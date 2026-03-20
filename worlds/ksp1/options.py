@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from Options import Choice, PerGameCommonOptions
+from Options import Choice, PerGameCommonOptions, Toggle
 
 
 class Goal(Choice):
@@ -36,7 +36,20 @@ class Difficulty(Choice):
     default = option_normal
 
 
+class StartWithLaunchClamps(Toggle):
+    """
+    Start the run with Launch Clamps already collected.
+
+    Launch Clamps are required to leave Kerbin's SOI.  Enabling this removes
+    that gate, allowing interplanetary missions from the very first item check.
+    Disable if you want the clamp to be a meaningful progression unlock.
+    """
+    display_name = "Start With Launch Clamps"
+    default = 1
+
+
 @dataclass
 class KSP1Options(PerGameCommonOptions):
     goal: Goal
     difficulty: Difficulty
+    start_with_launch_clamps: StartWithLaunchClamps
