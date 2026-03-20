@@ -3,7 +3,10 @@ from typing import Any
 from worlds.AutoWorld import WebWorld, World
 
 from . import items, locations, regions, rules
+from .items import ITEM_NAME_TO_ID
+from .locations import LOCATION_NAME_TO_ID
 from .options import KSP1Options
+from .tech_tree import NODES_BY_TIER
 
 
 class KSP1WebWorld(WebWorld):
@@ -24,8 +27,18 @@ class KSP1World(World):
     options_dataclass = KSP1Options
     options: KSP1Options
 
-    item_name_to_id = items.ITEM_NAME_TO_ID
-    location_name_to_id = locations.LOCATION_NAME_TO_ID
+    item_name_to_id = ITEM_NAME_TO_ID
+    location_name_to_id = LOCATION_NAME_TO_ID
+
+    def generate_early(self) -> None:
+        """Apply ExcludeLateTechTree to the exclude_locations option set."""
+        if self.options.exclude_late_tech_tree:
+            tier9_locs: set[str] = {
+                f"{node.display_name} {slot}"
+                for node in NODES_BY_TIER.get(9, [])
+                for slot in range(1, 6)
+            }
+            self.options.exclude_locations.value |= tier9_locs
 
     def create_regions(self) -> None:
         regions.create_all_regions(self)

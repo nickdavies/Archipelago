@@ -105,6 +105,20 @@ class Body:
     eva_jetpack_twr: float          # precomputed: 0.5/(0.09375*surface_gravity)
     dv: BodyDeltaV
 
+    # --- Location generation ---
+    check_scale: int = 1            # location checks per event (1/2/3)
+
+    # --- Science budget (for tech-tree access rules) ---
+    has_ocean: bool = False         # body has splashable liquid surface
+    num_biomes: int = 1             # distinct landed biomes
+    num_splash_biomes: int = 0      # distinct ocean/splash biomes
+    space_low_mult: float = 1.0     # InSpaceLow science multiplier
+    space_high_mult: float = 1.0    # InSpaceHigh science multiplier
+    fly_low_mult: float = 0.0       # FlyingLow multiplier (0 = no atmosphere)
+    fly_high_mult: float = 0.0      # FlyingHigh multiplier (0 = no atmosphere)
+    landed_mult: float = 0.0        # Landed multiplier (0 = can't land)
+    splashed_mult: float = 0.0      # Splashed multiplier (0 = no ocean)
+
 
 def _jetpack_twr(g: float) -> float:
     """Jetpack thrust ~0.5 kN, Kerbal mass ~0.09375 t."""
@@ -163,6 +177,11 @@ KERBIN = Body(
         dvGL=3400, dvLE=950, dvEI=None, dvK=None,
         dvLI=None, dvPL=None, dvPE=None, dvPlaneChange=0,
     ),
+    check_scale=1,  # Kerbin has its own special event list; scale unused
+    has_ocean=True, num_biomes=9, num_splash_biomes=2,
+    space_low_mult=1.5, space_high_mult=1.0,
+    fly_low_mult=1.0, fly_high_mult=0.7,
+    landed_mult=0.3, splashed_mult=0.4,
 )
 
 MUN = Body(
@@ -178,6 +197,10 @@ MUN = Body(
         dvGL=580, dvLE=None, dvEI=None, dvK=None,
         dvLI=310, dvPL=860, dvPE=None, dvPlaneChange=0,
     ),
+    check_scale=1,
+    num_biomes=7,
+    space_low_mult=4.0, space_high_mult=2.0,
+    landed_mult=9.0,
 )
 
 MINMUS = Body(
@@ -193,6 +216,10 @@ MINMUS = Body(
         dvGL=180, dvLE=None, dvEI=None, dvK=None,
         dvLI=160, dvPL=930, dvPE=None, dvPlaneChange=340,
     ),
+    check_scale=1,
+    num_biomes=9,
+    space_low_mult=5.0, space_high_mult=2.5,
+    landed_mult=12.0,
 )
 
 MOHO = Body(
@@ -208,6 +235,10 @@ MOHO = Body(
         dvGL=870, dvLE=None, dvEI=None, dvK=760,
         dvLI=2410, dvPL=None, dvPE=None, dvPlaneChange=2520,
     ),
+    check_scale=2,
+    num_biomes=6,
+    space_low_mult=8.0, space_high_mult=4.0,
+    landed_mult=9.0,
 )
 
 EVE = Body(
@@ -223,6 +254,11 @@ EVE = Body(
         dvGL=8000, dvLE=1330, dvEI=80, dvK=90,
         dvLI=None, dvPL=None, dvPE=None, dvPlaneChange=430,
     ),
+    check_scale=2,
+    has_ocean=True, num_biomes=8, num_splash_biomes=3,
+    space_low_mult=8.0, space_high_mult=4.0,
+    fly_low_mult=2.0, fly_high_mult=1.5,
+    landed_mult=8.0, splashed_mult=8.0,
 )
 
 GILLY = Body(
@@ -238,6 +274,10 @@ GILLY = Body(
         dvGL=30, dvLE=None, dvEI=None, dvK=None,
         dvLI=410, dvPL=None, dvPE=60, dvPlaneChange=0,
     ),
+    check_scale=1,
+    num_biomes=3,
+    space_low_mult=9.0, space_high_mult=4.5,
+    landed_mult=12.0,
 )
 
 DUNA = Body(
@@ -253,6 +293,11 @@ DUNA = Body(
         dvGL=1450, dvLE=360, dvEI=250, dvK=130,
         dvLI=None, dvPL=None, dvPE=None, dvPlaneChange=10,
     ),
+    check_scale=2,
+    num_biomes=5,
+    space_low_mult=8.0, space_high_mult=4.0,
+    fly_low_mult=1.5, fly_high_mult=1.2,
+    landed_mult=8.0,
 )
 
 IKE = Body(
@@ -268,6 +313,10 @@ IKE = Body(
         dvGL=390, dvLE=None, dvEI=None, dvK=None,
         dvLI=180, dvPL=None, dvPE=30, dvPlaneChange=0,
     ),
+    check_scale=1,
+    num_biomes=5,
+    space_low_mult=8.0, space_high_mult=4.0,
+    landed_mult=8.0,
 )
 
 DRES = Body(
@@ -283,6 +332,10 @@ DRES = Body(
         dvGL=430, dvLE=None, dvEI=None, dvK=610,
         dvLI=1290, dvPL=None, dvPE=None, dvPlaneChange=1010,
     ),
+    check_scale=2,
+    num_biomes=5,
+    space_low_mult=8.0, space_high_mult=4.0,
+    landed_mult=8.0,
 )
 
 JOOL = Body(
@@ -298,6 +351,10 @@ JOOL = Body(
         dvGL=14000, dvLE=2810, dvEI=160, dvK=980,
         dvLI=None, dvPL=None, dvPE=None, dvPlaneChange=270,
     ),
+    check_scale=2,
+    num_biomes=0,
+    space_low_mult=12.0, space_high_mult=6.0,
+    fly_low_mult=6.0, fly_high_mult=4.0,
 )
 
 LAYTHE = Body(
@@ -313,6 +370,11 @@ LAYTHE = Body(
         dvGL=2900, dvLE=None, dvEI=None, dvK=None,
         dvLI=1070, dvPL=None, dvPE=930, dvPlaneChange=0,
     ),
+    check_scale=3,
+    has_ocean=True, num_biomes=9, num_splash_biomes=4,
+    space_low_mult=12.0, space_high_mult=6.0,
+    fly_low_mult=4.0, fly_high_mult=3.0,
+    landed_mult=14.0, splashed_mult=10.0,
 )
 
 VALL = Body(
@@ -328,6 +390,10 @@ VALL = Body(
         dvGL=860, dvLE=None, dvEI=None, dvK=None,
         dvLI=910, dvPL=None, dvPE=620, dvPlaneChange=0,
     ),
+    check_scale=3,
+    num_biomes=9,
+    space_low_mult=12.0, space_high_mult=6.0,
+    landed_mult=12.0,
 )
 
 TYLO = Body(
@@ -343,6 +409,10 @@ TYLO = Body(
         dvGL=2270, dvLE=None, dvEI=None, dvK=None,
         dvLI=1100, dvPL=None, dvPE=400, dvPlaneChange=0,
     ),
+    check_scale=3,
+    num_biomes=6,
+    space_low_mult=12.0, space_high_mult=6.0,
+    landed_mult=12.0,
 )
 
 BOP = Body(
@@ -358,6 +428,10 @@ BOP = Body(
         dvGL=230, dvLE=None, dvEI=None, dvK=None,
         dvLI=900, dvPL=None, dvPE=220, dvPlaneChange=2440,
     ),
+    check_scale=2,
+    num_biomes=4,
+    space_low_mult=12.0, space_high_mult=6.0,
+    landed_mult=12.0,
 )
 
 POL = Body(
@@ -373,6 +447,10 @@ POL = Body(
         dvGL=130, dvLE=None, dvEI=None, dvK=None,
         dvLI=820, dvPL=None, dvPE=160, dvPlaneChange=700,
     ),
+    check_scale=2,
+    num_biomes=4,
+    space_low_mult=12.0, space_high_mult=6.0,
+    landed_mult=12.0,
 )
 
 EELOO = Body(
@@ -388,6 +466,10 @@ EELOO = Body(
         dvGL=620, dvLE=None, dvEI=None, dvK=1140,
         dvLI=1370, dvPL=None, dvPE=None, dvPlaneChange=1330,
     ),
+    check_scale=3,
+    num_biomes=7,
+    space_low_mult=15.0, space_high_mult=7.5,
+    landed_mult=15.0,
 )
 
 KERBOL = Body(
@@ -403,6 +485,9 @@ KERBOL = Body(
         dvGL=67000, dvLE=None, dvEI=None, dvK=6000,
         dvLI=13700, dvPL=None, dvPE=None, dvPlaneChange=0,
     ),
+    check_scale=1,
+    num_biomes=0,
+    space_low_mult=2.0, space_high_mult=1.0,
 )
 
 # Authoritative list of all bodies
@@ -1036,6 +1121,69 @@ _KERBOL_RETURN = _KERBOL_ORBIT + [
 
 _add("Kerbol", "orbit",  _KERBOL_ORBIT)
 _add("Kerbol", "return", _KERBOL_RETURN)
+
+
+# ---------------------------------------------------------------------------
+# Science budget estimator (used by tech-tree access rules)
+# ---------------------------------------------------------------------------
+
+def science_budget(
+    body: Body,
+    has_thermometer: bool,
+    has_barometer: bool,
+    has_capsule: bool,
+    can_land_crewed: bool,
+) -> float:
+    """
+    Estimate the total science collectible from *body* given the player's
+    current instrument and crew capabilities.
+
+    Conservative (golden rule): uses min(fly_low, fly_high) for flying
+    situations, does not count surface-sample crew value without crewed landing.
+
+    Base instrument values (from KSP science definitions):
+      Thermometer: 8   Barometer: 12   Crew Report: 5   EVA Report: 8
+      Surface Sample: 30
+
+    Science = base_value * situation_multiplier * recovery_factor
+    The recovery_factor (0.25 for transmit) is NOT applied here — we assume
+    the player physically recovers the data, giving full science value.
+    This is the upper bound; safety factors in can_afford_tier() discount it.
+    """
+    instrument_val: float = 0.0
+    if has_thermometer:
+        instrument_val += 8.0
+    if has_barometer:
+        instrument_val += 12.0
+
+    crew_orbital_val: float = (5.0 + 8.0) if has_capsule else 0.0
+    crew_surface_val: float = (5.0 + 8.0 + 30.0) if (has_capsule and can_land_crewed) else 0.0
+
+    # Orbital science (global, not per-biome)
+    orbital = (instrument_val + crew_orbital_val) * (body.space_low_mult + body.space_high_mult)
+
+    # Flying science (atmosphere only; use min to underestimate)
+    flying = 0.0
+    if body.has_atmosphere and body.fly_low_mult > 0 and body.fly_high_mult > 0:
+        flying = (instrument_val + crew_orbital_val) * min(body.fly_low_mult, body.fly_high_mult)
+
+    # Landed science (scales with biome count)
+    landed = 0.0
+    if body.can_land and body.num_biomes > 0:
+        landed = (
+            instrument_val * body.landed_mult
+            + crew_surface_val * body.landed_mult
+        ) * body.num_biomes
+
+    # Splashed science (ocean biomes only)
+    splashed = 0.0
+    if body.has_ocean and body.num_splash_biomes > 0:
+        splashed = (
+            instrument_val * body.splashed_mult
+            + crew_surface_val * body.splashed_mult
+        ) * body.num_splash_biomes
+
+    return orbital + flying + landed + splashed
 
 
 # ---------------------------------------------------------------------------

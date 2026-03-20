@@ -441,6 +441,27 @@ _DOCKING_PORT = MiscEquipment(
     provides=frozenset({"docking_port"}),
 )
 
+# Science instruments — no capability provides; checked separately by the
+# science heuristic in rules.py via state.has("Thermometer", player).
+_THERMOMETER = MiscEquipment(
+    name="2HOT Thermometer",
+    mass=0.005,
+    provides=frozenset(),
+)
+
+_BAROMETER = MiscEquipment(
+    name="PresMat Barometer",
+    mass=0.005,
+    provides=frozenset(),
+)
+
+# Structural — no capability provides; precollected for all seeds.
+_STRUT = MiscEquipment(
+    name="EAS-4 Strut Connector",
+    mass=0.05,
+    provides=frozenset(),
+)
+
 
 # ---------------------------------------------------------------------------
 # PART_DB: canonical item name -> list of part objects
@@ -508,4 +529,11 @@ PART_DB: dict[str, list[AnyPart]] = {
     "Launch Clamp":          [_LAUNCH_CLAMP],
     "Z-4K Battery":          [_BATTERY_LARGE],
     "Docking Port":          [_DOCKING_PORT],
+
+    # Science instruments (gate tech-tree science heuristic)
+    "Thermometer":           [_THERMOMETER],
+    "Barometer":             [_BAROMETER],
+
+    # Structural (precollected for all seeds)
+    "Struts":                [_STRUT],
 }
