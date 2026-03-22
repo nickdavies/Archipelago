@@ -12,6 +12,7 @@ from worlds.ksp1.bodies import (
 from worlds.ksp1.capability import (
     EquipmentFlags, _evaluate_profile, _assess_bodies, _assess_one_body,
     _try_profiles, _required_chute_count, _inject_ladder, _compute_sounding_altitude,
+    _group_edges,
 )
 from worlds.ksp1.parts import PART_DB, Engine, FuelTank, SolidBooster
 
@@ -907,6 +908,48 @@ class TestSoundingRocketAltitude(unittest.TestCase):
         # Both should be well above 70 km
         self.assertGreater(flea_alt, 70.0)
         self.assertGreater(reliant_alt, 70.0)
+
+
+class TestStagingGroupPreservation(unittest.TestCase):
+    """Tier 3 (docking ports) preserves all natural stage groups."""
+
+    def test_staging_tier_3_preserves_all_return_groups(self) -> None:
+        """Tylo sample_return at tier 3 should preserve all natural groups."""
+        profiles = MISSION_PROFILES.get(("Tylo", "sample_return"), [])
+        if not profiles:
+            self.skipTest("No Tylo sample_return profiles")
+        profile = profiles[0]
+        # Find how many natural groups exist (use a very high tier)
+        groups_natural = _group_edges(profile, staging_tier=99)
+        groups_tier3 = _group_edges(profile, staging_tier=3)
+        self.assertEqual(len(groups_tier3), len(groups_natural),
+                         "Tier 3 should preserve all natural groups")
+        # Return profiles should have >4 natural groups (the old tier 3 cap)
+        self.assertGreater(len(groups_tier3), 4,
+                           f"Expected >4 groups, got {len(groups_tier3)}")
+
+    def test_staging_tier_1_still_merges(self) -> None:
+        """Tier 1 should still merge down to staging_tier+1 stages."""
+        profiles = MISSION_PROFILES.get(("Mun", "return"), [])
+        self.assertTrue(len(profiles) > 0)
+        profile = profiles[0]
+        groups = _group_edges(profile, staging_tier=1)
+        self.assertLessEqual(len(groups), 2,
+                             f"Tier 1 should merge to <=2 groups, got {len(groups)}")
+
+    def test_constraint_aware_merge_skips_incompatible(self) -> None:
+        """When forced to merge (tier 0), incompatible groups are skipped."""
+        profiles = MISSION_PROFILES.get(("Mun", "return"), [])
+        self.assertTrue(len(profiles) > 0)
+        profile = profiles[0]
+        groups_tier0 = _group_edges(profile, staging_tier=0)
+        # Tier 0 wants 1 stage but _can_merge should prevent merging atmospheric
+        # ascent with vacuum transfer. We may get >1 group if incompatible
+        # pairs exist, or exactly 1 if all happen to be compatible.
+        # The key assertion: no crash, and the result is a valid partition.
+        total_edges = sum(len(g) for g in groups_tier0)
+        self.assertEqual(total_edges, len(profile),
+                         "All edges must be accounted for after merging")
 
 
 if __name__ == "__main__":

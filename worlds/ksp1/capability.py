@@ -627,20 +627,21 @@ def _group_edges(profile: list[MissionEdge], staging_tier: int) -> list[list[Mis
     """
     Group consecutive edges into stages based on staging_tier.
 
-    staging_tier=0: everything is one stage (no decouplers)
-    staging_tier>=1: split at natural staging points
+    staging_tier=0: everything is one stage (no decouplers).
+    staging_tier=1-2: limited staging (staging_tier + 1 stages). Excess
+      natural groups are merged (smallest-dv pairs first).
+    staging_tier>=3: docking ports enable orbital assembly; all natural
+      stage groups are preserved.
 
     Natural stage boundaries:
       - After Kerbin ascent (always own stage if staging_tier >= 1)
       - Before and after landing (always own stage if staging_tier >= 1)
       - Before any vacuum-to-atmo transition
 
-    When the number of available stage breaks > staging_tier allows, merge
-    the smallest adjacent groups first (conservative: bigger combined dv = harder).
+    When forced to merge (tier 0), constraint-aware merging skips incompatible
+    pairs (e.g. atmospheric + vacuum, TWR-constrained + unconstrained) to avoid
+    creating physically impossible combined stages.
     """
-    if staging_tier == 0:
-        return [profile]
-
     # Mark preferred split indices (after edge i, before edge i+1)
     from .bodies import EdgeType as ET
     splits: list[int] = []
@@ -683,18 +684,47 @@ def _group_edges(profile: list[MissionEdge], staging_tier: int) -> list[list[Mis
     # Remove empty groups
     groups = [g for g in groups if g]
 
-    # If we have more groups than staging_tier allows, merge smallest pairs
-    # Max stages = staging_tier + 1 (e.g. tier 1 = 2 stages: booster + payload)
-    max_stages = staging_tier + 1
+    # Tier 0 = no decouplers = single stage.
+    # Tier 1-2 = limited decouplers (staging_tier + 1 stages).
+    # Tier 3 = docking ports enable orbital assembly → all natural groups preserved.
+    if staging_tier == 0:
+        max_stages = 1
+    elif staging_tier >= 3:
+        max_stages = len(groups)
+    else:
+        max_stages = staging_tier + 1
+
+    # Constraint-aware merging: skip incompatible pairs when forced to merge.
+    atmo_types = {ET.ATMOSPHERIC_ASCENT, ET.ATMO_LANDING_PROPULSIVE}
+
+    def _can_merge(a: list[MissionEdge], b: list[MissionEdge]) -> bool:
+        """Groups are compatible for merging if they share physics regime."""
+        a_atmo = any(e.edge_type in atmo_types for e in a)
+        b_atmo = any(e.edge_type in atmo_types for e in b)
+        if a_atmo != b_atmo:
+            return False
+        a_twr = any(e.min_twr > 0 for e in a)
+        b_twr = any(e.min_twr > 0 for e in b)
+        if a_twr != b_twr:
+            return False
+        return True
+
     while len(groups) > max_stages:
-        # Find the pair with the smallest combined dv to merge
-        best_pair = 0
+        best_pair = -1
         best_dv = float("inf")
         for i in range(len(groups) - 1):
+            # At tier 0 (no decouplers), skip incompatible merges to avoid
+            # creating physically impossible single stages. At tier 1-2,
+            # merge unconditionally (decouplers allow staging; the optimizer
+            # handles mixed groups by picking the most constrained engine).
+            if staging_tier == 0 and not _can_merge(groups[i], groups[i + 1]):
+                continue
             combined = sum(e.base_dv for e in groups[i]) + sum(e.base_dv for e in groups[i + 1])
             if combined < best_dv:
                 best_dv = combined
                 best_pair = i
+        if best_pair < 0:
+            break  # no compatible merge possible
         merged = groups[best_pair] + groups[best_pair + 1]
         groups = groups[:best_pair] + [merged] + groups[best_pair + 2:]
 

@@ -210,8 +210,13 @@ def _mission_rule_for_event(
 
     All check-slots for one event share this single rule (they fire together).
     """
-    # Eve surface ascent is beyond the capability model; gate on having all parts.
+    # Eve surface ascent is beyond the capability model.
+    # Tylo/Laythe sample returns exceed the Kerbin ascent engine-count ceiling
+    # (~150t max payload) due to backward-pass mass cascade through 6 stages.
+    # See plans/engine_count_ceiling.md for details.
     if body_name == "Eve" and event in ("Return", "Sample Return"):
+        return _make_all_parts_rule(player)
+    if body_name in ("Tylo", "Laythe") and event == "Sample Return":
         return _make_all_parts_rule(player)
 
     def _can_orbit(state: CollectionState) -> bool:
