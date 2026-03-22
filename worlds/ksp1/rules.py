@@ -17,13 +17,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Callable
 
-from BaseClasses import CollectionState
+from BaseClasses import CollectionState, ItemClassification
 
 from .bodies import ALL_BODIES, BODY_BY_NAME, science_budget
 from .capability import get_capability
+from .items import ITEM_TABLE
 from .locations import (
     KERBIN_LOCATION_NAMES,
     MISSION_LOCATION_NAMES,
+    TECH_SLOTS_BY_DIFFICULTY,
     TECH_TREE_LOCATION_NAMES,
     event_location_names,
 )
@@ -47,6 +49,20 @@ _SCIENCE_SAFETY: dict[int, float] = {
 # Science needed to declare the tech tree complete (buy all 43 nodes)
 _TECH_TREE_COMPLETE_SCIENCE = cumulative_tier_cost(9)
 
+# All progression-classified part items.  Eve Return/Sample Return require
+# these — the capability system can't compute Eve ascent so we use this as a
+# proxy for "you have everything needed to attempt it."
+_ALL_PROGRESSION_ITEMS: frozenset[str] = frozenset(
+    name for name, (_, cls) in ITEM_TABLE.items()
+    if cls == ItemClassification.progression
+)
+
+
+def _make_all_parts_rule(player: int) -> Callable[[CollectionState], bool]:
+    def rule(state: CollectionState) -> bool:
+        return state.has_all(_ALL_PROGRESSION_ITEMS, player)
+    return rule
+
 
 # ---------------------------------------------------------------------------
 # Science heuristic helpers
@@ -60,17 +76,16 @@ def _accessible_science(state: CollectionState, player: int, difficulty: int) ->
     Multiplied by the difficulty safety factor before returning.
     """
     cap = get_capability(state, player)
-    has_thermo = state.has("Thermometer", player)
-    has_baro = state.has("Barometer", player)
-    has_capsule = cap.has_capsule
 
     total = 0.0
     for body in ALL_BODIES:
         body_cap = cap.bodies.get(body.name)
         if body_cap is None or not body_cap.can_orbit_low:
             continue
-        can_land_crewed = body_cap.can_land_crewed
-        total += science_budget(body, has_thermo, has_baro, has_capsule, can_land_crewed)
+        total += science_budget(
+            body, cap.has_thermometer, cap.has_barometer,
+            cap.has_capsule, body_cap.can_land_crewed,
+        )
 
     return total * _SCIENCE_SAFETY[difficulty]
 
@@ -97,17 +112,14 @@ def _make_science_threshold_rule(
     safety = _SCIENCE_SAFETY[difficulty]
     def rule(state: CollectionState) -> bool:
         cap = get_capability(state, player)
-        has_thermo = state.has("Thermometer", player)
-        has_baro = state.has("Barometer", player)
-        has_capsule = cap.has_capsule
         total = 0.0
         for body in ALL_BODIES:
             body_cap = cap.bodies.get(body.name)
             if body_cap is None or not body_cap.can_orbit_low:
                 continue
             total += science_budget(
-                body, has_thermo, has_baro, has_capsule,
-                body_cap.can_land_crewed
+                body, cap.has_thermometer, cap.has_barometer,
+                cap.has_capsule, body_cap.can_land_crewed,
             )
         return total * safety >= threshold
     return rule
@@ -138,13 +150,33 @@ def set_completion_condition(world: KSP1World) -> None:
 # Kerbin-specific location rules
 # ---------------------------------------------------------------------------
 
+# Altitude (km) each sounding-rocket milestone requires.
+# Formula: h = Δv² · (twr−1) / (2·g·twr) — see capability._compute_sounding_altitude.
+_ALTITUDE_THRESHOLDS_KM: dict[str, float] = {
+    "Kerbin 5km Altitude":  5.0,
+    "Kerbin 15km Altitude": 15.0,
+    "Kerbin 25km Altitude": 25.0,
+    "Kerbin 35km Altitude": 35.0,
+    "Kerbin 45km Altitude": 45.0,
+    "Kerbin 55km Altitude": 55.0,
+    "Kerbin 70km Altitude": 70.0,
+}
+
+
+def _make_altitude_rule(player: int, threshold_km: float) -> Callable[[CollectionState], bool]:
+    def rule(state: CollectionState) -> bool:
+        return get_capability(state, player).sounding_altitude_km >= threshold_km
+    return rule
+
+
 def _set_kerbin_rules(world: KSP1World, player: int) -> None:
     """
     Rules for the 11 Kerbin-specific locations.
 
-    Altitude milestones require progressively more delta-v (orbit proxy).
-    EVA in Orbit requires a capsule + orbit capability.
-    First Staging requires a decoupler.
+    Altitude milestones: sounding rocket must reach the stated altitude.
+    Kerbin Orbit / EVA in Orbit: full orbital capability (computed, not free).
+    First Staging: decoupler.
+    Splashdown: no rule.
     """
 
     def has_orbit(state: CollectionState) -> bool:
@@ -157,20 +189,13 @@ def _set_kerbin_rules(world: KSP1World, player: int) -> None:
         cap = get_capability(state, player)
         return cap.has_capsule and cap.bodies["Kerbin"].can_orbit_low
 
-    # Altitude milestones — proxy: increasingly tight orbit check
-    # In practice, 5-55 km altitudes require successively more dv.
-    # We gate them all on "can orbit Kerbin" (conservative — orbit needs more dv).
-    for name in KERBIN_LOCATION_NAMES:
-        if "km Altitude" in name or name == "Kerbin Orbit":
-            loc = world.get_location(name)
-            loc.access_rule = has_orbit
-        elif name == "Kerbin EVA in Orbit":
-            loc = world.get_location(name)
-            loc.access_rule = has_crewed_orbit
-        elif name == "Kerbin First Staging":
-            loc = world.get_location(name)
-            loc.access_rule = has_staging
-        # "Kerbin Splashdown" has no rule (land in ocean = no special gear)
+    for name, threshold_km in _ALTITUDE_THRESHOLDS_KM.items():
+        world.get_location(name).access_rule = _make_altitude_rule(player, threshold_km)
+
+    world.get_location("Kerbin Orbit").access_rule = has_orbit
+    world.get_location("Kerbin EVA in Orbit").access_rule = has_crewed_orbit
+    world.get_location("Kerbin First Staging").access_rule = has_staging
+    # "Kerbin Splashdown" has no rule (land in ocean = no special gear)
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +210,10 @@ def _mission_rule_for_event(
 
     All check-slots for one event share this single rule (they fire together).
     """
+    # Eve surface ascent is beyond the capability model; gate on having all parts.
+    if body_name == "Eve" and event in ("Return", "Sample Return"):
+        return _make_all_parts_rule(player)
+
     def _can_orbit(state: CollectionState) -> bool:
         return get_capability(state, player).bodies.get(body_name,
                type("_", (), {"can_orbit_low": False})()).can_orbit_low  # type: ignore[return-value]
@@ -238,13 +267,12 @@ def _set_mission_rules(world: KSP1World, player: int) -> None:
     the same rule — they check simultaneously when the player performs the event.
     """
     from .bodies import ALL_BODIES
-    from .locations import LANDABLE_EVENTS, ORBITAL_ONLY_EVENTS
+    from .locations import get_body_events
 
     for body in ALL_BODIES:
         if body.name == "Kerbin":
             continue
-        events = LANDABLE_EVENTS if body.can_land else ORBITAL_ONLY_EVENTS
-        for event in events:
+        for event in get_body_events(body):
             rule = _mission_rule_for_event(player, body.name, event)
             for loc_name in event_location_names(body.name, event):
                 loc = world.get_location(loc_name)
@@ -259,10 +287,12 @@ def _set_tech_tree_rules(world: KSP1World, player: int, difficulty: int) -> None
     """
     Each tech tree slot is gated on the player being able to earn enough
     science to afford all nodes through that slot's tier.
+    Slot count per node is scaled by difficulty (3–5).
     """
+    num_slots = TECH_SLOTS_BY_DIFFICULTY[difficulty]
     for node in TECH_NODES:
         rule = _make_tier_rule(player, node.tier, difficulty)
-        for slot in range(1, 6):
+        for slot in range(1, num_slots + 1):
             loc_name = f"{node.display_name} {slot}"
             loc = world.get_location(loc_name)
             loc.access_rule = rule
@@ -291,11 +321,12 @@ def _place_victory_event(
     Create an event location named "Victory" and set the completion condition.
     The event location has a locked "Victory" item and no location ID (event).
     """
-    from BaseClasses import Region
+    from BaseClasses import Location, Region
     from .items import create_item
 
     menu = world.get_region("Menu")
-    victory_location = world.create_location("Victory", None, menu)
+    victory_location = Location(world.player, "Victory", None, menu)
+    menu.locations.append(victory_location)
     victory_location.place_locked_item(create_item(world, "Victory"))
 
     # Assign the access rule based on the selected goal
@@ -325,11 +356,7 @@ def _make_goal_rule(
         return rule
 
     if goal == Goal.option_eve_return:
-        def rule(state: CollectionState) -> bool:
-            cap = get_capability(state, player)
-            bp = cap.bodies.get("Eve")
-            return bp is not None and (bp.can_return_to_kerbin or bp.can_return_crewed)
-        return rule
+        return _make_all_parts_rule(player)
 
     if goal == Goal.option_flag_every_body:
         def rule(state: CollectionState) -> bool:

@@ -1,24 +1,28 @@
 """
 Location definitions for KSP1 Archipelago.
 
-Three location sources (total 459 + N, where N = KSC starts by difficulty):
+Three location sources (total 462 max, filtered by difficulty):
 
-  1. KSC Starting Locations  (N = 5/10/15/20 by difficulty)
+  1. KSC Starting Locations  (5/10/15/20 by difficulty)
      Zero access requirements; AP fill places the items needed to bootstrap.
 
-  2. Mission Event Locations  (244 total)
-     11 Kerbin-specific + 233 per-body distance-scaled checks.
-     Each event generates `check_scale` location checks (1/2/3).
-     Landable bodies: 8 event types × scale.
-     Non-landable (Jool, Kerbol): 3 event types × scale.
+  2. Mission Event Locations  (227 total)
+     11 Kerbin-specific + 216 per-body event-scaled checks.
+     Eve Return/Sample Return exist but require all progression parts.
+     Scale is by event difficulty, not body distance:
+       Flyby/SOI Leave/Orbit = 1 slot each,
+       Landing/Crewed Landing/Flag Plant = 2 slots each,
+       Return/Sample Return = 3 slots each.
+     Per landable body: 3×1 + 3×2 + 2×3 = 15 locations.
+     Per non-landable body (Jool, Kerbol): 3×1 = 3 locations.
 
-  3. Tech Tree Locations  (215 total)
-     5 locations per node × 43 nodes.
+  3. Tech Tree Locations  (129–215 by difficulty)
+     3–5 locations per node × 43 nodes, scaled by difficulty.
      Access rule: player can earn enough science to afford the node's tier.
 
 Location IDs use KSP1_BASE_ID + offset.  The registry includes all 20
-possible KSC start slots so the world can create the correct subset at
-runtime based on difficulty.
+possible KSC start slots and max (5) tech slots so the world can create
+the correct subset at runtime based on difficulty.
 """
 from __future__ import annotations
 
@@ -26,7 +30,7 @@ from typing import TYPE_CHECKING
 
 from BaseClasses import Location
 
-from .bodies import ALL_BODIES, BODY_BY_NAME
+from .bodies import ALL_BODIES
 from .tech_tree import TECH_TREE_LOCATION_NAMES
 
 if TYPE_CHECKING:
@@ -34,11 +38,11 @@ if TYPE_CHECKING:
 
 KSP1_BASE_ID = 7_700_000
 
-# Offset ranges (all within location namespace; no collision with item offsets)
-_KSC_OFFSET_START = 0          # KSC starts: 0-19
-_KERBIN_OFFSET_START = 20      # Kerbin special: 20-30
-_MISSION_OFFSET_START = 31     # Per-body mission events: 31-470
-_TECH_OFFSET_START = 500       # Tech tree: 500-714
+# Offset ranges (items use 0–1999, locations use 2000–3999)
+_KSC_OFFSET_START = 2000       # KSC starts: 2000-2099
+_KERBIN_OFFSET_START = 2100    # Kerbin special: 2100-2199
+_MISSION_OFFSET_START = 2200   # Per-body mission events: 2200-2999
+_TECH_OFFSET_START = 3000      # Tech tree: 3000-3999
 
 
 class KSP1Location(Location):
@@ -68,14 +72,28 @@ ORBITAL_ONLY_EVENTS: tuple[str, ...] = (
     "Orbit",
 )
 
+#: Location slots per event, scaled by achievement difficulty.
+#: Easy events (fly past) get 1 slot; hard events (sample return) get 3.
+EVENT_SCALE: dict[str, int] = {
+    "Flyby": 1, "SOI Leave": 1, "Orbit": 1,
+    "Landing": 2, "Crewed Landing": 2, "Flag Plant": 2,
+    "Return": 3, "Sample Return": 3,
+}
+
 #: Bodies excluded from the per-body event table (have their own Kerbin events).
 _KERBIN_EXCLUDED: frozenset[str] = frozenset({"Kerbin"})
+
 
 # ---------------------------------------------------------------------------
 # KSC starting locations (registry includes all 20; world creates N of them)
 # ---------------------------------------------------------------------------
 
 MAX_KSC_STARTS = 20
+MAX_TECH_SLOTS = 5
+
+#: Tech tree slots per node, scaled by difficulty.
+#: Keys are Difficulty option values (casual=0, normal=1, expert=2, insane=3).
+TECH_SLOTS_BY_DIFFICULTY: dict[int, int] = {0: 5, 1: 5, 2: 4, 3: 3}
 
 KSC_LOCATION_NAMES: list[str] = [
     f"KSC Start {i + 1}" for i in range(MAX_KSC_STARTS)
@@ -105,27 +123,31 @@ assert len(KERBIN_LOCATION_NAMES) == 11
 # Per-body mission location names (233 total, generated from body data)
 # ---------------------------------------------------------------------------
 
+def get_body_events(body) -> tuple[str, ...]:
+    """Return the AP event list for a body."""
+    return LANDABLE_EVENTS if body.can_land else ORBITAL_ONLY_EVENTS
+
+
 def _build_mission_locations() -> list[str]:
     """
-    Generate all per-body scaled mission location names.
+    Generate all per-body event-scaled mission location names.
     Order: body order in ALL_BODIES (skipping Kerbin), then events, then slots.
     """
     names: list[str] = []
     for body in ALL_BODIES:
         if body.name in _KERBIN_EXCLUDED:
             continue
-        events = LANDABLE_EVENTS if body.can_land else ORBITAL_ONLY_EVENTS
-        for event in events:
-            for slot in range(1, body.check_scale + 1):
+        for event in get_body_events(body):
+            for slot in range(1, EVENT_SCALE[event] + 1):
                 names.append(f"{body.name} {event} {slot}")
     return names
 
 
 MISSION_LOCATION_NAMES: list[str] = _build_mission_locations()
 
-# Verify the per-body count matches the plan (233 checks)
-assert len(MISSION_LOCATION_NAMES) == 233, (
-    f"Expected 233 per-body mission locations, got {len(MISSION_LOCATION_NAMES)}"
+# 14 landable × 15 + 2 non-landable × 3 = 216
+assert len(MISSION_LOCATION_NAMES) == 216, (
+    f"Expected 216 per-body mission locations, got {len(MISSION_LOCATION_NAMES)}"
 )
 
 # ---------------------------------------------------------------------------
@@ -170,8 +192,7 @@ LOCATION_NAME_TO_ID: dict[str, int] = {
 
 def event_location_names(body_name: str, event: str) -> list[str]:
     """Return the list of location names for one body/event combination."""
-    body = BODY_BY_NAME[body_name]
-    return [f"{body_name} {event} {i}" for i in range(1, body.check_scale + 1)]
+    return [f"{body_name} {event} {i}" for i in range(1, EVENT_SCALE[event] + 1)]
 
 
 # ---------------------------------------------------------------------------
@@ -183,9 +204,11 @@ def create_all_locations(world: KSP1World) -> None:
     Create and attach all locations to the Menu region.
 
     KSC start locations: only the first N (by difficulty) are created.
-    All mission and tech tree locations are always created.
+    Tech tree slots per node: 3–5 by difficulty.
+    All mission locations are always created.
     """
     from .options import Difficulty
+    from .tech_tree import TECH_NODES
 
     difficulty = world.options.difficulty.value
     ksc_counts = {
@@ -195,6 +218,7 @@ def create_all_locations(world: KSP1World) -> None:
         Difficulty.option_insane: 5,
     }
     num_ksc = ksc_counts[difficulty]
+    num_tech_slots = TECH_SLOTS_BY_DIFFICULTY[difficulty]
 
     menu = world.get_region("Menu")
 
@@ -213,6 +237,10 @@ def create_all_locations(world: KSP1World) -> None:
     mission_locs = {name: LOCATION_NAME_TO_ID[name] for name in MISSION_LOCATION_NAMES}
     menu.add_locations(mission_locs, KSP1Location)
 
-    # Tech tree node slots
-    tech_locs = {name: LOCATION_NAME_TO_ID[name] for name in TECH_TREE_LOCATION_NAMES}
+    # Tech tree node slots (filtered by difficulty)
+    tech_locs: dict[str, int] = {}
+    for node in TECH_NODES:
+        for slot in range(1, num_tech_slots + 1):
+            name = f"{node.display_name} {slot}"
+            tech_locs[name] = LOCATION_NAME_TO_ID[name]
     menu.add_locations(tech_locs, KSP1Location)

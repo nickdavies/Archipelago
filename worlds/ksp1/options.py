@@ -31,13 +31,12 @@ class Goal(Choice):
 class Difficulty(Choice):
     """
     Controls delta-V margins and hardware requirement strictness.
-    Also controls how many KSC starting location slots are created (more
-    slots = easier early game).
+    Also controls KSC starting slots and tech tree slots per node.
 
-    casual  -- Generous margins; 20 KSC starting slots.
-    normal  -- Default margins; 15 KSC starting slots.
-    expert  -- Tight margins;   10 KSC starting slots.
-    insane  -- Exact delta-V;    5 KSC starting slots.
+    casual  -- Generous margins; 20 KSC starts, 5 tech slots/node.
+    normal  -- Default margins; 15 KSC starts, 5 tech slots/node.
+    expert  -- Tight margins;   10 KSC starts, 4 tech slots/node.
+    insane  -- Exact delta-V;    5 KSC starts, 3 tech slots/node.
     """
     display_name = "Difficulty"
 
@@ -65,18 +64,18 @@ class KSP1ExcludeLocations(ExcludeLocations):
     """
     Locations that are excluded from containing progression items by default.
 
-    The default set excludes return missions from Eve, Tylo, and Laythe —
-    the three hardest bodies to return from.  Players can remove these
-    exclusions to make those locations part of progression.
+    The default set excludes return missions from Eve, Tylo, and Laythe.
+    Eve returns require all progression parts (surface ascent is extremely demanding).
+    Tylo and Laythe returns are gated normally through the capability system.
     """
     default = frozenset({
-        # Eve returns (scale 2 = 2 checks each)
-        "Eve Return 1", "Eve Return 2",
-        "Eve Sample Return 1", "Eve Sample Return 2",
-        # Tylo returns (scale 3 = 3 checks each)
+        # Eve returns (3 checks each); requires all progression parts
+        "Eve Return 1", "Eve Return 2", "Eve Return 3",
+        "Eve Sample Return 1", "Eve Sample Return 2", "Eve Sample Return 3",
+        # Tylo returns (3 checks each)
         "Tylo Return 1", "Tylo Return 2", "Tylo Return 3",
         "Tylo Sample Return 1", "Tylo Sample Return 2", "Tylo Sample Return 3",
-        # Laythe returns (scale 3 = 3 checks each)
+        # Laythe returns (3 checks each)
         "Laythe Return 1", "Laythe Return 2", "Laythe Return 3",
         "Laythe Sample Return 1", "Laythe Sample Return 2", "Laythe Sample Return 3",
     })

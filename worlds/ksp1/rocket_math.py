@@ -234,6 +234,11 @@ def find_optimal_stage(
 
             for fill in FILL_LEVELS:
                 max_eng = max_engine_count(tank.size_class, engine.size_class)
+                if asparagus:
+                    # Asparagus allows multiple parallel stacks; each has its
+                    # own engine cluster.  4× is conservative (real designs
+                    # often use 6-8 stacks, but 4× gives adequate coverage).
+                    max_eng *= 4
                 if max_eng == 0:
                     continue
 

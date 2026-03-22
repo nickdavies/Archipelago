@@ -105,9 +105,6 @@ class Body:
     eva_jetpack_twr: float          # precomputed: 0.5/(0.09375*surface_gravity)
     dv: BodyDeltaV
 
-    # --- Location generation ---
-    check_scale: int = 1            # location checks per event (1/2/3)
-
     # --- Science budget (for tech-tree access rules) ---
     has_ocean: bool = False         # body has splashable liquid surface
     num_biomes: int = 1             # distinct landed biomes
@@ -177,7 +174,6 @@ KERBIN = Body(
         dvGL=3400, dvLE=950, dvEI=None, dvK=None,
         dvLI=None, dvPL=None, dvPE=None, dvPlaneChange=0,
     ),
-    check_scale=1,  # Kerbin has its own special event list; scale unused
     has_ocean=True, num_biomes=9, num_splash_biomes=2,
     space_low_mult=1.5, space_high_mult=1.0,
     fly_low_mult=1.0, fly_high_mult=0.7,
@@ -197,7 +193,6 @@ MUN = Body(
         dvGL=580, dvLE=None, dvEI=None, dvK=None,
         dvLI=310, dvPL=860, dvPE=None, dvPlaneChange=0,
     ),
-    check_scale=1,
     num_biomes=7,
     space_low_mult=4.0, space_high_mult=2.0,
     landed_mult=9.0,
@@ -216,7 +211,6 @@ MINMUS = Body(
         dvGL=180, dvLE=None, dvEI=None, dvK=None,
         dvLI=160, dvPL=930, dvPE=None, dvPlaneChange=340,
     ),
-    check_scale=1,
     num_biomes=9,
     space_low_mult=5.0, space_high_mult=2.5,
     landed_mult=12.0,
@@ -235,7 +229,6 @@ MOHO = Body(
         dvGL=870, dvLE=None, dvEI=None, dvK=760,
         dvLI=2410, dvPL=None, dvPE=None, dvPlaneChange=2520,
     ),
-    check_scale=2,
     num_biomes=6,
     space_low_mult=8.0, space_high_mult=4.0,
     landed_mult=9.0,
@@ -254,7 +247,6 @@ EVE = Body(
         dvGL=8000, dvLE=1330, dvEI=80, dvK=90,
         dvLI=None, dvPL=None, dvPE=None, dvPlaneChange=430,
     ),
-    check_scale=2,
     has_ocean=True, num_biomes=8, num_splash_biomes=3,
     space_low_mult=8.0, space_high_mult=4.0,
     fly_low_mult=2.0, fly_high_mult=1.5,
@@ -274,7 +266,6 @@ GILLY = Body(
         dvGL=30, dvLE=None, dvEI=None, dvK=None,
         dvLI=410, dvPL=None, dvPE=60, dvPlaneChange=0,
     ),
-    check_scale=1,
     num_biomes=3,
     space_low_mult=9.0, space_high_mult=4.5,
     landed_mult=12.0,
@@ -293,7 +284,6 @@ DUNA = Body(
         dvGL=1450, dvLE=360, dvEI=250, dvK=130,
         dvLI=None, dvPL=None, dvPE=None, dvPlaneChange=10,
     ),
-    check_scale=2,
     num_biomes=5,
     space_low_mult=8.0, space_high_mult=4.0,
     fly_low_mult=1.5, fly_high_mult=1.2,
@@ -313,7 +303,6 @@ IKE = Body(
         dvGL=390, dvLE=None, dvEI=None, dvK=None,
         dvLI=180, dvPL=None, dvPE=30, dvPlaneChange=0,
     ),
-    check_scale=1,
     num_biomes=5,
     space_low_mult=8.0, space_high_mult=4.0,
     landed_mult=8.0,
@@ -332,7 +321,6 @@ DRES = Body(
         dvGL=430, dvLE=None, dvEI=None, dvK=610,
         dvLI=1290, dvPL=None, dvPE=None, dvPlaneChange=1010,
     ),
-    check_scale=2,
     num_biomes=5,
     space_low_mult=8.0, space_high_mult=4.0,
     landed_mult=8.0,
@@ -351,7 +339,6 @@ JOOL = Body(
         dvGL=14000, dvLE=2810, dvEI=160, dvK=980,
         dvLI=None, dvPL=None, dvPE=None, dvPlaneChange=270,
     ),
-    check_scale=2,
     num_biomes=0,
     space_low_mult=12.0, space_high_mult=6.0,
     fly_low_mult=6.0, fly_high_mult=4.0,
@@ -370,7 +357,6 @@ LAYTHE = Body(
         dvGL=2900, dvLE=None, dvEI=None, dvK=None,
         dvLI=1070, dvPL=None, dvPE=930, dvPlaneChange=0,
     ),
-    check_scale=3,
     has_ocean=True, num_biomes=9, num_splash_biomes=4,
     space_low_mult=12.0, space_high_mult=6.0,
     fly_low_mult=4.0, fly_high_mult=3.0,
@@ -390,7 +376,6 @@ VALL = Body(
         dvGL=860, dvLE=None, dvEI=None, dvK=None,
         dvLI=910, dvPL=None, dvPE=620, dvPlaneChange=0,
     ),
-    check_scale=3,
     num_biomes=9,
     space_low_mult=12.0, space_high_mult=6.0,
     landed_mult=12.0,
@@ -409,7 +394,6 @@ TYLO = Body(
         dvGL=2270, dvLE=None, dvEI=None, dvK=None,
         dvLI=1100, dvPL=None, dvPE=400, dvPlaneChange=0,
     ),
-    check_scale=3,
     num_biomes=6,
     space_low_mult=12.0, space_high_mult=6.0,
     landed_mult=12.0,
@@ -428,7 +412,6 @@ BOP = Body(
         dvGL=230, dvLE=None, dvEI=None, dvK=None,
         dvLI=900, dvPL=None, dvPE=220, dvPlaneChange=2440,
     ),
-    check_scale=2,
     num_biomes=4,
     space_low_mult=12.0, space_high_mult=6.0,
     landed_mult=12.0,
@@ -447,7 +430,6 @@ POL = Body(
         dvGL=130, dvLE=None, dvEI=None, dvK=None,
         dvLI=820, dvPL=None, dvPE=160, dvPlaneChange=700,
     ),
-    check_scale=2,
     num_biomes=4,
     space_low_mult=12.0, space_high_mult=6.0,
     landed_mult=12.0,
@@ -466,7 +448,6 @@ EELOO = Body(
         dvGL=620, dvLE=None, dvEI=None, dvK=1140,
         dvLI=1370, dvPL=None, dvPE=None, dvPlaneChange=1330,
     ),
-    check_scale=3,
     num_biomes=7,
     space_low_mult=15.0, space_high_mult=7.5,
     landed_mult=15.0,
@@ -485,7 +466,6 @@ KERBOL = Body(
         dvGL=67000, dvLE=None, dvEI=None, dvK=6000,
         dvLI=13700, dvPL=None, dvPE=None, dvPlaneChange=0,
     ),
-    check_scale=1,
     num_biomes=0,
     space_low_mult=2.0, space_high_mult=1.0,
 )

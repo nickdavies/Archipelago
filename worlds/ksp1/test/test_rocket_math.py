@@ -5,9 +5,7 @@ import math
 import unittest
 
 from worlds.ksp1.parts import (
-    Engine, FuelTank, SolidBooster, HeatShield,
-    _SWIVEL, _FL_T800, _FL_T400, _TERRIER, _MAINSAIL, _DAWN, _HAMMER,
-    _X200_32,
+    Engine, FuelTank, SolidBooster, HeatShield, PART_DB,
 )
 from worlds.ksp1.rocket_math import (
     G0, stage_delta_v, srb_delta_v, required_tanks, twr,
@@ -15,22 +13,37 @@ from worlds.ksp1.rocket_math import (
 )
 
 
+# Convenience accessors for real parts
+def _p(ap_item: str, idx: int = 0):
+    return PART_DB[ap_item][idx]
+
+
+_SWIVEL = _p('LV-T45 "Swivel" Liquid Fuel Engine')
+_TERRIER = _p('LV-909 "Terrier" Liquid Fuel Engine')
+_MAINSAIL = _p('RE-M3 "Mainsail" Liquid Fuel Engine')
+_DAWN = _p('IX-6315 "Dawn" Electric Propulsion System')
+_HAMMER = _p('RT-10 "Hammer" Solid Fuel Booster')
+_FL_T400 = _p("FL-T400 Fuel Tank")
+_FL_T800 = _p("FL-T800 Fuel Tank")
+_X200_32 = _p("Rockomax X200-32 Fuel Tank")
+_MK1_LF = _p("Mk1 Liquid Fuel Fuselage")
+
+
 class TestStageDeltaV(unittest.TestCase):
     """Verify Tsiolkovsky equation results against hand-calculated values."""
 
     def test_basic_dv(self) -> None:
-        # Swivel (vac_isp=320), 1 engine, 1× FL-T800 (dry 0.5t, fuel 4.5t), 1t payload
-        # m_wet = 1.0 + 1.5 + 0.5 + 4.5 = 7.5 t
-        # m_dry = 1.0 + 1.5 + 0.5       = 3.0 t
-        # dv = 320 * 9.80665 * ln(7.5/3.0) = 320 * 9.80665 * 0.9163 ≈ 2875 m/s
+        # Swivel + 1x FL-T800 + 1t payload
+        # m_wet = payload + engine_mass + tank_dry + tank_fuel
+        m_wet = 1.0 + _SWIVEL.mass + _FL_T800.dry_mass + _FL_T800.fuel_mass
+        m_dry = 1.0 + _SWIVEL.mass + _FL_T800.dry_mass
         dv = stage_delta_v(_SWIVEL, 1, _FL_T800, 1, 1.0, 1.0, in_atmosphere=False)
-        expected = 320 * G0 * math.log(7.5 / 3.0)
+        expected = _SWIVEL.vac_isp * G0 * math.log(m_wet / m_dry)
         self.assertAlmostEqual(dv, expected, places=1)
 
     def test_atmospheric_uses_atm_isp(self) -> None:
         dv_vac = stage_delta_v(_SWIVEL, 1, _FL_T800, 1, 1.0, 1.0, in_atmosphere=False)
         dv_atm = stage_delta_v(_SWIVEL, 1, _FL_T800, 1, 1.0, 1.0, in_atmosphere=True)
-        # Swivel atm_isp=270 < vac_isp=320, so atm dv < vac dv
         self.assertLess(dv_atm, dv_vac)
 
     def test_fill_fraction_reduces_dv(self) -> None:
@@ -46,10 +59,9 @@ class TestStageDeltaV(unittest.TestCase):
 
     def test_high_isp_engine(self) -> None:
         # Terrier vac_isp=345 should beat Swivel vac_isp=320 for same config
-        from worlds.ksp1.parts import _MK1_LF
         dv_terr = stage_delta_v(_TERRIER, 1, _MK1_LF, 1, 1.0, 0.5)
         dv_swiv = stage_delta_v(_SWIVEL, 1, _FL_T800, 1, 1.0, 0.5)
-        # Terrier has much higher Isp; should win even with smaller tank
+        # Terrier has much higher Isp; should produce positive dv
         self.assertGreater(dv_terr, 0)
 
     def test_zero_isp_returns_zero(self) -> None:
@@ -69,9 +81,6 @@ class TestSrbDeltaV(unittest.TestCase):
         self.assertGreater(dv, 0)
 
     def test_more_srbs_more_dv(self) -> None:
-        # Adding SRBs with the same payload mass improves the mass ratio:
-        # fuel:dry ratio of the SRBs (8.75:1) dominates when payload is diluted
-        # by more booster mass.  Net effect: more SRBs → better ratio → more dv.
         dv1 = srb_delta_v(_HAMMER, 1, 1.0)
         dv2 = srb_delta_v(_HAMMER, 2, 1.0)
         self.assertGreater(dv2, dv1)
@@ -106,7 +115,7 @@ class TestRequiredTanks(unittest.TestCase):
 class TestTWR(unittest.TestCase):
 
     def test_basic_twr(self) -> None:
-        # 200 kN thrust, 10 t mass, 9.81 m/s² gravity → TWR = 200/(10*9.81) ≈ 2.04
+        # 200 kN thrust, 10 t mass, 9.81 m/s^2 gravity -> TWR = 200/(10*9.81)
         result = twr(200.0, 10.0, 9.81)
         self.assertAlmostEqual(result, 200.0 / (10.0 * 9.81), places=4)
 
@@ -138,8 +147,8 @@ class TestTerminalVelocity(unittest.TestCase):
         self.assertEqual(v, float("inf"))
 
     def test_known_value(self) -> None:
-        # m=5t, g=9.81, ρ=1.225, Cd=0, A=0, chute=400m²
-        # v = sqrt(2*5000*9.81 / (1.225*400)) ≈ 14.15 m/s
+        # m=5t, g=9.81, rho=1.225, Cd=0, A=0, chute=400m^2
+        # v = sqrt(2*5000*9.81 / (1.225*400))
         v = terminal_velocity(5.0, 9.81, 1.225, 0.0, 0.0, 400.0)
         expected = math.sqrt(2 * 5000 * 9.81 / (1.225 * 400))
         self.assertAlmostEqual(v, expected, places=2)
@@ -219,7 +228,6 @@ class TestFindOptimalStage(unittest.TestCase):
 
     def test_twr_requirement_satisfied(self) -> None:
         # Mainsail is a 2.5m engine — it requires a 2.5m tank (X200-32).
-        # FL_T800 is 1.25m and would give max_engine_count=0 for a 2.5m engine.
         result = find_optimal_stage(
             available_engines=[_MAINSAIL],
             available_srbs=[],

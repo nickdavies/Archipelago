@@ -8,15 +8,11 @@ Science costs are scaled so cumulative costs roughly match:
   - Through tier 7: ~7,233 science
   - Through tier 9: ~18,233 science (≈ complete tech tree cost)
 
-Part names reference PART_DB keys in parts.py.  Nodes without entries in
-the current PART_DB still exist as locations; their part list will fill in
-as PART_DB grows toward the full stock part list.
-
 Source of truth: GameData/Squad/Resources/TechTree.cfg (verify against this).
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
@@ -25,7 +21,6 @@ class TechNode:
     display_name: str       # Human-readable label
     tier: int               # 1-9
     science_cost: int       # Science required to unlock
-    parts: tuple[str, ...]  # AP item names (PART_DB keys) living in this node
 
 
 # ---------------------------------------------------------------------------
@@ -36,363 +31,81 @@ TECH_NODES: list[TechNode] = [
     # -----------------------------------------------------------------------
     # Tier 1  (1 node, cumulative: 5)
     # -----------------------------------------------------------------------
-    TechNode(
-        node_id="basicRocketry",
-        display_name="Basic Rocketry",
-        tier=1, science_cost=5,
-        parts=(
-            "Command Pod",
-            "Reliant Engine",
-            "FL-T400 Tank",
-            "Mk16 Parachute",
-            "TR-18A Decoupler",
-        ),
-    ),
+    TechNode("basicRocketry", "Basic Rocketry", tier=1, science_cost=5),
 
     # -----------------------------------------------------------------------
     # Tier 2  (3 nodes, cumulative: 65)
     # -----------------------------------------------------------------------
-    TechNode(
-        node_id="generalRocketry",
-        display_name="General Rocketry",
-        tier=2, science_cost=20,
-        parts=(
-            "Oscar-B Tank",
-            "FL-T800 Tank",
-            "Hammer SRB",
-            "TT-38K Radial Decoupler",
-        ),
-    ),
-    TechNode(
-        node_id="survivability",
-        display_name="Survivability",
-        tier=2, science_cost=20,
-        parts=(
-            "LT-1 Landing Legs",
-            "Mk2-R Drogue",
-        ),
-    ),
-    TechNode(
-        node_id="stability",
-        display_name="Stability",
-        tier=2, science_cost=20,
-        parts=(
-            "OX-STAT Solar",
-            "Communotron 16",
-        ),
-    ),
+    TechNode("generalRocketry", "General Rocketry", tier=2, science_cost=20),
+    TechNode("survivability", "Survivability", tier=2, science_cost=20),
+    TechNode("stability", "Stability", tier=2, science_cost=20),
 
     # -----------------------------------------------------------------------
     # Tier 3  (5 nodes, cumulative: 335)
     # -----------------------------------------------------------------------
-    TechNode(
-        node_id="advRocketry",
-        display_name="Advanced Rocketry",
-        tier=3, science_cost=45,
-        parts=(
-            "Swivel Engine",
-            "FL-R10 Monoprop Tank",
-            "RCS Thruster",
-        ),
-    ),
-    TechNode(
-        node_id="spaceExploration",
-        display_name="Space Exploration",
-        tier=3, science_cost=45,
-        parts=(
-            "Probe Core",
-            "OX-4 Solar",
-            "Z-4K Battery",
-        ),
-    ),
-    TechNode(
-        node_id="advConstruction",
-        display_name="Advanced Construction",
-        tier=3, science_cost=45,
-        parts=(
-            "FTX-2 Fuel Line",
-            "Crew Ladder",
-        ),
-    ),
-    TechNode(
-        node_id="fieldScience",
-        display_name="Field Science",
-        tier=3, science_cost=90,
-        parts=(
-            "Probodobodyne OKTO2",
-            "HG-5 Relay",
-            "Thermometer",
-            "Barometer",
-        ),
-    ),
-    TechNode(
-        node_id="basicScience",
-        display_name="Basic Science",
-        tier=3, science_cost=45,
-        parts=(
-            "Reaction Wheel",
-            "Struts",
-        ),
-    ),
+    TechNode("advRocketry", "Advanced Rocketry", tier=3, science_cost=45),
+    TechNode("spaceExploration", "Space Exploration", tier=3, science_cost=45),
+    TechNode("advConstruction", "Advanced Construction", tier=3, science_cost=45),
+    TechNode("fieldScience", "Field Science", tier=3, science_cost=90),
+    TechNode("basicScience", "Basic Science", tier=3, science_cost=45),
 
     # -----------------------------------------------------------------------
     # Tier 4  (6 nodes, cumulative: 835)
     # -----------------------------------------------------------------------
-    TechNode(
-        node_id="propulsionSystems",
-        display_name="Propulsion Systems",
-        tier=4, science_cost=80,
-        parts=(
-            "Terrier Engine",
-            "Rockomax X200-32",
-            "Docking Port",
-        ),
-    ),
-    TechNode(
-        node_id="advExploration",
-        display_name="Advanced Exploration",
-        tier=4, science_cost=80,
-        parts=(
-            "1.25m Heat Shield",
-        ),
-    ),
-    TechNode(
-        node_id="landing",
-        display_name="Landing",
-        tier=4, science_cost=60,
-        parts=(
-            "LT-2 Landing Strut",
-        ),
-    ),
-    TechNode(
-        node_id="advAerodynamics",
-        display_name="Advanced Aerodynamics",
-        tier=4, science_cost=100,
-        parts=(),
-    ),
-    TechNode(
-        node_id="scienceTech",
-        display_name="Science Tech",
-        tier=4, science_cost=120,
-        parts=(),
-    ),
-    TechNode(
-        node_id="generalConstruction",
-        display_name="General Construction",
-        tier=4, science_cost=60,
-        parts=(),
-    ),
+    TechNode("propulsionSystems", "Propulsion Systems", tier=4, science_cost=80),
+    TechNode("advExploration", "Advanced Exploration", tier=4, science_cost=80),
+    TechNode("landing", "Landing", tier=4, science_cost=60),
+    TechNode("advAerodynamics", "Advanced Aerodynamics", tier=4, science_cost=100),
+    TechNode("scienceTech", "Science Tech", tier=4, science_cost=120),
+    TechNode("generalConstruction", "General Construction", tier=4, science_cost=60),
 
     # -----------------------------------------------------------------------
     # Tier 5  (7 nodes, cumulative: 1883)
     # -----------------------------------------------------------------------
-    TechNode(
-        node_id="heavyRocketry",
-        display_name="Heavy Rocketry",
-        tier=5, science_cost=130,
-        parts=(
-            "Poodle Engine",
-            "Rockomax Jumbo-64",
-        ),
-    ),
-    TechNode(
-        node_id="highAltitudeFlight",
-        display_name="High Altitude Flight",
-        tier=5, science_cost=130,
-        parts=(),
-    ),
-    TechNode(
-        node_id="advLanding",
-        display_name="Advanced Landing",
-        tier=5, science_cost=150,
-        parts=(),
-    ),
-    TechNode(
-        node_id="actuators",
-        display_name="Actuators",
-        tier=5, science_cost=180,
-        parts=(),
-    ),
-    TechNode(
-        node_id="electronics",
-        display_name="Electronics",
-        tier=5, science_cost=180,
-        parts=(),
-    ),
-    TechNode(
-        node_id="ionPropulsion",
-        display_name="Ion Propulsion",
-        tier=5, science_cost=150,
-        parts=(
-            "Dawn Ion Engine",
-            "PB-X50R Xenon Tank",
-            "Gigantor Solar Array",
-        ),
-    ),
-    TechNode(
-        node_id="precisionEngineering",
-        display_name="Precision Engineering",
-        tier=5, science_cost=128,
-        parts=(
-            "2.5m Heat Shield",
-        ),
-    ),
+    TechNode("heavyRocketry", "Heavy Rocketry", tier=5, science_cost=130),
+    TechNode("highAltitudeFlight", "High Altitude Flight", tier=5, science_cost=130),
+    TechNode("advLanding", "Advanced Landing", tier=5, science_cost=150),
+    TechNode("actuators", "Actuators", tier=5, science_cost=180),
+    TechNode("electronics", "Electronics", tier=5, science_cost=180),
+    TechNode("ionPropulsion", "Ion Propulsion", tier=5, science_cost=150),
+    TechNode("precisionEngineering", "Precision Engineering", tier=5, science_cost=128),
 
     # -----------------------------------------------------------------------
     # Tier 6  (8 nodes, cumulative: 4033)
     # -----------------------------------------------------------------------
-    TechNode(
-        node_id="heavierRocketry",
-        display_name="Heavier Rocketry",
-        tier=6, science_cost=200,
-        parts=(
-            "Mainsail Engine",
-        ),
-    ),
-    TechNode(
-        node_id="nuclearPropulsion",
-        display_name="Nuclear Propulsion",
-        tier=6, science_cost=600,
-        parts=(
-            "Nerv Engine",
-            "Mk1 LF Tank",
-        ),
-    ),
-    TechNode(
-        node_id="specializedControl",
-        display_name="Specialized Control",
-        tier=6, science_cost=300,
-        parts=(),
-    ),
-    TechNode(
-        node_id="unmannedTech",
-        display_name="Unmanned Tech",
-        tier=6, science_cost=200,
-        parts=(
-            "RA-2 Relay",
-            "RTG",
-        ),
-    ),
-    TechNode(
-        node_id="advScienceTech",
-        display_name="Advanced Science Tech",
-        tier=6, science_cost=250,
-        parts=(),
-    ),
-    TechNode(
-        node_id="specializedConstruction",
-        display_name="Specialized Construction",
-        tier=6, science_cost=200,
-        parts=(),
-    ),
-    TechNode(
-        node_id="largeElectrics",
-        display_name="Large Electrics",
-        tier=6, science_cost=200,
-        parts=(),
-    ),
-    TechNode(
-        node_id="composites",
-        display_name="Composites",
-        tier=6, science_cost=200,
-        parts=(),
-    ),
+    TechNode("heavierRocketry", "Heavier Rocketry", tier=6, science_cost=200),
+    TechNode("nuclearPropulsion", "Nuclear Propulsion", tier=6, science_cost=600),
+    TechNode("specializedControl", "Specialized Control", tier=6, science_cost=300),
+    TechNode("unmannedTech", "Unmanned Tech", tier=6, science_cost=200),
+    TechNode("advScienceTech", "Advanced Science Tech", tier=6, science_cost=250),
+    TechNode("specializedConstruction", "Specialized Construction", tier=6, science_cost=200),
+    TechNode("largeElectrics", "Large Electrics", tier=6, science_cost=200),
+    TechNode("composites", "Composites", tier=6, science_cost=200),
 
     # -----------------------------------------------------------------------
     # Tier 7  (6 nodes, cumulative: 7233)
     # -----------------------------------------------------------------------
-    TechNode(
-        node_id="veryHeavyRocketry",
-        display_name="Very Heavy Rocketry",
-        tier=7, science_cost=550,
-        parts=(
-            "Rhino Engine",
-            "Kerbodyne S3-3600",
-        ),
-    ),
-    TechNode(
-        node_id="experimentalElectrics",
-        display_name="Experimental Electrics",
-        tier=7, science_cost=600,
-        parts=(),
-    ),
-    TechNode(
-        node_id="highPerformanceFuelSystems",
-        display_name="High Performance Fuel Systems",
-        tier=7, science_cost=600,
-        parts=(),
-    ),
-    TechNode(
-        node_id="advUnmannedTech",
-        display_name="Advanced Unmanned Tech",
-        tier=7, science_cost=600,
-        parts=(),
-    ),
-    TechNode(
-        node_id="robotics",
-        display_name="Robotics",
-        tier=7, science_cost=500,
-        parts=(),
-    ),
-    TechNode(
-        node_id="experimentalMotors",
-        display_name="Experimental Motors",
-        tier=7, science_cost=350,
-        parts=(),
-    ),
+    TechNode("veryHeavyRocketry", "Very Heavy Rocketry", tier=7, science_cost=550),
+    TechNode("experimentalElectrics", "Experimental Electrics", tier=7, science_cost=600),
+    TechNode("highPerformanceFuelSystems", "High Performance Fuel Systems", tier=7, science_cost=600),
+    TechNode("advUnmannedTech", "Advanced Unmanned Tech", tier=7, science_cost=600),
+    TechNode("robotics", "Robotics", tier=7, science_cost=500),
+    TechNode("experimentalMotors", "Experimental Motors", tier=7, science_cost=350),
 
     # -----------------------------------------------------------------------
     # Tier 8  (5 nodes, cumulative: 15733)
     # -----------------------------------------------------------------------
-    TechNode(
-        node_id="aerospaceComposites",
-        display_name="Aerospace Composites",
-        tier=8, science_cost=1800,
-        parts=(
-            "Mammoth Engine",
-            "3.75m Heat Shield",
-        ),
-    ),
-    TechNode(
-        node_id="fieldResearch",
-        display_name="Field Research",
-        tier=8, science_cost=1800,
-        parts=(),
-    ),
-    TechNode(
-        node_id="nanolathing",
-        display_name="Nanolathing",
-        tier=8, science_cost=1700,
-        parts=(),
-    ),
-    TechNode(
-        node_id="advancedMotors",
-        display_name="Advanced Motors",
-        tier=8, science_cost=1600,
-        parts=(),
-    ),
-    TechNode(
-        node_id="highPerformanceSystems",
-        display_name="High Performance Systems",
-        tier=8, science_cost=1600,
-        parts=(),
-    ),
+    TechNode("aerospaceComposites", "Aerospace Composites", tier=8, science_cost=1800),
+    TechNode("fieldResearch", "Field Research", tier=8, science_cost=1800),
+    TechNode("nanolathing", "Nanolathing", tier=8, science_cost=1700),
+    TechNode("advancedMotors", "Advanced Motors", tier=8, science_cost=1600),
+    TechNode("highPerformanceSystems", "High Performance Systems", tier=8, science_cost=1600),
 
     # -----------------------------------------------------------------------
     # Tier 9  (2 nodes, cumulative: 18233)
     # -----------------------------------------------------------------------
-    TechNode(
-        node_id="metaMaterials",
-        display_name="Meta-Materials",
-        tier=9, science_cost=1400,
-        parts=(),
-    ),
-    TechNode(
-        node_id="ultimateRocketry",
-        display_name="Ultimate Rocketry",
-        tier=9, science_cost=1100,
-        parts=(),
-    ),
+    TechNode("metaMaterials", "Meta-Materials", tier=9, science_cost=1400),
+    TechNode("ultimateRocketry", "Ultimate Rocketry", tier=9, science_cost=1100),
 ]
 
 assert len(TECH_NODES) == 43, f"Expected 43 tech nodes, got {len(TECH_NODES)}"

@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from .world import KSP1World
 
 _CACHE_KEY = "ksp1_capability"
+_VERSION_KEY = "ksp1_cap_version"
 
 # Terminal velocity threshold for parachute adequacy (m/s)
 _MAX_SAFE_LANDING_SPEED: float = 6.0
@@ -55,6 +56,9 @@ _MIN_EVA_JETPACK_TWR: float = 1.05
 
 # Bodies that are purely orbital (cannot land regardless of equipment)
 _ORBITAL_ONLY_BODIES: frozenset[str] = frozenset({"Jool", "Kerbol"})
+
+# Sounding rocket parameters
+_SOUNDING_MIN_TWR: float = 1.1   # minimum sea-level TWR to count as a viable rocket
 
 # Interplanetary gate: any mission leaving Kerbin SOI requires launch clamps
 _INTERPLANETARY_BODIES: frozenset[str] = frozenset({
@@ -87,6 +91,8 @@ class EquipmentFlags:
     has_ladder: bool = False
     has_launch_clamp: bool = False
     has_isru: bool = False
+    has_thermometer: bool = False
+    has_barometer: bool = False
 
     # Tiered values
     landing_leg_tier: int = 0       # 0 = no legs
@@ -146,6 +152,11 @@ class RocketCapability:
     power_profile: str = "none"
     staging_tier: int = 0
     has_launch_clamp: bool = False
+    has_thermometer: bool = False
+    has_barometer: bool = False
+
+    # Sounding rocket: best achievable altitude (km) with a single stage
+    sounding_altitude_km: float = 0.0
 
     # Per-body assessments
     bodies: dict[str, BodyAccessProfile] = field(default_factory=dict)
@@ -161,12 +172,45 @@ class RocketCapability:
 def get_capability(state: CollectionState, player: int) -> RocketCapability:
     """
     Return the cached RocketCapability for this state/player, computing it
-    if cold.  This is the only function that access rules should call.
+    if the cache is cold or stale.
+
+    Staleness is detected by comparing the current sum of collected progression
+    items against the version stored at cache time.  This ensures that adding
+    items to the state (via collect()) always produces a fresh result.
     """
     cache: dict[int, RocketCapability] = state.prog_items.setdefault(_CACHE_KEY, {})
-    if player not in cache:
+    versions: dict[int, int] = state.prog_items.setdefault(_VERSION_KEY, {})
+    current_version = sum(state.prog_items[player].values())
+    if player not in cache or versions.get(player, -1) != current_version:
         cache[player] = _compute_capability(state, player)
+        versions[player] = current_version
     return cache[player]
+
+
+def explain_body_unreachable(state: CollectionState, player: int, body_name: str) -> str:
+    """
+    Return a human-readable explanation of why *body_name* is not fully
+    accessible given the current collection state.  Useful for debugging
+    test failures and in-game diagnostics.
+    """
+    cap = get_capability(state, player)
+    bp = cap.bodies.get(body_name)
+    if bp is None:
+        return f"{body_name}: not evaluated (not in mission graph)"
+    if bp.blocking_reason:
+        return f"{body_name}: {bp.blocking_reason}"
+    lines = []
+    if not bp.can_orbit_low:
+        lines.append("cannot orbit (low)")
+    if not bp.can_land_unmanned:
+        lines.append("cannot land (unmanned)")
+    if not bp.can_land_crewed:
+        lines.append(f"cannot land (crewed) — has_capsule={cap.has_capsule}")
+    if not bp.can_return_to_kerbin:
+        lines.append("cannot return to Kerbin")
+    if not bp.can_sample_return:
+        lines.append("cannot sample return")
+    return f"{body_name}: " + ("; ".join(lines) if lines else "fully accessible")
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +290,21 @@ def _pre_pass(state: CollectionState, player: int,
     return flags
 
 
+def _apply_misc_relay(flags: EquipmentFlags, flag: str) -> None:
+    """Set relay tier from a provides flag string."""
+    if flag == "relay_t1" and flags.relay_tier < 1:
+        flags.relay_tier = 1
+    elif flag == "relay_t2" and flags.relay_tier < 2:
+        flags.relay_tier = 2
+    elif flag == "relay_t3" and flags.relay_tier < 3:
+        flags.relay_tier = 3
+
+
+def _compute_relay_tier(flags: EquipmentFlags) -> int:
+    """Return the relay tier already computed by _apply_misc."""
+    return flags.relay_tier
+
+
 def _apply_misc(flags: EquipmentFlags, part: MiscEquipment, count: int) -> None:
     for flag in part.provides:
         if flag == "probe_core":
@@ -281,68 +340,10 @@ def _apply_misc(flags: EquipmentFlags, part: MiscEquipment, count: int) -> None:
             flags.has_launch_clamp = True
         elif flag == "isru":
             flags.has_isru = True
-
-
-def _compute_relay_tier(flags: EquipmentFlags) -> int:
-    # relay_t1/t2/t3 flags set via _apply_misc on MiscEquipment provides
-    # We check which were granted via the provides mechanism — the flags
-    # object tracks this through has_relay_t* attributes, but we collapsed
-    # them into relay_tier during _apply_misc.  To avoid over-engineering,
-    # we track relay tier via the highest relay flag seen.
-    # Re-scan available engines is unnecessary; tier is set during _apply_misc.
-    # The tier is already computed progressively — return current value.
-    return flags.relay_tier
-
-
-def _apply_misc_relay(flags: EquipmentFlags, flag: str) -> None:
-    """Set relay tier from a provides flag string."""
-    if flag == "relay_t1" and flags.relay_tier < 1:
-        flags.relay_tier = 1
-    elif flag == "relay_t2" and flags.relay_tier < 2:
-        flags.relay_tier = 2
-    elif flag == "relay_t3" and flags.relay_tier < 3:
-        flags.relay_tier = 3
-
-
-# Patch _apply_misc to also handle relay flags properly
-_original_apply_misc = _apply_misc
-
-
-def _apply_misc(flags: EquipmentFlags, part: MiscEquipment, count: int) -> None:  # type: ignore[no-redef]
-    for flag in part.provides:
-        if flag == "probe_core":
-            flags.has_probe_core = True
-            if part.mass < flags.lightest_probe_mass:
-                flags.lightest_probe_mass = part.mass
-        elif flag == "capsule":
-            flags.has_capsule = True
-            if part.mass > flags.heaviest_capsule_mass:
-                flags.heaviest_capsule_mass = part.mass
-        elif flag == "reaction_wheel":
-            flags.has_reaction_wheels = True
-        elif flag == "rcs":
-            flags.has_rcs = True
-        elif flag in ("solar_fixed", "solar_retractable"):
-            flags.has_solar = True
-            if flag == "solar_retractable":
-                flags.has_solar_retractable = True
-        elif flag == "solar_array_large":
-            flags.has_solar_array_large = True
-            flags.has_solar = True
-        elif flag == "rtg":
-            flags.has_rtg = True
-        elif flag == "battery_large":
-            flags.has_battery_large = True
-        elif flag == "docking_port":
-            flags.has_docking_port = True
-        elif flag == "fuel_line":
-            flags.has_fuel_lines = True
-        elif flag == "ladder":
-            flags.has_ladder = True
-        elif flag == "launch_clamp":
-            flags.has_launch_clamp = True
-        elif flag == "isru":
-            flags.has_isru = True
+        elif flag == "thermometer":
+            flags.has_thermometer = True
+        elif flag == "barometer":
+            flags.has_barometer = True
         elif flag.startswith("relay_"):
             _apply_misc_relay(flags, flag)
 
@@ -523,7 +524,6 @@ def _evaluate_profile(
     payload = terminal_mass + terminal_equip
 
     stage_results_list: list[StageResult] = []
-    consumed_chutes = 0
 
     for group in reversed(groups):
         body = BODY_BY_NAME[group[0].body]
@@ -541,18 +541,27 @@ def _evaluate_profile(
 
         # Group-level constraints (union = strictest)
         from .bodies import EdgeType as ET
+        # Only propulsive burns force atmospheric ISP and higher TWR floors.
+        # Aerocapture (passive drag) and aero landings (parachutes) are not
+        # engine-powered, so they must not contaminate the ISP selection for
+        # the rest of the group (e.g. vacuum interplanetary burns).
         atmo_types = {
-            ET.ATMOSPHERIC_ASCENT, ET.ATMO_LANDING_PROPULSIVE,
-            ET.ATMO_LANDING_AERO, ET.AEROBRAKE_CAPTURE,
+            ET.ATMOSPHERIC_ASCENT,
+            ET.ATMO_LANDING_PROPULSIVE,
         }
         in_atmo = any(e.edge_type in atmo_types for e in group)
-        min_twr = max(e.min_twr for e in group)
-        # Apply difficulty-specific TWR floors
-        if min_twr > 0:
-            if in_atmo:
-                min_twr = max(min_twr, diff.min_twr_atmo)
-            else:
-                min_twr = max(min_twr, diff.min_twr_vac)
+
+        # Per-edge TWR → acceleration conversion to handle merged groups that
+        # span bodies with very different gravities.  A Gilly VL min_twr=1.2
+        # at g=0.049 m/s² must not be evaluated at Kerbin g=9.81 m/s².
+        _min_accel = 0.0
+        for _e in group:
+            if _e.min_twr > 0:
+                _g_e = BODY_BY_NAME[_e.body].surface_gravity
+                _floor = diff.min_twr_atmo if _e.edge_type in atmo_types else diff.min_twr_vac
+                _min_accel = max(_min_accel, max(_e.min_twr, _floor) * _g_e)
+        min_twr = _min_accel / body.surface_gravity if body.surface_gravity > 0 else 0.0
+
         req_throttle = any(e.requires_throttleable for e in group)
         needs_hs = any(e.needs_heat_shield for e in group)
         needs_legs_g = any(e.needs_landing_legs for e in group)
@@ -565,18 +574,19 @@ def _evaluate_profile(
             leg_body = BODY_BY_NAME[next(e.body for e in group if e.needs_landing_legs)]
             equip_mass += _leg_mass_for_tier(flags, leg_body.landing_leg_tier)
 
-        # Parachute consumption check for aero landing edges in this group
+        # Parachute consumption check for aero landing edges in this group.
+        # Use the landing edge's actual body (not the group's first body) since
+        # groups may be merged across bodies.  The heat shield is jettisoned
+        # during aero-braking before parachutes deploy, so it is excluded from
+        # the chute landing-mass estimate.
         aero_land_edges = [e for e in group if e.edge_type == ET.ATMO_LANDING_AERO]
         if aero_land_edges:
-            needed = _required_chute_count(
-                payload + equip_mass, body, flags, diff
-            )
-            if needed < 0:
-                return ProfileResult(False, failure_reason="parachute terminal velocity check failed")
-            consumed_chutes += needed
-            if consumed_chutes > flags.parachute_count:
-                return ProfileResult(False,
-                    failure_reason=f"need {consumed_chutes} chutes, have {flags.parachute_count}")
+            for _aero_e in aero_land_edges:
+                _aero_body = BODY_BY_NAME[_aero_e.body]
+                needed = _required_chute_count(payload, _aero_body, flags, diff)
+                if needed < 0:
+                    return ProfileResult(False,
+                        failure_reason=f"parachute terminal velocity check failed at {_aero_body.name}")
 
         asparagus = (flags.staging_tier >= 2 and flags.has_fuel_lines)
 
@@ -639,8 +649,11 @@ def _group_edges(profile: list[MissionEdge], staging_tier: int) -> list[list[Mis
         cur = profile[i]
         nxt = profile[i + 1]
 
-        # Always split after Kerbin atmospheric ascent
-        if cur.edge_type == ET.ATMOSPHERIC_ASCENT and cur.body == "Kerbin":
+        # Always split after any atmospheric or vacuum ascent.
+        # Surface ascents (AT/VA) are always their own stage — they have
+        # different ISP, TWR requirements, and gravity from the burns that
+        # follow once the vehicle is in orbit.
+        if cur.edge_type in (ET.ATMOSPHERIC_ASCENT, ET.VACUUM_ASCENT):
             splits.append(i)
             continue
 
@@ -692,19 +705,20 @@ def _terminal_equipment_mass(profile: list[MissionEdge],
                               flags: EquipmentFlags) -> float:
     """
     Equipment mass carried all the way to the terminal destination.
-    This is the mass of legs / ladder / heat shield on the final landing.
+
+    Legs are only included if the LAST edge in the profile needs landing legs.
+    On return missions the last edge is Kerbin reentry (no legs); the legs
+    used at intermediate bodies are left on the surface, not returned.
     """
-    # Find the last landing edge (if any) — its equipment rides with the terminal payload
-    from .bodies import EdgeType as ET
     mass = 0.0
-    for edge in reversed(profile):
-        if edge.needs_landing_legs:
-            body = BODY_BY_NAME.get(edge.body)
+    if profile:
+        last_edge = profile[-1]
+        if last_edge.needs_landing_legs:
+            body = BODY_BY_NAME.get(last_edge.body)
             if body:
                 mass += _leg_mass_for_tier(flags, body.landing_leg_tier)
-            break
-    # Ladder
-    if any(e.needs_ladder for e in profile):
+    # Ladder — only if last edge needs one (same logic: left at surface otherwise)
+    if profile and profile[-1].needs_ladder:
         mass += 0.005  # Pegasus ladder mass
     return mass
 
@@ -747,7 +761,10 @@ def _required_chute_count(
         return -1
 
     chute = non_drogue[0]  # use the first available (all Mk16s in dummy DB)
-    max_chutes = flags.parachute_count
+    # The AP item represents the parachute *type* being unlocked, not a single
+    # physical part.  Once unlocked, the player can attach as many as needed.
+    # Use a generous per-mission budget (50) so the physics check can succeed.
+    max_chutes = flags.parachute_count * 50
 
     for n in range(1, max_chutes + 1):
         total_mass = landing_mass + chute.mass * n
@@ -809,17 +826,6 @@ def _assess_one_body(
                 prof.blocking_reason = f"parent {body.parent} orbit unreachable"
                 return prof
 
-    # --- Kerbin is always accessible (starting body) ---
-    if body.name == "Kerbin":
-        prof.can_orbit_low = True
-        prof.can_orbit_high = True
-        prof.can_land_unmanned = True
-        prof.can_land_crewed = flags.has_capsule
-        prof.can_return_to_kerbin = True
-        prof.can_return_crewed = flags.has_capsule
-        prof.can_sample_return = flags.has_capsule
-        return prof
-
     # --- Launch clamp gate for interplanetary ---
     if body.name in _INTERPLANETARY_BODIES and not flags.has_launch_clamp:
         prof.blocking_reason = "no launch clamp for interplanetary mission"
@@ -838,28 +844,32 @@ def _assess_one_body(
     # --- Landing (unmanned) ---
     if body.can_land and body.name not in _ORBITAL_ONLY_BODIES:
         land_profiles = MISSION_PROFILES.get((body.name, "land"), [])
-        prof.can_land_unmanned = _try_profiles(
-            land_profiles, flags, diff, "land", crewed=False
-        )
+        ok, reason = _try_profiles_reason(land_profiles, flags, diff, "land", crewed=False)
+        prof.can_land_unmanned = ok
+        if not ok and not prof.blocking_reason:
+            prof.blocking_reason = f"land: {reason}"
 
         # Landing (crewed)
         if flags.has_capsule:
-            prof.can_land_crewed = _try_profiles(
-                land_profiles, flags, diff, "land", crewed=True
-            )
+            ok, reason = _try_profiles_reason(land_profiles, flags, diff, "land", crewed=True)
+            prof.can_land_crewed = ok
+            if not ok and not prof.blocking_reason:
+                prof.blocking_reason = f"crewed land: {reason}"
 
     # --- Return (unmanned) ---
     return_profiles = MISSION_PROFILES.get((body.name, "return"), [])
     if return_profiles:
-        prof.can_return_to_kerbin = _try_profiles(
-            return_profiles, flags, diff, "return", crewed=False
-        )
+        ok, reason = _try_profiles_reason(return_profiles, flags, diff, "return", crewed=False)
+        prof.can_return_to_kerbin = ok
+        if not ok and not prof.blocking_reason:
+            prof.blocking_reason = f"return: {reason}"
 
         # Return (crewed)
         if flags.has_capsule:
-            prof.can_return_crewed = _try_profiles(
-                return_profiles, flags, diff, "return", crewed=True
-            )
+            ok, reason = _try_profiles_reason(return_profiles, flags, diff, "return", crewed=True)
+            prof.can_return_crewed = ok
+            if not ok and not prof.blocking_reason:
+                prof.blocking_reason = f"crewed return: {reason}"
 
     # --- Sample return (crewed + ladder check) ---
     if body.can_land and body.name not in _ORBITAL_ONLY_BODIES:
@@ -870,9 +880,12 @@ def _assess_one_body(
                 sr_profiles_with_ladder = _inject_ladder(sr_profiles)
             else:
                 sr_profiles_with_ladder = sr_profiles
-            prof.can_sample_return = _try_profiles(
+            ok, reason = _try_profiles_reason(
                 sr_profiles_with_ladder, flags, diff, "sample_return", crewed=True
             )
+            prof.can_sample_return = ok
+            if not ok and not prof.blocking_reason:
+                prof.blocking_reason = f"sample return: {reason}"
 
     return prof
 
@@ -909,9 +922,102 @@ def _try_profiles(
     return False
 
 
+def _try_profiles_reason(
+    profiles: list[list[MissionEdge]],
+    flags: EquipmentFlags,
+    diff: DifficultyProfile,
+    mission_type: str,
+    crewed: bool,
+) -> tuple[bool, str]:
+    """
+    Like _try_profiles but also returns the failure reason from the best
+    (last) profile attempt on failure.
+    """
+    last_reason = "no profiles defined"
+    for profile in profiles:
+        result = _evaluate_profile(profile, flags, diff, mission_type, is_crewed=crewed)
+        if result.feasible:
+            return True, ""
+        last_reason = result.failure_reason
+    return False, last_reason
+
+
 # ---------------------------------------------------------------------------
 # Step 4: Assemble RocketCapability
 # ---------------------------------------------------------------------------
+
+def _compute_sounding_altitude(flags: EquipmentFlags) -> float:
+    """
+    Estimate the maximum altitude (km) achievable with a single-stage sounding
+    rocket built from the player's current parts.
+
+    Formula: h_km = Δv² · (twr − 1) / (2 · g · twr · 1000)
+    (No atmospheric drag; generous gravity-drag approximation; uses vacuum Isp
+    since drag becomes negligible in the upper atmosphere.)
+
+    Payload options:
+      • Probe core (unmanned) — no survival constraint.
+      • Capsule (crewed) — requires decoupler + parachute so the pod can
+        separate from the rocket body and land safely.
+    """
+    g = 9.81
+    best_km = 0.0
+
+    payloads: list[float] = []
+    if flags.has_probe_core and flags.lightest_probe_mass < float("inf"):
+        payloads.append(flags.lightest_probe_mass)
+    if flags.has_capsule and flags.heaviest_capsule_mass > 0:
+        # Crewed: survivable iff (decoupler + at least one parachute)
+        if flags.has_parachutes and flags.staging_tier >= 1:
+            payloads.append(flags.heaviest_capsule_mass)
+
+    if not payloads:
+        return 0.0
+
+    for payload_mass in payloads:
+        # Liquid / LF engines
+        for engine in flags.available_engines:
+            if engine.fuel_type not in ("lfo", "lf"):
+                continue  # ion/xenon have negligible atm thrust
+            thrust = engine.atm_thrust
+            m_base = engine.mass + payload_mass
+            max_total = thrust / (_SOUNDING_MIN_TWR * g)
+            if m_base >= max_total:
+                continue
+            max_prop = max_total - m_base
+            for tank in flags.available_tanks:
+                if tank.fuel_type != engine.fuel_type:
+                    continue
+                tank_full = tank.dry_mass + tank.fuel_mass
+                n = int(max_prop / tank_full)
+                if n < 1:
+                    continue
+                m0 = m_base + n * tank_full
+                m_dry = m_base + n * tank.dry_mass
+                if m_dry <= 0 or m0 <= m_dry:
+                    continue
+                dv = engine.vac_isp * g * math.log(m0 / m_dry)
+                twr = thrust / (g * m0)
+                if twr < _SOUNDING_MIN_TWR:
+                    continue
+                h_km = dv ** 2 * (twr - 1.0) / (2.0 * g * twr * 1000.0)
+                best_km = max(best_km, h_km)
+
+        # Solid rocket boosters
+        for srb in flags.available_srbs:
+            m0 = srb.dry_mass + srb.fuel_mass + payload_mass
+            m_dry = srb.dry_mass + payload_mass
+            if m_dry <= 0 or m0 <= m_dry:
+                continue
+            twr = srb.atm_thrust / (g * m0)
+            if twr < _SOUNDING_MIN_TWR:
+                continue
+            dv = srb.vac_isp * g * math.log(m0 / m_dry)
+            h_km = dv ** 2 * (twr - 1.0) / (2.0 * g * twr * 1000.0)
+            best_km = max(best_km, h_km)
+
+    return best_km
+
 
 def _compute_capability(state: CollectionState, player: int) -> RocketCapability:
     """Full capability computation from the current collection state."""
@@ -925,6 +1031,7 @@ def _compute_capability(state: CollectionState, player: int) -> RocketCapability
 
     flags = _pre_pass(state, player, start_with_clamps)
     body_profiles = _assess_bodies(flags, diff)
+    sounding_km = _compute_sounding_altitude(flags)
 
     # Determine power profile string for the RocketCapability summary
     if flags.has_rtg:
@@ -947,10 +1054,13 @@ def _compute_capability(state: CollectionState, player: int) -> RocketCapability
         has_rtg=flags.has_rtg,
         has_isru=flags.has_isru,
         has_docking_port=flags.has_docking_port,
+        sounding_altitude_km=sounding_km,
         relay_tier=flags.relay_tier,
         power_profile=power_str,
         staging_tier=flags.staging_tier,
         has_launch_clamp=flags.has_launch_clamp,
+        has_thermometer=flags.has_thermometer,
+        has_barometer=flags.has_barometer,
         bodies=body_profiles,
     )
 

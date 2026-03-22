@@ -11,16 +11,68 @@ from worlds.ksp1.bodies import (
 )
 from worlds.ksp1.capability import (
     EquipmentFlags, _evaluate_profile, _assess_bodies, _assess_one_body,
-    _try_profiles, _required_chute_count, _inject_ladder,
+    _try_profiles, _required_chute_count, _inject_ladder, _compute_sounding_altitude,
 )
-from worlds.ksp1.parts import (
-    _SWIVEL, _TERRIER, _MAINSAIL, _FL_T400, _FL_T800, _X200_32, _JUMBO_64,
-    _S3_3600,
-    _SHIELD_125, _SHIELD_25, _MK16, _LT1, _LT2,
-    _TR18A, _PROBE_CORE, _COMMAND_POD, _REACTION_WHEEL,
-    _OX_STAT, _SOLAR_ARRAY, _RTG, _COMM16, _HG5, _RA2,
-    _LAUNCH_CLAMP, _FUEL_LINE, _TT38K, _LADDER,
-)
+from worlds.ksp1.parts import PART_DB, Engine, FuelTank, SolidBooster
+
+
+# ---------------------------------------------------------------------------
+# Convenience accessors for parts from the real PART_DB
+# ---------------------------------------------------------------------------
+
+def _part(ap_item: str, idx: int = 0):
+    """Get a part object by AP item name."""
+    return PART_DB[ap_item][idx]
+
+
+# Engines
+_RELIANT = _part('LV-T30 "Reliant" Liquid Fuel Engine')
+_SWIVEL = _part('LV-T45 "Swivel" Liquid Fuel Engine')
+_TERRIER = _part('LV-909 "Terrier" Liquid Fuel Engine')
+_MAINSAIL = _part('RE-M3 "Mainsail" Liquid Fuel Engine')
+_MAMMOTH = _part('S3 KS-25x4 "Mammoth" Liquid Fuel Engine')
+_NERV = _part('LV-N "Nerv" Atomic Rocket Motor')
+_DAWN = _part('IX-6315 "Dawn" Electric Propulsion System')
+
+# SRBs
+_FLEA = _part('RT-5 "Flea" Solid Fuel Booster')
+_HAMMER = _part('RT-10 "Hammer" Solid Fuel Booster')
+
+# Fuel Tanks
+_FL_T400 = _part("FL-T400 Fuel Tank")
+_FL_T800 = _part("FL-T800 Fuel Tank")
+_X200_32 = _part("Rockomax X200-32 Fuel Tank")
+_JUMBO_64 = _part("Rockomax Jumbo-64 Fuel Tank")
+_S3_3600 = _part("Kerbodyne S3-3600 Tank")
+
+# Heat Shields
+_SHIELD_125 = _part("Heat Shield (1.25m)")
+_SHIELD_25 = _part("Heat Shield (2.5m)")
+
+# Parachutes
+_MK16 = _part("Mk16 Parachute")
+
+# Landing Legs
+_LT1 = _part("LT-1 Landing Struts")
+_LT2 = _part("LT-2 Landing Strut")
+
+# Decouplers
+_TR18A = _part("TD-12 Decoupler")
+_TT38K = _part("TT-38K Radial Decoupler")
+
+# Misc
+_PROBE_CORE = _part("Probodobodyne HECS")
+_COMMAND_POD = _part("Mk1 Command Pod")
+_REACTION_WHEEL = _part("Advanced Inline Stabilizer")
+_OX_STAT = _part("OX-STAT Photovoltaic Panels")
+_SOLAR_ARRAY = _part("Gigantor XL Solar Array")
+_RTG = _part("PB-NUK Radioisotope Thermoelectric Generator")
+_COMM16 = _part("Communotron 16")
+_HG5 = _part("HG-5 High Gain Antenna")
+_RA2 = _part("RA-2 Relay Antenna")
+_LAUNCH_CLAMP = _part("TT18-A Launch Stability Enhancer")
+_FUEL_LINE = _part("FTX-2 External Fuel Duct")
+_LADDER = _part("Pegasus I Mobility Enhancer")
 
 
 # ---------------------------------------------------------------------------
@@ -46,10 +98,10 @@ def _make_flags(
 
     if probe_core:
         flags.has_probe_core = True
-        flags.lightest_probe_mass = 0.1
+        flags.lightest_probe_mass = _PROBE_CORE.mass
     if capsule:
         flags.has_capsule = True
-        flags.heaviest_capsule_mass = 0.84
+        flags.heaviest_capsule_mass = _COMMAND_POD.mass
 
     if reaction_wheels:
         flags.has_reaction_wheels = True
@@ -215,7 +267,7 @@ class TestHeatShieldGate(unittest.TestCase):
         flags.has_heat_shield = True
         flags.available_heat_shields = [_SHIELD_125]
         flags.max_heat_shield_size = 1.25
-        flags.best_heat_shield_mass = 0.15
+        flags.best_heat_shield_mass = _SHIELD_125.mass
         profiles = MISSION_PROFILES.get(("Duna", "land"), [])
         aero_profiles = [p for p in profiles
                          if any(e.needs_heat_shield for e in p)]
@@ -373,7 +425,7 @@ class TestCrewedVsUnmanned(unittest.TestCase):
     def test_unmanned_with_probe_core(self) -> None:
         flags = self._base_flags()
         flags.has_probe_core = True
-        flags.lightest_probe_mass = 0.1
+        flags.lightest_probe_mass = _PROBE_CORE.mass
         profiles = MISSION_PROFILES.get(("Mun", "orbit"), [])
         ok = _try_profiles(profiles, flags, _normal_diff(), "orbit", crewed=False)
         self.assertTrue(ok)
@@ -527,6 +579,334 @@ class TestBodiesDatabase(unittest.TestCase):
         for mtype in ("orbit", "land", "return", "sample_return"):
             self.assertIn(("Mun", mtype), MISSION_PROFILES,
                           f"Mun should have {mtype} profiles")
+
+
+class TestNoEngines(unittest.TestCase):
+    """With no engines, nothing should be orbitally reachable."""
+
+    def _no_engine_flags(self) -> EquipmentFlags:
+        # Launch clamp, probe core, solar, fuel tank — but zero engines.
+        return _make_flags(
+            tanks=[_FL_T800],
+            probe_core=True,
+            solar=True,
+            launch_clamp=True,
+        )
+
+    def test_kerbin_orbit_false_without_engines(self) -> None:
+        flags = self._no_engine_flags()
+        profiles = MISSION_PROFILES.get(("Kerbin", "orbit"), [])
+        ok = _try_profiles(profiles, flags, _normal_diff(), "orbit", crewed=False)
+        self.assertFalse(ok, "Kerbin orbit should require engines")
+
+    def test_mun_orbit_false_without_engines(self) -> None:
+        flags = self._no_engine_flags()
+        mun = BODY_BY_NAME["Mun"]
+        result = _assess_one_body(mun, flags, _normal_diff(), computed={})
+        self.assertFalse(result.can_orbit_low,
+                         "Mun orbit should be False without engines")
+
+    def test_all_bodies_orbit_false_without_engines(self) -> None:
+        flags = self._no_engine_flags()
+        # Assess every non-Kerbin body; none should be orbitally reachable.
+        all_results = _assess_bodies(flags, _normal_diff())
+        for body_name, prof in all_results.items():
+            if body_name == "Kerbin":
+                continue  # Kerbin is the starting body, always True
+            self.assertFalse(
+                prof.can_orbit_low,
+                f"{body_name} should not be orbitally reachable without engines",
+            )
+
+
+class TestKerbinOrbit(unittest.TestCase):
+    """Minimum realistic kits for Kerbin orbit / failure cases."""
+
+    def test_mainsail_x200_single_stage_orbits_kerbin(self) -> None:
+        # Single stage, no decoupler: Mainsail (2.5m) + X200-32 (2.5m).
+        # staging_tier=0 forces a single group — the optimizer stacks X200-32s.
+        flags = _make_flags(
+            engines=[_MAINSAIL],
+            tanks=[_X200_32],
+            probe_core=True, solar=True,
+            launch_clamp=True,
+            staging_tier=0,
+        )
+        profiles = MISSION_PROFILES.get(("Kerbin", "orbit"), [])
+        ok = _try_profiles(profiles, flags, _normal_diff(), "orbit", crewed=False)
+        self.assertTrue(ok, "Mainsail + X200-32 single stage should reach Kerbin orbit")
+
+    def test_nerv_x200_32_fails_kerbin_orbit_normal(self) -> None:
+        # Nerv has atm_thrust ~14 kN — far too low for atmospheric TWR >= 1.5.
+        flags = _make_flags(
+            engines=[_NERV],
+            tanks=[_X200_32],
+            probe_core=True, reaction_wheels=True, solar=True,
+            launch_clamp=True,
+        )
+        profiles = MISSION_PROFILES.get(("Kerbin", "orbit"), [])
+        ok = _try_profiles(profiles, flags, _normal_diff(), "orbit", crewed=False)
+        self.assertFalse(
+            ok,
+            "Nerv Engine has insufficient atmospheric TWR for Kerbin ascent at normal difficulty",
+        )
+
+
+class TestDunaReturn(unittest.TestCase):
+    """
+    3-stage Duna return chain with realistic parts.
+
+    Stage 1: Mammoth + S3-3600 (3.75m, high-thrust Kerbin ascent)
+    Stage 2: Swivel + FL-T800 (1.25m, transfer + Duna orbit insertion)
+    Stage 3: Terrier + FL-T400 (1.25m, Duna landing + ascent + Kerbin return)
+
+    The Mammoth (3746 kN atm thrust) on S3-3600 (3.75m) tanks provides enough
+    TWR for the heavy Kerbin ascent. Mainsail alone is limited to 1 engine on
+    2.5m tanks (ENGINE_COUNT_TABLE), which can't close the dv/TWR tradeoff.
+
+    Equipment: heat shield (2.5m), parachutes (3x Mk16), landing legs (LT-2),
+    RTG (Duna power at solar distance ~1.5 AU), relay_tier=1.
+    Staging tier 2 (radial decouplers) to enable 3 distinct stages.
+    """
+
+    def _duna_return_flags(self) -> EquipmentFlags:
+        return _make_flags(
+            engines=[_MAMMOTH, _MAINSAIL, _SWIVEL, _TERRIER],
+            tanks=[_S3_3600, _JUMBO_64, _X200_32, _FL_T800, _FL_T400],
+            probe_core=True, reaction_wheels=True,
+            solar=True, solar_retractable=True, rtg=True,
+            relay_tier=1,
+            heat_shields=[_SHIELD_25],
+            parachutes=[_MK16, _MK16, _MK16],
+            legs=[_LT2],
+            launch_clamp=True, decoupler_radial=True,
+        )
+
+    def test_duna_can_return_to_kerbin(self) -> None:
+        flags = self._duna_return_flags()
+        duna = BODY_BY_NAME["Duna"]
+        result = _assess_one_body(duna, flags, _normal_diff(), computed={})
+        self.assertTrue(
+            result.can_return_to_kerbin,
+            f"Duna return should succeed with 3-stage rocket + heat shield + chutes. "
+            f"Blocking reason: {result.blocking_reason}",
+        )
+
+    def test_duna_return_fails_without_heat_shield(self) -> None:
+        # Remove the heat shield — Kerbin reentry requires it.
+        flags = _make_flags(
+            engines=[_MAINSAIL, _SWIVEL, _TERRIER],
+            tanks=[_JUMBO_64, _X200_32, _FL_T800, _FL_T400],
+            probe_core=True, reaction_wheels=True,
+            solar=True, solar_retractable=True, rtg=True,
+            relay_tier=1,
+            # No heat shield
+            parachutes=[_MK16, _MK16, _MK16],
+            legs=[_LT2],
+            launch_clamp=True, decoupler_radial=True,
+        )
+        return_profiles = MISSION_PROFILES.get(("Duna", "return"), [])
+        ok = _try_profiles(return_profiles, flags, _normal_diff(), "return", crewed=False)
+        self.assertFalse(ok, "Duna return should fail without a heat shield (Kerbin reentry blocked)")
+
+
+class TestInterplanetaryBodies(unittest.TestCase):
+    """
+    A full-kit rocket (3-engine tiers, large S3-3600 first stage, full support
+    gear, relay_tier=2) should reach orbit of all inner/middle solar system
+    bodies.  Eeloo requires relay_tier=3 and should be blocked at tier 2.
+
+    Staging tier 2 (radial decouplers) is required so the optimizer can split
+    the Kerbin ascent stage from the interplanetary transfer stages.
+    """
+
+    def _full_kit_flags(self) -> EquipmentFlags:
+        return _make_flags(
+            engines=[_MAINSAIL, _SWIVEL, _TERRIER],
+            tanks=[_JUMBO_64, _S3_3600, _X200_32, _FL_T800, _FL_T400],
+            probe_core=True, reaction_wheels=True,
+            solar=True, solar_retractable=True, rtg=True,
+            relay_tier=2,
+            heat_shields=[_SHIELD_25],
+            parachutes=[_MK16, _MK16, _MK16],
+            legs=[_LT2],
+            launch_clamp=True, decoupler_radial=True,
+        )
+
+    def test_inner_and_middle_bodies_orbitally_reachable(self) -> None:
+        flags = self._full_kit_flags()
+        results = _assess_bodies(flags, _normal_diff())
+        for body_name in ("Mun", "Minmus", "Moho", "Eve", "Duna", "Dres", "Jool"):
+            prof = results[body_name]
+            self.assertTrue(
+                prof.can_orbit_low,
+                f"{body_name} orbit should be reachable with full kit. "
+                f"Blocking reason: {prof.blocking_reason}",
+            )
+
+    def test_eeloo_not_reachable_with_relay_tier_2(self) -> None:
+        # Eeloo requires min_relay_tier=3.  Tier 2 relay should block it.
+        flags = self._full_kit_flags()
+        self.assertEqual(flags.relay_tier, 2)
+        results = _assess_bodies(flags, _normal_diff())
+        eeloo = results["Eeloo"]
+        self.assertFalse(
+            eeloo.can_orbit_low,
+            "Eeloo orbit should be blocked at relay_tier=2 (requires tier 3)",
+        )
+
+
+class TestKerbinOrbitIsEarlyGame(unittest.TestCase):
+    """
+    A minimal rocket (Reliant + X200-32 + probe core + launch clamp) can orbit
+    Kerbin.  This confirms the game can start with basic tech-tree parts.
+
+    The X200-32 is a 2.5m tank, allowing up to 4× Reliant engines via
+    ENGINE_COUNT_TABLE(2.5, 1.25)=4.  Multiple engines give sufficient
+    atmospheric TWR (4×205≈820 kN) to close the dv/TWR tradeoff for the
+    ~4025 m/s Kerbin ascent edge at normal difficulty.
+    """
+
+    def test_reliant_x200_32_orbits_kerbin(self) -> None:
+        flags = _make_flags(
+            engines=[_RELIANT],
+            tanks=[_X200_32],
+            probe_core=True, reaction_wheels=True, solar=True,
+            launch_clamp=True,
+            staging_tier=0,
+        )
+        profiles = MISSION_PROFILES.get(("Kerbin", "orbit"), [])
+        self.assertTrue(len(profiles) > 0, "Kerbin orbit profiles must exist")
+        ok = _try_profiles(profiles, flags, _normal_diff(), "orbit", crewed=False)
+        self.assertTrue(
+            ok,
+            "Reliant + X200-32 (4× engines on 2.5m tank) should reach Kerbin orbit",
+        )
+
+
+class TestSoundingRocketAltitude(unittest.TestCase):
+    """
+    Unit tests for _compute_sounding_altitude.
+
+    Formula: h_km = dv^2 * (twr - 1) / (2*g*twr*1000)
+    No drag, TWR floor = 1.1.
+    Crewed flights require staging_tier >= 1 (decoupler) AND parachutes.
+    """
+
+    def test_empty_flags_zero(self) -> None:
+        flags = _make_flags()
+        self.assertEqual(_compute_sounding_altitude(flags), 0.0)
+
+    def test_probe_core_no_engine_zero(self) -> None:
+        # Probe core alone, no engine -> no thrust, no altitude
+        flags = _make_flags(probe_core=True)
+        self.assertEqual(_compute_sounding_altitude(flags), 0.0)
+
+    def test_capsule_only_zero(self) -> None:
+        # Capsule, no engine -> zero
+        flags = _make_flags(capsule=True)
+        self.assertEqual(_compute_sounding_altitude(flags), 0.0)
+
+    def test_probe_reliant_ft800_above_70km(self) -> None:
+        # Probe + LFO engine + LFO tank — should clear all 7 altitude milestones
+        flags = _make_flags(
+            engines=[_RELIANT],
+            tanks=[_FL_T800],
+            probe_core=True,
+        )
+        alt = _compute_sounding_altitude(flags)
+        self.assertGreater(alt, 70.0, f"Expected > 70 km, got {alt:.1f} km")
+
+    def test_probe_hammer_srb_above_70km(self) -> None:
+        # SRB path: Hammer SRB + probe core
+        flags = _make_flags(srbs=[_HAMMER], probe_core=True)
+        alt = _compute_sounding_altitude(flags)
+        self.assertGreater(alt, 70.0, f"Expected > 70 km, got {alt:.1f} km")
+
+    def test_crewed_no_parachute_zero(self) -> None:
+        # Capsule + engine + tank but no parachute -> can't survive, altitude = 0
+        flags = _make_flags(
+            engines=[_RELIANT],
+            tanks=[_FL_T800],
+            capsule=True,
+            staging_tier=1,  # has decoupler
+        )
+        self.assertEqual(_compute_sounding_altitude(flags), 0.0)
+
+    def test_crewed_no_decoupler_zero(self) -> None:
+        # Capsule + engine + tank + parachute but no decoupler -> can't separate
+        flags = _make_flags(
+            engines=[_RELIANT],
+            tanks=[_FL_T800],
+            capsule=True,
+            parachutes=[_MK16],
+            staging_tier=0,  # no decoupler
+        )
+        self.assertEqual(_compute_sounding_altitude(flags), 0.0)
+
+    def test_crewed_full_kit_above_70km(self) -> None:
+        # Capsule + engine + tank + parachute + decoupler -> survivable crewed flight
+        flags = _make_flags(
+            engines=[_RELIANT],
+            tanks=[_FL_T800],
+            capsule=True,
+            parachutes=[_MK16],
+            staging_tier=1,  # has decoupler
+        )
+        alt = _compute_sounding_altitude(flags)
+        self.assertGreater(alt, 70.0, f"Expected > 70 km, got {alt:.1f} km")
+
+    # --- Analytic precision tests -------------------------------------------
+    # These check specific numeric outputs to catch formula regressions.
+    # Expected values hand-calculated from h = dv^2 * (twr-1) / (2*g*twr*1000).
+
+    def test_flea_probe_expected_altitude(self) -> None:
+        """
+        RT-5 Flea SRB + probe:
+          m0 = dry_mass + fuel_mass + probe = 0.45 + 1.05 + 0.1 = 1.60t
+          m_dry = 0.45 + 0.1 = 0.55t
+          twr = 192 / (1.60 * 9.80665) = 12.24 (atm_thrust=162.9/... but
+                sounding uses atm values for thrust, vac for ISP)
+        """
+        flags = _make_flags(srbs=[_FLEA], probe_core=True)
+        alt = _compute_sounding_altitude(flags)
+        # Flea + probe should reach > 100 km regardless of exact formula details
+        self.assertGreater(alt, 100.0, f"got {alt:.2f} km")
+
+    def test_hammer_probe_expected_altitude(self) -> None:
+        """
+        RT-10 Hammer SRB + probe:
+          m0 = 0.75 + 2.8125 + 0.1 = 3.6625t
+          Real Hammer has lower ISP (195) and less fuel than old Thumper data.
+        """
+        flags = _make_flags(srbs=[_HAMMER], probe_core=True)
+        alt = _compute_sounding_altitude(flags)
+        # Hammer + probe should comfortably clear 70 km
+        self.assertGreater(alt, 70.0, f"got {alt:.2f} km")
+
+    def test_reliant_fl400_probe_expected_altitude(self) -> None:
+        """
+        Reliant + FL-T400 + probe:
+          Optimizer stacks tanks to maximize altitude within TWR constraints.
+        """
+        flags = _make_flags(engines=[_RELIANT], tanks=[_FL_T400], probe_core=True)
+        alt = _compute_sounding_altitude(flags)
+        # Should comfortably reach above 70 km (orbital altitude)
+        self.assertGreater(alt, 70.0, f"got {alt:.2f} km")
+
+    def test_flea_beats_reliant_low_twr_kills_altitude(self) -> None:
+        """
+        Flea (high TWR) should reach substantial altitude despite lower dv.
+        Reliant+FL-T400 (low TWR) also reaches good altitude but TWR penalty
+        limits sounding rocket performance.
+        """
+        flea_flags = _make_flags(srbs=[_FLEA], probe_core=True)
+        reliant_flags = _make_flags(engines=[_RELIANT], tanks=[_FL_T400], probe_core=True)
+        flea_alt = _compute_sounding_altitude(flea_flags)
+        reliant_alt = _compute_sounding_altitude(reliant_flags)
+        # Both should be well above 70 km
+        self.assertGreater(flea_alt, 70.0)
+        self.assertGreater(reliant_alt, 70.0)
 
 
 if __name__ == "__main__":

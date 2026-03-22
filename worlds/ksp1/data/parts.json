@@ -1,0 +1,5001 @@
+{
+  "_meta": {
+    "source": "/home/nick/games/ksp/GameData/Squad/Parts",
+    "generated": "2026-03-21T14:57:37.941106+00:00",
+    "part_count": 345
+  },
+  "AdvancedCanard": {
+    "name": "AdvancedCanard",
+    "title": "Advanced Canard",
+    "mass": 0.08,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "hypersonicFlight",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "CanardController": {
+    "name": "CanardController",
+    "title": "Standard Canard",
+    "mass": 0.1,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "CargoStorageUnit": {
+    "name": "CargoStorageUnit",
+    "title": "SEQ-24 Cargo Storage Unit",
+    "mass": 0.4,
+    "bulkhead_profiles": [
+      "size2"
+    ],
+    "tech_required": "advExploration",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "CircularIntake": {
+    "name": "CircularIntake",
+    "title": "Circular Intake",
+    "mass": 0.04,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "aerodynamicSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "IntakeAir": 2.0
+    }
+  },
+  "Clydesdale": {
+    "name": "Clydesdale",
+    "title": "S2-33 \"Clydesdale\" Solid Fuel Booster",
+    "mass": 21.0,
+    "bulkhead_profiles": [
+      "size2",
+      "srf"
+    ],
+    "tech_required": "veryHeavyRocketry",
+    "engine": {
+      "max_thrust": 3300.0,
+      "isp_vac": 235.0,
+      "isp_atm": 210.0,
+      "engine_type": "SolidBooster",
+      "throttle_locked": true,
+      "propellants": {
+        "SolidFuel": 1.0
+      }
+    },
+    "has_gimbal": true,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "SolidFuel": 16400.0
+    }
+  },
+  "ConformalStorageUnit": {
+    "name": "ConformalStorageUnit",
+    "title": "SEQ-3C Conformal Storage Unit",
+    "mass": 0.02,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "spaceExploration",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "Decoupler_0": {
+    "name": "Decoupler_0",
+    "title": "TD-06 Decoupler",
+    "mass": 0.01,
+    "bulkhead_profiles": [
+      "size0"
+    ],
+    "tech_required": "precisionEngineering",
+    "has_gimbal": false,
+    "has_module_decouple": true,
+    "has_module_anchored_decouple": false
+  },
+  "Decoupler_1": {
+    "name": "Decoupler_1",
+    "title": "TD-12 Decoupler",
+    "mass": 0.04,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "engineering101",
+    "has_gimbal": false,
+    "has_module_decouple": true,
+    "has_module_anchored_decouple": false
+  },
+  "Decoupler_2": {
+    "name": "Decoupler_2",
+    "title": "TD-25 Decoupler",
+    "mass": 0.16,
+    "bulkhead_profiles": [
+      "size2"
+    ],
+    "tech_required": "generalConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": true,
+    "has_module_anchored_decouple": false
+  },
+  "Decoupler_3": {
+    "name": "Decoupler_3",
+    "title": "TD-37 Decoupler",
+    "mass": 0.36,
+    "bulkhead_profiles": [
+      "size3"
+    ],
+    "tech_required": "largeVolumeContainment",
+    "has_gimbal": false,
+    "has_module_decouple": true,
+    "has_module_anchored_decouple": false
+  },
+  "FuelCell": {
+    "name": "FuelCell",
+    "title": "Fuel Cell",
+    "mass": 0.05,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "largeElectrics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "ElectricCharge": 50.0
+    }
+  },
+  "FuelCellArray": {
+    "name": "FuelCellArray",
+    "title": "Fuel Cell Array",
+    "mass": 0.24,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "specializedElectrics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "ElectricCharge": 300.0
+    }
+  },
+  "GearFixed": {
+    "name": "GearFixed",
+    "title": "LY-01 Fixed Landing Gear",
+    "mass": 0.022,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "aviation",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "GearFree": {
+    "name": "GearFree",
+    "title": "LY-05 Steerable Landing Gear",
+    "mass": 0.015,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "aviation",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "GearLarge": {
+    "name": "GearLarge",
+    "title": "LY-99 Extra Large Landing Gear",
+    "mass": 0.6,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "heavyLanding",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "GearMedium": {
+    "name": "GearMedium",
+    "title": "LY-60 Large Landing Gear",
+    "mass": 0.4,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "heavyLanding",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "GearSmall": {
+    "name": "GearSmall",
+    "title": "LY-35 Medium Landing Gear",
+    "mass": 0.25,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advLanding",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "GooExperiment": {
+    "name": "GooExperiment",
+    "title": "Mystery Goo\u2122 Containment Unit",
+    "mass": 0.05,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "start",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "GrapplingDevice": {
+    "name": "GrapplingDevice",
+    "title": "Advanced Grabbing Unit",
+    "mass": 0.075,
+    "bulkhead_profiles": [
+      "size1",
+      "srf"
+    ],
+    "tech_required": "actuators",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "HECS2_ProbeCore": {
+    "name": "HECS2_ProbeCore",
+    "title": "Probodobodyne HECS2",
+    "mass": 0.2,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "advUnmanned",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "ElectricCharge": 1000.0
+    }
+  },
+  "HeatShield0": {
+    "name": "HeatShield0",
+    "title": "Heat Shield (0.625m)",
+    "mass": 0.025,
+    "bulkhead_profiles": [
+      "size0"
+    ],
+    "tech_required": "survivability",
+    "has_gimbal": false,
+    "has_module_decouple": true,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "Ablator": 50.0
+    }
+  },
+  "HeatShield1": {
+    "name": "HeatShield1",
+    "title": "Heat Shield (1.25m)",
+    "mass": 0.1,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "survivability",
+    "has_gimbal": false,
+    "has_module_decouple": true,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "Ablator": 200.0
+    }
+  },
+  "HeatShield2": {
+    "name": "HeatShield2",
+    "title": "Heat Shield (2.5m)",
+    "mass": 0.5,
+    "bulkhead_profiles": [
+      "size2"
+    ],
+    "tech_required": "landing",
+    "has_gimbal": false,
+    "has_module_decouple": true,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "Ablator": 800.0
+    }
+  },
+  "HeatShield3": {
+    "name": "HeatShield3",
+    "title": "Heat Shield (3.75m)",
+    "mass": 1.0,
+    "bulkhead_profiles": [
+      "size3"
+    ],
+    "tech_required": "advLanding",
+    "has_gimbal": false,
+    "has_module_decouple": true,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "Ablator": 1800.0
+    }
+  },
+  "HighGainAntenna": {
+    "name": "HighGainAntenna",
+    "title": "Communotron HG-55",
+    "mass": 0.075,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "electronics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "HighGainAntenna5_v2": {
+    "name": "HighGainAntenna5_v2",
+    "title": "HG-5 High Gain Antenna",
+    "mass": 0.07,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "basicScience",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "ISRU": {
+    "name": "ISRU",
+    "title": "Convert-O-Tron 250",
+    "mass": 4.25,
+    "bulkhead_profiles": [
+      "size2",
+      "srf"
+    ],
+    "tech_required": "advScienceTech",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "InflatableHeatShield": {
+    "name": "InflatableHeatShield",
+    "title": "Heat Shield (10m)",
+    "mass": 1.5,
+    "bulkhead_profiles": [
+      "size2"
+    ],
+    "tech_required": "heavyLanding",
+    "has_gimbal": false,
+    "has_module_decouple": true,
+    "has_module_anchored_decouple": false
+  },
+  "InfraredTelescope": {
+    "name": "InfraredTelescope",
+    "title": "SENTINEL Infrared Telescope",
+    "mass": 0.1,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "scienceTech",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "IntakeRadialLong": {
+    "name": "IntakeRadialLong",
+    "title": "Adjustable Ramp Intake (Radial)",
+    "mass": 0.01,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "highAltitudeFlight",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "IntakeAir": 0.5
+    }
+  },
+  "JetEngine": {
+    "name": "JetEngine",
+    "title": "J-33 \"Wheesley\" Turbofan Engine",
+    "mass": 1.5,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "aerodynamicSystems",
+    "engine": {
+      "max_thrust": 120.0,
+      "isp_vac": 10500.0,
+      "isp_atm": 0.0,
+      "engine_type": "Turbine",
+      "throttle_locked": false,
+      "propellants": {
+        "IntakeAir": 127.0,
+        "LiquidFuel": 1.0
+      }
+    },
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "LargeTank": {
+    "name": "LargeTank",
+    "title": "Large Holding Tank",
+    "mass": 2.0,
+    "bulkhead_profiles": [
+      "size2",
+      "srf"
+    ],
+    "tech_required": "experimentalScience",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "Ore": 1500.0
+    }
+  },
+  "Large_Crewed_Lab": {
+    "name": "Large_Crewed_Lab",
+    "title": "Mobile Processing Lab MPL-LG-2",
+    "mass": 3.5,
+    "bulkhead_profiles": [
+      "size2"
+    ],
+    "tech_required": "advExploration",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "LaunchEscapeSystem": {
+    "name": "LaunchEscapeSystem",
+    "title": "Launch Escape System",
+    "mass": 0.9,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "landing",
+    "engine": {
+      "max_thrust": 750.0,
+      "isp_vac": 180.0,
+      "isp_atm": 160.0,
+      "engine_type": "SolidBooster",
+      "throttle_locked": true,
+      "propellants": {
+        "SolidFuel": 1.0
+      }
+    },
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "SolidFuel": 30.0
+    }
+  },
+  "LgRadialSolarPanel": {
+    "name": "LgRadialSolarPanel",
+    "title": "OX-STAT-XL Photovoltaic Panels",
+    "mass": 0.04,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advElectrics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "MK1CrewCabin": {
+    "name": "MK1CrewCabin",
+    "title": "Mk1 Crew Cabin",
+    "mass": 1.0,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "generalConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "MK1Fuselage": {
+    "name": "MK1Fuselage",
+    "title": "Mk1 Liquid Fuel Fuselage",
+    "mass": 0.25,
+    "bulkhead_profiles": [
+      "size1",
+      "srf"
+    ],
+    "tech_required": "aviation",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 400.0
+    }
+  },
+  "MK1IntakeFuselage": {
+    "name": "MK1IntakeFuselage",
+    "title": "Mk1 Diverterless Supersonic Intake",
+    "mass": 0.17,
+    "bulkhead_profiles": [
+      "size1",
+      "srf"
+    ],
+    "tech_required": "highAltitudeFlight",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "IntakeAir": 2.0,
+      "LiquidFuel": 200.0
+    }
+  },
+  "Magnetometer": {
+    "name": "Magnetometer",
+    "title": "Magnetometer Boom",
+    "mass": 0.05,
+    "bulkhead_profiles": [
+      "size0"
+    ],
+    "tech_required": "electronics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "Mark1Cockpit": {
+    "name": "Mark1Cockpit",
+    "title": "Mk1 Cockpit",
+    "mass": 1.25,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "aviation",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "ElectricCharge": 50.0,
+      "MonoPropellant": 7.5
+    }
+  },
+  "Mark2Cockpit": {
+    "name": "Mark2Cockpit",
+    "title": "Mk1 Inline Cockpit",
+    "mass": 1.0,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "aerodynamicSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "ElectricCharge": 50.0,
+      "MonoPropellant": 7.5
+    }
+  },
+  "MassiveBooster": {
+    "name": "MassiveBooster",
+    "title": "S1 SRB-KD25k \"Kickback\" Solid Fuel Booster",
+    "mass": 4.5,
+    "bulkhead_profiles": [
+      "size1",
+      "srf"
+    ],
+    "tech_required": "heavyRocketry",
+    "engine": {
+      "max_thrust": 670.0,
+      "isp_vac": 220.0,
+      "isp_atm": 195.0,
+      "engine_type": "SolidBooster",
+      "throttle_locked": true,
+      "propellants": {
+        "SolidFuel": 1.0
+      }
+    },
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "SolidFuel": 2600.0
+    }
+  },
+  "MiniDrill": {
+    "name": "MiniDrill",
+    "title": "Drill-O-Matic Junior' Mining Excavator",
+    "mass": 0.25,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advScienceTech",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "MiniISRU": {
+    "name": "MiniISRU",
+    "title": "Convert-O-Tron 125",
+    "mass": 1.25,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "advScienceTech",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "Mite": {
+    "name": "Mite",
+    "title": "FM1 \"Mite\" Solid Fuel Booster",
+    "mass": 0.075,
+    "bulkhead_profiles": [
+      "size0",
+      "srf"
+    ],
+    "tech_required": "propulsionSystems",
+    "engine": {
+      "max_thrust": 12.5,
+      "isp_vac": 210.0,
+      "isp_atm": 185.0,
+      "engine_type": "SolidBooster",
+      "throttle_locked": true,
+      "propellants": {
+        "SolidFuel": 1.0
+      }
+    },
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "SolidFuel": 40.0
+    }
+  },
+  "Mk1FuselageStructural": {
+    "name": "Mk1FuselageStructural",
+    "title": "Structural Fuselage",
+    "mass": 0.1,
+    "bulkhead_profiles": [
+      "size1",
+      "srf"
+    ],
+    "tech_required": "generalConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "MpoProbe": {
+    "name": "MpoProbe",
+    "title": "MPO Probe",
+    "mass": 0.395,
+    "bulkhead_profiles": [
+      "size2"
+    ],
+    "tech_required": "largeUnmanned",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 45.0,
+      "Oxidizer": 55.0,
+      "ElectricCharge": 1000.0
+    }
+  },
+  "MtmStage": {
+    "name": "MtmStage",
+    "title": "MTM Stage",
+    "mass": 0.415,
+    "bulkhead_profiles": [
+      "size2"
+    ],
+    "tech_required": "largeUnmanned",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "ElectricCharge": 4000.0,
+      "XenonGas": 3800.0
+    }
+  },
+  "OrbitalScanner": {
+    "name": "OrbitalScanner",
+    "title": "M4435 Narrow-Band Scanner",
+    "mass": 0.1,
+    "bulkhead_profiles": [
+      "size0",
+      "srf"
+    ],
+    "tech_required": "experimentalScience",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "R8winglet": {
+    "name": "R8winglet",
+    "title": "AV-R8 Winglet",
+    "mass": 0.1,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "flightControl",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "RAPIER": {
+    "name": "RAPIER",
+    "title": "CR-7 R.A.P.I.E.R. Engine",
+    "mass": 2.0,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "aerospaceTech",
+    "engine": {
+      "max_thrust": 105.0,
+      "isp_vac": 3200.0,
+      "isp_atm": 0.0,
+      "engine_type": "Turbine",
+      "throttle_locked": false,
+      "propellants": {
+        "IntakeAir": 6.0,
+        "LiquidFuel": 1.0
+      }
+    },
+    "has_gimbal": true,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "RCSBlock_v2": {
+    "name": "RCSBlock_v2",
+    "title": "RV-105 RCS Thruster Block",
+    "mass": 0.04,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advFlightControl",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "RCSFuelTank": {
+    "name": "RCSFuelTank",
+    "title": "FL-R120 RCS Fuel Tank",
+    "mass": 0.08,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "advFuelSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "MonoPropellant": 120.0
+    }
+  },
+  "RCSLinearSmall": {
+    "name": "RCSLinearSmall",
+    "title": "Place Anywhere 1 Linear RCS Port",
+    "mass": 0.00125,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advFlightControl",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "RCSTank1-2": {
+    "name": "RCSTank1-2",
+    "title": "FL-R750 RCS Fuel Tank",
+    "mass": 0.4,
+    "bulkhead_profiles": [
+      "size2"
+    ],
+    "tech_required": "advFuelSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "MonoPropellant": 750.0
+    }
+  },
+  "RCSblock_01_small": {
+    "name": "RCSblock_01_small",
+    "title": "RV-1X Variable Thruster Block",
+    "mass": 0.005,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advFlightControl",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "RadialDrill": {
+    "name": "RadialDrill",
+    "title": "Drill-O-Matic' Mining Excavator",
+    "mass": 1.25,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advScienceTech",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "RadialOreTank": {
+    "name": "RadialOreTank",
+    "title": "Radial Holding Tank",
+    "mass": 0.125,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advScienceTech",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "Ore": 75.0
+    }
+  },
+  "RelayAntenna100": {
+    "name": "RelayAntenna100",
+    "title": "RA-100 Relay Antenna",
+    "mass": 0.65,
+    "bulkhead_profiles": [
+      "size0"
+    ],
+    "tech_required": "automation",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "RelayAntenna5": {
+    "name": "RelayAntenna5",
+    "title": "RA-2 Relay Antenna",
+    "mass": 0.15,
+    "bulkhead_profiles": [
+      "size0"
+    ],
+    "tech_required": "precisionEngineering",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "RelayAntenna50": {
+    "name": "RelayAntenna50",
+    "title": "RA-15 Relay Antenna",
+    "mass": 0.3,
+    "bulkhead_profiles": [
+      "size0"
+    ],
+    "tech_required": "electronics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "ReleaseValve": {
+    "name": "ReleaseValve",
+    "title": "FTE-1 Drain Valve",
+    "mass": 0.01,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "fuelSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "Rockomax16_BW": {
+    "name": "Rockomax16_BW",
+    "title": "Rockomax X200-16 Fuel Tank",
+    "mass": 1.0,
+    "bulkhead_profiles": [
+      "size2",
+      "srf"
+    ],
+    "tech_required": "fuelSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 720.0,
+      "Oxidizer": 880.0
+    }
+  },
+  "Rockomax32_BW": {
+    "name": "Rockomax32_BW",
+    "title": "Rockomax X200-32 Fuel Tank",
+    "mass": 2.0,
+    "bulkhead_profiles": [
+      "size2",
+      "srf"
+    ],
+    "tech_required": "fuelSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 1440.0,
+      "Oxidizer": 1760.0
+    }
+  },
+  "Rockomax64_BW": {
+    "name": "Rockomax64_BW",
+    "title": "Rockomax Jumbo-64 Fuel Tank",
+    "mass": 4.0,
+    "bulkhead_profiles": [
+      "size2",
+      "srf"
+    ],
+    "tech_required": "advFuelSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 2880.0,
+      "Oxidizer": 3520.0
+    }
+  },
+  "Rockomax8BW": {
+    "name": "Rockomax8BW",
+    "title": "Rockomax X200-8 Fuel Tank",
+    "mass": 0.5,
+    "bulkhead_profiles": [
+      "size2",
+      "srf"
+    ],
+    "tech_required": "fuelSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 360.0,
+      "Oxidizer": 440.0
+    }
+  },
+  "SSME": {
+    "name": "SSME",
+    "title": "S3 KS-25 \"Vector\" Liquid Fuel Engine",
+    "mass": 4.0,
+    "bulkhead_profiles": [
+      "srf",
+      "size1"
+    ],
+    "tech_required": "veryHeavyRocketry",
+    "engine": {
+      "max_thrust": 1000.0,
+      "isp_vac": 315.0,
+      "isp_atm": 295.0,
+      "engine_type": "LiquidFuel",
+      "throttle_locked": false,
+      "propellants": {
+        "LiquidFuel": 0.9,
+        "Oxidizer": 1.1
+      }
+    },
+    "has_gimbal": true,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "ScienceBox": {
+    "name": "ScienceBox",
+    "title": "Experiment Storage Unit",
+    "mass": 0.05,
+    "bulkhead_profiles": [
+      "size0"
+    ],
+    "tech_required": "basicScience",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "Separator_0": {
+    "name": "Separator_0",
+    "title": "TS-06 Stack Separator",
+    "mass": 0.01,
+    "bulkhead_profiles": [
+      "size0"
+    ],
+    "tech_required": "miniaturization",
+    "has_gimbal": false,
+    "has_module_decouple": true,
+    "has_module_anchored_decouple": false
+  },
+  "Separator_1": {
+    "name": "Separator_1",
+    "title": "TS-12 Stack Separator",
+    "mass": 0.05,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "advConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": true,
+    "has_module_anchored_decouple": false
+  },
+  "Separator_2": {
+    "name": "Separator_2",
+    "title": "TS-25 Stack Separator",
+    "mass": 0.21,
+    "bulkhead_profiles": [
+      "size2"
+    ],
+    "tech_required": "specializedConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": true,
+    "has_module_anchored_decouple": false
+  },
+  "Separator_3": {
+    "name": "Separator_3",
+    "title": "TS-37 Stack Separator",
+    "mass": 0.48,
+    "bulkhead_profiles": [
+      "size3"
+    ],
+    "tech_required": "composites",
+    "has_gimbal": false,
+    "has_module_decouple": true,
+    "has_module_anchored_decouple": false
+  },
+  "ServiceBay_125_v2": {
+    "name": "ServiceBay_125_v2",
+    "title": "Service Bay (1.25m)",
+    "mass": 0.1,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "survivability",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "ServiceBay_250_v2": {
+    "name": "ServiceBay_250_v2",
+    "title": "Service Bay (2.5m)",
+    "mass": 0.3,
+    "bulkhead_profiles": [
+      "size2"
+    ],
+    "tech_required": "commandModules",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "Shrimp": {
+    "name": "Shrimp",
+    "title": "F3S0 \"Shrimp\" Solid Fuel Booster",
+    "mass": 0.15,
+    "bulkhead_profiles": [
+      "size0",
+      "srf"
+    ],
+    "tech_required": "precisionPropulsion",
+    "engine": {
+      "max_thrust": 30.0,
+      "isp_vac": 215.0,
+      "isp_atm": 190.0,
+      "engine_type": "SolidBooster",
+      "throttle_locked": true,
+      "propellants": {
+        "SolidFuel": 1.0
+      }
+    },
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "SolidFuel": 90.0
+    }
+  },
+  "Size2LFB_v2": {
+    "name": "Size2LFB_v2",
+    "title": "LFB KR-1x2 \"Twin-Boar\" Liquid Fuel Engine",
+    "mass": 10.5,
+    "bulkhead_profiles": [
+      "size2",
+      "srf"
+    ],
+    "tech_required": "heavierRocketry",
+    "engine": {
+      "max_thrust": 2000.0,
+      "isp_vac": 300.0,
+      "isp_atm": 280.0,
+      "engine_type": "LiquidFuel",
+      "throttle_locked": false,
+      "propellants": {
+        "LiquidFuel": 0.9,
+        "Oxidizer": 1.1
+      }
+    },
+    "has_gimbal": true,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 2880.0,
+      "Oxidizer": 3520.0
+    }
+  },
+  "Size3AdvancedEngine": {
+    "name": "Size3AdvancedEngine",
+    "title": "Kerbodyne KR-2L+ \"Rhino\" Liquid Fuel Engine",
+    "mass": 9.0,
+    "bulkhead_profiles": [
+      "size3"
+    ],
+    "tech_required": "veryHeavyRocketry",
+    "engine": {
+      "max_thrust": 2000.0,
+      "isp_vac": 340.0,
+      "isp_atm": 205.0,
+      "engine_type": "LiquidFuel",
+      "throttle_locked": false,
+      "propellants": {
+        "LiquidFuel": 0.9,
+        "Oxidizer": 1.1
+      }
+    },
+    "has_gimbal": true,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "Size3EngineCluster": {
+    "name": "Size3EngineCluster",
+    "title": "S3 KS-25x4 \"Mammoth\" Liquid Fuel Engine",
+    "mass": 15.0,
+    "bulkhead_profiles": [
+      "size3"
+    ],
+    "tech_required": "veryHeavyRocketry",
+    "engine": {
+      "max_thrust": 4000.0,
+      "isp_vac": 315.0,
+      "isp_atm": 295.0,
+      "engine_type": "LiquidFuel",
+      "throttle_locked": false,
+      "propellants": {
+        "LiquidFuel": 0.9,
+        "Oxidizer": 1.1
+      }
+    },
+    "has_gimbal": true,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "Size3LargeTank": {
+    "name": "Size3LargeTank",
+    "title": "Kerbodyne S3-14400 Tank",
+    "mass": 9.0,
+    "bulkhead_profiles": [
+      "size3",
+      "srf"
+    ],
+    "tech_required": "highPerformanceFuelSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 6480.0,
+      "Oxidizer": 7920.0
+    }
+  },
+  "Size3MediumTank": {
+    "name": "Size3MediumTank",
+    "title": "Kerbodyne S3-7200 Tank",
+    "mass": 4.5,
+    "bulkhead_profiles": [
+      "size3",
+      "srf"
+    ],
+    "tech_required": "largeVolumeContainment",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 3240.0,
+      "Oxidizer": 3960.0
+    }
+  },
+  "Size3SmallTank": {
+    "name": "Size3SmallTank",
+    "title": "Kerbodyne S3-3600 Tank",
+    "mass": 2.25,
+    "bulkhead_profiles": [
+      "size3",
+      "srf"
+    ],
+    "tech_required": "largeVolumeContainment",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 1620.0,
+      "Oxidizer": 1980.0
+    }
+  },
+  "Size3To2Adapter_v2": {
+    "name": "Size3To2Adapter_v2",
+    "title": "Kerbodyne ADTP-2-3",
+    "mass": 1.875,
+    "bulkhead_profiles": [
+      "size2",
+      "size3"
+    ],
+    "tech_required": "largeVolumeContainment",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 1350.0,
+      "Oxidizer": 1650.0
+    }
+  },
+  "SmallGearBay": {
+    "name": "SmallGearBay",
+    "title": "LY-10 Small Landing Gear",
+    "mass": 0.045,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "landing",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "SmallTank": {
+    "name": "SmallTank",
+    "title": "Small Holding Tank",
+    "mass": 0.5,
+    "bulkhead_profiles": [
+      "size1",
+      "srf"
+    ],
+    "tech_required": "advScienceTech",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "Ore": 300.0
+    }
+  },
+  "StandardCtrlSrf": {
+    "name": "StandardCtrlSrf",
+    "title": "Elevon 1",
+    "mass": 0.05,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "aviation",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "SurfAntenna": {
+    "name": "SurfAntenna",
+    "title": "Communotron 16-S",
+    "mass": 0.015,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "engineering101",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "SurfaceScanner": {
+    "name": "SurfaceScanner",
+    "title": "Surface Scanning Module",
+    "mass": 0.005,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "scienceTech",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "SurveyScanner": {
+    "name": "SurveyScanner",
+    "title": "M700 Survey Scanner",
+    "mass": 0.2,
+    "bulkhead_profiles": [
+      "size1",
+      "srf"
+    ],
+    "tech_required": "scienceTech",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "Thoroughbred": {
+    "name": "Thoroughbred",
+    "title": "S2-17 \"Thoroughbred\" Solid Fuel Booster",
+    "mass": 10.0,
+    "bulkhead_profiles": [
+      "size2",
+      "srf"
+    ],
+    "tech_required": "heavierRocketry",
+    "engine": {
+      "max_thrust": 1700.0,
+      "isp_vac": 230.0,
+      "isp_atm": 205.0,
+      "engine_type": "SolidBooster",
+      "throttle_locked": true,
+      "propellants": {
+        "SolidFuel": 1.0
+      }
+    },
+    "has_gimbal": true,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "SolidFuel": 8000.0
+    }
+  },
+  "adapterEngines": {
+    "name": "adapterEngines",
+    "title": "Mk3 Engine Mount",
+    "mass": 0.7,
+    "bulkhead_profiles": [
+      "mk3",
+      "srf"
+    ],
+    "tech_required": "experimentalAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "adapterLargeSmallBi": {
+    "name": "adapterLargeSmallBi",
+    "title": "TVR-200L Stack Bi-Adapter",
+    "mass": 0.1,
+    "bulkhead_profiles": [
+      "size2",
+      "size1"
+    ],
+    "tech_required": "metaMaterials",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "adapterLargeSmallQuad": {
+    "name": "adapterLargeSmallQuad",
+    "title": "TVR-400L Stack Quad-Adapter",
+    "mass": 0.2,
+    "bulkhead_profiles": [
+      "size2",
+      "size1"
+    ],
+    "tech_required": "metaMaterials",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "adapterLargeSmallTri": {
+    "name": "adapterLargeSmallTri",
+    "title": "TVR-300L Stack Tri-Adapter",
+    "mass": 0.15,
+    "bulkhead_profiles": [
+      "size2",
+      "size1"
+    ],
+    "tech_required": "metaMaterials",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "adapterMk3-Mk2": {
+    "name": "adapterMk3-Mk2",
+    "title": "Mk3 to Mk2 Adapter",
+    "mass": 1.43,
+    "bulkhead_profiles": [
+      "mk2",
+      "mk3",
+      "srf"
+    ],
+    "tech_required": "experimentalAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 900.0,
+      "Oxidizer": 1100.0
+    }
+  },
+  "adapterMk3-Size2": {
+    "name": "adapterMk3-Size2",
+    "title": "Mk3 to 2.5m Adapter",
+    "mass": 1.79,
+    "bulkhead_profiles": [
+      "size2",
+      "srf",
+      "mk3"
+    ],
+    "tech_required": "heavyAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 1125.0,
+      "Oxidizer": 1375.0
+    }
+  },
+  "adapterMk3-Size2Slant": {
+    "name": "adapterMk3-Size2Slant",
+    "title": "Mk3 to 2.5m Adapter Slanted",
+    "mass": 1.79,
+    "bulkhead_profiles": [
+      "size2",
+      "srf",
+      "mk3"
+    ],
+    "tech_required": "heavyAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 1125.0,
+      "Oxidizer": 1375.0
+    }
+  },
+  "adapterSize2-Mk2": {
+    "name": "adapterSize2-Mk2",
+    "title": "2.5m to Mk2 Adapter",
+    "mass": 0.57,
+    "bulkhead_profiles": [
+      "size2",
+      "srf",
+      "mk2"
+    ],
+    "tech_required": "highAltitudeFlight",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 360.0,
+      "Oxidizer": 440.0
+    }
+  },
+  "adapterSize2-Size1": {
+    "name": "adapterSize2-Size1",
+    "title": "C7 Brand Adapter - 2.5m to 1.25m",
+    "mass": 0.57,
+    "bulkhead_profiles": [
+      "size1",
+      "size2",
+      "srf"
+    ],
+    "tech_required": "advFuelSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 360.0,
+      "Oxidizer": 440.0
+    }
+  },
+  "adapterSize2-Size1Slant": {
+    "name": "adapterSize2-Size1Slant",
+    "title": "C7 Brand Adapter Slanted - 2.5m to 1.25m",
+    "mass": 0.57,
+    "bulkhead_profiles": [
+      "size1",
+      "size2",
+      "srf"
+    ],
+    "tech_required": "advFuelSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 360.0,
+      "Oxidizer": 440.0
+    }
+  },
+  "adapterSize3-Mk3": {
+    "name": "adapterSize3-Mk3",
+    "title": "Mk3 to 3.75m Adapter",
+    "mass": 1.79,
+    "bulkhead_profiles": [
+      "size3",
+      "srf",
+      "mk3"
+    ],
+    "tech_required": "experimentalAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 1125.0,
+      "Oxidizer": 1375.0
+    }
+  },
+  "adapterSmallMiniShort": {
+    "name": "adapterSmallMiniShort",
+    "title": "FL-A5 Adapter",
+    "mass": 0.04,
+    "bulkhead_profiles": [
+      "size0",
+      "size1"
+    ],
+    "tech_required": "miniaturization",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "adapterSmallMiniTall": {
+    "name": "adapterSmallMiniTall",
+    "title": "FL-A10 Adapter",
+    "mass": 0.05,
+    "bulkhead_profiles": [
+      "size0",
+      "size1"
+    ],
+    "tech_required": "miniaturization",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "advSasModule": {
+    "name": "advSasModule",
+    "title": "Advanced Inline Stabilizer",
+    "mass": 0.1,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "advFlightControl",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "airScoop": {
+    "name": "airScoop",
+    "title": "XM-G50 Radial Air Intake",
+    "mass": 0.02,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "aerodynamicSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "IntakeAir": 2.0
+    }
+  },
+  "airbrake1": {
+    "name": "airbrake1",
+    "title": "A.I.R.B.R.A.K.E.S",
+    "mass": 0.05,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "airlinerCtrlSrf": {
+    "name": "airlinerCtrlSrf",
+    "title": "FAT-455 Aeroplane Control Surface",
+    "mass": 0.17,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "heavyAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "airlinerMainWing": {
+    "name": "airlinerMainWing",
+    "title": "FAT-455 Aeroplane Main Wing",
+    "mass": 0.78,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "heavyAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 600.0
+    }
+  },
+  "airlinerTailFin": {
+    "name": "airlinerTailFin",
+    "title": "FAT-455 Aeroplane Tail Fin",
+    "mass": 0.36,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "heavyAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "airplaneTail": {
+    "name": "airplaneTail",
+    "title": "Tail Connector A",
+    "mass": 0.2,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "aviation",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "airplaneTailB": {
+    "name": "airplaneTailB",
+    "title": "Tail Connector B",
+    "mass": 0.2,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "aerodynamicSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "asasmodule1-2": {
+    "name": "asasmodule1-2",
+    "title": "Advanced Reaction Wheel Module, Large",
+    "mass": 0.2,
+    "bulkhead_profiles": [
+      "size2"
+    ],
+    "tech_required": "specializedControl",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "avionicsNoseCone": {
+    "name": "avionicsNoseCone",
+    "title": "CH-J3 Fly-By-Wire Avionics Hub",
+    "mass": 0.08,
+    "bulkhead_profiles": [
+      "size0"
+    ],
+    "tech_required": "specializedControl",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "basicFin": {
+    "name": "basicFin",
+    "title": "Basic Fin",
+    "mass": 0.01,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "start",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "batteryBank": {
+    "name": "batteryBank",
+    "title": "Z-1k Rechargeable Battery Bank",
+    "mass": 0.05,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "largeElectrics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "ElectricCharge": 1000.0
+    }
+  },
+  "batteryBankLarge": {
+    "name": "batteryBankLarge",
+    "title": "Z-4K Rechargeable Battery Bank",
+    "mass": 0.2,
+    "bulkhead_profiles": [
+      "size2"
+    ],
+    "tech_required": "specializedElectrics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "ElectricCharge": 4000.0
+    }
+  },
+  "batteryBankMini": {
+    "name": "batteryBankMini",
+    "title": "Z-200 Rechargeable Battery Bank",
+    "mass": 0.01,
+    "bulkhead_profiles": [
+      "size0"
+    ],
+    "tech_required": "electrics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "ElectricCharge": 200.0
+    }
+  },
+  "batteryPack": {
+    "name": "batteryPack",
+    "title": "Z-100 Rechargeable Battery Pack",
+    "mass": 0.005,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "basicScience",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "ElectricCharge": 100.0
+    }
+  },
+  "cargoContainer": {
+    "name": "cargoContainer",
+    "title": "SEQ-9 Container Module",
+    "mass": 0.15,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "advExploration",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "commDish": {
+    "name": "commDish",
+    "title": "Communotron 88-88",
+    "mass": 0.1,
+    "bulkhead_profiles": [
+      "size0",
+      "srf"
+    ],
+    "tech_required": "automation",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "crewCabin": {
+    "name": "crewCabin",
+    "title": "PPD-10 Hitchhiker Storage Container",
+    "mass": 2.25,
+    "bulkhead_profiles": [
+      "size2"
+    ],
+    "tech_required": "spaceExploration",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "cupola": {
+    "name": "cupola",
+    "title": "PPD-12 Cupola Module",
+    "mass": 0.94,
+    "bulkhead_profiles": [
+      "size2",
+      "size1"
+    ],
+    "tech_required": "commandModules",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "ElectricCharge": 200.0,
+      "MonoPropellant": 10.0
+    }
+  },
+  "deltaWing": {
+    "name": "deltaWing",
+    "title": "Delta Wing",
+    "mass": 0.2,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "delta_small": {
+    "name": "delta_small",
+    "title": "Small Delta Wing",
+    "mass": 0.05,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "dockingPort1": {
+    "name": "dockingPort1",
+    "title": "Clamp-O-Tron Shielded Docking Port",
+    "mass": 0.1,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "advMetalworks",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "dockingPort2": {
+    "name": "dockingPort2",
+    "title": "Clamp-O-Tron Docking Port",
+    "mass": 0.05,
+    "bulkhead_profiles": [
+      "size1",
+      "srf"
+    ],
+    "tech_required": "specializedConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "dockingPort3": {
+    "name": "dockingPort3",
+    "title": "Clamp-O-Tron Docking Port Jr.",
+    "mass": 0.02,
+    "bulkhead_profiles": [
+      "size0",
+      "srf"
+    ],
+    "tech_required": "miniaturization",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "dockingPortLarge": {
+    "name": "dockingPortLarge",
+    "title": "Clamp-O-Tron Docking Port Sr.",
+    "mass": 0.2,
+    "bulkhead_profiles": [
+      "size2"
+    ],
+    "tech_required": "metaMaterials",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "dockingPortLateral": {
+    "name": "dockingPortLateral",
+    "title": "Inline Clamp-O-Tron",
+    "mass": 0.3,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "composites",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "domeLight1": {
+    "name": "domeLight1",
+    "title": "Domelight Mk1",
+    "mass": 0.002,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "electrics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "elevon2": {
+    "name": "elevon2",
+    "title": "Elevon 2",
+    "mass": 0.06,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "elevon3": {
+    "name": "elevon3",
+    "title": "Elevon 3",
+    "mass": 0.08,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "elevon5": {
+    "name": "elevon5",
+    "title": "Elevon 5",
+    "mass": 0.08,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "engineLargeSkipper_v2": {
+    "name": "engineLargeSkipper_v2",
+    "title": "RE-I5 \"Skipper\" Liquid Fuel Engine",
+    "mass": 3.0,
+    "bulkhead_profiles": [
+      "size2"
+    ],
+    "tech_required": "heavyRocketry",
+    "engine": {
+      "max_thrust": 650.0,
+      "isp_vac": 320.0,
+      "isp_atm": 280.0,
+      "engine_type": "LiquidFuel",
+      "throttle_locked": false,
+      "propellants": {
+        "LiquidFuel": 0.9,
+        "Oxidizer": 1.1
+      }
+    },
+    "has_gimbal": true,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "evaChute": {
+    "name": "evaChute",
+    "title": "Personal Parachute",
+    "mass": 0.004,
+    "bulkhead_profiles": [],
+    "tech_required": "start",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "evaCylinder": {
+    "name": "evaCylinder",
+    "title": "EVA Fuel Cylinders",
+    "mass": 0.005,
+    "bulkhead_profiles": [],
+    "tech_required": "advExploration",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "EVA Propellant": 3.0
+    }
+  },
+  "evaJetpack": {
+    "name": "evaJetpack",
+    "title": "EVA Jetpack",
+    "mass": 0.02,
+    "bulkhead_profiles": [],
+    "tech_required": "start",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "EVA Propellant": 5.0
+    }
+  },
+  "evaRepairKit": {
+    "name": "evaRepairKit",
+    "title": "EVA Repair Kit",
+    "mass": 0.005,
+    "bulkhead_profiles": [],
+    "tech_required": "spaceExploration",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "evaScienceKit": {
+    "name": "evaScienceKit",
+    "title": "EVA Experiments Kit",
+    "mass": 0.015,
+    "bulkhead_profiles": [],
+    "tech_required": "miniaturization",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "externalTankCapsule": {
+    "name": "externalTankCapsule",
+    "title": "R-11 'Baguette' External Tank",
+    "mass": 0.03375,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "propulsionSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 24.3,
+      "Oxidizer": 29.7
+    }
+  },
+  "externalTankRound": {
+    "name": "externalTankRound",
+    "title": "R-4 'Dumpling' External Tank",
+    "mass": 0.01375,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "precisionPropulsion",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 9.9,
+      "Oxidizer": 12.1
+    }
+  },
+  "externalTankToroid": {
+    "name": "externalTankToroid",
+    "title": "R-12 'Doughnut' External Tank",
+    "mass": 0.0375,
+    "bulkhead_profiles": [
+      "size1",
+      "srf"
+    ],
+    "tech_required": "precisionPropulsion",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 27.0,
+      "Oxidizer": 33.0
+    }
+  },
+  "fairingSize1": {
+    "name": "fairingSize1",
+    "title": "AE-FF1 Airstream Protective Shell (1.25m)",
+    "mass": 0.075,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "advConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "fairingSize2": {
+    "name": "fairingSize2",
+    "title": "AE-FF2 Airstream Protective Shell (2.5m)",
+    "mass": 0.175,
+    "bulkhead_profiles": [
+      "size2"
+    ],
+    "tech_required": "specializedConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "fairingSize3": {
+    "name": "fairingSize3",
+    "title": "AE-FF3 Airstream Protective Shell (3.75m)",
+    "mass": 0.475,
+    "bulkhead_profiles": [
+      "size3"
+    ],
+    "tech_required": "composites",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "fireworksLauncherBig": {
+    "name": "fireworksLauncherBig",
+    "title": "Starshot-32",
+    "mass": 0.03,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advRocketry",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "fireworksLauncherSmall": {
+    "name": "fireworksLauncherSmall",
+    "title": "Starshot-8",
+    "mass": 0.00125,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advRocketry",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "flag": {
+    "name": "flag",
+    "title": "",
+    "mass": 0.0,
+    "bulkhead_profiles": [],
+    "tech_required": "",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "flagPartFlat": {
+    "name": "flagPartFlat",
+    "title": "RFP-F Flag Flat",
+    "mass": 0.00015,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "composites",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "flagPartSize0": {
+    "name": "flagPartSize0",
+    "title": "RFP-0 Flag (.625m)",
+    "mass": 2.5e-05,
+    "bulkhead_profiles": [
+      "srf",
+      "size0"
+    ],
+    "tech_required": "advConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "flagPartSize1": {
+    "name": "flagPartSize1",
+    "title": "RFP-1 Flag  (1.25m)",
+    "mass": 5e-05,
+    "bulkhead_profiles": [
+      "srf",
+      "size1"
+    ],
+    "tech_required": "generalConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "flagPartSize2": {
+    "name": "flagPartSize2",
+    "title": "RFP-2 Flag  (2.5m)",
+    "mass": 0.000225,
+    "bulkhead_profiles": [
+      "srf",
+      "size2"
+    ],
+    "tech_required": "specializedConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "flagPartSize3": {
+    "name": "flagPartSize3",
+    "title": "RFP-3 Flag  (3.75m)",
+    "mass": 0.0005,
+    "bulkhead_profiles": [
+      "srf",
+      "size3"
+    ],
+    "tech_required": "composites",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "foldingRadLarge": {
+    "name": "foldingRadLarge",
+    "title": "Thermal Control System (large)",
+    "mass": 1.0,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "largeElectrics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "foldingRadMed": {
+    "name": "foldingRadMed",
+    "title": "Thermal Control System (medium)",
+    "mass": 0.25,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advElectrics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "foldingRadSmall": {
+    "name": "foldingRadSmall",
+    "title": "Thermal Control System (small)",
+    "mass": 0.05,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "electrics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "fuelLine": {
+    "name": "fuelLine",
+    "title": "FTX-2 External Fuel Duct",
+    "mass": 0.05,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "fuelSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "fuelTank": {
+    "name": "fuelTank",
+    "title": "FL-T400 Fuel Tank",
+    "mass": 0.25,
+    "bulkhead_profiles": [
+      "size1",
+      "srf"
+    ],
+    "tech_required": "advRocketry",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 180.0,
+      "Oxidizer": 220.0
+    }
+  },
+  "fuelTankSmall": {
+    "name": "fuelTankSmall",
+    "title": "FL-T200 Fuel Tank",
+    "mass": 0.125,
+    "bulkhead_profiles": [
+      "size1",
+      "srf"
+    ],
+    "tech_required": "generalRocketry",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 90.0,
+      "Oxidizer": 110.0
+    }
+  },
+  "fuelTankSmallFlat": {
+    "name": "fuelTankSmallFlat",
+    "title": "FL-T100 Fuel Tank",
+    "mass": 0.0625,
+    "bulkhead_profiles": [
+      "size1",
+      "srf"
+    ],
+    "tech_required": "basicRocketry",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 45.0,
+      "Oxidizer": 55.0
+    }
+  },
+  "fuelTank_long": {
+    "name": "fuelTank_long",
+    "title": "FL-T800 Fuel Tank",
+    "mass": 0.5,
+    "bulkhead_profiles": [
+      "size1",
+      "srf"
+    ],
+    "tech_required": "fuelSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 360.0,
+      "Oxidizer": 440.0
+    }
+  },
+  "groundAnchor": {
+    "name": "groundAnchor",
+    "title": "Stamp-O-Tron Ground Anchor",
+    "mass": 0.05,
+    "bulkhead_profiles": [
+      "size1",
+      "srf"
+    ],
+    "tech_required": "specializedConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "groundLight1": {
+    "name": "groundLight1",
+    "title": "Work Lamp - Small",
+    "mass": 0.002,
+    "bulkhead_profiles": [],
+    "tech_required": "spaceExploration",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "groundLight2": {
+    "name": "groundLight2",
+    "title": "Work Lamp - Stand",
+    "mass": 0.003,
+    "bulkhead_profiles": [],
+    "tech_required": "spaceExploration",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "ionEngine": {
+    "name": "ionEngine",
+    "title": "IX-6315 \"Dawn\" Electric Propulsion System",
+    "mass": 0.25,
+    "bulkhead_profiles": [
+      "size0"
+    ],
+    "tech_required": "ionPropulsion",
+    "engine": {
+      "max_thrust": 2.0,
+      "isp_vac": 4200.0,
+      "isp_atm": 100.0,
+      "engine_type": "Electric",
+      "throttle_locked": false,
+      "propellants": {
+        "ElectricCharge": 1.8,
+        "XenonGas": 0.1
+      }
+    },
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "kerbalEVA": {
+    "name": "kerbalEVA",
+    "title": "",
+    "mass": 0.0,
+    "bulkhead_profiles": [],
+    "tech_required": "",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "kerbalEVASlimSuit": {
+    "name": "kerbalEVASlimSuit",
+    "title": "",
+    "mass": 0.0,
+    "bulkhead_profiles": [],
+    "tech_required": "",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "kerbalEVASlimSuitFemale": {
+    "name": "kerbalEVASlimSuitFemale",
+    "title": "",
+    "mass": 0.0,
+    "bulkhead_profiles": [],
+    "tech_required": "",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "kerbalEVAfemale": {
+    "name": "kerbalEVAfemale",
+    "title": "",
+    "mass": 0.0,
+    "bulkhead_profiles": [],
+    "tech_required": "",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "ksp_r_largeBatteryPack": {
+    "name": "ksp_r_largeBatteryPack",
+    "title": "Z-400 Rechargeable Battery",
+    "mass": 0.02,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advElectrics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "ElectricCharge": 400.0
+    }
+  },
+  "ladder1": {
+    "name": "ladder1",
+    "title": "Pegasus I Mobility Enhancer",
+    "mass": 0.005,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "spaceExploration",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "landerCabinSmall": {
+    "name": "landerCabinSmall",
+    "title": "Mk1 Lander Can",
+    "mass": 0.6,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "advFlightControl",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "ElectricCharge": 50.0,
+      "MonoPropellant": 15.0
+    }
+  },
+  "landingLeg1": {
+    "name": "landingLeg1",
+    "title": "LT-1 Landing Struts",
+    "mass": 0.05,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "landing",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "landingLeg1-2": {
+    "name": "landingLeg1-2",
+    "title": "LT-2 Landing Strut",
+    "mass": 0.1,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advLanding",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "largeAdapter": {
+    "name": "largeAdapter",
+    "title": "Rockomax Brand Adapter",
+    "mass": 0.1,
+    "bulkhead_profiles": [
+      "size1",
+      "size2"
+    ],
+    "tech_required": "generalConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "largeAdapter2": {
+    "name": "largeAdapter2",
+    "title": "Rockomax Brand Adapter 02",
+    "mass": 0.08,
+    "bulkhead_profiles": [
+      "size2",
+      "size1"
+    ],
+    "tech_required": "advConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "largeSolarPanel": {
+    "name": "largeSolarPanel",
+    "title": "Gigantor XL Solar Array",
+    "mass": 0.3,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "largeElectrics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "launchClamp1": {
+    "name": "launchClamp1",
+    "title": "TT18-A Launch Stability Enhancer",
+    "mass": 0.1,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "generalConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "linearRcs": {
+    "name": "linearRcs",
+    "title": "Place-Anywhere 7 Linear RCS Port",
+    "mass": 0.02,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advFlightControl",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "liquidEngine2-2_v2": {
+    "name": "liquidEngine2-2_v2",
+    "title": "RE-L10 \"Poodle\" Liquid Fuel Engine",
+    "mass": 1.75,
+    "bulkhead_profiles": [
+      "size2"
+    ],
+    "tech_required": "heavyRocketry",
+    "engine": {
+      "max_thrust": 250.0,
+      "isp_vac": 350.0,
+      "isp_atm": 90.0,
+      "engine_type": "LiquidFuel",
+      "throttle_locked": false,
+      "propellants": {
+        "LiquidFuel": 0.9,
+        "Oxidizer": 1.1
+      }
+    },
+    "has_gimbal": true,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "liquidEngine2_v2": {
+    "name": "liquidEngine2_v2",
+    "title": "LV-T45 \"Swivel\" Liquid Fuel Engine",
+    "mass": 1.5,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "basicRocketry",
+    "engine": {
+      "max_thrust": 215.0,
+      "isp_vac": 320.0,
+      "isp_atm": 250.0,
+      "engine_type": "LiquidFuel",
+      "throttle_locked": false,
+      "propellants": {
+        "LiquidFuel": 0.9,
+        "Oxidizer": 1.1
+      }
+    },
+    "has_gimbal": true,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "liquidEngine3_v2": {
+    "name": "liquidEngine3_v2",
+    "title": "LV-909 \"Terrier\" Liquid Fuel Engine",
+    "mass": 0.5,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "advRocketry",
+    "engine": {
+      "max_thrust": 60.0,
+      "isp_vac": 345.0,
+      "isp_atm": 85.0,
+      "engine_type": "LiquidFuel",
+      "throttle_locked": false,
+      "propellants": {
+        "LiquidFuel": 0.9,
+        "Oxidizer": 1.1
+      }
+    },
+    "has_gimbal": true,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "liquidEngineMainsail_v2": {
+    "name": "liquidEngineMainsail_v2",
+    "title": "RE-M3 \"Mainsail\" Liquid Fuel Engine",
+    "mass": 6.0,
+    "bulkhead_profiles": [
+      "size2"
+    ],
+    "tech_required": "heavierRocketry",
+    "engine": {
+      "max_thrust": 1500.0,
+      "isp_vac": 310.0,
+      "isp_atm": 285.0,
+      "engine_type": "LiquidFuel",
+      "throttle_locked": false,
+      "propellants": {
+        "LiquidFuel": 0.9,
+        "Oxidizer": 1.1
+      }
+    },
+    "has_gimbal": true,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "liquidEngineMini_v2": {
+    "name": "liquidEngineMini_v2",
+    "title": "48-7S \"Spark\" Liquid Fuel Engine",
+    "mass": 0.13,
+    "bulkhead_profiles": [
+      "size0"
+    ],
+    "tech_required": "propulsionSystems",
+    "engine": {
+      "max_thrust": 20.0,
+      "isp_vac": 320.0,
+      "isp_atm": 265.0,
+      "engine_type": "LiquidFuel",
+      "throttle_locked": false,
+      "propellants": {
+        "LiquidFuel": 0.9,
+        "Oxidizer": 1.1
+      }
+    },
+    "has_gimbal": true,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "liquidEngine_v2": {
+    "name": "liquidEngine_v2",
+    "title": "LV-T30 \"Reliant\" Liquid Fuel Engine",
+    "mass": 1.25,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "generalRocketry",
+    "engine": {
+      "max_thrust": 240.0,
+      "isp_vac": 310.0,
+      "isp_atm": 265.0,
+      "engine_type": "LiquidFuel",
+      "throttle_locked": false,
+      "propellants": {
+        "LiquidFuel": 0.9,
+        "Oxidizer": 1.1
+      }
+    },
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "longAntenna": {
+    "name": "longAntenna",
+    "title": "Communotron 16",
+    "mass": 0.005,
+    "bulkhead_profiles": [
+      "size0",
+      "srf"
+    ],
+    "tech_required": "engineering101",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "mediumDishAntenna": {
+    "name": "mediumDishAntenna",
+    "title": "Communotron DTS-M1",
+    "mass": 0.05,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "precisionEngineering",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "microEngine_v2": {
+    "name": "microEngine_v2",
+    "title": "LV-1 \"Ant\" Liquid Fuel Engine",
+    "mass": 0.02,
+    "bulkhead_profiles": [
+      "size0",
+      "srf"
+    ],
+    "tech_required": "propulsionSystems",
+    "engine": {
+      "max_thrust": 2.0,
+      "isp_vac": 315.0,
+      "isp_atm": 80.0,
+      "engine_type": "LiquidFuel",
+      "throttle_locked": false,
+      "propellants": {
+        "LiquidFuel": 0.9,
+        "Oxidizer": 1.1
+      }
+    },
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "miniFuelTank": {
+    "name": "miniFuelTank",
+    "title": "Oscar-B Fuel Tank",
+    "mass": 0.025,
+    "bulkhead_profiles": [
+      "size0",
+      "srf"
+    ],
+    "tech_required": "propulsionSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 18.0,
+      "Oxidizer": 22.0
+    }
+  },
+  "miniFuselage": {
+    "name": "miniFuselage",
+    "title": "Mk0 Liquid Fuel Fuselage",
+    "mass": 0.025,
+    "bulkhead_profiles": [
+      "size0"
+    ],
+    "tech_required": "aviation",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 50.0
+    }
+  },
+  "miniIntake": {
+    "name": "miniIntake",
+    "title": "Small Circular Intake",
+    "mass": 0.007,
+    "bulkhead_profiles": [
+      "size0"
+    ],
+    "tech_required": "aviation",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "IntakeAir": 0.5
+    }
+  },
+  "miniJetEngine": {
+    "name": "miniJetEngine",
+    "title": "J-20 \"Juno\" Basic Jet Engine",
+    "mass": 0.25,
+    "bulkhead_profiles": [
+      "size0"
+    ],
+    "tech_required": "aviation",
+    "engine": {
+      "max_thrust": 20.0,
+      "isp_vac": 6400.0,
+      "isp_atm": 0.0,
+      "engine_type": "Turbine",
+      "throttle_locked": false,
+      "propellants": {
+        "IntakeAir": 22.0,
+        "LiquidFuel": 1.0
+      }
+    },
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "miniLandingLeg": {
+    "name": "miniLandingLeg",
+    "title": "LT-05 Micro Landing Strut",
+    "mass": 0.015,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "survivability",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "mk1-3pod": {
+    "name": "mk1-3pod",
+    "title": "Mk1-3 Command Pod",
+    "mass": 2.6,
+    "bulkhead_profiles": [
+      "size2",
+      "size1"
+    ],
+    "tech_required": "commandModules",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "ElectricCharge": 150.0,
+      "MonoPropellant": 30.0
+    }
+  },
+  "mk1pod_v2": {
+    "name": "mk1pod_v2",
+    "title": "Mk1 Command Pod",
+    "mass": 0.8,
+    "bulkhead_profiles": [
+      "size1",
+      "size0"
+    ],
+    "tech_required": "start",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "ElectricCharge": 50.0,
+      "MonoPropellant": 10.0
+    }
+  },
+  "mk2CargoBayL": {
+    "name": "mk2CargoBayL",
+    "title": "Mk2 Cargo Bay CRG-08",
+    "mass": 0.5,
+    "bulkhead_profiles": [
+      "mk2"
+    ],
+    "tech_required": "highAltitudeFlight",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "mk2CargoBayS": {
+    "name": "mk2CargoBayS",
+    "title": "Mk2 Cargo Bay CRG-04",
+    "mass": 0.25,
+    "bulkhead_profiles": [
+      "mk2"
+    ],
+    "tech_required": "supersonicFlight",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "mk2Cockpit_Inline": {
+    "name": "mk2Cockpit_Inline",
+    "title": "Mk2 Inline Cockpit",
+    "mass": 2.0,
+    "bulkhead_profiles": [
+      "mk2"
+    ],
+    "tech_required": "highAltitudeFlight",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "ElectricCharge": 150.0,
+      "MonoPropellant": 25.0
+    }
+  },
+  "mk2Cockpit_Standard": {
+    "name": "mk2Cockpit_Standard",
+    "title": "Mk2 Cockpit",
+    "mass": 2.0,
+    "bulkhead_profiles": [
+      "mk2"
+    ],
+    "tech_required": "supersonicFlight",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "ElectricCharge": 150.0,
+      "MonoPropellant": 15.0
+    }
+  },
+  "mk2CrewCabin": {
+    "name": "mk2CrewCabin",
+    "title": "MK2 Crew Cabin",
+    "mass": 2.03,
+    "bulkhead_profiles": [
+      "mk2"
+    ],
+    "tech_required": "highAltitudeFlight",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "mk2DockingPort": {
+    "name": "mk2DockingPort",
+    "title": "Mk2 Clamp-O-Tron",
+    "mass": 0.3,
+    "bulkhead_profiles": [
+      "size1",
+      "mk2"
+    ],
+    "tech_required": "highAltitudeFlight",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "MonoPropellant": 75.0
+    }
+  },
+  "mk2DroneCore": {
+    "name": "mk2DroneCore",
+    "title": "MK2 Drone Core",
+    "mass": 0.2,
+    "bulkhead_profiles": [
+      "mk2"
+    ],
+    "tech_required": "automation",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "ElectricCharge": 250.0
+    }
+  },
+  "mk2Fuselage": {
+    "name": "mk2Fuselage",
+    "title": "Mk2 Liquid Fuel Fuselage",
+    "mass": 0.57,
+    "bulkhead_profiles": [
+      "mk2",
+      "srf"
+    ],
+    "tech_required": "highAltitudeFlight",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 800.0
+    }
+  },
+  "mk2FuselageLongLFO": {
+    "name": "mk2FuselageLongLFO",
+    "title": "Mk2 Rocket Fuel Fuselage",
+    "mass": 0.57,
+    "bulkhead_profiles": [
+      "mk2",
+      "srf"
+    ],
+    "tech_required": "highAltitudeFlight",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 360.0,
+      "Oxidizer": 440.0
+    }
+  },
+  "mk2FuselageShortLFO": {
+    "name": "mk2FuselageShortLFO",
+    "title": "Mk2 Rocket Fuel Fuselage Short",
+    "mass": 0.29,
+    "bulkhead_profiles": [
+      "mk2",
+      "srf"
+    ],
+    "tech_required": "supersonicFlight",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 180.0,
+      "Oxidizer": 220.0
+    }
+  },
+  "mk2FuselageShortLiquid": {
+    "name": "mk2FuselageShortLiquid",
+    "title": "Mk2 Liquid Fuel Fuselage Short",
+    "mass": 0.29,
+    "bulkhead_profiles": [
+      "mk2",
+      "srf"
+    ],
+    "tech_required": "supersonicFlight",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 400.0
+    }
+  },
+  "mk2FuselageShortMono": {
+    "name": "mk2FuselageShortMono",
+    "title": "Mk2 Monopropellant Tank",
+    "mass": 0.29,
+    "bulkhead_profiles": [
+      "mk2"
+    ],
+    "tech_required": "highAltitudeFlight",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "MonoPropellant": 400.0
+    }
+  },
+  "mk2LanderCabin_v2": {
+    "name": "mk2LanderCabin_v2",
+    "title": "Mk2 Lander Can",
+    "mass": 1.355,
+    "bulkhead_profiles": [
+      "size2"
+    ],
+    "tech_required": "commandModules",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "ElectricCharge": 100.0,
+      "MonoPropellant": 40.0
+    }
+  },
+  "mk2SpacePlaneAdapter": {
+    "name": "mk2SpacePlaneAdapter",
+    "title": "Mk2 to 1.25m Adapter",
+    "mass": 0.29,
+    "bulkhead_profiles": [
+      "size1",
+      "srf",
+      "mk2"
+    ],
+    "tech_required": "supersonicFlight",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 180.0,
+      "Oxidizer": 220.0
+    }
+  },
+  "mk2_1m_AdapterLong": {
+    "name": "mk2_1m_AdapterLong",
+    "title": "Mk2 to 1.25m Adapter Long",
+    "mass": 0.57,
+    "bulkhead_profiles": [
+      "size1",
+      "srf",
+      "mk2"
+    ],
+    "tech_required": "highAltitudeFlight",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 360.0,
+      "Oxidizer": 440.0
+    }
+  },
+  "mk2_1m_Bicoupler": {
+    "name": "mk2_1m_Bicoupler",
+    "title": "Mk2 Bicoupler",
+    "mass": 0.29,
+    "bulkhead_profiles": [
+      "size1",
+      "srf",
+      "mk2"
+    ],
+    "tech_required": "supersonicFlight",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 180.0,
+      "Oxidizer": 220.0
+    }
+  },
+  "mk3CargoBayL": {
+    "name": "mk3CargoBayL",
+    "title": "Mk3 Cargo Bay CRG-100",
+    "mass": 6.0,
+    "bulkhead_profiles": [
+      "mk3"
+    ],
+    "tech_required": "experimentalAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "mk3CargoBayM": {
+    "name": "mk3CargoBayM",
+    "title": "Mk3 Cargo Bay CRG-50",
+    "mass": 3.0,
+    "bulkhead_profiles": [
+      "mk3"
+    ],
+    "tech_required": "heavyAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "mk3CargoBayS": {
+    "name": "mk3CargoBayS",
+    "title": "Mk3 Cargo Bay CRG-25",
+    "mass": 1.5,
+    "bulkhead_profiles": [
+      "mk3"
+    ],
+    "tech_required": "heavyAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "mk3CargoRamp": {
+    "name": "mk3CargoRamp",
+    "title": "Mk3 Cargo Ramp",
+    "mass": 4.0,
+    "bulkhead_profiles": [
+      "mk3"
+    ],
+    "tech_required": "heavyAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "mk3Cockpit_Shuttle": {
+    "name": "mk3Cockpit_Shuttle",
+    "title": "Mk3 Cockpit",
+    "mass": 3.5,
+    "bulkhead_profiles": [
+      "size1",
+      "mk3"
+    ],
+    "tech_required": "heavyAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "ElectricCharge": 500.0,
+      "MonoPropellant": 100.0
+    }
+  },
+  "mk3CrewCabin": {
+    "name": "mk3CrewCabin",
+    "title": "Mk3 Passenger Module",
+    "mass": 7.9,
+    "bulkhead_profiles": [
+      "mk3"
+    ],
+    "tech_required": "heavyAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "mk3FuselageLFO_100": {
+    "name": "mk3FuselageLFO_100",
+    "title": "Mk3 Rocket Fuel Fuselage Long",
+    "mass": 7.14,
+    "bulkhead_profiles": [
+      "mk3",
+      "srf"
+    ],
+    "tech_required": "experimentalAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 4500.0,
+      "Oxidizer": 5500.0
+    }
+  },
+  "mk3FuselageLFO_25": {
+    "name": "mk3FuselageLFO_25",
+    "title": "Mk3 Rocket Fuel Fuselage Short",
+    "mass": 1.79,
+    "bulkhead_profiles": [
+      "mk3",
+      "srf"
+    ],
+    "tech_required": "experimentalAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 1125.0,
+      "Oxidizer": 1375.0
+    }
+  },
+  "mk3FuselageLFO_50": {
+    "name": "mk3FuselageLFO_50",
+    "title": "Mk3 Rocket Fuel Fuselage",
+    "mass": 3.57,
+    "bulkhead_profiles": [
+      "mk3",
+      "srf"
+    ],
+    "tech_required": "experimentalAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 2250.0,
+      "Oxidizer": 2750.0
+    }
+  },
+  "mk3FuselageLF_100": {
+    "name": "mk3FuselageLF_100",
+    "title": "Mk3 Liquid Fuel Fuselage Long",
+    "mass": 7.14,
+    "bulkhead_profiles": [
+      "mk3",
+      "srf"
+    ],
+    "tech_required": "experimentalAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 10000.0
+    }
+  },
+  "mk3FuselageLF_25": {
+    "name": "mk3FuselageLF_25",
+    "title": "Mk3 Liquid Fuel Fuselage Short",
+    "mass": 1.79,
+    "bulkhead_profiles": [
+      "mk3",
+      "srf"
+    ],
+    "tech_required": "heavyAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 2500.0
+    }
+  },
+  "mk3FuselageLF_50": {
+    "name": "mk3FuselageLF_50",
+    "title": "Mk3 Liquid Fuel Fuselage",
+    "mass": 3.57,
+    "bulkhead_profiles": [
+      "mk3",
+      "srf"
+    ],
+    "tech_required": "heavyAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 5000.0
+    }
+  },
+  "mk3FuselageMONO": {
+    "name": "mk3FuselageMONO",
+    "title": "Mk3 Monopropellant Tank",
+    "mass": 1.4,
+    "bulkhead_profiles": [
+      "mk3"
+    ],
+    "tech_required": "experimentalAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "MonoPropellant": 2100.0
+    }
+  },
+  "nacelleBody": {
+    "name": "nacelleBody",
+    "title": "Engine Nacelle",
+    "mass": 0.15,
+    "bulkhead_profiles": [
+      "size1",
+      "srf"
+    ],
+    "tech_required": "aerodynamicSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "IntakeAir": 5.0,
+      "LiquidFuel": 150.0
+    }
+  },
+  "navLight1": {
+    "name": "navLight1",
+    "title": "Navigation Light Mk1",
+    "mass": 0.001,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "aviation",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "noseCone": {
+    "name": "noseCone",
+    "title": "Aerodynamic Nose Cone",
+    "mass": 0.03,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "stability",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "noseConeAdapter": {
+    "name": "noseConeAdapter",
+    "title": "NCS Adapter",
+    "mass": 0.1,
+    "bulkhead_profiles": [
+      "size0",
+      "size1"
+    ],
+    "tech_required": "aerodynamicSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 80.0
+    }
+  },
+  "nuclearEngine": {
+    "name": "nuclearEngine",
+    "title": "LV-N \"Nerv\" Atomic Rocket Motor",
+    "mass": 3.0,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "nuclearPropulsion",
+    "engine": {
+      "max_thrust": 60.0,
+      "isp_vac": 800.0,
+      "isp_atm": 185.0,
+      "engine_type": "Nuclear",
+      "throttle_locked": false,
+      "propellants": {
+        "LiquidFuel": 0.9
+      }
+    },
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "omsEngine": {
+    "name": "omsEngine",
+    "title": "O-10 \"Puff\" MonoPropellant Fuel Engine",
+    "mass": 0.09,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "precisionPropulsion",
+    "engine": {
+      "max_thrust": 20.0,
+      "isp_vac": 250.0,
+      "isp_atm": 120.0,
+      "engine_type": "MonoProp",
+      "throttle_locked": false,
+      "propellants": {
+        "MonoPropellant": 0.9
+      }
+    },
+    "has_gimbal": true,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "parachuteDrogue": {
+    "name": "parachuteDrogue",
+    "title": "Mk25 Parachute",
+    "mass": 0.2,
+    "bulkhead_profiles": [
+      "size1",
+      "srf"
+    ],
+    "tech_required": "advLanding",
+    "has_gimbal": false,
+    "parachute": {
+      "fully_deployed_drag": 170.0
+    },
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "parachuteLarge": {
+    "name": "parachuteLarge",
+    "title": "Mk16-XL Parachute",
+    "mass": 0.3,
+    "bulkhead_profiles": [
+      "size1",
+      "srf"
+    ],
+    "tech_required": "landing",
+    "has_gimbal": false,
+    "parachute": {
+      "fully_deployed_drag": 500.0
+    },
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "parachuteRadial": {
+    "name": "parachuteRadial",
+    "title": "Mk2-R Radial-Mount Parachute",
+    "mass": 0.1,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "survivability",
+    "has_gimbal": false,
+    "parachute": {
+      "fully_deployed_drag": 500.0
+    },
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "parachuteSingle": {
+    "name": "parachuteSingle",
+    "title": "Mk16 Parachute",
+    "mass": 0.1,
+    "bulkhead_profiles": [
+      "size0",
+      "srf"
+    ],
+    "tech_required": "start",
+    "has_gimbal": false,
+    "parachute": {
+      "fully_deployed_drag": 500.0
+    },
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "pointyNoseConeA": {
+    "name": "pointyNoseConeA",
+    "title": "Advanced Nose Cone - Type A",
+    "mass": 0.075,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "advConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "pointyNoseConeB": {
+    "name": "pointyNoseConeB",
+    "title": "Advanced Nose Cone - Type B",
+    "mass": 0.075,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "specializedConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "probeCoreCube": {
+    "name": "probeCoreCube",
+    "title": "Probodobodyne QBE",
+    "mass": 0.07,
+    "bulkhead_profiles": [
+      "size0"
+    ],
+    "tech_required": "unmannedTech",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "ElectricCharge": 5.0
+    }
+  },
+  "probeCoreHex_v2": {
+    "name": "probeCoreHex_v2",
+    "title": "Probodobodyne HECS",
+    "mass": 0.1,
+    "bulkhead_profiles": [
+      "size0"
+    ],
+    "tech_required": "precisionEngineering",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "ElectricCharge": 10.0
+    }
+  },
+  "probeCoreOcto2_v2": {
+    "name": "probeCoreOcto2_v2",
+    "title": "Probodobodyne OKTO2",
+    "mass": 0.04,
+    "bulkhead_profiles": [
+      "size0"
+    ],
+    "tech_required": "unmannedTech",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "ElectricCharge": 5.0
+    }
+  },
+  "probeCoreOcto_v2": {
+    "name": "probeCoreOcto_v2",
+    "title": "Probodobodyne OKTO",
+    "mass": 0.1,
+    "bulkhead_profiles": [
+      "size0"
+    ],
+    "tech_required": "electrics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "ElectricCharge": 10.0
+    }
+  },
+  "probeCoreSphere_v2": {
+    "name": "probeCoreSphere_v2",
+    "title": "Probodobodyne Stayputnik",
+    "mass": 0.05,
+    "bulkhead_profiles": [
+      "size0"
+    ],
+    "tech_required": "basicScience",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "ElectricCharge": 10.0
+    }
+  },
+  "probeStackLarge": {
+    "name": "probeStackLarge",
+    "title": "RC-L01 Remote Guidance Unit",
+    "mass": 0.5,
+    "bulkhead_profiles": [
+      "size2"
+    ],
+    "tech_required": "largeUnmanned",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "ElectricCharge": 30.0
+    }
+  },
+  "probeStackSmall": {
+    "name": "probeStackSmall",
+    "title": "RC-001S Remote Guidance Unit",
+    "mass": 0.1,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "advUnmanned",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "ElectricCharge": 15.0
+    }
+  },
+  "radPanelEdge": {
+    "name": "radPanelEdge",
+    "title": "Radiator Panel (edge)",
+    "mass": 0.03,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "basicScience",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "radPanelLg": {
+    "name": "radPanelLg",
+    "title": "Radiator Panel (large)",
+    "mass": 0.05,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "basicScience",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "radPanelSm": {
+    "name": "radPanelSm",
+    "title": "Radiator Panel (small)",
+    "mass": 0.01,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "survivability",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "radialDecoupler": {
+    "name": "radialDecoupler",
+    "title": "TT-38K Radial Decoupler",
+    "mass": 0.025,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "stability",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": true
+  },
+  "radialDecoupler1-2": {
+    "name": "radialDecoupler1-2",
+    "title": "Hydraulic Detachment Manifold",
+    "mass": 0.4,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": true
+  },
+  "radialDecoupler2": {
+    "name": "radialDecoupler2",
+    "title": "TT-70 Radial Decoupler",
+    "mass": 0.05,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": true
+  },
+  "radialDrogue": {
+    "name": "radialDrogue",
+    "title": "Mk12-R Radial-Mount Drogue Chute",
+    "mass": 0.075,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "survivability",
+    "has_gimbal": false,
+    "parachute": {
+      "fully_deployed_drag": 100.0
+    },
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "radialEngineBody": {
+    "name": "radialEngineBody",
+    "title": "Engine Pre-cooler",
+    "mass": 0.15,
+    "bulkhead_profiles": [
+      "size1",
+      "srf"
+    ],
+    "tech_required": "hypersonicFlight",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "IntakeAir": 5.0,
+      "LiquidFuel": 40.0
+    }
+  },
+  "radialEngineMini_v2": {
+    "name": "radialEngineMini_v2",
+    "title": "LV-1R \"Spider\" Liquid Fuel Engine",
+    "mass": 0.02,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "precisionPropulsion",
+    "engine": {
+      "max_thrust": 2.0,
+      "isp_vac": 290.0,
+      "isp_atm": 260.0,
+      "engine_type": "LiquidFuel",
+      "throttle_locked": false,
+      "propellants": {
+        "LiquidFuel": 0.9,
+        "Oxidizer": 1.1
+      }
+    },
+    "has_gimbal": true,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "radialLiquidEngine1-2": {
+    "name": "radialLiquidEngine1-2",
+    "title": "Mk-55 \"Thud\" Liquid Fuel Engine",
+    "mass": 0.9,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advRocketry",
+    "engine": {
+      "max_thrust": 120.0,
+      "isp_vac": 305.0,
+      "isp_atm": 275.0,
+      "engine_type": "LiquidFuel",
+      "throttle_locked": false,
+      "propellants": {
+        "LiquidFuel": 0.9,
+        "Oxidizer": 1.1
+      }
+    },
+    "has_gimbal": true,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "radialRCSTank": {
+    "name": "radialRCSTank",
+    "title": "Stratus-V Roundified Monopropellant Tank",
+    "mass": 0.02,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advFlightControl",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "MonoPropellant": 20.0
+    }
+  },
+  "ramAirIntake": {
+    "name": "ramAirIntake",
+    "title": "Adjustable Ramp Intake",
+    "mass": 0.06,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "highAltitudeFlight",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "IntakeAir": 2.0
+    }
+  },
+  "rcsTankMini": {
+    "name": "rcsTankMini",
+    "title": "FL-R20 RCS Fuel Tank",
+    "mass": 0.02,
+    "bulkhead_profiles": [
+      "size0",
+      "srf"
+    ],
+    "tech_required": "advFuelSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "MonoPropellant": 20.0
+    }
+  },
+  "rcsTankRadialLong": {
+    "name": "rcsTankRadialLong",
+    "title": "Stratus-V Cylindrified Monopropellant Tank",
+    "mass": 0.03,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "specializedControl",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "MonoPropellant": 50.0
+    }
+  },
+  "rocketNoseConeSize3": {
+    "name": "rocketNoseConeSize3",
+    "title": "Protective Rocket Nose Cone Mk12A",
+    "mass": 0.4,
+    "bulkhead_profiles": [
+      "size3"
+    ],
+    "tech_required": "composites",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "rocketNoseCone_v3": {
+    "name": "rocketNoseCone_v3",
+    "title": "Protective Rocket Nose Cone Mk7",
+    "mass": 0.2,
+    "bulkhead_profiles": [
+      "size2"
+    ],
+    "tech_required": "advConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "roverBody_v2": {
+    "name": "roverBody_v2",
+    "title": "Probodobodyne RoveMate",
+    "mass": 0.15,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "fieldScience",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "ElectricCharge": 120.0
+    }
+  },
+  "roverWheel1": {
+    "name": "roverWheel1",
+    "title": "RoveMax Model M1",
+    "mass": 0.075,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "fieldScience",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "roverWheel2": {
+    "name": "roverWheel2",
+    "title": "RoveMax Model S2",
+    "mass": 0.05,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "spaceExploration",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "roverWheel3": {
+    "name": "roverWheel3",
+    "title": "RoveMax Model XL3",
+    "mass": 1.25,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advancedMotors",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "rtg": {
+    "name": "rtg",
+    "title": "PB-NUK Radioisotope Thermoelectric Generator",
+    "mass": 0.08,
+    "bulkhead_profiles": [
+      "size0",
+      "srf"
+    ],
+    "tech_required": "experimentalElectrics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "sasModule": {
+    "name": "sasModule",
+    "title": "Small Inline Reaction Wheel",
+    "mass": 0.05,
+    "bulkhead_profiles": [
+      "size0"
+    ],
+    "tech_required": "flightControl",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "science_module": {
+    "name": "science_module",
+    "title": "SC-9001 Science Jr.",
+    "mass": 0.2,
+    "bulkhead_profiles": [
+      "size1",
+      "srf"
+    ],
+    "tech_required": "basicScience",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "seatExternalCmd": {
+    "name": "seatExternalCmd",
+    "title": "EAS-1 External Command Seat",
+    "mass": 0.05,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "fieldScience",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "sensorAccelerometer": {
+    "name": "sensorAccelerometer",
+    "title": "Double-C Seismic Accelerometer",
+    "mass": 0.005,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "electronics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "sensorAtmosphere": {
+    "name": "sensorAtmosphere",
+    "title": "Atmospheric Fluid Spectro-Variometer",
+    "mass": 0.005,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "scienceTech",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "sensorBarometer": {
+    "name": "sensorBarometer",
+    "title": "PresMat Barometer",
+    "mass": 0.005,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "survivability",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "sensorGravimeter": {
+    "name": "sensorGravimeter",
+    "title": "GRAVMAX Negative Gravioli Detector",
+    "mass": 0.005,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advScienceTech",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "sensorThermometer": {
+    "name": "sensorThermometer",
+    "title": "2HOT Thermometer",
+    "mass": 0.005,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "engineering101",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "sepMotor1": {
+    "name": "sepMotor1",
+    "title": "Sepratron I",
+    "mass": 0.0125,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "precisionPropulsion",
+    "engine": {
+      "max_thrust": 18.0,
+      "isp_vac": 154.0,
+      "isp_atm": 118.0,
+      "engine_type": "SolidBooster",
+      "throttle_locked": true,
+      "propellants": {
+        "SolidFuel": 1.0
+      }
+    },
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "SolidFuel": 8.0
+    }
+  },
+  "shockConeIntake": {
+    "name": "shockConeIntake",
+    "title": "Shock Cone Intake",
+    "mass": 0.12,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "hypersonicFlight",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "IntakeAir": 2.0
+    }
+  },
+  "smallCargoContainer": {
+    "name": "smallCargoContainer",
+    "title": "SEQ-3 Cargo Storage Unit",
+    "mass": 0.05,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "spaceExploration",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "smallClaw": {
+    "name": "smallClaw",
+    "title": "Advanced Grabbing Unit Jr.",
+    "mass": 0.03,
+    "bulkhead_profiles": [
+      "size0",
+      "srf"
+    ],
+    "tech_required": "actuators",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "smallCtrlSrf": {
+    "name": "smallCtrlSrf",
+    "title": "Elevon 4",
+    "mass": 0.04,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "smallHardpoint": {
+    "name": "smallHardpoint",
+    "title": "Small Hardpoint",
+    "mass": 0.05,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": true,
+    "has_module_anchored_decouple": false
+  },
+  "smallRadialEngine_v2": {
+    "name": "smallRadialEngine_v2",
+    "title": "24-77 \"Twitch\" Liquid Fuel Engine",
+    "mass": 0.08,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "precisionPropulsion",
+    "engine": {
+      "max_thrust": 16.0,
+      "isp_vac": 290.0,
+      "isp_atm": 275.0,
+      "engine_type": "LiquidFuel",
+      "throttle_locked": false,
+      "propellants": {
+        "LiquidFuel": 0.9,
+        "Oxidizer": 1.1
+      }
+    },
+    "has_gimbal": true,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "solarPanelOX10C": {
+    "name": "solarPanelOX10C",
+    "title": "OX-10C Photovoltaic Panels",
+    "mass": 0.09,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "largeElectrics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "solarPanelOX10L": {
+    "name": "solarPanelOX10L",
+    "title": "OX-10L 1x5 Photovoltaic Panels",
+    "mass": 0.09,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "largeElectrics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "solarPanelSP10C": {
+    "name": "solarPanelSP10C",
+    "title": "SP-10C Photovoltaic Panels",
+    "mass": 0.13,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "largeElectrics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "solarPanelSP10L": {
+    "name": "solarPanelSP10L",
+    "title": "SP-10L 1x5 Photovoltaic Panels",
+    "mass": 0.13,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "largeElectrics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "solarPanels1": {
+    "name": "solarPanels1",
+    "title": "SP-W 3x2 Photovoltaic Panels",
+    "mass": 0.025,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advElectrics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "solarPanels2": {
+    "name": "solarPanels2",
+    "title": "SP-L 1x6 Photovoltaic Panels",
+    "mass": 0.025,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advElectrics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "solarPanels3": {
+    "name": "solarPanels3",
+    "title": "OX-4W 3x2 Photovoltaic Panels",
+    "mass": 0.0175,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advElectrics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "solarPanels4": {
+    "name": "solarPanels4",
+    "title": "OX-4L 1x6 Photovoltaic Panels",
+    "mass": 0.0175,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advElectrics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "solarPanels5": {
+    "name": "solarPanels5",
+    "title": "OX-STAT Photovoltaic Panels",
+    "mass": 0.005,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "electrics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "solidBooster1-1": {
+    "name": "solidBooster1-1",
+    "title": "BACC \"Thumper\" Solid Fuel Booster",
+    "mass": 1.5,
+    "bulkhead_profiles": [
+      "size1",
+      "srf"
+    ],
+    "tech_required": "generalRocketry",
+    "engine": {
+      "max_thrust": 300.0,
+      "isp_vac": 210.0,
+      "isp_atm": 175.0,
+      "engine_type": "SolidBooster",
+      "throttle_locked": true,
+      "propellants": {
+        "SolidFuel": 1.0
+      }
+    },
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "SolidFuel": 820.0
+    }
+  },
+  "solidBooster_sm_v2": {
+    "name": "solidBooster_sm_v2",
+    "title": "RT-5 \"Flea\" Solid Fuel Booster",
+    "mass": 0.45,
+    "bulkhead_profiles": [
+      "size1",
+      "srf"
+    ],
+    "tech_required": "start",
+    "engine": {
+      "max_thrust": 192.0,
+      "isp_vac": 165.0,
+      "isp_atm": 140.0,
+      "engine_type": "SolidBooster",
+      "throttle_locked": true,
+      "propellants": {
+        "SolidFuel": 1.0
+      }
+    },
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "SolidFuel": 140.0
+    }
+  },
+  "solidBooster_v2": {
+    "name": "solidBooster_v2",
+    "title": "RT-10 \"Hammer\" Solid Fuel Booster",
+    "mass": 0.75,
+    "bulkhead_profiles": [
+      "size1",
+      "srf"
+    ],
+    "tech_required": "basicRocketry",
+    "engine": {
+      "max_thrust": 227.0,
+      "isp_vac": 195.0,
+      "isp_atm": 170.0,
+      "engine_type": "SolidBooster",
+      "throttle_locked": true,
+      "propellants": {
+        "SolidFuel": 1.0
+      }
+    },
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "SolidFuel": 375.0
+    }
+  },
+  "spotLight1_v2": {
+    "name": "spotLight1_v2",
+    "title": "Illuminator Mk1",
+    "mass": 0.015,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "electrics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "spotLight2_v2": {
+    "name": "spotLight2_v2",
+    "title": "Illuminator Mk2",
+    "mass": 0.015,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "electrics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "spotLight3": {
+    "name": "spotLight3",
+    "title": "Spotlight Mk1",
+    "mass": 0.005,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "electrics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "stackBiCoupler_v2": {
+    "name": "stackBiCoupler_v2",
+    "title": "TVR-200 Stack Bi-Coupler",
+    "mass": 0.1,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "specializedConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "stackPoint1": {
+    "name": "stackPoint1",
+    "title": "BZ-52 Radial Attachment Point",
+    "mass": 0.04,
+    "bulkhead_profiles": [
+      "size1",
+      "srf"
+    ],
+    "tech_required": "specializedConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "stackQuadCoupler": {
+    "name": "stackQuadCoupler",
+    "title": "TVR-2160C Mk2 Stack Quad-Coupler",
+    "mass": 0.175,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "advMetalworks",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "stackTriCoupler_v2": {
+    "name": "stackTriCoupler_v2",
+    "title": "TVR-1180C Mk1 Stack Tri-Coupler",
+    "mass": 0.15,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "advConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "standardNoseCone": {
+    "name": "standardNoseCone",
+    "title": "Small Nose Cone",
+    "mass": 0.01,
+    "bulkhead_profiles": [
+      "size0"
+    ],
+    "tech_required": "aerodynamicSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "stationHub": {
+    "name": "stationHub",
+    "title": "Rockomax HubMax Multi-Point Connector",
+    "mass": 1.5,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "metaMaterials",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "stripLight1": {
+    "name": "stripLight1",
+    "title": "LightStrip Mk1",
+    "mass": 0.001,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advElectrics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "structuralIBeam1": {
+    "name": "structuralIBeam1",
+    "title": "M-Beam 650 I-Beam",
+    "mass": 0.08,
+    "bulkhead_profiles": [
+      "size0",
+      "srf"
+    ],
+    "tech_required": "composites",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "structuralIBeam2": {
+    "name": "structuralIBeam2",
+    "title": "M-Beam 200 I-Beam",
+    "mass": 0.375,
+    "bulkhead_profiles": [
+      "size0",
+      "srf"
+    ],
+    "tech_required": "composites",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "structuralIBeam3": {
+    "name": "structuralIBeam3",
+    "title": "M-Beam 200 I-Beam Pocket Edition",
+    "mass": 0.1875,
+    "bulkhead_profiles": [
+      "size0",
+      "srf"
+    ],
+    "tech_required": "composites",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "structuralMiniNode": {
+    "name": "structuralMiniNode",
+    "title": "The Not-Rockomax Micronode",
+    "mass": 0.15,
+    "bulkhead_profiles": [
+      "size0"
+    ],
+    "tech_required": "precisionEngineering",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "structuralPanel1": {
+    "name": "structuralPanel1",
+    "title": "M-1x1 Structural Panel",
+    "mass": 0.075,
+    "bulkhead_profiles": [
+      "size0",
+      "srf"
+    ],
+    "tech_required": "composites",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "structuralPanel2": {
+    "name": "structuralPanel2",
+    "title": "M-2x2 Structural Panel",
+    "mass": 0.3,
+    "bulkhead_profiles": [
+      "size0",
+      "srf"
+    ],
+    "tech_required": "composites",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "structuralPylon": {
+    "name": "structuralPylon",
+    "title": "Structural Pylon",
+    "mass": 0.2,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "highAltitudeFlight",
+    "has_gimbal": false,
+    "has_module_decouple": true,
+    "has_module_anchored_decouple": false
+  },
+  "structuralWing": {
+    "name": "structuralWing",
+    "title": "Structural Wing Type A",
+    "mass": 0.1,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "supersonicFlight",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "structuralWing2": {
+    "name": "structuralWing2",
+    "title": "Structural Wing Type B",
+    "mass": 0.1,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "aerodynamicSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "structuralWing3": {
+    "name": "structuralWing3",
+    "title": "Structural Wing Type C",
+    "mass": 0.05,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "aviation",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "structuralWing4": {
+    "name": "structuralWing4",
+    "title": "Structural Wing Type D",
+    "mass": 0.025,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "strutConnector": {
+    "name": "strutConnector",
+    "title": "EAS-4 Strut Connector",
+    "mass": 0.05,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "generalConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "strutCube": {
+    "name": "strutCube",
+    "title": "Cubic Octagonal Strut",
+    "mass": 0.001,
+    "bulkhead_profiles": [
+      "size0",
+      "srf"
+    ],
+    "tech_required": "precisionEngineering",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "strutOcto": {
+    "name": "strutOcto",
+    "title": "Octagonal Strut",
+    "mass": 0.001,
+    "bulkhead_profiles": [
+      "size0"
+    ],
+    "tech_required": "precisionEngineering",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "sweptWing": {
+    "name": "sweptWing",
+    "title": "Swept Wings",
+    "mass": 0.275,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "aviation",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "sweptWing1": {
+    "name": "sweptWing1",
+    "title": "Swept Wing Type A",
+    "mass": 0.113,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "sweptWing2": {
+    "name": "sweptWing2",
+    "title": "Swept Wing Type B",
+    "mass": 0.226,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "aerodynamicSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "tailfin": {
+    "name": "tailfin",
+    "title": "Tail Fin",
+    "mass": 0.125,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "aviation",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "telescopicLadder": {
+    "name": "telescopicLadder",
+    "title": "Kelus Mobility Enhancer",
+    "mass": 0.005,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advExploration",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "telescopicLadderBay": {
+    "name": "telescopicLadderBay",
+    "title": "Kelus-LV Bay Mobility Enhancer",
+    "mass": 0.005,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advExploration",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "toroidalAerospike": {
+    "name": "toroidalAerospike",
+    "title": "T-1 Toroidal Aerospike \"Dart\" Liquid Fuel Engine",
+    "mass": 1.0,
+    "bulkhead_profiles": [
+      "srf",
+      "size1"
+    ],
+    "tech_required": "hypersonicFlight",
+    "engine": {
+      "max_thrust": 180.0,
+      "isp_vac": 340.0,
+      "isp_atm": 290.0,
+      "engine_type": "LiquidFuel",
+      "throttle_locked": false,
+      "propellants": {
+        "LiquidFuel": 0.9,
+        "Oxidizer": 1.1
+      }
+    },
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "trussAdapter": {
+    "name": "trussAdapter",
+    "title": "Modular Girder Adapter",
+    "mass": 0.25,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "specializedConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "trussPiece1x": {
+    "name": "trussPiece1x",
+    "title": "Modular Girder Segment",
+    "mass": 0.125,
+    "bulkhead_profiles": [
+      "size0",
+      "srf"
+    ],
+    "tech_required": "start",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "trussPiece3x": {
+    "name": "trussPiece3x",
+    "title": "Segment XL",
+    "mass": 0.375,
+    "bulkhead_profiles": [
+      "size0",
+      "srf"
+    ],
+    "tech_required": "advMetalworks",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "turboFanEngine": {
+    "name": "turboFanEngine",
+    "title": "J-X4 \"Whiplash\" Turbo Ramjet Engine",
+    "mass": 1.8,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "hypersonicFlight",
+    "engine": {
+      "max_thrust": 130.0,
+      "isp_vac": 4000.0,
+      "isp_atm": 0.0,
+      "engine_type": "Turbine",
+      "throttle_locked": false,
+      "propellants": {
+        "IntakeAir": 8.0,
+        "LiquidFuel": 1.0
+      }
+    },
+    "has_gimbal": true,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "turboFanSize2": {
+    "name": "turboFanSize2",
+    "title": "J-90 \"Goliath\" Turbofan Engine",
+    "mass": 4.5,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "heavyAerodynamics",
+    "engine": {
+      "max_thrust": 360.0,
+      "isp_vac": 12600.0,
+      "isp_atm": 0.0,
+      "engine_type": "Turbine",
+      "throttle_locked": false,
+      "propellants": {
+        "IntakeAir": 227.0,
+        "LiquidFuel": 1.0
+      }
+    },
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "IntakeAir": 3.4
+    }
+  },
+  "turboJet": {
+    "name": "turboJet",
+    "title": "J-404 \"Panther\" Afterburning Turbofan",
+    "mass": 1.2,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "supersonicFlight",
+    "engine": {
+      "max_thrust": 85.0,
+      "isp_vac": 9000.0,
+      "isp_atm": 0.0,
+      "engine_type": "Turbine",
+      "throttle_locked": false,
+      "propellants": {
+        "IntakeAir": 40.0,
+        "LiquidFuel": 1.0
+      }
+    },
+    "has_gimbal": true,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "vernierEngine": {
+    "name": "vernierEngine",
+    "title": "Vernor Engine",
+    "mass": 0.08,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "specializedControl",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "wheelMed": {
+    "name": "wheelMed",
+    "title": "TR-2L Ruggedized Vehicular Wheel",
+    "mass": 0.105,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advancedMotors",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "wingConnector": {
+    "name": "wingConnector",
+    "title": "Wing Connector Type A",
+    "mass": 0.2,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "aerodynamicSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "wingConnector2": {
+    "name": "wingConnector2",
+    "title": "Wing Connector Type B",
+    "mass": 0.2,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "aviation",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "wingConnector3": {
+    "name": "wingConnector3",
+    "title": "Wing Connector Type C",
+    "mass": 0.1,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "aerodynamicSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "wingConnector4": {
+    "name": "wingConnector4",
+    "title": "Wing Connector Type D",
+    "mass": 0.05,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "advAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "wingConnector5": {
+    "name": "wingConnector5",
+    "title": "Wing Connector Type E",
+    "mass": 0.05,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "aviation",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "wingShuttleDelta": {
+    "name": "wingShuttleDelta",
+    "title": "Big-S Delta Wing",
+    "mass": 0.5,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "experimentalAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 300.0
+    }
+  },
+  "wingShuttleElevon1": {
+    "name": "wingShuttleElevon1",
+    "title": "Big-S Elevon 1",
+    "mass": 0.15,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "experimentalAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "wingShuttleElevon2": {
+    "name": "wingShuttleElevon2",
+    "title": "Big-S Elevon 2",
+    "mass": 0.23,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "experimentalAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "wingShuttleRudder": {
+    "name": "wingShuttleRudder",
+    "title": "Big-S Spaceplane Tail Fin",
+    "mass": 0.45,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "experimentalAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "wingShuttleStrake": {
+    "name": "wingShuttleStrake",
+    "title": "Big-S Wing Strake",
+    "mass": 0.1,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "experimentalAerodynamics",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 100.0
+    }
+  },
+  "wingStrake": {
+    "name": "wingStrake",
+    "title": "Wing Strake",
+    "mass": 0.05,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "supersonicFlight",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "winglet": {
+    "name": "winglet",
+    "title": "AV-T1 Winglet",
+    "mass": 0.037,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "stability",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "winglet3": {
+    "name": "winglet3",
+    "title": "Delta-Deluxe Winglet",
+    "mass": 0.078,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "flightControl",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "xenonTank": {
+    "name": "xenonTank",
+    "title": "PB-X150 Xenon Container",
+    "mass": 0.024,
+    "bulkhead_profiles": [
+      "size0"
+    ],
+    "tech_required": "ionPropulsion",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "XenonGas": 720.0
+    }
+  },
+  "xenonTankLarge": {
+    "name": "xenonTankLarge",
+    "title": "PB-X750 Xenon Container",
+    "mass": 0.19,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "ionPropulsion",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "XenonGas": 5700.0
+    }
+  },
+  "xenonTankRadial": {
+    "name": "xenonTankRadial",
+    "title": "PB-X50R Xenon Container",
+    "mass": 0.0135,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "ionPropulsion",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "XenonGas": 405.0
+    }
+  }
+}
