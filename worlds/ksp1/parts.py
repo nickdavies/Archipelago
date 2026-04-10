@@ -115,6 +115,7 @@ class MiscEquipment:
 # ---------------------------------------------------------------------------
 # Engine cluster sizing table
 # (tank_size_class, engine_size_class) -> max simultaneous engines
+# How many engines of a given size fit under a single tank.
 # Conservative estimates capped at 6.  Verified values to be updated
 # after in-game testing.
 # ---------------------------------------------------------------------------

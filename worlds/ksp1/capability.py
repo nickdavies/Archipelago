@@ -38,8 +38,23 @@ from .rocket_math import (
 if TYPE_CHECKING:
     from .world import KSP1World
 
-_CACHE_KEY = "ksp1_capability"
-_VERSION_KEY = "ksp1_cap_version"
+# Item names that affect capability computation. Built once at module load
+# from PART_DB: any item containing an Engine, FuelTank, SolidBooster,
+# HeatShield, Parachute, LandingLeg, Decoupler, or MiscEquipment with
+# non-empty `provides`.
+_CAPABILITY_PART_TYPES = (
+    Engine, FuelTank, SolidBooster, HeatShield,
+    Parachute, LandingLeg, Decoupler, MiscEquipment,
+)
+CAPABILITY_ITEMS: frozenset[str] = frozenset(
+    name for name, parts in PART_DB.items()
+    if any(
+        isinstance(p, _CAPABILITY_PART_TYPES) and (
+            not isinstance(p, MiscEquipment) or p.provides
+        )
+        for p in parts
+    )
+)
 
 # Terminal velocity threshold for parachute adequacy (m/s)
 _MAX_SAFE_LANDING_SPEED: float = 6.0
@@ -118,6 +133,9 @@ class EquipmentFlags:
     available_parachutes: list[Parachute] = field(default_factory=list)
     available_landing_legs: list[LandingLeg] = field(default_factory=list)
 
+    # Pre-indexed tanks by fuel type (built once after pre-pass)
+    tanks_by_fuel_type: Optional[dict[str, list[FuelTank]]] = None
+
 
 # ---------------------------------------------------------------------------
 # Top-level result dataclasses (public API)
@@ -169,22 +187,40 @@ class RocketCapability:
 # Cache accessor — only public entry point for rules
 # ---------------------------------------------------------------------------
 
+def _capability_fingerprint(state: CollectionState, player: int) -> frozenset[str]:
+    """Return the set of capability-affecting items the player has collected."""
+    return frozenset(name for name in CAPABILITY_ITEMS if state.count(name, player))
+
+
 def get_capability(state: CollectionState, player: int) -> RocketCapability:
     """
     Return the cached RocketCapability for this state/player, computing it
     if the cache is cold or stale.
 
-    Staleness is detected by comparing the current sum of collected progression
-    items against the version stored at cache time.  This ensures that adding
-    items to the state (via collect()) always produces a fresh result.
+    Two-level cache:
+      L1 — stale flag on CollectionState (via LogicMixin). Within a single
+            sweep step, multiple rule checks reuse the same result for free.
+      L2 — equipment fingerprint on World object. When stale, compute which
+            capability-affecting items the player has. If another state already
+            computed the same set, reuse that result without running the full
+            capability pipeline.
     """
-    cache: dict[int, RocketCapability] = state.prog_items.setdefault(_CACHE_KEY, {})
-    versions: dict[int, int] = state.prog_items.setdefault(_VERSION_KEY, {})
-    current_version = sum(state.prog_items[player].values())
-    if player not in cache or versions.get(player, -1) != current_version:
-        cache[player] = _compute_capability(state, player)
-        versions[player] = current_version
-    return cache[player]
+    # L1: not stale → return state-local cached result
+    if not state.ksp1_cap_stale[player]:
+        return state.ksp1_cap_result[player]
+
+    # L2: check fingerprint cache on the World object
+    fingerprint = _capability_fingerprint(state, player)
+    world: KSP1World = state.multiworld.worlds[player]
+
+    result = world.capability_cache.get(fingerprint)
+    if result is None:
+        result = _compute_capability(state, player)
+        world.capability_cache[fingerprint] = result
+
+    state.ksp1_cap_result[player] = result
+    state.ksp1_cap_stale[player] = False
+    return result
 
 
 def explain_body_unreachable(state: CollectionState, player: int, body_name: str) -> str:
@@ -286,6 +322,26 @@ def _pre_pass(state: CollectionState, player: int,
     # Capsule/probe mass defaults if not found
     if flags.lightest_probe_mass == float("inf"):
         flags.lightest_probe_mass = 0.0  # no probe: will be blocked by gate
+
+    # Sort engines by Isp desc, mass asc — high-Isp lightweight engines
+    # produce lighter stages, helping the optimizer's upper-bound pruning.
+    flags.available_engines.sort(key=lambda e: (-e.vac_isp, e.mass))
+
+    # Build fuel-type index for tanks, sorted for best-first search.
+    # Sort by ratio (fuel/dry) desc then fuel_mass asc — the optimizer
+    # uses best_wet upper-bound pruning, so trying high-ratio small tanks
+    # first finds good solutions quickly and skips worse options.
+    tank_index: dict[str, list[FuelTank]] = {}
+    for tank in flags.available_tanks:
+        tank_index.setdefault(tank.fuel_type, []).append(tank)
+    for fuel_type in tank_index:
+        tank_index[fuel_type].sort(
+            key=lambda t: (
+                -(t.fuel_mass / t.dry_mass if t.dry_mass > 0 else 0),
+                t.fuel_mass,
+            )
+        )
+    flags.tanks_by_fuel_type = tank_index
 
     return flags
 
@@ -606,6 +662,7 @@ def _evaluate_profile(
             asparagus=asparagus,
             srb_needs_rcs=diff.srb_needs_rcs,
             player_has_rcs=flags.has_rcs,
+            tanks_by_fuel_type=flags.tanks_by_fuel_type,
         )
 
         if result is None:
@@ -825,6 +882,7 @@ def _assess_bodies(
     unreachable, all its moons are immediately marked False.
     """
     results: dict[str, BodyAccessProfile] = {}
+    has_attitude = _has_attitude_control(flags)
 
     # We need to evaluate planets before moons.
     # ALL_BODIES is ordered: Kerbin first, then moons, then outer bodies.
@@ -833,7 +891,7 @@ def _assess_bodies(
     moons = [b for b in ALL_BODIES if b.parent is not None]
 
     for body in planets + moons:
-        results[body.name] = _assess_one_body(body, flags, diff, results)
+        results[body.name] = _assess_one_body(body, flags, diff, results, has_attitude)
 
     return results
 
@@ -843,6 +901,7 @@ def _assess_one_body(
     flags: EquipmentFlags,
     diff: DifficultyProfile,
     computed: dict[str, BodyAccessProfile],
+    has_attitude: Optional[bool] = None,
 ) -> BodyAccessProfile:
     prof = BodyAccessProfile()
 
@@ -859,6 +918,23 @@ def _assess_one_body(
     # --- Launch clamp gate for interplanetary ---
     if body.name in _INTERPLANETARY_BODIES and not flags.has_launch_clamp:
         prof.blocking_reason = "no launch clamp for interplanetary mission"
+        return prof
+
+    # --- Equipment gates ---
+    # No command module at all → nothing is possible.
+    if not flags.has_probe_core and not flags.has_capsule:
+        prof.blocking_reason = "no command (probe or capsule)"
+        return prof
+    # Nearly all profiles require attitude control. Without it, only
+    # very exotic profiles could succeed, and we have none.
+    if has_attitude is None:
+        has_attitude = _has_attitude_control(flags)
+    if not has_attitude:
+        prof.blocking_reason = "no attitude control"
+        return prof
+    # Orbit is always evaluated unmanned; gate on probe core.
+    if not flags.has_probe_core:
+        prof.blocking_reason = "no probe core for orbit"
         return prof
 
     # --- Orbit ---

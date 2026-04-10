@@ -1,12 +1,24 @@
 from typing import Any
 
-from worlds.AutoWorld import WebWorld, World
+from BaseClasses import CollectionState, Item, MultiWorld
+from worlds.AutoWorld import LogicMixin, WebWorld, World
 
 from . import items, locations, regions, rules
+from .capability import RocketCapability
 from .items import ITEM_NAME_TO_ID
 from .locations import LOCATION_NAME_TO_ID
 from .options import KSP1Options
 from .tech_tree import NODES_BY_TIER
+
+
+class KSP1State(LogicMixin):
+    """Inject per-player stale flag and cached result onto CollectionState."""
+    ksp1_cap_stale: dict[int, bool]
+    ksp1_cap_result: dict[int, RocketCapability]
+
+    def init_mixin(self, multiworld: MultiWorld) -> None:
+        self.ksp1_cap_stale = {p: True for p in multiworld.get_game_players("Kerbal Space Program")}
+        self.ksp1_cap_result = {}
 
 
 class KSP1WebWorld(WebWorld):
@@ -30,8 +42,12 @@ class KSP1World(World):
     item_name_to_id = ITEM_NAME_TO_ID
     location_name_to_id = LOCATION_NAME_TO_ID
 
+    # Fingerprint → RocketCapability, shared across all CollectionState copies
+    capability_cache: dict[frozenset[str], RocketCapability]
+
     def generate_early(self) -> None:
         """Apply ExcludeLateTechTree to the exclude_locations option set."""
+        self.capability_cache = {}
         if self.options.exclude_late_tech_tree:
             tier9_locs: set[str] = {
                 f"{node.display_name} {slot}"
@@ -59,3 +75,15 @@ class KSP1World(World):
 
     def fill_slot_data(self) -> dict[str, Any]:
         return self.options.as_dict("goal", "difficulty")
+
+    def collect(self, state: CollectionState, item: Item) -> bool:
+        change = super().collect(state, item)
+        if change:
+            state.ksp1_cap_stale[self.player] = True
+        return change
+
+    def remove(self, state: CollectionState, item: Item) -> bool:
+        change = super().remove(state, item)
+        if change:
+            state.ksp1_cap_stale[self.player] = True
+        return change

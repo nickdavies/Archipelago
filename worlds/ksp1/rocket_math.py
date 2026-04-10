@@ -15,7 +15,7 @@ from typing import Optional
 
 from .parts import (
     Engine, FuelTank, SolidBooster,
-    max_engine_count, AnyPart,
+    ENGINE_COUNT_TABLE, max_engine_count, AnyPart,
 )
 
 G0: float = 9.80665  # standard gravity, m/s²
@@ -192,25 +192,42 @@ def find_optimal_stage(
     asparagus: bool = False,
     srb_needs_rcs: bool = True,     # if True, SRBs only valid when player has RCS
     player_has_rcs: bool = False,
+    tanks_by_fuel_type: Optional[dict[str, list[FuelTank]]] = None,
 ) -> Optional[StageResult]:
     """
     Find the minimum-mass engine+tank configuration that meets *required_dv*
     and all constraints.  Returns None if no valid configuration exists.
 
     Algorithm:
-      For each eligible engine:
-        For each compatible tank:
+      For each eligible engine (sorted by Isp desc, mass asc):
+        For each compatible tank (sorted by ratio desc, fuel_mass asc):
           For each fill level [1.0, 0.75, 0.5, 0.25]:
-            Find min engine count satisfying TWR (if required)
+            Find min engine count satisfying TWR (analytical)
             Compute required tank count
             If valid, track minimum wet-mass configuration
+            Use best-so-far as upper bound to skip unpromising combos
       Also evaluate SRBs (fixed config, no fill levels)
       Return best result or None
     """
     best: Optional[StageResult] = None
+    best_wet: float = float("inf")
 
     # Full payload = caller-supplied payload + heat shield (if needed)
     full_payload = payload_mass + (heat_shield_mass if needs_heat_shield else 0.0)
+
+    # Asparagus dry-mass factor (applied to tank dry mass)
+    dry_factor = ASPARAGUS_DRY_MASS_FACTOR if asparagus else 1.0
+
+    # Pre-check: TWR denom component that depends only on engine
+    has_twr = min_twr > 0 and gravity > 0
+    twr_g = min_twr * gravity  # reused per engine
+
+    # Local refs to avoid repeated global/attribute lookups in hot loop
+    _exp = math.exp
+    _log = math.log
+    _ceil = math.ceil
+    _ect = ENGINE_COUNT_TABLE
+    _fills = FILL_LEVELS
 
     # -----------------------------------------------------------------------
     # Evaluate liquid engines + tanks
@@ -227,71 +244,110 @@ def find_optimal_stage(
         if requires_throttleable and not engine.throttleable:
             continue
 
-        # ION engine (xenon) special handling: requires xenon tanks
-        for tank in available_tanks:
-            if tank.fuel_type != engine.fuel_type:
+        e_mass = engine.mass
+        e_size = engine.size_class
+        thrust_per_eng = engine.atm_thrust if in_atmosphere else engine.vac_thrust
+
+        # Engine lower bound: even with 1 engine + 1 smallest tank, can't beat best?
+        if full_payload + e_mass >= best_wet:
+            continue
+
+        # Compute mass ratio R once per engine (the key optimisation: avoids
+        # redundant math.exp inside the tank/fill/engine-count loops).
+        isp = engine.atm_isp if in_atmosphere else engine.vac_isp
+        if isp <= 0:
+            continue
+        R = _exp(required_dv / (isp * G0))
+        R_minus_1 = R - 1
+        isp_g0 = isp * G0
+
+        # TWR: denom that depends only on engine
+        # thrust_per_eng - min_twr * gravity * engine.mass
+        twr_eng_denom = thrust_per_eng - twr_g * e_mass if has_twr else 0.0
+
+        # Use pre-indexed tanks if available, otherwise filter inline
+        if tanks_by_fuel_type is not None:
+            compatible_tanks = tanks_by_fuel_type.get(engine.fuel_type, ())
+        else:
+            compatible_tanks = [t for t in available_tanks if t.fuel_type == engine.fuel_type]
+
+        for tank in compatible_tanks:
+            t_dry = tank.dry_mass
+            t_fuel = tank.fuel_mass
+            t_size = tank.size_class
+
+            # Lower bound: 1 engine + 1 tank at lowest fill can't beat best?
+            lb = full_payload + e_mass + t_dry + t_fuel * 0.25
+            if lb >= best_wet:
                 continue
 
-            for fill in FILL_LEVELS:
-                max_eng = max_engine_count(tank.size_class, engine.size_class)
-                if asparagus:
-                    # Asparagus allows multiple parallel stacks; each has its
-                    # own engine cluster.  4× is conservative (real designs
-                    # often use 6-8 stacks, but 4× gives adequate coverage).
-                    max_eng *= 4
-                if max_eng == 0:
-                    continue
+            # Early exit: if even fill=1.0 can't achieve the dv, skip tank.
+            # denominator = fuel*fill - R_minus_1 * dry*dry_factor
+            # At fill=1.0 this is maximised; if still <= 0, impossible.
+            effective_dry = t_dry * dry_factor
+            if t_fuel - R_minus_1 * effective_dry <= 0:
+                continue
 
-                # Find minimum engine count that satisfies TWR
+            # max_engine_count via direct dict lookup (no function call)
+            if e_size > t_size:
+                continue
+            max_eng = _ect.get((t_size, e_size), 1)
+            if asparagus:
+                max_eng *= 6
+
+            for fill in _fills:
+                # Denominator for required tank count (depends on tank+fill+R)
+                denom = t_fuel * fill - R_minus_1 * effective_dry
+                if denom <= 0:
+                    continue  # impossible at this fill level
+
+                # Find minimum engine count that satisfies TWR analytically.
                 min_engines = 1
-                if min_twr > 0 and gravity > 0:
-                    # We need: thrust / (m_wet * gravity) >= min_twr
-                    # Estimate wet mass with 1 tank (conservative starting point)
-                    # Use a single-tank wet mass for the TWR floor search;
-                    # we'll verify with the actual tank count after.
-                    for n_eng in range(1, max_eng + 1):
-                        # Approximate wet mass with 1 tank to check if TWR is
-                        # achievable at all for this engine count.  The actual
-                        # check below uses the real tank count.
-                        est_wet = full_payload + engine.mass * n_eng + tank.dry_mass + tank.fuel_mass * fill
-                        thrust = (engine.atm_thrust if in_atmosphere else engine.vac_thrust) * n_eng
-                        if twr(thrust, est_wet, gravity) >= min_twr:
-                            min_engines = n_eng
-                            break
-                    else:
-                        continue  # even max engines can't meet TWR on a 1-tank stage
+                if has_twr:
+                    if twr_eng_denom <= 0:
+                        continue  # engine too heavy for this TWR at any count
+                    m_tank_1 = t_dry + t_fuel * fill
+                    numer = twr_g * (full_payload + m_tank_1)
+                    min_engines = max(1, _ceil(numer / twr_eng_denom))
+                    if min_engines > max_eng:
+                        continue
 
                 for n_eng in range(min_engines, max_eng + 1):
-                    n_tanks = required_tanks(
-                        engine, n_eng, tank, fill, required_dv, full_payload,
-                        in_atmosphere=in_atmosphere, asparagus=asparagus,
-                    )
+                    # Inline required_tanks: n = ceil(R_minus_1 * (payload + m_eng) / denom)
+                    m_engine = e_mass * n_eng
+                    n_tanks = _ceil(R_minus_1 * (full_payload + m_engine) / denom)
                     if n_tanks <= 0:
                         continue
 
-                    m_engine = engine.mass * n_eng
-                    m_tank_dry = tank.dry_mass * n_tanks
-                    m_fuel = tank.fuel_mass * n_tanks * fill
+                    m_tank_dry = t_dry * n_tanks
+                    m_fuel = t_fuel * n_tanks * fill
                     m_dry = full_payload + m_engine + m_tank_dry
                     m_wet = m_dry + m_fuel
 
+                    # Skip if can't beat current best
+                    if m_wet >= best_wet:
+                        break  # more engines only adds mass
+
                     # Verify TWR at ignition with the actual tank count
-                    thrust = (engine.atm_thrust if in_atmosphere else engine.vac_thrust) * n_eng
-                    if min_twr > 0 and twr(thrust, m_wet, gravity) < min_twr:
+                    thrust = thrust_per_eng * n_eng
+                    if has_twr and thrust < twr_g * m_wet:
                         continue
 
-                    # Verify delta-v is actually achieved (required_tanks rounds up)
-                    actual_dv = stage_delta_v(
-                        engine, n_eng, tank, n_tanks, fill, full_payload,
-                        in_atmosphere=in_atmosphere, asparagus=asparagus,
-                    )
+                    # Verify delta-v (required_tanks rounds up, so check actual)
+                    # Inline stage_delta_v to avoid function call overhead.
+                    verify_dry = m_tank_dry * dry_factor if asparagus else m_tank_dry
+                    v_dry = full_payload + m_engine + verify_dry
+                    v_wet = v_dry + m_fuel
+                    if v_dry <= 0 or v_wet <= v_dry:
+                        continue
+                    actual_dv = isp_g0 * _log(v_wet / v_dry)
                     if actual_dv < required_dv:
                         continue
 
-                    twr_ign = twr(thrust, m_wet, gravity)
-                    twr_bur = twr(thrust, m_dry, gravity)
+                    twr_ign = thrust / (m_wet * gravity) if gravity > 0 else 0.0
+                    twr_bur = thrust / (m_dry * gravity) if gravity > 0 else 0.0
 
-                    result = StageResult(
+                    best = StageResult(
                         delta_v=actual_dv,
                         twr_at_ignition=twr_ign,
                         twr_at_burnout=twr_bur,
@@ -305,9 +361,7 @@ def find_optimal_stage(
                         engine_name=engine.name,
                         tank_name=tank.name,
                     )
-
-                    if best is None or m_wet < best.stage_mass_wet:
-                        best = result
+                    best_wet = m_wet
 
                     # Once we've found a valid n_eng, no need to try more
                     break
@@ -329,43 +383,48 @@ def find_optimal_stage(
             if srb.size_class > max_heat_shield_size:
                 continue
 
-        # SRBs don't have separate tank types — they self-contain fuel
-        # Use a single 1.25m LFO tank's size as the "tank" for count lookup
-        max_srb = max_engine_count(srb.size_class, srb.size_class)
+        srb_size = srb.size_class
+        max_srb = _ect.get((srb_size, srb_size), 1)
         max_srb = max(max_srb, 1)
 
+        srb_isp = srb.atm_isp if in_atmosphere else srb.vac_isp
+        if srb_isp <= 0:
+            continue
+        srb_thrust = (srb.atm_thrust if in_atmosphere else srb.vac_thrust)
+
         for n_srb in range(1, max_srb + 1):
-            dv = srb_delta_v(srb, n_srb, full_payload, in_atmosphere=in_atmosphere)
+            # Inline srb_delta_v
+            m_dry = full_payload + srb.dry_mass * n_srb
+            m_wet = m_dry + srb.fuel_mass * n_srb
+            if m_dry <= 0 or m_wet <= m_dry:
+                continue
+            dv = srb_isp * G0 * _log(m_wet / m_dry)
             if dv < required_dv:
                 continue
 
-            m_dry = full_payload + srb.dry_mass * n_srb
-            m_wet = m_dry + srb.fuel_mass * n_srb
-
-            thrust = (srb.atm_thrust if in_atmosphere else srb.vac_thrust) * n_srb
-            if min_twr > 0 and twr(thrust, m_wet, gravity) < min_twr:
+            thrust = srb_thrust * n_srb
+            if has_twr and thrust < twr_g * m_wet:
                 continue
 
-            twr_ign = twr(thrust, m_wet, gravity)
-            twr_bur = twr(thrust, m_dry, gravity)
+            twr_ign = thrust / (m_wet * gravity) if gravity > 0 else 0.0
+            twr_bur = thrust / (m_dry * gravity) if gravity > 0 else 0.0
 
-            result = StageResult(
-                delta_v=dv,
-                twr_at_ignition=twr_ign,
-                twr_at_burnout=twr_bur,
-                engine_is_throttleable=False,
-                engine_has_gimbal=srb.has_gimbal,
-                stage_mass_wet=m_wet,
-                stage_mass_dry=m_dry,
-                engine_count=n_srb,
-                tank_count=0,
-                fill_fraction=1.0,
-                engine_name=srb.name,
-                tank_name="(SRB integral)",
-            )
-
-            if best is None or m_wet < best.stage_mass_wet:
-                best = result
+            if best is None or m_wet < best_wet:
+                best = StageResult(
+                    delta_v=dv,
+                    twr_at_ignition=twr_ign,
+                    twr_at_burnout=twr_bur,
+                    engine_is_throttleable=False,
+                    engine_has_gimbal=srb.has_gimbal,
+                    stage_mass_wet=m_wet,
+                    stage_mass_dry=m_dry,
+                    engine_count=n_srb,
+                    tank_count=0,
+                    fill_fraction=1.0,
+                    engine_name=srb.name,
+                    tank_name="(SRB integral)",
+                )
+                best_wet = m_wet
             break  # found minimum SRB count, no need to try more
 
     return best
