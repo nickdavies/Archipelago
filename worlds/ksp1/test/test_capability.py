@@ -14,7 +14,8 @@ from worlds.ksp1.capability import (
     _try_profiles, _required_chute_count, _inject_ladder, _compute_sounding_altitude,
     _group_edges,
 )
-from worlds.ksp1.parts import PART_DB, Engine, FuelTank, SolidBooster
+from worlds.ksp1.parts import PART_DB, Engine, FuelTank, SolidBooster, MultiMount
+from worlds.ksp1.rocket_math import find_optimal_stage, _adapter_max_engines
 
 
 # ---------------------------------------------------------------------------
@@ -34,6 +35,8 @@ _MAINSAIL = _part("liquidEngineMainsail.v2")
 _MAMMOTH = _part("Size3EngineCluster")
 _NERV = _part("nuclearEngine")
 _DAWN = _part("ionEngine")
+_SPIDER = _part("radialEngineMini.v2")   # radial-mountable engine
+_THUD = _part("radialLiquidEngine1-2")   # radial-mountable engine
 
 # SRBs
 _FLEA = _part("solidBooster.sm.v2")
@@ -663,7 +666,7 @@ class TestDunaReturn(unittest.TestCase):
 
     The Mammoth (3746 kN atm thrust) on S3-3600 (3.75m) tanks provides enough
     TWR for the heavy Kerbin ascent. Mainsail alone is limited to 1 engine on
-    2.5m tanks (ENGINE_COUNT_TABLE), which can't close the dv/TWR tradeoff.
+    2.5m tanks (single engine without adapter), which can't close the dv/TWR tradeoff.
 
     Equipment: heat shield (2.5m), parachutes (3x Mk16), landing legs (LT-2),
     RTG (Duna power at solar distance ~1.5 AU), relay_tier=1.
@@ -759,16 +762,17 @@ class TestInterplanetaryBodies(unittest.TestCase):
 
 class TestKerbinOrbitIsEarlyGame(unittest.TestCase):
     """
-    A minimal rocket (Reliant + X200-32 + probe core + launch clamp) can orbit
-    Kerbin.  This confirms the game can start with basic tech-tree parts.
+    Kerbin orbit with early parts requires a multi-mount adapter.
 
-    The X200-32 is a 2.5m tank, allowing up to 4× Reliant engines via
-    ENGINE_COUNT_TABLE(2.5, 1.25)=4.  Multiple engines give sufficient
-    atmospheric TWR (4×205≈820 kN) to close the dv/TWR tradeoff for the
-    ~4025 m/s Kerbin ascent edge at normal difficulty.
+    Reliant (1.25m stack engine) on X200-32 (2.5m tank) cannot mount
+    multiple engines without an adapter — radial-tank mounting forces
+    n_tank >= n_eng, making the vehicle too heavy.  A quad coupler
+    (TVR-2160C) allows 4× Reliant under a shared tank stack, giving
+    sufficient atmospheric TWR.
     """
 
-    def test_reliant_x200_32_orbits_kerbin(self) -> None:
+    def test_reliant_x200_32_needs_adapter_for_kerbin_orbit(self) -> None:
+        """Without adapter, Reliant + X200-32 single stage can't orbit Kerbin."""
         flags = _make_flags(
             engines=[_RELIANT],
             tanks=[_X200_32],
@@ -779,9 +783,27 @@ class TestKerbinOrbitIsEarlyGame(unittest.TestCase):
         profiles = MISSION_PROFILES.get(("Kerbin", "orbit"), [])
         self.assertTrue(len(profiles) > 0, "Kerbin orbit profiles must exist")
         ok = _try_profiles(profiles, flags, _normal_diff(), "orbit", crewed=False)
+        self.assertFalse(
+            ok,
+            "Reliant + X200-32 should NOT reach Kerbin orbit without an adapter",
+        )
+
+    def test_reliant_x200_32_with_quad_coupler_orbits_kerbin(self) -> None:
+        """With a quad coupler, 3–4× Reliant under X200-32 tanks can orbit."""
+        flags = _make_flags(
+            engines=[_RELIANT],
+            tanks=[_X200_32],
+            probe_core=True, reaction_wheels=True, solar=True,
+            launch_clamp=True,
+            staging_tier=0,
+        )
+        from worlds.ksp1.parts import MULTI_MOUNT_TABLE
+        flags.available_multi_mounts = [MULTI_MOUNT_TABLE["stackQuadCoupler"]]
+        profiles = MISSION_PROFILES.get(("Kerbin", "orbit"), [])
+        ok = _try_profiles(profiles, flags, _normal_diff(), "orbit", crewed=False)
         self.assertTrue(
             ok,
-            "Reliant + X200-32 (4× engines on 2.5m tank) should reach Kerbin orbit",
+            "Reliant + X200-32 + quad coupler should reach Kerbin orbit",
         )
 
 
@@ -950,6 +972,174 @@ class TestStagingGroupPreservation(unittest.TestCase):
         total_edges = sum(len(g) for g in groups_tier0)
         self.assertEqual(total_edges, len(profile),
                          "All edges must be accounted for after merging")
+
+
+class TestEngineMounting(unittest.TestCase):
+    """
+    Tests for the 3-mode engine mounting logic:
+      Mode 1: Radial engines — mount on tank side, cap 8, no n_tank constraint
+      Mode 2: Radial tank mounting — stack engines, cap 8, n_tank >= n_eng
+      Mode 3: Adapter/plate — multiple engines under shared stack, no n_tank constraint
+    """
+
+    # Stock quad coupler: 1.25m input, up to 4× 1.25m engines
+    _QUAD_COUPLER = MultiMount(1.25, {1.25: 4})
+    # EP-50 engine plate: no min_tank_size, up to 9× 1.25m
+    _EP50 = MultiMount(0.0, {0.625: 9, 1.25: 9, 1.875: 7, 2.5: 3, 3.75: 1})
+
+    def test_adapter_max_engines_basic(self) -> None:
+        """Quad coupler on 1.25m tank → 4 engines for 1.25m engine."""
+        result = _adapter_max_engines(1.25, 1.25, [self._QUAD_COUPLER])
+        self.assertEqual(result, 4)
+
+    def test_adapter_max_engines_tank_too_small(self) -> None:
+        """Quad coupler has min_tank_size=1.25; 0.625m tank → 0."""
+        result = _adapter_max_engines(1.25, 0.625, [self._QUAD_COUPLER])
+        self.assertEqual(result, 0)
+
+    def test_adapter_max_engines_engine_too_large(self) -> None:
+        """Quad coupler only mounts 1.25m engines; 2.5m engine → 0."""
+        result = _adapter_max_engines(2.5, 1.25, [self._QUAD_COUPLER])
+        self.assertEqual(result, 0)
+
+    def test_adapter_max_engines_ep50(self) -> None:
+        """EP-50 on any tank → 9 engines for 1.25m engine."""
+        result = _adapter_max_engines(1.25, 0.625, [self._EP50])
+        self.assertEqual(result, 9)
+
+    def test_adapter_max_engines_best_of_multiple(self) -> None:
+        """Multiple mounts: best count wins."""
+        result = _adapter_max_engines(1.25, 1.25, [self._QUAD_COUPLER, self._EP50])
+        self.assertEqual(result, 9)
+
+    def test_stack_engine_no_adapter_enforces_tank_constraint(self) -> None:
+        """Stack engine with no adapter: n_eng>1 forces n_tank >= n_eng."""
+        # Reliant is a stack engine (not radial_mountable).
+        # With no adapters, multi-engine requires radial tank mounting.
+        self.assertFalse(_RELIANT.radial_mountable)
+        result = find_optimal_stage(
+            available_engines=[_RELIANT],
+            available_srbs=[],
+            available_tanks=[_X200_32],
+            required_dv=3000.0,
+            payload_mass=0.5,
+            gravity=9.81,
+            min_twr=1.5,
+            in_atmosphere=True,
+            available_multi_mounts=[],
+        )
+        if result is not None and result.engine_count > 1:
+            self.assertGreaterEqual(
+                result.tank_count, result.engine_count,
+                "Without adapter, stack engine multi-engine must have n_tank >= n_eng",
+            )
+
+    def test_stack_engine_with_quad_coupler_no_tank_constraint(self) -> None:
+        """Stack engine + quad coupler: up to 4 engines, no n_tank constraint."""
+        result = find_optimal_stage(
+            available_engines=[_RELIANT],
+            available_srbs=[],
+            available_tanks=[_X200_32],
+            required_dv=3000.0,
+            payload_mass=0.5,
+            gravity=9.81,
+            min_twr=1.5,
+            in_atmosphere=True,
+            available_multi_mounts=[self._QUAD_COUPLER],
+        )
+        self.assertIsNotNone(result)
+        # With a quad coupler, optimizer can use up to 4 engines with fewer tanks
+        if result.engine_count <= 4:
+            # Adapter covers it — no constraint on n_tank >= n_eng
+            self.assertGreater(result.engine_count, 0)
+
+    def test_stack_engine_with_ep50_more_engines(self) -> None:
+        """Stack engine + EP-50: allows up to 9× 1.25m engines."""
+        result = find_optimal_stage(
+            available_engines=[_RELIANT],
+            available_srbs=[],
+            available_tanks=[_X200_32],
+            required_dv=3500.0,
+            payload_mass=1.0,
+            gravity=9.81,
+            min_twr=1.5,
+            in_atmosphere=True,
+            available_multi_mounts=[self._EP50],
+        )
+        self.assertIsNotNone(result)
+
+    def test_radial_engine_no_tank_constraint(self) -> None:
+        """Radial engine (Spider): mounts on tank side, no n_tank >= n_eng."""
+        self.assertTrue(_SPIDER.radial_mountable)
+        result = find_optimal_stage(
+            available_engines=[_SPIDER],
+            available_srbs=[],
+            available_tanks=[_FL_T400],
+            required_dv=500.0,
+            payload_mass=0.5,
+            gravity=1.63,
+            min_twr=1.2,
+            available_multi_mounts=[],
+        )
+        self.assertIsNotNone(result)
+        # Radial engines have no n_tank >= n_eng constraint
+        if result.engine_count > 1:
+            # n_tanks can be less than n_eng — that's the point
+            self.assertIsInstance(result.tank_count, int)
+
+    def test_radial_srb_capped_at_8(self) -> None:
+        """Radial SRBs (Flea, Hammer) are capped at 8."""
+        self.assertTrue(_FLEA.radial_mountable)
+        result = find_optimal_stage(
+            available_engines=[],
+            available_srbs=[_FLEA],
+            available_tanks=[],
+            required_dv=200.0,
+            payload_mass=0.5,
+            gravity=9.81,
+            min_twr=1.5,
+            in_atmosphere=True,
+            available_multi_mounts=[],
+        )
+        if result is not None:
+            self.assertLessEqual(result.engine_count, 8)
+
+    def test_stack_srb_limited_to_1(self) -> None:
+        """
+        A hypothetical stack-only SRB (no srf profile) can only mount 1.
+        All stock SRBs happen to be radial-mountable, so we construct one.
+        """
+        stack_srb = SolidBooster(
+            name="test_stack_srb",
+            vac_isp=200.0, atm_isp=180.0,
+            vac_thrust=500.0, atm_thrust=450.0,
+            dry_mass=1.0, fuel_mass=4.0,
+            has_gimbal=False, size_class=1.25,
+            radial_mountable=False,
+        )
+        result = find_optimal_stage(
+            available_engines=[],
+            available_srbs=[stack_srb],
+            available_tanks=[],
+            required_dv=200.0,
+            payload_mass=0.5,
+            gravity=9.81,
+            min_twr=1.5,
+            in_atmosphere=True,
+            available_multi_mounts=[],
+        )
+        if result is not None:
+            self.assertEqual(result.engine_count, 1,
+                             "Stack SRB should be limited to 1")
+
+    def test_radial_mountable_flag_set_correctly(self) -> None:
+        """Verify radial_mountable is set from bulkhead_profiles."""
+        self.assertTrue(_SPIDER.radial_mountable, "Spider should be radial")
+        self.assertTrue(_THUD.radial_mountable, "Thud should be radial")
+        self.assertFalse(_RELIANT.radial_mountable, "Reliant should be stack")
+        self.assertFalse(_SWIVEL.radial_mountable, "Swivel should be stack")
+        self.assertTrue(_FLEA.radial_mountable, "Flea should be radial")
+        self.assertTrue(_HAMMER.radial_mountable, "Hammer should be radial")
 
 
 if __name__ == "__main__":

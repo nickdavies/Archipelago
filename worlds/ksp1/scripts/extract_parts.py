@@ -355,21 +355,28 @@ def walk_and_extract_with_titles(parts_dir: str) -> dict[str, dict]:
 
 def main() -> None:
     if len(sys.argv) < 2:
-        print(f"Usage: {sys.argv[0]} <path/to/GameData/Squad/Parts>", file=sys.stderr)
+        print(f"Usage: {sys.argv[0]} <path/to/Parts> [<path/to/Parts> ...]",
+              file=sys.stderr)
+        print("  e.g.: extract_parts.py GameData/Squad/Parts GameData/SquadExpansion/MakingHistory/Parts",
+              file=sys.stderr)
         sys.exit(1)
 
-    parts_dir = sys.argv[1]
-    if not os.path.isdir(parts_dir):
-        print(f"Error: {parts_dir} is not a directory", file=sys.stderr)
-        sys.exit(1)
+    parts_dirs = sys.argv[1:]
+    for d in parts_dirs:
+        if not os.path.isdir(d):
+            print(f"Error: {d} is not a directory", file=sys.stderr)
+            sys.exit(1)
 
-    parts = walk_and_extract_with_titles(parts_dir)
+    # Merge parts from all directories (later dirs override earlier on conflict)
+    parts: dict[str, dict] = {}
+    for parts_dir in parts_dirs:
+        parts.update(walk_and_extract_with_titles(parts_dir))
 
     # Sort alphabetically and add metadata
     sorted_parts = dict(sorted(parts.items()))
     output = {
         "_meta": {
-            "source": os.path.abspath(parts_dir),
+            "sources": [os.path.abspath(d) for d in parts_dirs],
             "generated": datetime.now(timezone.utc).isoformat(),
             "part_count": len(sorted_parts),
         },

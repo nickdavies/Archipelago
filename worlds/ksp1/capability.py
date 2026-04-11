@@ -29,6 +29,7 @@ from .bodies import (
 from .parts import (
     PART_DB, Engine, FuelTank, SolidBooster, HeatShield,
     Parachute, LandingLeg, Decoupler, MiscEquipment,
+    MultiMount, MULTI_MOUNT_TABLE,
 )
 from .rocket_math import (
     StageResult, find_optimal_stage, terminal_velocity,
@@ -132,6 +133,9 @@ class EquipmentFlags:
     available_heat_shields: list[HeatShield] = field(default_factory=list)
     available_parachutes: list[Parachute] = field(default_factory=list)
     available_landing_legs: list[LandingLeg] = field(default_factory=list)
+
+    # Multi-mount adapters/plates available to the player
+    available_multi_mounts: list[MultiMount] = field(default_factory=list)
 
     # Pre-indexed tanks by fuel type (built once after pre-pass)
     tanks_by_fuel_type: Optional[dict[str, list[FuelTank]]] = None
@@ -328,11 +332,18 @@ def _pre_pass(state: CollectionState, player: int,
     flags.available_engines.sort(key=lambda e: (-e.vac_isp, e.mass))
 
     # Build fuel-type index for tanks, sorted for best-first search.
+    # Deduplicate by optimizer-relevant fields (dry_mass, fuel_mass, size_class)
+    # since many structural variants (adapters, mk2/mk3 fuselages) share stats.
     # Sort by ratio (fuel/dry) desc then fuel_mass asc — the optimizer
     # uses best_wet upper-bound pruning, so trying high-ratio small tanks
     # first finds good solutions quickly and skips worse options.
     tank_index: dict[str, list[FuelTank]] = {}
+    seen_tank_stats: set[tuple[str, float, float, float]] = set()
     for tank in flags.available_tanks:
+        key = (tank.fuel_type, tank.dry_mass, tank.fuel_mass, tank.size_class)
+        if key in seen_tank_stats:
+            continue
+        seen_tank_stats.add(key)
         tank_index.setdefault(tank.fuel_type, []).append(tank)
     for fuel_type in tank_index:
         tank_index[fuel_type].sort(
@@ -396,6 +407,10 @@ def _apply_misc(flags: EquipmentFlags, part: MiscEquipment, count: int) -> None:
             flags.has_launch_clamp = True
         elif flag == "isru":
             flags.has_isru = True
+        elif flag == "multi_mount":
+            mount = MULTI_MOUNT_TABLE.get(part.name)
+            if mount is not None:
+                flags.available_multi_mounts.append(mount)
         elif flag == "thermometer":
             flags.has_thermometer = True
         elif flag == "barometer":
@@ -663,6 +678,7 @@ def _evaluate_profile(
             srb_needs_rcs=diff.srb_needs_rcs,
             player_has_rcs=flags.has_rcs,
             tanks_by_fuel_type=flags.tanks_by_fuel_type,
+            available_multi_mounts=flags.available_multi_mounts,
         )
 
         if result is None:

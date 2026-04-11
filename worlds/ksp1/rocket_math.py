@@ -14,8 +14,8 @@ from dataclasses import dataclass
 from typing import Optional
 
 from .parts import (
-    Engine, FuelTank, SolidBooster,
-    ENGINE_COUNT_TABLE, max_engine_count, AnyPart,
+    Engine, FuelTank, SolidBooster, MultiMount,
+    MAX_RADIAL_ENGINES,
 )
 
 G0: float = 9.80665  # standard gravity, m/s²
@@ -173,6 +173,27 @@ def terminal_velocity(
 
 
 # ---------------------------------------------------------------------------
+# Multi-mount adapter/plate helper
+# ---------------------------------------------------------------------------
+
+def _adapter_max_engines(e_size: float, t_size: float,
+                         mounts: list[MultiMount]) -> int:
+    """Best engine count from available adapters/plates for this engine+tank combo."""
+    best = 0
+    for mount in mounts:
+        if mount.min_tank_size > 0 and t_size < mount.min_tank_size:
+            continue
+        # Find smallest engine_counts key >= e_size (pre-sorted)
+        for max_size in mount._sorted_sizes:
+            if e_size <= max_size:
+                count = mount.engine_counts[max_size]
+                if count > best:
+                    best = count
+                break
+    return best
+
+
+# ---------------------------------------------------------------------------
 # Stage optimizer
 # ---------------------------------------------------------------------------
 
@@ -193,6 +214,7 @@ def find_optimal_stage(
     srb_needs_rcs: bool = True,     # if True, SRBs only valid when player has RCS
     player_has_rcs: bool = False,
     tanks_by_fuel_type: Optional[dict[str, list[FuelTank]]] = None,
+    available_multi_mounts: Optional[list[MultiMount]] = None,
 ) -> Optional[StageResult]:
     """
     Find the minimum-mass engine+tank configuration that meets *required_dv*
@@ -226,8 +248,11 @@ def find_optimal_stage(
     _exp = math.exp
     _log = math.log
     _ceil = math.ceil
-    _ect = ENGINE_COUNT_TABLE
     _fills = FILL_LEVELS
+    _mounts = available_multi_mounts or []
+    _max_radial = MAX_RADIAL_ENGINES
+    # Cache adapter lookups: only ~36 unique (e_size, t_size) combos
+    _adapter_cache: dict[tuple[float, float], int] = {}
 
     # -----------------------------------------------------------------------
     # Evaluate liquid engines + tanks
@@ -288,10 +313,28 @@ def find_optimal_stage(
             if t_fuel - R_minus_1 * effective_dry <= 0:
                 continue
 
-            # max_engine_count via direct dict lookup (no function call)
+            # Engine must fit under or on the tank
             if e_size > t_size:
                 continue
-            max_eng = _ect.get((t_size, e_size), 1)
+
+            # Three mounting modes:
+            # 1. Radial engine: mounts directly on tank side (cap 8)
+            # 2. Adapter/plate: multiple engines under shared tank stack
+            # 3. Radial tank: each engine needs its own tank (cap 8)
+            _size_key = (e_size, t_size)
+            adapter_max = _adapter_cache.get(_size_key)
+            if adapter_max is None:
+                adapter_max = _adapter_max_engines(e_size, t_size, _mounts)
+                _adapter_cache[_size_key] = adapter_max
+
+            if engine.radial_mountable:
+                max_eng = _max_radial
+                use_radial_tank_constraint = False
+            else:
+                # Best of adapter mode or radial-tank mode
+                max_eng = max(adapter_max, _max_radial)
+                use_radial_tank_constraint = True
+
             if asparagus:
                 max_eng *= 6
 
@@ -318,6 +361,12 @@ def find_optimal_stage(
                     n_tanks = _ceil(R_minus_1 * (full_payload + m_engine) / denom)
                     if n_tanks <= 0:
                         continue
+
+                    # Radial-tank constraint: each stack engine needs its own
+                    # tank unless an adapter/plate covers this engine count
+                    if (use_radial_tank_constraint and n_eng > 1
+                            and n_eng > adapter_max):
+                        n_tanks = max(n_tanks, n_eng)
 
                     m_tank_dry = t_dry * n_tanks
                     m_fuel = t_fuel * n_tanks * fill
@@ -383,9 +432,10 @@ def find_optimal_stage(
             if srb.size_class > max_heat_shield_size:
                 continue
 
-        srb_size = srb.size_class
-        max_srb = _ect.get((srb_size, srb_size), 1)
-        max_srb = max(max_srb, 1)
+        if srb.radial_mountable:
+            max_srb = _max_radial
+        else:
+            max_srb = 1
 
         srb_isp = srb.atm_isp if in_atmosphere else srb.vac_isp
         if srb_isp <= 0:

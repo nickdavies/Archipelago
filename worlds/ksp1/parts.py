@@ -31,6 +31,7 @@ class Engine:
     has_gimbal: bool
     size_class: float       # metres: 0.625, 1.25, 2.5, 3.75, 5.0
     fuel_type: str          # "lfo" | "lf" | "xenon"
+    radial_mountable: bool = False  # True if engine has "srf" in bulkhead_profiles
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,7 @@ class SolidBooster:
     fuel_mass: float        # tonnes (propellant)
     has_gimbal: bool        # always False for stock SRBs
     size_class: float
+    radial_mountable: bool = False  # True if SRB has "srf" in bulkhead_profiles
 
 
 @dataclass(frozen=True)
@@ -113,39 +115,51 @@ class MiscEquipment:
 
 
 # ---------------------------------------------------------------------------
-# Engine cluster sizing table
-# (tank_size_class, engine_size_class) -> max simultaneous engines
-# How many engines of a given size fit under a single tank.
-# Conservative estimates capped at 6.  Verified values to be updated
-# after in-game testing.
+# Multi-mount adapter/coupler/plate table
 # ---------------------------------------------------------------------------
 
-ENGINE_COUNT_TABLE: dict[tuple[float, float], int] = {
-    (0.625, 0.625): 1,
-    (1.25,  0.625): 2,
-    (1.25,  1.25):  1,
-    (2.5,   0.625): 4,
-    (2.5,   1.25):  4,
-    (2.5,   2.5):   1,
-    (3.75,  0.625): 6,
-    (3.75,  1.25):  6,
-    (3.75,  2.5):   3,
-    (3.75,  3.75):  1,
-    (5.0,   0.625): 6,
-    (5.0,   1.25):  6,
-    (5.0,   2.5):   4,
-    (5.0,   3.75):  2,
-    (5.0,   5.0):   1,
+# Cap for radial-mount engines/SRBs and radial-tank-mounting (KSP symmetry
+# modes: 1x, 2x, 3x, 4x, 6x, 8x).
+MAX_RADIAL_ENGINES: int = 8
+
+
+@dataclass(frozen=True)
+class MultiMount:
+    """An adapter, coupler, or engine plate that enables multi-engine stages.
+
+    min_tank_size: minimum tank size_class above the adapter (0.0 = no limit,
+                   e.g. engine plates attach anywhere).
+    engine_counts: mapping of engine_size_class → max engines mountable.
+                   Lookup: find the smallest key >= the engine's size_class.
+    _sorted_sizes: pre-sorted engine_counts keys for fast lookup (auto-set).
+    """
+    min_tank_size: float
+    engine_counts: dict[float, int]
+    _sorted_sizes: tuple[float, ...] = field(default=(), repr=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, '_sorted_sizes',
+                           tuple(sorted(self.engine_counts)))
+
+
+MULTI_MOUNT_TABLE: dict[str, MultiMount] = {
+    # Stock couplers (output 1.25m nodes)
+    "stackBiCoupler.v2":     MultiMount(1.25, {1.25: 2}),
+    "stackTriCoupler.v2":    MultiMount(1.25, {1.25: 3}),
+    "stackQuadCoupler":      MultiMount(1.25, {1.25: 4}),
+    # Stock adapters (2.5m input → 1.25m output)
+    "adapterLargeSmallBi":   MultiMount(2.5,  {1.25: 2}),
+    "adapterLargeSmallTri":  MultiMount(2.5,  {1.25: 3}),
+    "adapterLargeSmallQuad": MultiMount(2.5,  {1.25: 4}),
+    # Engine plates (Making History, no min_tank_size restriction)
+    "EnginePlate5":   MultiMount(0.0, {0.625: 3}),                                       # EP-12
+    "EnginePlate1p5": MultiMount(0.0, {0.625: 7}),                                       # EP-18
+    "EnginePlate2":   MultiMount(0.0, {0.625: 9, 1.25: 3}),                              # EP-25
+    "EnginePlate3":   MultiMount(0.0, {0.625: 9, 1.25: 7, 1.875: 3}),                    # EP-37
+    "EnginePlate4":   MultiMount(0.0, {0.625: 9, 1.25: 9, 1.875: 7, 2.5: 3}),            # EP-50
+    # Dual-purpose adapter (Making History) — also a fuel tank
+    "Size4.EngineAdapter.01": MultiMount(3.75, {2.5: 5, 3.75: 1}),
 }
-
-
-def max_engine_count(tank_size_class: float, engine_size_class: float) -> int:
-    """Return the maximum number of engines of *engine_size_class* that fit
-    on a stage whose main tank is *tank_size_class*.  Returns 0 if the engine
-    is larger than the tank."""
-    if engine_size_class > tank_size_class:
-        return 0
-    return ENGINE_COUNT_TABLE.get((tank_size_class, engine_size_class), 1)
 
 
 # ---------------------------------------------------------------------------
@@ -430,11 +444,11 @@ PART_REGISTRY: list[PartMapping] = [
     PartMapping("adapterEngines", MiscEquipment, "Mk3 Engine Mount", 1174,
                 {"provides": frozenset()}),
     PartMapping("adapterLargeSmallBi", MiscEquipment, "TVR-200L Stack Bi-Adapter", 1314,
-                {"provides": frozenset()}),
+                {"provides": frozenset({"multi_mount"})}),
     PartMapping("adapterLargeSmallQuad", MiscEquipment, "TVR-400L Stack Quad-Adapter", 1317,
-                {"provides": frozenset()}),
+                {"provides": frozenset({"multi_mount"})}),
     PartMapping("adapterLargeSmallTri", MiscEquipment, "TVR-300L Stack Tri-Adapter", 1316,
-                {"provides": frozenset()}),
+                {"provides": frozenset({"multi_mount"})}),
     PartMapping("adapterSmallMiniShort", MiscEquipment, "FL-A5 Adapter", 1071,
                 {"provides": frozenset()}),
     PartMapping("adapterSmallMiniTall", MiscEquipment, "FL-A10 Adapter", 1070,
@@ -698,13 +712,13 @@ PART_REGISTRY: list[PartMapping] = [
     PartMapping("spotLight3", MiscEquipment, "Spotlight Mk1", 1282,
                 {"provides": frozenset()}),
     PartMapping("stackBiCoupler_v2", MiscEquipment, "TVR-200 Stack Bi-Coupler", 1313,
-                {"provides": frozenset()}),
+                {"provides": frozenset({"multi_mount"})}),
     PartMapping("stackPoint1", MiscEquipment, "BZ-52 Radial Attachment Point", 1022,
                 {"provides": frozenset()}),
     PartMapping("stackQuadCoupler", MiscEquipment, "TVR-2160C Mk2 Stack Quad-Coupler", 1315,
-                {"provides": frozenset()}),
+                {"provides": frozenset({"multi_mount"})}),
     PartMapping("stackTriCoupler_v2", MiscEquipment, "TVR-1180C Mk1 Stack Tri-Coupler", 1312,
-                {"provides": frozenset()}),
+                {"provides": frozenset({"multi_mount"})}),
     PartMapping("standardNoseCone", MiscEquipment, "Small Nose Cone", 1281,
                 {"provides": frozenset()}),
     PartMapping("stationHub", MiscEquipment, "Rockomax HubMax Multi-Point Connector", 1248,
@@ -793,6 +807,120 @@ PART_REGISTRY: list[PartMapping] = [
                 {"provides": frozenset()}),
     PartMapping("winglet3", MiscEquipment, "Delta-Deluxe Winglet", 1047,
                 {"provides": frozenset()}),
+    # ===================================================================
+    # Making History DLC parts (offsets 1400+)
+    # ===================================================================
+    # --- MH Engines (7) ---
+    PartMapping("LiquidEngineKE-1", Engine, 'Kerbodyne KE-1 "Mastodon" Liquid Fuel Engine', 1400),
+    PartMapping("LiquidEngineLV-T91", Engine, 'LV-T91 "Cheetah" Liquid Fuel Engine', 1401),
+    PartMapping("LiquidEngineLV-TX87", Engine, 'LV-TX87 "Bobcat" Liquid Fuel Engine', 1402),
+    PartMapping("LiquidEngineRE-I2", Engine, 'RE-I2 "Skiff" Liquid Fuel Engine', 1403),
+    PartMapping("LiquidEngineRE-J10", Engine, 'RE-J10 "Wolfhound" Liquid Fuel Engine', 1404),
+    PartMapping("LiquidEngineRK-7", Engine, 'RK-7 "Kodiak" Liquid Fuel Engine', 1405),
+    PartMapping("LiquidEngineRV-1", Engine, 'RV-1 "Cub" Vernier Engine', 1406),
+    # --- MH Solid Rocket Boosters (1) ---
+    PartMapping("Pollux", SolidBooster, 'THK "Pollux" Solid Fuel Booster', 1407),
+    # --- MH Fuel Tanks (17) ---
+    PartMapping("Size1p5_Tank_01", FuelTank, "FL-TX220 Fuel Tank", 1410),
+    PartMapping("Size1p5_Tank_02", FuelTank, "FL-TX440 Fuel Tank", 1411),
+    PartMapping("Size1p5_Tank_03", FuelTank, "FL-TX900 Fuel Tank", 1412),
+    PartMapping("Size1p5_Tank_04", FuelTank, "FL-TX1800 Fuel Tank", 1413),
+    PartMapping("Size1p5_Tank_05", FuelTank, "FL-C1000 Fuel Tank", 1414),
+    PartMapping("Size1p5_Size0_Adapter_01", FuelTank, "FL-A150 Fuel Tank Adapter", 1415),
+    PartMapping("Size1p5_Size1_Adapter_01", FuelTank, "FL-A151L Fuel Tank Adapter", 1416),
+    PartMapping("Size1p5_Size1_Adapter_02", FuelTank, "FL-A151S Fuel Tank Adapter", 1417),
+    PartMapping("Size1p5_Size2_Adapter_01", FuelTank, "FL-A215 Fuel Tank Adapter", 1418),
+    PartMapping("Size1p5_Monoprop", FuelTank, "FL-R400 RCS Fuel Tank", 1419),
+    PartMapping("Size4_Tank_01", FuelTank, "Kerbodyne S4-64 Fuel Tank", 1420),
+    PartMapping("Size4_Tank_02", FuelTank, "Kerbodyne S4-128 Fuel Tank", 1421),
+    PartMapping("Size4_Tank_03", FuelTank, "Kerbodyne S4-256 Fuel Tank", 1422),
+    PartMapping("Size4_Tank_04", FuelTank, "Kerbodyne S4-512 Fuel Tank", 1423),
+    PartMapping("Size3_Size4_Adapter_01", FuelTank, "Kerbodyne S3-S4 Adapter Tank", 1424),
+    PartMapping("Size4_EngineAdapter_01", FuelTank, "Kerbodyne Engine Cluster Adapter Tank", 1425),
+    PartMapping("monopropMiniSphere", FuelTank, "Stratus-V Minified Monopropellant Tank", 1426),
+    # --- MH Heat Shield (1) ---
+    PartMapping("HeatShield1p5", HeatShield, "Heat Shield (1.875m)", 1430),
+    # --- MH Decouplers (5) ---
+    PartMapping("Decoupler_1p5", Decoupler, "TD-18 Decoupler", 1431),
+    PartMapping("Decoupler_4", Decoupler, "TD-50 Decoupler", 1432),
+    PartMapping("Separator_1p5", Decoupler, "TS-18 Stack Separator", 1433),
+    PartMapping("Separator_4", Decoupler, "TS-50 Stack Separator", 1434),
+    PartMapping("Size1p5_Strut_Decoupler", Decoupler, "Size 1.5 Decoupler", 1435),
+    # --- MH Engine Plates (5, MiscEquipment with multi_mount) ---
+    PartMapping("EnginePlate5", MiscEquipment, "EP-12 Engine Plate", 1440,
+                {"provides": frozenset({"multi_mount"})}),
+    PartMapping("EnginePlate1p5", MiscEquipment, "EP-18 Engine Plate", 1441,
+                {"provides": frozenset({"multi_mount"})}),
+    PartMapping("EnginePlate2", MiscEquipment, "EP-25 Engine Plate", 1442,
+                {"provides": frozenset({"multi_mount"})}),
+    PartMapping("EnginePlate3", MiscEquipment, "EP-37 Engine Plate", 1443,
+                {"provides": frozenset({"multi_mount"})}),
+    PartMapping("EnginePlate4", MiscEquipment, "EP-50 Engine Plate", 1444,
+                {"provides": frozenset({"multi_mount"})}),
+    # --- MH Command Pods / Capsules (5) ---
+    PartMapping("kv1Pod", MiscEquipment, "KV-1 'Onion' Reentry Module", 1450,
+                {"provides": frozenset({"capsule"})}),
+    PartMapping("kv2Pod", MiscEquipment, "KV-2 'Onion' Reentry Module", 1451,
+                {"provides": frozenset({"capsule"})}),
+    PartMapping("kv3Pod", MiscEquipment, "KV-3 'Tato' Reentry Module", 1452,
+                {"provides": frozenset({"capsule"})}),
+    PartMapping("Mk2Pod", MiscEquipment, "Mk2 Command Pod", 1453,
+                {"provides": frozenset({"capsule", "reaction_wheel"})}),
+    PartMapping("MEMLander", MiscEquipment, "Munar Excursion Module (M.E.M.)", 1454,
+                {"provides": frozenset({"capsule"})}),
+    # --- MH Service Modules & Other (25) ---
+    PartMapping("ServiceModule18", MiscEquipment, "SM-18 Service Module", 1460,
+                {"provides": frozenset()}),
+    PartMapping("ServiceModule25", MiscEquipment, "SM-25 Service Module", 1461,
+                {"provides": frozenset()}),
+    PartMapping("Size1to0ServiceModule", MiscEquipment, "SM-6A Service Module", 1462,
+                {"provides": frozenset()}),
+    PartMapping("InflatableAirlock", MiscEquipment, "Inflatable Airlock", 1463,
+                {"provides": frozenset()}),
+    PartMapping("fairingSize1p5", MiscEquipment, "AE-FF1.5 Airstream Protective Shell (1.875m)", 1464,
+                {"provides": frozenset()}),
+    PartMapping("fairingSize4", MiscEquipment, "AE-FF5 Airstream Protective Shell (5m)", 1465,
+                {"provides": frozenset()}),
+    PartMapping("Size_1_5_Cone", MiscEquipment, "Protective Rocket Nosecone Mk5A", 1466,
+                {"provides": frozenset()}),
+    PartMapping("rocketNoseConeSize4", MiscEquipment, "Protective Nose Cone Mk16A", 1467,
+                {"provides": frozenset()}),
+    PartMapping("roverWheelM1-F", MiscEquipment, "RoveMax M1-F Rover Wheel", 1468,
+                {"provides": frozenset()}),
+    PartMapping("EquiTriangle0", MiscEquipment, "SP-T06 Structural Panel", 1470,
+                {"provides": frozenset()}),
+    PartMapping("EquiTriangle1", MiscEquipment, "SP-T12 Structural Panel", 1471,
+                {"provides": frozenset()}),
+    PartMapping("EquiTriangle1p5", MiscEquipment, "SP-T18 Structural Panel", 1472,
+                {"provides": frozenset()}),
+    PartMapping("EquiTriangle2", MiscEquipment, "SP-T25 Structural Panel", 1473,
+                {"provides": frozenset()}),
+    PartMapping("Panel0", MiscEquipment, "SP-S06 Structural Panel", 1474,
+                {"provides": frozenset()}),
+    PartMapping("Panel1", MiscEquipment, "SP-S12 Structural Panel", 1475,
+                {"provides": frozenset()}),
+    PartMapping("Panel1p5", MiscEquipment, "SP-S18 Structural Panel", 1476,
+                {"provides": frozenset()}),
+    PartMapping("Panel2", MiscEquipment, "SP-S25 Structural Panel", 1477,
+                {"provides": frozenset()}),
+    PartMapping("Triangle0", MiscEquipment, "SP-R06 Structural Panel", 1478,
+                {"provides": frozenset()}),
+    PartMapping("Triangle1", MiscEquipment, "SP-R12 Structural Panel", 1479,
+                {"provides": frozenset()}),
+    PartMapping("Triangle1p5", MiscEquipment, "SP-R18 Structural Panel", 1480,
+                {"provides": frozenset()}),
+    PartMapping("Triangle2", MiscEquipment, "SP-R25 Structural Panel", 1481,
+                {"provides": frozenset()}),
+    PartMapping("Tube1", MiscEquipment, "T-12 Structural Tube", 1482,
+                {"provides": frozenset()}),
+    PartMapping("Tube1p5", MiscEquipment, "T-18 Structural Tube", 1483,
+                {"provides": frozenset()}),
+    PartMapping("Tube2", MiscEquipment, "T-25 Structural Tube", 1484,
+                {"provides": frozenset()}),
+    PartMapping("Tube3", MiscEquipment, "T-37 Structural Tube", 1485,
+                {"provides": frozenset()}),
+    PartMapping("Tube4", MiscEquipment, "T-50 Structural Tube", 1486,
+                {"provides": frozenset()}),
 ]
 
 
@@ -860,6 +988,9 @@ def _build_part(part_type: type, cfg: dict, overrides: dict, name: str) -> AnyPa
     mass = cfg["mass"]
     size = _best_size_class(cfg.get("bulkhead_profiles", []))
 
+    bulkheads = cfg.get("bulkhead_profiles", [])
+    is_radial = "srf" in bulkheads
+
     if part_type is Engine:
         eng = cfg["engine"]
         isp_vac = eng["isp_vac"]
@@ -877,6 +1008,7 @@ def _build_part(part_type: type, cfg: dict, overrides: dict, name: str) -> AnyPa
             has_gimbal=cfg.get("has_gimbal", False),
             size_class=size,
             fuel_type=_fuel_type_from_propellants(eng["propellants"]),
+            radial_mountable=is_radial,
         )
 
     if part_type is FuelTank:
@@ -906,6 +1038,7 @@ def _build_part(part_type: type, cfg: dict, overrides: dict, name: str) -> AnyPa
             fuel_mass=_fuel_mass_from_resources(resources),
             has_gimbal=cfg.get("has_gimbal", False),
             size_class=size,
+            radial_mountable=is_radial,
         )
 
     if part_type is HeatShield:
@@ -946,6 +1079,13 @@ def _build_part(part_type: type, cfg: dict, overrides: dict, name: str) -> AnyPa
 # Loader: reads data/parts.json and builds PART_DB at import time
 # ---------------------------------------------------------------------------
 
+# Items that are registered as one type but also provide a secondary role.
+# Each entry adds a MiscEquipment with the given provides to the same item.
+_DUAL_PURPOSE: dict[str, frozenset[str]] = {
+    "Size4_EngineAdapter_01": frozenset({"multi_mount"}),
+}
+
+
 def _load_part_db() -> dict[str, list[AnyPart]]:
     raw = pkgutil.get_data("worlds.ksp1", "data/parts.json")
     assert raw is not None, "data/parts.json not found in package"
@@ -962,6 +1102,14 @@ def _load_part_db() -> dict[str, list[AnyPart]]:
         part = _build_part(mapping.part_type, cfg, mapping.overrides,
                            name=mapping.ksp_name)
         db.setdefault(mapping.ksp_name, []).append(part)
+
+        # Dual-purpose parts: also add a MiscEquipment to the same item
+        provides = _DUAL_PURPOSE.get(mapping.cfg_name)
+        if provides is not None:
+            db[mapping.ksp_name].append(
+                MiscEquipment(name=mapping.ksp_name, mass=cfg["mass"],
+                              provides=provides)
+            )
     return db
 
 

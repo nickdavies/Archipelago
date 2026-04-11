@@ -8,7 +8,7 @@ import pkgutil
 import unittest
 
 from worlds.ksp1.parts import (
-    PART_DB, PART_REGISTRY, PartMapping,
+    PART_DB, PART_REGISTRY, PartMapping, _DUAL_PURPOSE,
     Engine, FuelTank, SolidBooster, HeatShield,
     Parachute, LandingLeg, Decoupler, MiscEquipment,
 )
@@ -63,9 +63,15 @@ class TestPartDbPopulated(unittest.TestCase):
             )
 
     def test_part_types_match_registry(self) -> None:
+        dual_cfg_names = set(_DUAL_PURPOSE)
         for mapping in PART_REGISTRY:
             parts = PART_DB.get(mapping.ksp_name, [])
             for part in parts:
+                # Dual-purpose parts add a MiscEquipment alongside the
+                # primary type — skip MiscEquipment extras for those.
+                if (mapping.cfg_name in dual_cfg_names
+                        and isinstance(part, MiscEquipment)):
+                    continue
                 self.assertIsInstance(
                     part, mapping.part_type,
                     f"PART_DB[{mapping.ksp_name!r}] contains {type(part).__name__} "
@@ -189,6 +195,7 @@ class TestProvidesFlags(unittest.TestCase):
         "relay_t1", "relay_t2", "relay_t3",
         "thermometer", "barometer",
         "science_instrument",  # classification only, not a capability flag
+        "multi_mount",         # adapter/coupler/engine plate
     })
 
     def test_all_provides_flags_known(self) -> None:

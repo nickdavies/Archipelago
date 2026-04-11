@@ -58,6 +58,7 @@ _PROGRESSION_PROVIDES: frozenset[str] = frozenset({
     "fuel_line",           # gates asparagus staging
     "ladder",              # gates sample returns on high-gravity bodies
     "science_instrument",  # gates science collection for tech tree
+    "multi_mount",         # gates efficient multi-engine stages (adapters/plates)
 })
 
 _USEFUL_PROVIDES: frozenset[str] = frozenset({

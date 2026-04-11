@@ -1,8 +1,11 @@
 {
   "_meta": {
-    "source": "/home/nick/games/ksp/GameData/Squad/Parts",
-    "generated": "2026-03-21T14:57:37.941106+00:00",
-    "part_count": 345
+    "sources": [
+      "/home/nick/.local/share/Steam/steamapps/common/Kerbal Space Program/GameData/Squad/Parts",
+      "/home/nick/.local/share/Steam/steamapps/common/Kerbal Space Program/GameData/SquadExpansion/MakingHistory/Parts"
+    ],
+    "generated": "2026-04-11T17:50:52.903793+00:00",
+    "part_count": 416
   },
   "AdvancedCanard": {
     "name": "AdvancedCanard",
@@ -117,6 +120,18 @@
     "has_module_decouple": true,
     "has_module_anchored_decouple": false
   },
+  "Decoupler_1p5": {
+    "name": "Decoupler_1p5",
+    "title": "TD-18 Decoupler",
+    "mass": 0.09,
+    "bulkhead_profiles": [
+      "size1p5"
+    ],
+    "tech_required": "generalConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": true,
+    "has_module_anchored_decouple": false
+  },
   "Decoupler_2": {
     "name": "Decoupler_2",
     "title": "TD-25 Decoupler",
@@ -139,6 +154,130 @@
     "tech_required": "largeVolumeContainment",
     "has_gimbal": false,
     "has_module_decouple": true,
+    "has_module_anchored_decouple": false
+  },
+  "Decoupler_4": {
+    "name": "Decoupler_4",
+    "title": "TD-50 Decoupler",
+    "mass": 0.64,
+    "bulkhead_profiles": [
+      "size4"
+    ],
+    "tech_required": "highPerformanceFuelSystems",
+    "has_gimbal": false,
+    "has_module_decouple": true,
+    "has_module_anchored_decouple": false
+  },
+  "EnginePlate1p5": {
+    "name": "EnginePlate1p5",
+    "title": "EP-18 Engine Plate",
+    "mass": 0.14,
+    "bulkhead_profiles": [
+      "size1p5"
+    ],
+    "tech_required": "advConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": true,
+    "has_module_anchored_decouple": false
+  },
+  "EnginePlate2": {
+    "name": "EnginePlate2",
+    "title": "EP-25 Engine Plate",
+    "mass": 0.25,
+    "bulkhead_profiles": [
+      "size2"
+    ],
+    "tech_required": "specializedConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": true,
+    "has_module_anchored_decouple": false
+  },
+  "EnginePlate3": {
+    "name": "EnginePlate3",
+    "title": "EP-37 Engine Plate",
+    "mass": 0.58,
+    "bulkhead_profiles": [
+      "size3"
+    ],
+    "tech_required": "composites",
+    "has_gimbal": false,
+    "has_module_decouple": true,
+    "has_module_anchored_decouple": false
+  },
+  "EnginePlate4": {
+    "name": "EnginePlate4",
+    "title": "EP-50 Engine Plate",
+    "mass": 1.0,
+    "bulkhead_profiles": [
+      "size4"
+    ],
+    "tech_required": "metaMaterials",
+    "has_gimbal": false,
+    "has_module_decouple": true,
+    "has_module_anchored_decouple": false
+  },
+  "EnginePlate5": {
+    "name": "EnginePlate5",
+    "title": "EP-12 Engine Plate",
+    "mass": 0.062,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "generalConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": true,
+    "has_module_anchored_decouple": false
+  },
+  "EquiTriangle0": {
+    "name": "EquiTriangle0",
+    "title": "SP-T06 Structural Panel",
+    "mass": 0.01,
+    "bulkhead_profiles": [
+      "size0",
+      "srf"
+    ],
+    "tech_required": "composites",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "EquiTriangle1": {
+    "name": "EquiTriangle1",
+    "title": "SP-T12 Structural Panel",
+    "mass": 0.04,
+    "bulkhead_profiles": [
+      "size1",
+      "srf"
+    ],
+    "tech_required": "composites",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "EquiTriangle1p5": {
+    "name": "EquiTriangle1p5",
+    "title": "SP-T18 Structural Panel",
+    "mass": 0.085,
+    "bulkhead_profiles": [
+      "size1p5",
+      "srf"
+    ],
+    "tech_required": "composites",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "EquiTriangle2": {
+    "name": "EquiTriangle2",
+    "title": "SP-T25 Structural Panel",
+    "mass": 0.15,
+    "bulkhead_profiles": [
+      "size2",
+      "srf"
+    ],
+    "tech_required": "composites",
+    "has_gimbal": false,
+    "has_module_decouple": false,
     "has_module_anchored_decouple": false
   },
   "FuelCell": {
@@ -233,7 +372,7 @@
   },
   "GooExperiment": {
     "name": "GooExperiment",
-    "title": "Mystery Goo\u2122 Containment Unit",
+    "title": "Mystery Goo™ Containment Unit\\u0020",
     "mass": 0.05,
     "bulkhead_profiles": [
       "srf"
@@ -301,6 +440,21 @@
       "Ablator": 200.0
     }
   },
+  "HeatShield1p5": {
+    "name": "HeatShield1p5",
+    "title": "Heat Shield (1.875m)",
+    "mass": 0.3,
+    "bulkhead_profiles": [
+      "size1p5"
+    ],
+    "tech_required": "landing",
+    "has_gimbal": false,
+    "has_module_decouple": true,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "Ablator": 500.0
+    }
+  },
   "HeatShield2": {
     "name": "HeatShield2",
     "title": "Heat Shield (2.5m)",
@@ -364,6 +518,18 @@
       "srf"
     ],
     "tech_required": "advScienceTech",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "InflatableAirlock": {
+    "name": "InflatableAirlock",
+    "title": "Inflatable Airlock",
+    "mass": 0.1,
+    "bulkhead_profiles": [
+      "size0"
+    ],
+    "tech_required": "advMetalworks",
     "has_gimbal": false,
     "has_module_decouple": false,
     "has_module_anchored_decouple": false
@@ -494,6 +660,195 @@
     "has_gimbal": false,
     "has_module_decouple": false,
     "has_module_anchored_decouple": false
+  },
+  "LiquidEngineKE-1": {
+    "name": "LiquidEngineKE-1",
+    "title": "Kerbodyne KE-1 \"Mastodon\" Liquid Fuel Engine",
+    "mass": 5.0,
+    "bulkhead_profiles": [
+      "size1",
+      "size1p5",
+      "size2",
+      "srf"
+    ],
+    "tech_required": "veryHeavyRocketry",
+    "engine": {
+      "max_thrust": 1350.0,
+      "isp_vac": 305.0,
+      "isp_atm": 290.0,
+      "engine_type": "LiquidFuel",
+      "throttle_locked": false,
+      "propellants": {
+        "LiquidFuel": 0.9,
+        "Oxidizer": 1.1
+      }
+    },
+    "has_gimbal": true,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "LiquidEngineLV-T91": {
+    "name": "LiquidEngineLV-T91",
+    "title": "LV-T91 \"Cheetah\" Liquid Fuel Engine",
+    "mass": 1.0,
+    "bulkhead_profiles": [
+      "size1p5",
+      "srf"
+    ],
+    "tech_required": "heavierRocketry",
+    "engine": {
+      "max_thrust": 125.0,
+      "isp_vac": 355.0,
+      "isp_atm": 150.0,
+      "engine_type": "LiquidFuel",
+      "throttle_locked": false,
+      "propellants": {
+        "LiquidFuel": 0.9,
+        "Oxidizer": 1.1
+      }
+    },
+    "has_gimbal": true,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "LiquidEngineLV-TX87": {
+    "name": "LiquidEngineLV-TX87",
+    "title": "LV-TX87 \"Bobcat\" Liquid Fuel Engine",
+    "mass": 2.0,
+    "bulkhead_profiles": [
+      "size1p5",
+      "srf"
+    ],
+    "tech_required": "heavyRocketry",
+    "engine": {
+      "max_thrust": 400.0,
+      "isp_vac": 310.0,
+      "isp_atm": 290.0,
+      "engine_type": "LiquidFuel",
+      "throttle_locked": false,
+      "propellants": {
+        "LiquidFuel": 0.9,
+        "Oxidizer": 1.1
+      }
+    },
+    "has_gimbal": true,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "LiquidEngineRE-I2": {
+    "name": "LiquidEngineRE-I2",
+    "title": "RE-I2 \"Skiff\" Liquid Fuel Engine",
+    "mass": 1.6,
+    "bulkhead_profiles": [
+      "size2",
+      "srf"
+    ],
+    "tech_required": "heavierRocketry",
+    "engine": {
+      "max_thrust": 300.0,
+      "isp_vac": 330.0,
+      "isp_atm": 265.0,
+      "engine_type": "LiquidFuel",
+      "throttle_locked": false,
+      "propellants": {
+        "LiquidFuel": 0.9,
+        "Oxidizer": 1.1
+      }
+    },
+    "has_gimbal": true,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "LiquidEngineRE-J10": {
+    "name": "LiquidEngineRE-J10",
+    "title": "RE-J10 \"Wolfhound\"  Liquid Fuel Engine",
+    "mass": 3.3,
+    "bulkhead_profiles": [
+      "size2"
+    ],
+    "tech_required": "veryHeavyRocketry",
+    "engine": {
+      "max_thrust": 375.0,
+      "isp_vac": 380.0,
+      "isp_atm": 70.0,
+      "engine_type": "LiquidFuel",
+      "throttle_locked": false,
+      "propellants": {
+        "LiquidFuel": 0.9,
+        "Oxidizer": 1.1
+      }
+    },
+    "has_gimbal": true,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "LiquidEngineRK-7": {
+    "name": "LiquidEngineRK-7",
+    "title": "RK-7 \"Kodiak\" Liquid Fueled Enine",
+    "mass": 1.25,
+    "bulkhead_profiles": [
+      "size1p5",
+      "srf"
+    ],
+    "tech_required": "heavierRocketry",
+    "engine": {
+      "max_thrust": 260.0,
+      "isp_vac": 300.0,
+      "isp_atm": 285.0,
+      "engine_type": "LiquidFuel",
+      "throttle_locked": false,
+      "propellants": {
+        "LiquidFuel": 0.9,
+        "Oxidizer": 1.1
+      }
+    },
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "LiquidEngineRV-1": {
+    "name": "LiquidEngineRV-1",
+    "title": "RV-1 \"Cub\" Vernier Engine",
+    "mass": 0.18,
+    "bulkhead_profiles": [
+      "size0",
+      "srf"
+    ],
+    "tech_required": "precisionPropulsion",
+    "engine": {
+      "max_thrust": 32.0,
+      "isp_vac": 310.0,
+      "isp_atm": 280.0,
+      "engine_type": "LiquidFuel",
+      "throttle_locked": false,
+      "propellants": {
+        "LiquidFuel": 0.9,
+        "Oxidizer": 1.1
+      }
+    },
+    "has_gimbal": true,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "MEMLander": {
+    "name": "MEMLander",
+    "title": "Munar Excursion Module (M.E.M.)",
+    "mass": 1.355,
+    "bulkhead_profiles": [
+      "size0",
+      "size1",
+      "size1p5"
+    ],
+    "tech_required": "commandModules",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "ElectricCharge": 150.0,
+      "MonoPropellant": 30.0,
+      "LiquidFuel": 54.0,
+      "Oxidizer": 66.0
+    }
   },
   "MK1CrewCabin": {
     "name": "MK1CrewCabin",
@@ -673,6 +1028,21 @@
     "has_module_decouple": false,
     "has_module_anchored_decouple": false
   },
+  "Mk2Pod": {
+    "name": "Mk2Pod",
+    "title": "Mk2 Command Pod",
+    "mass": 1.56,
+    "bulkhead_profiles": [
+      "size1p5"
+    ],
+    "tech_required": "advFlightControl",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "ElectricCharge": 200.0
+    }
+  },
   "MpoProbe": {
     "name": "MpoProbe",
     "title": "MPO Probe",
@@ -718,6 +1088,84 @@
     "has_gimbal": false,
     "has_module_decouple": false,
     "has_module_anchored_decouple": false
+  },
+  "Panel0": {
+    "name": "Panel0",
+    "title": "SP-S06 Structural Panel",
+    "mass": 0.02,
+    "bulkhead_profiles": [
+      "size0",
+      "srf"
+    ],
+    "tech_required": "composites",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "Panel1": {
+    "name": "Panel1",
+    "title": "SP-S12 Structural Panel",
+    "mass": 0.075,
+    "bulkhead_profiles": [
+      "size1",
+      "srf"
+    ],
+    "tech_required": "composites",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "Panel1p5": {
+    "name": "Panel1p5",
+    "title": "SP-S18 Structural Panel",
+    "mass": 0.17,
+    "bulkhead_profiles": [
+      "size1p5",
+      "srf"
+    ],
+    "tech_required": "composites",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "Panel2": {
+    "name": "Panel2",
+    "title": "SP-S25 Structural Panel",
+    "mass": 0.3,
+    "bulkhead_profiles": [
+      "size2",
+      "srf"
+    ],
+    "tech_required": "composites",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "Pollux": {
+    "name": "Pollux",
+    "title": "THK \"Pollux\" Solid Fuel Booster",
+    "mass": 8.0,
+    "bulkhead_profiles": [
+      "size1p5",
+      "srf"
+    ],
+    "tech_required": "heavyRocketry",
+    "engine": {
+      "max_thrust": 1300.0,
+      "isp_vac": 225.0,
+      "isp_atm": 200.0,
+      "engine_type": "SolidBooster",
+      "throttle_locked": true,
+      "propellants": {
+        "SolidFuel": 1.0
+      }
+    },
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "SolidFuel": 5800.0
+    }
   },
   "R8winglet": {
     "name": "R8winglet",
@@ -1023,6 +1471,18 @@
     "has_module_decouple": true,
     "has_module_anchored_decouple": false
   },
+  "Separator_1p5": {
+    "name": "Separator_1p5",
+    "title": "TS-18 Stack Separator",
+    "mass": 0.12,
+    "bulkhead_profiles": [
+      "size1p5"
+    ],
+    "tech_required": "advConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": true,
+    "has_module_anchored_decouple": false
+  },
   "Separator_2": {
     "name": "Separator_2",
     "title": "TS-25 Stack Separator",
@@ -1047,6 +1507,18 @@
     "has_module_decouple": true,
     "has_module_anchored_decouple": false
   },
+  "Separator_4": {
+    "name": "Separator_4",
+    "title": "TS-50 Stack Separator",
+    "mass": 0.85,
+    "bulkhead_profiles": [
+      "size4"
+    ],
+    "tech_required": "highPerformanceFuelSystems",
+    "has_gimbal": false,
+    "has_module_decouple": true,
+    "has_module_anchored_decouple": false
+  },
   "ServiceBay_125_v2": {
     "name": "ServiceBay_125_v2",
     "title": "Service Bay (1.25m)",
@@ -1067,6 +1539,30 @@
       "size2"
     ],
     "tech_required": "commandModules",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "ServiceModule18": {
+    "name": "ServiceModule18",
+    "title": "SM-18 Service Module",
+    "mass": 0.15,
+    "bulkhead_profiles": [
+      "size1p5"
+    ],
+    "tech_required": "advConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "ServiceModule25": {
+    "name": "ServiceModule25",
+    "title": "SM-25 Service Module",
+    "mass": 0.5,
+    "bulkhead_profiles": [
+      "size2"
+    ],
+    "tech_required": "highAltitudeFlight",
     "has_gimbal": false,
     "has_module_decouple": false,
     "has_module_anchored_decouple": false
@@ -1096,6 +1592,214 @@
     "resources": {
       "SolidFuel": 90.0
     }
+  },
+  "Size1p5_Monoprop": {
+    "name": "Size1p5_Monoprop",
+    "title": "FL-R400 RCS Fuel Tank",
+    "mass": 0.25,
+    "bulkhead_profiles": [
+      "size1p5"
+    ],
+    "tech_required": "advFuelSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "MonoPropellant": 400.0
+    }
+  },
+  "Size1p5_Size0_Adapter_01": {
+    "name": "Size1p5_Size0_Adapter_01",
+    "title": "FL-A150 Fuel Tank Adapter",
+    "mass": 0.1,
+    "bulkhead_profiles": [
+      "size0",
+      "size1p5",
+      "srf"
+    ],
+    "tech_required": "fuelSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 72.0,
+      "Oxidizer": 88.0
+    }
+  },
+  "Size1p5_Size1_Adapter_01": {
+    "name": "Size1p5_Size1_Adapter_01",
+    "title": "FL-A151L Fuel Tank Adapter",
+    "mass": 0.375,
+    "bulkhead_profiles": [
+      "size1p5",
+      "size1",
+      "srf"
+    ],
+    "tech_required": "fuelSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 270.0,
+      "Oxidizer": 330.0
+    }
+  },
+  "Size1p5_Size1_Adapter_02": {
+    "name": "Size1p5_Size1_Adapter_02",
+    "title": "FL-A151S Fuel Tank Adapter",
+    "mass": 0.1,
+    "bulkhead_profiles": [
+      "size1",
+      "size1p5",
+      "srf"
+    ],
+    "tech_required": "advRocketry",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 72.0,
+      "Oxidizer": 88.0
+    }
+  },
+  "Size1p5_Size2_Adapter_01": {
+    "name": "Size1p5_Size2_Adapter_01",
+    "title": "FL-A215 Fuel Tank Adapter",
+    "mass": 0.75,
+    "bulkhead_profiles": [
+      "size1p5",
+      "size2",
+      "srf"
+    ],
+    "tech_required": "fuelSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 540.0,
+      "Oxidizer": 660.0
+    }
+  },
+  "Size1p5_Strut_Decoupler": {
+    "name": "Size1p5_Strut_Decoupler",
+    "title": "Size 1.5 Decoupler",
+    "mass": 0.09,
+    "bulkhead_profiles": [
+      "size1p5",
+      "srf"
+    ],
+    "tech_required": "advConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": true,
+    "has_module_anchored_decouple": false
+  },
+  "Size1p5_Tank_01": {
+    "name": "Size1p5_Tank_01",
+    "title": "FL-TX220 Fuel Tank",
+    "mass": 0.1375,
+    "bulkhead_profiles": [
+      "size1p5",
+      "srf"
+    ],
+    "tech_required": "advRocketry",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 99.0,
+      "Oxidizer": 121.0
+    }
+  },
+  "Size1p5_Tank_02": {
+    "name": "Size1p5_Tank_02",
+    "title": "FL-TX440 Fuel Tank",
+    "mass": 0.275,
+    "bulkhead_profiles": [
+      "size1p5",
+      "srf"
+    ],
+    "tech_required": "fuelSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 198.0,
+      "Oxidizer": 242.0
+    }
+  },
+  "Size1p5_Tank_03": {
+    "name": "Size1p5_Tank_03",
+    "title": "FL-TX900 Fuel Tank",
+    "mass": 0.5625,
+    "bulkhead_profiles": [
+      "size1p5",
+      "srf"
+    ],
+    "tech_required": "fuelSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 405.0,
+      "Oxidizer": 495.0
+    }
+  },
+  "Size1p5_Tank_04": {
+    "name": "Size1p5_Tank_04",
+    "title": "FL-TX1800 Fuel Tank",
+    "mass": 1.125,
+    "bulkhead_profiles": [
+      "size1p5",
+      "srf"
+    ],
+    "tech_required": "advFuelSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 810.0,
+      "Oxidizer": 990.0
+    }
+  },
+  "Size1p5_Tank_05": {
+    "name": "Size1p5_Tank_05",
+    "title": "FL-C1000 Fuel Tank",
+    "mass": 0.75,
+    "bulkhead_profiles": [
+      "size1p5",
+      "srf"
+    ],
+    "tech_required": "fuelSystems",
+    "engine": {
+      "max_thrust": 32.0,
+      "isp_vac": 154.0,
+      "isp_atm": 118.0,
+      "engine_type": "SolidBooster",
+      "throttle_locked": true,
+      "propellants": {
+        "SolidFuel": 1.0
+      }
+    },
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 540.0,
+      "Oxidizer": 660.0,
+      "SolidFuel": 4.0
+    }
+  },
+  "Size1to0ServiceModule": {
+    "name": "Size1to0ServiceModule",
+    "title": "SM-6A Service Module",
+    "mass": 0.075,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "advConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
   },
   "Size2LFB_v2": {
     "name": "Size2LFB_v2",
@@ -1239,6 +1943,122 @@
       "Oxidizer": 1650.0
     }
   },
+  "Size3_Size4_Adapter_01": {
+    "name": "Size3_Size4_Adapter_01",
+    "title": "Kerbodyne S3-S4 Adapter Tank",
+    "mass": 4.0,
+    "bulkhead_profiles": [
+      "size3",
+      "size4",
+      "srf"
+    ],
+    "tech_required": "highPerformanceFuelSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 2880.0,
+      "Oxidizer": 3520.0
+    }
+  },
+  "Size4_EngineAdapter_01": {
+    "name": "Size4_EngineAdapter_01",
+    "title": "Kerbodyne Engine Cluster Adapter Tank",
+    "mass": 5.625,
+    "bulkhead_profiles": [
+      "size4",
+      "size1",
+      "srf"
+    ],
+    "tech_required": "highPerformanceFuelSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 4050.0,
+      "Oxidizer": 4950.0
+    }
+  },
+  "Size4_Tank_01": {
+    "name": "Size4_Tank_01",
+    "title": "Kerbodyne S4-64 Fuel Tank",
+    "mass": 4.0,
+    "bulkhead_profiles": [
+      "size4",
+      "srf"
+    ],
+    "tech_required": "highPerformanceFuelSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 2880.0,
+      "Oxidizer": 3520.0
+    }
+  },
+  "Size4_Tank_02": {
+    "name": "Size4_Tank_02",
+    "title": "Kerbodyne S4-128 Fuel Tank",
+    "mass": 8.0,
+    "bulkhead_profiles": [
+      "size4",
+      "srf"
+    ],
+    "tech_required": "highPerformanceFuelSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 5760.0,
+      "Oxidizer": 7040.0
+    }
+  },
+  "Size4_Tank_03": {
+    "name": "Size4_Tank_03",
+    "title": "Kerbodyne S4-256 Fuel Tank",
+    "mass": 16.0,
+    "bulkhead_profiles": [
+      "size4",
+      "srf"
+    ],
+    "tech_required": "highPerformanceFuelSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 11520.0,
+      "Oxidizer": 14080.0
+    }
+  },
+  "Size4_Tank_04": {
+    "name": "Size4_Tank_04",
+    "title": "Kerbodyne S4-512 Fuel Tank",
+    "mass": 32.0,
+    "bulkhead_profiles": [
+      "size4",
+      "srf"
+    ],
+    "tech_required": "highPerformanceFuelSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "LiquidFuel": 23040.0,
+      "Oxidizer": 28160.0
+    }
+  },
+  "Size_1_5_Cone": {
+    "name": "Size_1_5_Cone",
+    "title": "Protective Rocket Nosecone Mk5A",
+    "mass": 0.12,
+    "bulkhead_profiles": [
+      "size1p5"
+    ],
+    "tech_required": "advConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
   "SmallGearBay": {
     "name": "SmallGearBay",
     "title": "LY-10 Small Landing Gear",
@@ -1341,6 +2161,118 @@
     "resources": {
       "SolidFuel": 8000.0
     }
+  },
+  "Triangle0": {
+    "name": "Triangle0",
+    "title": "SP-R06 Structural Panel",
+    "mass": 0.01,
+    "bulkhead_profiles": [
+      "size0",
+      "srf"
+    ],
+    "tech_required": "composites",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "Triangle1": {
+    "name": "Triangle1",
+    "title": "SP-R12 Structural Panel",
+    "mass": 0.04,
+    "bulkhead_profiles": [
+      "size1",
+      "srf"
+    ],
+    "tech_required": "composites",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "Triangle1p5": {
+    "name": "Triangle1p5",
+    "title": "SP-R18 Structural Panel",
+    "mass": 0.085,
+    "bulkhead_profiles": [
+      "size1p5",
+      "srf"
+    ],
+    "tech_required": "composites",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "Triangle2": {
+    "name": "Triangle2",
+    "title": "SP-R25 Structural Panel",
+    "mass": 0.15,
+    "bulkhead_profiles": [
+      "size2",
+      "srf"
+    ],
+    "tech_required": "composites",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "Tube1": {
+    "name": "Tube1",
+    "title": "T-12 Structural Tube",
+    "mass": 0.075,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "advConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "Tube1p5": {
+    "name": "Tube1p5",
+    "title": "T-18 Structural Tube",
+    "mass": 0.075,
+    "bulkhead_profiles": [
+      "size1p5"
+    ],
+    "tech_required": "advConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "Tube2": {
+    "name": "Tube2",
+    "title": "T-25 Structural Tube",
+    "mass": 0.075,
+    "bulkhead_profiles": [
+      "size2"
+    ],
+    "tech_required": "specializedConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "Tube3": {
+    "name": "Tube3",
+    "title": "T-37 Structural Tube",
+    "mass": 0.075,
+    "bulkhead_profiles": [
+      "size3"
+    ],
+    "tech_required": "composites",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "Tube4": {
+    "name": "Tube4",
+    "title": "T-50 Structural Tube",
+    "mass": 0.075,
+    "bulkhead_profiles": [
+      "size4"
+    ],
+    "tech_required": "metaMaterials",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
   },
   "adapterEngines": {
     "name": "adapterEngines",
@@ -2072,6 +3004,18 @@
     "has_module_decouple": false,
     "has_module_anchored_decouple": false
   },
+  "fairingSize1p5": {
+    "name": "fairingSize1p5",
+    "title": "AE-FF1.5 Airstream Protective Shell (1.875m) //Needs new autoloc for size",
+    "mass": 0.15,
+    "bulkhead_profiles": [
+      "size1p5"
+    ],
+    "tech_required": "advConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
   "fairingSize2": {
     "name": "fairingSize2",
     "title": "AE-FF2 Airstream Protective Shell (2.5m)",
@@ -2092,6 +3036,18 @@
       "size3"
     ],
     "tech_required": "composites",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "fairingSize4": {
+    "name": "fairingSize4",
+    "title": "AE-FF5 Airstream Protective Shell (5m) //Needs autoloc with new size",
+    "mass": 0.8,
+    "bulkhead_profiles": [
+      "size4"
+    ],
+    "tech_required": "metaMaterials",
     "has_gimbal": false,
     "has_module_decouple": false,
     "has_module_anchored_decouple": false
@@ -2168,6 +3124,19 @@
     "has_module_decouple": false,
     "has_module_anchored_decouple": false
   },
+  "flagPartSize1p5": {
+    "name": "flagPartSize1p5",
+    "title": "RFP-1.5 Flag  (1.875m)",
+    "mass": 0.000125,
+    "bulkhead_profiles": [
+      "srf",
+      "size1p5"
+    ],
+    "tech_required": "advConstruction",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
   "flagPartSize2": {
     "name": "flagPartSize2",
     "title": "RFP-2 Flag  (2.5m)",
@@ -2190,6 +3159,19 @@
       "size3"
     ],
     "tech_required": "composites",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "flagPartSize4": {
+    "name": "flagPartSize4",
+    "title": "RFP-4 Flag  (5m)",
+    "mass": 0.0009,
+    "bulkhead_profiles": [
+      "srf",
+      "size4"
+    ],
+    "tech_required": "metaMaterials",
     "has_gimbal": false,
     "has_module_decouple": false,
     "has_module_anchored_decouple": false
@@ -2396,8 +3378,28 @@
     "has_module_decouple": false,
     "has_module_anchored_decouple": false
   },
+  "kerbalEVAVintage": {
+    "name": "kerbalEVAVintage",
+    "title": "",
+    "mass": 0.0,
+    "bulkhead_profiles": [],
+    "tech_required": "",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
   "kerbalEVAfemale": {
     "name": "kerbalEVAfemale",
+    "title": "",
+    "mass": 0.0,
+    "bulkhead_profiles": [],
+    "tech_required": "",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "kerbalEVAfemaleVintage": {
+    "name": "kerbalEVAfemaleVintage",
     "title": "",
     "mass": 0.0,
     "bulkhead_profiles": [],
@@ -2419,6 +3421,54 @@
     "has_module_anchored_decouple": false,
     "resources": {
       "ElectricCharge": 400.0
+    }
+  },
+  "kv1Pod": {
+    "name": "kv1Pod",
+    "title": "KV-1 'Onion' Reentry Module",
+    "mass": 0.75,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "start",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": true,
+    "resources": {
+      "ElectricCharge": 50.0,
+      "Ablator": 20.0
+    }
+  },
+  "kv2Pod": {
+    "name": "kv2Pod",
+    "title": "KV-2 'Onion' Reentry Module",
+    "mass": 1.5,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "flightControl",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": true,
+    "resources": {
+      "ElectricCharge": 50.0,
+      "Ablator": 20.0
+    }
+  },
+  "kv3Pod": {
+    "name": "kv3Pod",
+    "title": "KV-3 'Tato' Reentry Module",
+    "mass": 2.25,
+    "bulkhead_profiles": [
+      "size1"
+    ],
+    "tech_required": "advFlightControl",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": true,
+    "resources": {
+      "ElectricCharge": 50.0,
+      "Ablator": 20.0
     }
   },
   "ladder1": {
@@ -3279,6 +4329,21 @@
       "MonoPropellant": 2100.0
     }
   },
+  "monopropMiniSphere": {
+    "name": "monopropMiniSphere",
+    "title": "Stratus-V Minified Monopropellant Tank",
+    "mass": 0.01,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "propulsionSystems",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false,
+    "resources": {
+      "MonoPropellant": 7.5
+    }
+  },
   "nacelleBody": {
     "name": "nacelleBody",
     "title": "Engine Nacelle",
@@ -3795,6 +4860,18 @@
     "has_module_decouple": false,
     "has_module_anchored_decouple": false
   },
+  "rocketNoseConeSize4": {
+    "name": "rocketNoseConeSize4",
+    "title": "Protective Nose Cone Mk16A",
+    "mass": 0.8,
+    "bulkhead_profiles": [
+      "size4"
+    ],
+    "tech_required": "metaMaterials",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
   "rocketNoseCone_v3": {
     "name": "rocketNoseCone_v3",
     "title": "Protective Rocket Nose Cone Mk7",
@@ -3854,6 +4931,18 @@
       "srf"
     ],
     "tech_required": "advancedMotors",
+    "has_gimbal": false,
+    "has_module_decouple": false,
+    "has_module_anchored_decouple": false
+  },
+  "roverWheelM1-F": {
+    "name": "roverWheelM1-F",
+    "title": "RoveMax M1-F Rover Wheel",
+    "mass": 0.025,
+    "bulkhead_profiles": [
+      "srf"
+    ],
+    "tech_required": "fieldScience",
     "has_gimbal": false,
     "has_module_decouple": false,
     "has_module_anchored_decouple": false
