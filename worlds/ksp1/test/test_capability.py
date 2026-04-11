@@ -21,59 +21,59 @@ from worlds.ksp1.parts import PART_DB, Engine, FuelTank, SolidBooster
 # Convenience accessors for parts from the real PART_DB
 # ---------------------------------------------------------------------------
 
-def _part(ap_item: str, idx: int = 0):
-    """Get a part object by AP item name."""
-    return PART_DB[ap_item][idx]
+def _part(cfg_name: str, idx: int = 0):
+    """Get a part object by cfg name."""
+    return PART_DB[cfg_name][idx]
 
 
 # Engines
-_RELIANT = _part('LV-T30 "Reliant" Liquid Fuel Engine')
-_SWIVEL = _part('LV-T45 "Swivel" Liquid Fuel Engine')
-_TERRIER = _part('LV-909 "Terrier" Liquid Fuel Engine')
-_MAINSAIL = _part('RE-M3 "Mainsail" Liquid Fuel Engine')
-_MAMMOTH = _part('S3 KS-25x4 "Mammoth" Liquid Fuel Engine')
-_NERV = _part('LV-N "Nerv" Atomic Rocket Motor')
-_DAWN = _part('IX-6315 "Dawn" Electric Propulsion System')
+_RELIANT = _part("liquidEngine.v2")
+_SWIVEL = _part("liquidEngine2.v2")
+_TERRIER = _part("liquidEngine3.v2")
+_MAINSAIL = _part("liquidEngineMainsail.v2")
+_MAMMOTH = _part("Size3EngineCluster")
+_NERV = _part("nuclearEngine")
+_DAWN = _part("ionEngine")
 
 # SRBs
-_FLEA = _part('RT-5 "Flea" Solid Fuel Booster')
-_HAMMER = _part('RT-10 "Hammer" Solid Fuel Booster')
+_FLEA = _part("solidBooster.sm.v2")
+_HAMMER = _part("solidBooster.v2")
 
 # Fuel Tanks
-_FL_T400 = _part("FL-T400 Fuel Tank")
-_FL_T800 = _part("FL-T800 Fuel Tank")
-_X200_32 = _part("Rockomax X200-32 Fuel Tank")
-_JUMBO_64 = _part("Rockomax Jumbo-64 Fuel Tank")
-_S3_3600 = _part("Kerbodyne S3-3600 Tank")
+_FL_T400 = _part("fuelTank")
+_FL_T800 = _part("fuelTank.long")
+_X200_32 = _part("Rockomax32.BW")
+_JUMBO_64 = _part("Rockomax64.BW")
+_S3_3600 = _part("Size3SmallTank")
 
 # Heat Shields
-_SHIELD_125 = _part("Heat Shield (1.25m)")
-_SHIELD_25 = _part("Heat Shield (2.5m)")
+_SHIELD_125 = _part("HeatShield1")
+_SHIELD_25 = _part("HeatShield2")
 
 # Parachutes
-_MK16 = _part("Mk16 Parachute")
+_MK16 = _part("parachuteSingle")
 
 # Landing Legs
-_LT1 = _part("LT-1 Landing Struts")
-_LT2 = _part("LT-2 Landing Strut")
+_LT1 = _part("landingLeg1")
+_LT2 = _part("landingLeg1-2")
 
 # Decouplers
-_TR18A = _part("TD-12 Decoupler")
-_TT38K = _part("TT-38K Radial Decoupler")
+_TR18A = _part("Decoupler.1")
+_TT38K = _part("radialDecoupler")
 
 # Misc
-_PROBE_CORE = _part("Probodobodyne HECS")
-_COMMAND_POD = _part("Mk1 Command Pod")
-_REACTION_WHEEL = _part("Advanced Inline Stabilizer")
-_OX_STAT = _part("OX-STAT Photovoltaic Panels")
-_SOLAR_ARRAY = _part("Gigantor XL Solar Array")
-_RTG = _part("PB-NUK Radioisotope Thermoelectric Generator")
-_COMM16 = _part("Communotron 16")
-_HG5 = _part("HG-5 High Gain Antenna")
-_RA2 = _part("RA-2 Relay Antenna")
-_LAUNCH_CLAMP = _part("TT18-A Launch Stability Enhancer")
-_FUEL_LINE = _part("FTX-2 External Fuel Duct")
-_LADDER = _part("Pegasus I Mobility Enhancer")
+_PROBE_CORE = _part("probeCoreHex.v2")
+_COMMAND_POD = _part("mk1pod.v2")
+_REACTION_WHEEL = _part("advSasModule")
+_OX_STAT = _part("solarPanels5")
+_SOLAR_ARRAY = _part("largeSolarPanel")
+_RTG = _part("rtg")
+_COMM16 = _part("longAntenna")
+_HG5 = _part("HighGainAntenna5.v2")
+_RA2 = _part("RelayAntenna5")
+_LAUNCH_CLAMP = _part("launchClamp1")
+_FUEL_LINE = _part("fuelLine")
+_LADDER = _part("ladder1")
 
 
 # ---------------------------------------------------------------------------

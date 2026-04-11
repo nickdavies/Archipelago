@@ -29,7 +29,7 @@ class TestRegistryJsonConsistency(unittest.TestCase):
             self.assertIn(
                 mapping.cfg_name, parts_json,
                 f"PART_REGISTRY references {mapping.cfg_name!r} but it's "
-                f"not in parts.json (AP item: {mapping.ap_item!r})",
+                f"not in parts.json (AP item: {mapping.title!r})",
             )
 
 
@@ -42,9 +42,9 @@ class TestNoDuplicateCfgNames(unittest.TestCase):
             if mapping.cfg_name in seen:
                 self.fail(
                     f"cfg_name {mapping.cfg_name!r} mapped twice: "
-                    f"{seen[mapping.cfg_name]!r} and {mapping.ap_item!r}"
+                    f"{seen[mapping.cfg_name]!r} and {mapping.title!r}"
                 )
-            seen[mapping.cfg_name] = mapping.ap_item
+            seen[mapping.cfg_name] = mapping.title
 
 
 class TestPartDbPopulated(unittest.TestCase):
@@ -53,22 +53,22 @@ class TestPartDbPopulated(unittest.TestCase):
     def test_all_registry_items_in_part_db(self) -> None:
         for mapping in PART_REGISTRY:
             self.assertIn(
-                mapping.ap_item, PART_DB,
-                f"AP item {mapping.ap_item!r} from PART_REGISTRY "
+                mapping.ksp_name, PART_DB,
+                f"ksp_name {mapping.ksp_name!r} ({mapping.title!r}) "
                 f"not found in PART_DB",
             )
             self.assertTrue(
-                len(PART_DB[mapping.ap_item]) > 0,
-                f"PART_DB[{mapping.ap_item!r}] is empty",
+                len(PART_DB[mapping.ksp_name]) > 0,
+                f"PART_DB[{mapping.ksp_name!r}] is empty",
             )
 
     def test_part_types_match_registry(self) -> None:
         for mapping in PART_REGISTRY:
-            parts = PART_DB.get(mapping.ap_item, [])
+            parts = PART_DB.get(mapping.ksp_name, [])
             for part in parts:
                 self.assertIsInstance(
                     part, mapping.part_type,
-                    f"PART_DB[{mapping.ap_item!r}] contains {type(part).__name__} "
+                    f"PART_DB[{mapping.ksp_name!r}] contains {type(part).__name__} "
                     f"but registry declares {mapping.part_type.__name__}",
                 )
 
@@ -199,7 +199,7 @@ class TestProvidesFlags(unittest.TestCase):
             for flag in provides:
                 self.assertIn(
                     flag, self._KNOWN_FLAGS,
-                    f"Unknown provides flag {flag!r} on {mapping.ap_item!r}",
+                    f"Unknown provides flag {flag!r} on {mapping.title!r}",
                 )
 
     def test_precollected_items_in_part_db(self) -> None:
@@ -215,7 +215,7 @@ class TestSpotCheckValues(unittest.TestCase):
     """Spot-check a few well-known parts against KSP wiki values."""
 
     def test_reliant(self) -> None:
-        eng = PART_DB['LV-T30 "Reliant" Liquid Fuel Engine'][0]
+        eng = PART_DB["liquidEngine.v2"][0]
         assert isinstance(eng, Engine)
         self.assertAlmostEqual(eng.vac_isp, 310.0, places=0)
         self.assertAlmostEqual(eng.vac_thrust, 240.0, places=0)
@@ -223,19 +223,19 @@ class TestSpotCheckValues(unittest.TestCase):
         self.assertEqual(eng.size_class, 1.25)
 
     def test_swivel(self) -> None:
-        eng = PART_DB['LV-T45 "Swivel" Liquid Fuel Engine'][0]
+        eng = PART_DB["liquidEngine2.v2"][0]
         assert isinstance(eng, Engine)
         self.assertTrue(eng.has_gimbal)
         self.assertAlmostEqual(eng.vac_isp, 320.0, places=0)
 
     def test_flea_srb(self) -> None:
-        srb = PART_DB['RT-5 "Flea" Solid Fuel Booster'][0]
+        srb = PART_DB["solidBooster.sm.v2"][0]
         assert isinstance(srb, SolidBooster)
         self.assertAlmostEqual(srb.vac_isp, 165.0, places=0)
         self.assertAlmostEqual(srb.vac_thrust, 192.0, places=0)
 
     def test_fl_t400(self) -> None:
-        tank = PART_DB["FL-T400 Fuel Tank"][0]
+        tank = PART_DB["fuelTank"][0]
         assert isinstance(tank, FuelTank)
         # LF=180, Ox=220 -> fuel_mass = 180*0.005 + 220*0.005 = 2.0
         self.assertAlmostEqual(tank.fuel_mass, 2.0, places=2)
@@ -250,18 +250,18 @@ class TestStableIdRanges(unittest.TestCase):
         for mapping in PART_REGISTRY:
             self.assertGreaterEqual(
                 mapping.offset, 1000,
-                f"{mapping.ap_item!r} offset {mapping.offset} < 1000",
+                f"{mapping.title!r} offset {mapping.offset} < 1000",
             )
             self.assertLess(
                 mapping.offset, 2000,
-                f"{mapping.ap_item!r} offset {mapping.offset} >= 2000",
+                f"{mapping.title!r} offset {mapping.offset} >= 2000",
             )
             if mapping.offset in seen:
                 self.fail(
                     f"Duplicate offset {mapping.offset}: "
-                    f"{seen[mapping.offset]!r} and {mapping.ap_item!r}"
+                    f"{seen[mapping.offset]!r} and {mapping.title!r}"
                 )
-            seen[mapping.offset] = mapping.ap_item
+            seen[mapping.offset] = mapping.title
 
     def test_filler_offsets_in_range(self) -> None:
         from worlds.ksp1.items import _FILLER_ITEMS

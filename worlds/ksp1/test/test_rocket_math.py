@@ -14,19 +14,19 @@ from worlds.ksp1.rocket_math import (
 
 
 # Convenience accessors for real parts
-def _p(ap_item: str, idx: int = 0):
-    return PART_DB[ap_item][idx]
+def _p(cfg_name: str, idx: int = 0):
+    return PART_DB[cfg_name][idx]
 
 
-_SWIVEL = _p('LV-T45 "Swivel" Liquid Fuel Engine')
-_TERRIER = _p('LV-909 "Terrier" Liquid Fuel Engine')
-_MAINSAIL = _p('RE-M3 "Mainsail" Liquid Fuel Engine')
-_DAWN = _p('IX-6315 "Dawn" Electric Propulsion System')
-_HAMMER = _p('RT-10 "Hammer" Solid Fuel Booster')
-_FL_T400 = _p("FL-T400 Fuel Tank")
-_FL_T800 = _p("FL-T800 Fuel Tank")
-_X200_32 = _p("Rockomax X200-32 Fuel Tank")
-_MK1_LF = _p("Mk1 Liquid Fuel Fuselage")
+_SWIVEL = _p("liquidEngine2.v2")
+_TERRIER = _p("liquidEngine3.v2")
+_MAINSAIL = _p("liquidEngineMainsail.v2")
+_DAWN = _p("ionEngine")
+_HAMMER = _p("solidBooster.v2")
+_FL_T400 = _p("fuelTank")
+_FL_T800 = _p("fuelTank.long")
+_X200_32 = _p("Rockomax32.BW")
+_MK1_LF = _p("MK1Fuselage")
 
 
 class TestStageDeltaV(unittest.TestCase):

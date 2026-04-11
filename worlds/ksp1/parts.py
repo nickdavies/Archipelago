@@ -186,11 +186,16 @@ _BULKHEAD_DIAMETER: dict[str, float] = {
 
 @dataclass(frozen=True)
 class PartMapping:
-    cfg_name: str           # key into parts.json
+    cfg_name: str           # key into parts.json (cfg-file internal name)
     part_type: type         # Engine, FuelTank, etc.
-    ap_item: str            # key in PART_DB (matches ITEM_TABLE in items.py)
+    title: str              # human-readable display name (for comments/UI only)
     offset: int             # stable item ID offset (1000+); see scripts/generate_registry.py
     overrides: dict = field(default_factory=dict)
+
+    @property
+    def ksp_name(self) -> str:
+        """KSP runtime name (AvailablePart.name): underscores become dots."""
+        return self.cfg_name.replace('_', '.')
 
 
 PART_REGISTRY: list[PartMapping] = [
@@ -849,9 +854,9 @@ def _fuel_mass_from_resources(resources: dict[str, float]) -> float:
     return total
 
 
-def _build_part(part_type: type, cfg: dict, overrides: dict) -> AnyPart:
+def _build_part(part_type: type, cfg: dict, overrides: dict, name: str) -> AnyPart:
     """Construct a frozen part dataclass from cfg JSON data + manual overrides."""
-    title = cfg["title"]
+    cfg_name = name
     mass = cfg["mass"]
     size = _best_size_class(cfg.get("bulkhead_profiles", []))
 
@@ -862,7 +867,7 @@ def _build_part(part_type: type, cfg: dict, overrides: dict) -> AnyPart:
         vac_thrust = eng["max_thrust"]
         atm_thrust = vac_thrust * (isp_atm / isp_vac) if isp_vac > 0 else 0.0
         return Engine(
-            name=title,
+            name=cfg_name,
             vac_isp=isp_vac,
             atm_isp=isp_atm,
             vac_thrust=vac_thrust,
@@ -877,7 +882,7 @@ def _build_part(part_type: type, cfg: dict, overrides: dict) -> AnyPart:
     if part_type is FuelTank:
         resources = cfg.get("resources", {})
         return FuelTank(
-            name=title,
+            name=cfg_name,
             dry_mass=mass,
             fuel_mass=_fuel_mass_from_resources(resources),
             fuel_type=_fuel_type_from_resources(resources),
@@ -892,7 +897,7 @@ def _build_part(part_type: type, cfg: dict, overrides: dict) -> AnyPart:
         vac_thrust = eng["max_thrust"]
         atm_thrust = vac_thrust * (isp_atm / isp_vac) if isp_vac > 0 else 0.0
         return SolidBooster(
-            name=title,
+            name=cfg_name,
             vac_isp=isp_vac,
             atm_isp=isp_atm,
             vac_thrust=vac_thrust,
@@ -904,12 +909,12 @@ def _build_part(part_type: type, cfg: dict, overrides: dict) -> AnyPart:
         )
 
     if part_type is HeatShield:
-        return HeatShield(name=title, mass=mass, size_class=size)
+        return HeatShield(name=cfg_name, mass=mass, size_class=size)
 
     if part_type is Parachute:
         chute = cfg.get("parachute", {})
         return Parachute(
-            name=title,
+            name=cfg_name,
             mass=mass,
             drag_area=chute.get("fully_deployed_drag", 0.0),
             is_drogue=overrides.get("is_drogue", False),
@@ -917,7 +922,7 @@ def _build_part(part_type: type, cfg: dict, overrides: dict) -> AnyPart:
 
     if part_type is LandingLeg:
         return LandingLeg(
-            name=title,
+            name=cfg_name,
             mass=mass,
             tier=overrides["tier"],
         )
@@ -925,11 +930,11 @@ def _build_part(part_type: type, cfg: dict, overrides: dict) -> AnyPart:
     if part_type is Decoupler:
         kind = ("radial" if cfg.get("has_module_anchored_decouple")
                 else "stack")
-        return Decoupler(name=title, mass=mass, kind=kind, size_class=size)
+        return Decoupler(name=cfg_name, mass=mass, kind=kind, size_class=size)
 
     if part_type is MiscEquipment:
         return MiscEquipment(
-            name=title,
+            name=cfg_name,
             mass=mass,
             provides=overrides.get("provides", frozenset()),
         )
@@ -954,8 +959,9 @@ def _load_part_db() -> dict[str, list[AnyPart]]:
                 f"PART_REGISTRY references cfg name {mapping.cfg_name!r} "
                 f"which does not exist in parts.json"
             )
-        part = _build_part(mapping.part_type, cfg, mapping.overrides)
-        db.setdefault(mapping.ap_item, []).append(part)
+        part = _build_part(mapping.part_type, cfg, mapping.overrides,
+                           name=mapping.ksp_name)
+        db.setdefault(mapping.ksp_name, []).append(part)
     return db
 
 

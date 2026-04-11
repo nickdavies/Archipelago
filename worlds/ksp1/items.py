@@ -100,7 +100,7 @@ def _classify_part_item(item_name: str) -> ItemClassification:
 _SORTED_PART_NAMES: list[str] = sorted(PART_DB.keys())
 
 ITEM_TABLE: dict[str, tuple[int, ItemClassification]] = {
-    m.ap_item: (m.offset, _classify_part_item(m.ap_item))
+    m.ksp_name: (m.offset, _classify_part_item(m.ksp_name))
     for m in PART_REGISTRY
 }
 
@@ -134,10 +134,10 @@ ITEM_NAME_TO_ID: dict[str, int] = {
 # ---------------------------------------------------------------------------
 
 #: Always precollected — structural necessity in every seed.
-ALWAYS_PRECOLLECTED: tuple[str, ...] = ("EAS-4 Strut Connector",)
+ALWAYS_PRECOLLECTED: tuple[str, ...] = ("strutConnector",)
 
 #: Precollected when start_with_launch_clamps option is enabled.
-CLAMP_PRECOLLECTED: tuple[str, ...] = ("TT18-A Launch Stability Enhancer",)
+CLAMP_PRECOLLECTED: tuple[str, ...] = ("launchClamp1",)
 
 # ---------------------------------------------------------------------------
 # Item creation helpers

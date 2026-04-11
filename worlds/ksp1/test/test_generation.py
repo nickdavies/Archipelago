@@ -179,9 +179,9 @@ class TestItemClassification(KSP1TestBase):
 
     def test_engines_are_progression(self):
         for name in (
-            'LV-T45 "Swivel" Liquid Fuel Engine',
-            'LV-909 "Terrier" Liquid Fuel Engine',
-            'RE-M3 "Mainsail" Liquid Fuel Engine',
+            "liquidEngine2.v2",   # Swivel
+            "liquidEngine3.v2",   # Terrier
+            "liquidEngineMainsail.v2",  # Mainsail
         ):
             self.assertEqual(
                 self._classification(name),
@@ -191,14 +191,14 @@ class TestItemClassification(KSP1TestBase):
 
     def test_rcs_is_useful(self):
         self.assertEqual(
-            self._classification("RV-105 RCS Thruster Block"),
+            self._classification("RCSBlock.v2"),  # RV-105
             ItemClassification.useful,
             "RCS Thruster should be useful, not progression",
         )
 
     def test_ladder_is_progression(self):
         self.assertEqual(
-            self._classification("Pegasus I Mobility Enhancer"),
+            self._classification("ladder1"),  # Pegasus I
             ItemClassification.progression,
             "Ladder should be progression (gates sample returns on high-g bodies)",
         )
