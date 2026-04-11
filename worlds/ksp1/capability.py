@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 from BaseClasses import CollectionState
 
@@ -257,7 +257,7 @@ def explain_body_unreachable(state: CollectionState, player: int, body_name: str
 # Step 1: Pre-pass
 # ---------------------------------------------------------------------------
 
-def _pre_pass(state: CollectionState, player: int,
+def _pre_pass(item_count_fn: Callable[[str], int],
               start_with_clamps: bool) -> EquipmentFlags:
     """
     Iterate every item the player has collected and build EquipmentFlags.
@@ -269,7 +269,7 @@ def _pre_pass(state: CollectionState, player: int,
         flags.has_launch_clamp = True
 
     for item_name, parts in PART_DB.items():
-        count = state.count(item_name, player)
+        count = item_count_fn(item_name)
         if count == 0:
             continue
 
@@ -428,6 +428,7 @@ class ProfileResult:
     feasible: bool
     launch_mass: float = 0.0          # total wet mass at kerbin_surface
     stage_results: list[StageResult] = field(default_factory=list)
+    edge_groups: list[list[MissionEdge]] = field(default_factory=list)
     failure_reason: str = ""
 
 
@@ -693,6 +694,7 @@ def _evaluate_profile(
         feasible=True,
         launch_mass=payload,
         stage_results=list(reversed(stage_results_list)),
+        edge_groups=groups,
     )
 
 
@@ -1064,6 +1066,37 @@ def _try_profiles_reason(
     return False, last_reason
 
 
+def evaluate_mission_detailed(
+    flags: EquipmentFlags,
+    diff: DifficultyProfile,
+    body_name: str,
+    mission_type: str,
+    crewed: bool,
+) -> ProfileResult:
+    """
+    Evaluate a specific mission and return the winning ProfileResult
+    with full stage details + edge groups. Returns a non-feasible
+    ProfileResult if no profile alternative succeeds.
+    """
+    profiles = MISSION_PROFILES.get((body_name, mission_type), [])
+    if not profiles:
+        return ProfileResult(False,
+                             failure_reason=f"no profiles for ({body_name}, {mission_type})")
+
+    if mission_type == "sample_return":
+        body = BODY_BY_NAME[body_name]
+        if body.eva_jetpack_twr < _MIN_EVA_JETPACK_TWR:
+            profiles = _inject_ladder(profiles)
+
+    last_failure = ""
+    for profile in profiles:
+        result = _evaluate_profile(profile, flags, diff, mission_type, is_crewed=crewed)
+        if result.feasible:
+            return result
+        last_failure = result.failure_reason
+    return ProfileResult(False, failure_reason=last_failure)
+
+
 # ---------------------------------------------------------------------------
 # Step 4: Assemble RocketCapability
 # ---------------------------------------------------------------------------
@@ -1141,21 +1174,17 @@ def _compute_sounding_altitude(flags: EquipmentFlags) -> float:
     return best_km
 
 
-def _compute_capability(state: CollectionState, player: int) -> RocketCapability:
-    """Full capability computation from the current collection state."""
-    # Retrieve world options
-    world = state.multiworld.worlds[player]
-    options = world.options
-
-    difficulty_name = ["casual", "normal", "expert", "insane"][options.difficulty.value]
+def compute_capability_from_items(
+    item_count_fn: Callable[[str], int],
+    difficulty_name: str,
+    start_with_clamps: bool,
+) -> tuple[RocketCapability, EquipmentFlags]:
+    """Compute capability without a CollectionState. For CLI/external tools."""
     diff = DIFFICULTY_PROFILES[difficulty_name]
-    start_with_clamps = bool(options.start_with_launch_clamps.value)
-
-    flags = _pre_pass(state, player, start_with_clamps)
+    flags = _pre_pass(item_count_fn, start_with_clamps)
     body_profiles = _assess_bodies(flags, diff)
     sounding_km = _compute_sounding_altitude(flags)
 
-    # Determine power profile string for the RocketCapability summary
     if flags.has_rtg:
         power_str = "rtg"
     elif flags.has_solar_retractable:
@@ -1186,4 +1215,17 @@ def _compute_capability(state: CollectionState, player: int) -> RocketCapability
         bodies=body_profiles,
     )
 
+    return cap, flags
+
+
+def _compute_capability(state: CollectionState, player: int) -> RocketCapability:
+    """Full capability computation from the current collection state."""
+    world = state.multiworld.worlds[player]
+    options = world.options
+    difficulty_name = ["casual", "normal", "expert", "insane"][options.difficulty.value]
+    start_with_clamps = bool(options.start_with_launch_clamps.value)
+    cap, _ = compute_capability_from_items(
+        lambda name: state.count(name, player),
+        difficulty_name, start_with_clamps,
+    )
     return cap
