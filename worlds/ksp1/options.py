@@ -12,7 +12,7 @@ class Goal(Choice):
     flag_every_body        -- Plant a flag on all 15 landable bodies (crewed).
     standard_returns       -- Return from 11 bodies (excl. Eve, Tylo, Laythe).
     standard_sample_returns -- Crewed sample return from the same 11 bodies.
-    complete_tech_tree     -- Purchase all 43 tech tree nodes with science.
+    complete_tech_tree     -- Purchase all 62 tech tree nodes with science.
     eve_return             -- Return a vessel (or crew) from Eve (challenge).
     """
     display_name = "Goal"
@@ -33,10 +33,10 @@ class Difficulty(Choice):
     Controls delta-V margins and hardware requirement strictness.
     Also controls KSC starting slots and tech tree slots per node.
 
-    casual  -- Generous margins; 20 KSC starts, 5 tech slots/node.
-    normal  -- Default margins; 15 KSC starts, 5 tech slots/node.
-    expert  -- Tight margins;   10 KSC starts, 4 tech slots/node.
-    insane  -- Exact delta-V;    5 KSC starts, 3 tech slots/node.
+    casual  -- Generous margins; 20 KSC starts, 4 tech slots/node.
+    normal  -- Default margins; 15 KSC starts, 4 tech slots/node.
+    expert  -- Tight margins;   10 KSC starts, 3 tech slots/node.
+    insane  -- Exact delta-V;    5 KSC starts, 2 tech slots/node.
     """
     display_name = "Difficulty"
 
@@ -83,9 +83,9 @@ class KSP1ExcludeLocations(ExcludeLocations):
 
 class ExcludeLateTechTree(Toggle):
     """
-    Exclude tier-9 tech tree locations from containing progression items.
+    Exclude tier-8 tech tree locations from containing progression items.
 
-    Tier-9 nodes require massive amounts of science to unlock.  Enabling this
+    Tier-8 nodes require massive amounts of science to unlock.  Enabling this
     prevents late-game science grind from being required to complete the seed.
     Disable for Complete Tech Tree goal or challenge runs.
     """

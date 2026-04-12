@@ -31,7 +31,7 @@ from .locations import (
     event_location_names,
 )
 from .options import Difficulty, Goal
-from .tech_tree import NODES_BY_TIER, NODE_BY_ID, cumulative_tier_cost, TECH_NODES
+from .tech_tree import MAX_TIER, NODES_BY_TIER, NODE_BY_ID, cumulative_tier_cost, TECH_NODES
 
 if TYPE_CHECKING:
     from .world import KSP1World
@@ -47,8 +47,8 @@ _SCIENCE_SAFETY: dict[int, float] = {
     Difficulty.option_insane: 1.00,
 }
 
-# Science needed to declare the tech tree complete (buy all 43 nodes)
-_TECH_TREE_COMPLETE_SCIENCE = cumulative_tier_cost(9)
+# Science needed to declare the tech tree complete (buy all 62 nodes)
+_TECH_TREE_COMPLETE_SCIENCE = cumulative_tier_cost(MAX_TIER)
 
 # All progression-classified part items.  Eve Return/Sample Return require
 # these — the capability system can't compute Eve ascent so we use this as a
@@ -448,7 +448,7 @@ def _make_goal_rule(
         return rule
 
     if goal == Goal.option_complete_tech_tree:
-        # Victory when the player can afford all 43 nodes
+        # Victory when the player can afford all 62 nodes
         return _make_science_threshold_rule(player, _TECH_TREE_COMPLETE_SCIENCE, difficulty)
 
     # Fallback (should never be reached)

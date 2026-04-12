@@ -6,9 +6,9 @@ from worlds.AutoWorld import LogicMixin, WebWorld, World
 from . import items, locations, regions, rules
 from .capability import RocketCapability
 from .items import ITEM_NAME_TO_ID
-from .locations import LOCATION_NAME_TO_ID, TECH_SLOTS_BY_DIFFICULTY
+from .locations import LOCATION_NAME_TO_ID, MAX_TECH_SLOTS, TECH_SLOTS_BY_DIFFICULTY
 from .options import KSP1Options
-from .tech_tree import NODES_BY_TIER
+from .tech_tree import MAX_TIER, NODES_BY_TIER
 
 
 class KSP1State(LogicMixin):
@@ -49,12 +49,12 @@ class KSP1World(World):
         """Apply ExcludeLateTechTree to the exclude_locations option set."""
         self.capability_cache = {}
         if self.options.exclude_late_tech_tree:
-            tier9_locs: set[str] = {
+            late_tier_locs: set[str] = {
                 f"{node.display_name} {slot}"
-                for node in NODES_BY_TIER.get(9, [])
-                for slot in range(1, 6)
+                for node in NODES_BY_TIER.get(MAX_TIER, [])
+                for slot in range(1, MAX_TECH_SLOTS + 1)
             }
-            self.options.exclude_locations.value |= tier9_locs
+            self.options.exclude_locations.value |= late_tier_locs
 
     def create_regions(self) -> None:
         regions.create_all_regions(self)

@@ -1,7 +1,7 @@
 """
 Location definitions for KSP1 Archipelago.
 
-Four location sources (total 475 max, filtered by difficulty):
+Four location sources (total ~508 max, filtered by difficulty):
 
   1. Starting Inventory Locations  (5/10/15/20 by difficulty)
      Zero access requirements; AP fill places the items needed to bootstrap.
@@ -20,12 +20,12 @@ Four location sources (total 475 max, filtered by difficulty):
      Per landable body: 3×1 + 3×2 + 2×3 = 15 locations.
      Per non-landable body (Jool, Kerbol): 3×1 = 3 locations.
 
-  4. Tech Tree Locations  (129–215 by difficulty)
-     3–5 locations per node × 43 nodes, scaled by difficulty.
+  4. Tech Tree Locations  (124–248 by difficulty)
+     2–4 locations per node × 62 nodes, scaled by difficulty.
      Access rule: player can earn enough science to afford the node's tier.
 
 Location IDs use KSP1_BASE_ID + offset.  The registry includes all 20
-possible starting inventory slots and max (5) tech slots so the world can
+possible starting inventory slots and max (4) tech slots so the world can
 create the correct subset at runtime based on difficulty.
 """
 from __future__ import annotations
@@ -35,7 +35,7 @@ from typing import TYPE_CHECKING
 from BaseClasses import Location
 
 from .bodies import ALL_BODIES
-from .tech_tree import TECH_TREE_LOCATION_NAMES
+from .tech_tree import TECH_NODES
 
 if TYPE_CHECKING:
     from .world import KSP1World
@@ -94,15 +94,24 @@ _KERBIN_EXCLUDED: frozenset[str] = frozenset({"Kerbin"})
 # ---------------------------------------------------------------------------
 
 MAX_STARTING_INV = 20
-MAX_TECH_SLOTS = 5
+MAX_TECH_SLOTS = 4
 
 #: Tech tree slots per node, scaled by difficulty.
 #: Keys are Difficulty option values (casual=0, normal=1, expert=2, insane=3).
-TECH_SLOTS_BY_DIFFICULTY: dict[int, int] = {0: 5, 1: 5, 2: 4, 3: 3}
+TECH_SLOTS_BY_DIFFICULTY: dict[int, int] = {0: 4, 1: 4, 2: 3, 3: 2}
 
 STARTING_INV_NAMES: list[str] = [
     f"Starting Inventory {i + 1}" for i in range(MAX_STARTING_INV)
 ]
+
+# Location names for tech tree slots: "{display_name} {slot}" for slots 1..MAX_TECH_SLOTS.
+TECH_TREE_LOCATION_NAMES: list[str] = [
+    f"{node.display_name} {slot}"
+    for node in TECH_NODES
+    for slot in range(1, MAX_TECH_SLOTS + 1)
+]
+
+assert len(TECH_TREE_LOCATION_NAMES) == 248  # 62 nodes × 4 slots
 
 # ---------------------------------------------------------------------------
 # KSC biome locations (always all 11, no difficulty scaling)
@@ -235,11 +244,10 @@ def create_all_locations(world: KSP1World) -> None:
 
     Starting inventory locations: only the first N (by difficulty) are created.
     KSC biome locations: always all 11.
-    Tech tree slots per node: 3–5 by difficulty.
+    Tech tree slots per node: 2–4 by difficulty.
     All mission locations are always created.
     """
     from .options import Difficulty
-    from .tech_tree import TECH_NODES
 
     difficulty = world.options.difficulty.value
     starting_inv_counts = {
