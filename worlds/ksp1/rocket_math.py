@@ -380,6 +380,8 @@ def find_optimal_stage(
                     n_tanks = _ceil(R_minus_1 * (full_payload + m_engine) / denom)
                     if n_tanks <= 0:
                         continue
+                    if tank.max_count > 0 and n_tanks > tank.max_count:
+                        continue
 
                     # Radial-tank constraint: each stack engine needs its own
                     # tank unless an adapter/plate covers this engine count

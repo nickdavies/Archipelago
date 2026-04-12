@@ -41,6 +41,7 @@ class FuelTank:
     fuel_mass: float        # tonnes at 100% fill
     fuel_type: str          # "lfo" | "lf" | "xenon" | "monoprop"
     size_class: float       # metres
+    max_count: int = 0      # 0 = unlimited; >0 caps optimizer tank count (adapters)
 
 
 @dataclass(frozen=True)
@@ -150,6 +151,7 @@ MULTI_MOUNT_TABLE: dict[str, MultiMount] = {
     "stackTriCoupler.v2":    MultiMount(1.25, {1.25: 3}),
     "stackQuadCoupler":      MultiMount(1.25, {1.25: 4}),
     # Stock adapters (2.5m input → 1.25m output)
+    "mk2.1m.Bicoupler":     MultiMount(2.5,  {1.25: 2}),
     "adapterLargeSmallBi":   MultiMount(2.5,  {1.25: 2}),
     "adapterLargeSmallTri":  MultiMount(2.5,  {1.25: 3}),
     "adapterLargeSmallQuad": MultiMount(2.5,  {1.25: 4}),
@@ -281,7 +283,8 @@ PART_REGISTRY: list[PartMapping] = [
     PartMapping("mk2FuselageShortMono", FuelTank, "Mk2 Monopropellant Tank", 1162),
     PartMapping("mk2SpacePlaneAdapter", FuelTank, "Mk2 to 1.25m Adapter", 1165),
     PartMapping("mk2_1m_AdapterLong", FuelTank, "Mk2 to 1.25m Adapter Long", 1166),
-    PartMapping("mk2_1m_Bicoupler", FuelTank, "Mk2 Bicoupler", 1153),
+    PartMapping("mk2_1m_Bicoupler", FuelTank, "Mk2 Bicoupler", 1153,
+                {"max_count": 1}),
     PartMapping("mk3FuselageLFO_100", FuelTank, "Mk3 Rocket Fuel Fuselage Long", 1181),
     PartMapping("mk3FuselageLFO_25", FuelTank, "Mk3 Rocket Fuel Fuselage Short", 1182),
     PartMapping("mk3FuselageLFO_50", FuelTank, "Mk3 Rocket Fuel Fuselage", 1180),
@@ -838,7 +841,8 @@ PART_REGISTRY: list[PartMapping] = [
     PartMapping("Size4_Tank_03", FuelTank, "Kerbodyne S4-256 Fuel Tank", 1422),
     PartMapping("Size4_Tank_04", FuelTank, "Kerbodyne S4-512 Fuel Tank", 1423),
     PartMapping("Size3_Size4_Adapter_01", FuelTank, "Kerbodyne S3-S4 Adapter Tank", 1424),
-    PartMapping("Size4_EngineAdapter_01", FuelTank, "Kerbodyne Engine Cluster Adapter Tank", 1425),
+    PartMapping("Size4_EngineAdapter_01", FuelTank, "Kerbodyne Engine Cluster Adapter Tank", 1425,
+                {"max_count": 1}),
     PartMapping("monopropMiniSphere", FuelTank, "Stratus-V Minified Monopropellant Tank", 1426),
     # --- MH Heat Shield (1) ---
     PartMapping("HeatShield1p5", HeatShield, "Heat Shield (1.875m)", 1430),
@@ -1021,6 +1025,7 @@ def _build_part(part_type: type, cfg: dict, overrides: dict, name: str) -> AnyPa
             fuel_mass=_fuel_mass_from_resources(resources),
             fuel_type=_fuel_type_from_resources(resources),
             size_class=size,
+            max_count=overrides.get("max_count", 0),
         )
 
     if part_type is SolidBooster:
@@ -1086,6 +1091,7 @@ def _build_part(part_type: type, cfg: dict, overrides: dict, name: str) -> AnyPa
 # Each entry adds a MiscEquipment with the given provides to the same item.
 _DUAL_PURPOSE: dict[str, frozenset[str]] = {
     "Size4_EngineAdapter_01": frozenset({"multi_mount"}),
+    "mk2_1m_Bicoupler": frozenset({"multi_mount"}),
 }
 
 
