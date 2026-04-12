@@ -193,7 +193,7 @@ class TestProvidesFlags(unittest.TestCase):
         "rtg", "battery_small", "battery_large",
         "docking_port", "fuel_line", "ladder", "launch_clamp", "isru",
         "relay_t1", "relay_t2", "relay_t3",
-        "thermometer", "barometer",
+        "thermometer", "barometer", "wheel",
         "science_instrument",  # classification only, not a capability flag
         "multi_mount",         # adapter/coupler/engine plate
     })

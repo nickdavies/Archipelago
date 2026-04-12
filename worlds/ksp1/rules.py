@@ -23,6 +23,7 @@ from .bodies import ALL_BODIES, BODY_BY_NAME, science_budget
 from .capability import get_capability
 from .items import ITEM_TABLE
 from .locations import (
+    KSC_BIOME_NAMES,
     KERBIN_LOCATION_NAMES,
     MISSION_LOCATION_NAMES,
     TECH_SLOTS_BY_DIFFICULTY,
@@ -133,6 +134,7 @@ def set_all_rules(world: KSP1World) -> None:
     player = world.player
     difficulty = world.options.difficulty.value
 
+    _set_ksc_biome_rules(world, player)
     _set_kerbin_rules(world, player)
     _set_mission_rules(world, player)
     _set_tech_tree_rules(world, player, difficulty)
@@ -144,6 +146,36 @@ def set_completion_condition(world: KSP1World) -> None:
     goal = world.options.goal.value
 
     _place_victory_event(world, player, goal, difficulty)
+
+
+# ---------------------------------------------------------------------------
+# KSC biome location rules
+# ---------------------------------------------------------------------------
+
+def _can_do_ksc_science(state: CollectionState, player: int) -> bool:
+    """
+    Can the player do science at KSC biomes?
+
+    Path 1: Crewed EVA (EVA report / surface sample) — just needs a capsule.
+    Path 2: Rover with science instruments — probe + wheels + power + instrument.
+    """
+    cap = get_capability(state, player)
+    if cap.has_capsule:
+        return True
+    if (cap.has_probe_core and cap.has_wheel
+            and (cap.has_solar or cap.has_rtg)
+            and (cap.has_thermometer or cap.has_barometer)):
+        return True
+    return False
+
+
+def _set_ksc_biome_rules(world: KSP1World, player: int) -> None:
+    """Apply the KSC science rule to all 11 KSC biome locations."""
+    def rule(state: CollectionState) -> bool:
+        return _can_do_ksc_science(state, player)
+
+    for name in KSC_BIOME_NAMES:
+        world.get_location(name).access_rule = rule
 
 
 # ---------------------------------------------------------------------------
@@ -171,13 +203,23 @@ def _make_altitude_rule(player: int, threshold_km: float) -> Callable[[Collectio
 
 def _set_kerbin_rules(world: KSP1World, player: int) -> None:
     """
-    Rules for the 11 Kerbin-specific locations.
+    Rules for the 13 Kerbin-specific locations.
 
+    First Launch: any propulsion that can leave the pad.
+    First Landing: can launch + has parachutes or a throttleable engine.
     Altitude milestones: sounding rocket must reach the stated altitude.
     Kerbin Orbit / EVA in Orbit: full orbital capability (computed, not free).
     First Staging: decoupler.
     Splashdown: no rule.
     """
+
+    def has_any_propulsion(state: CollectionState) -> bool:
+        return get_capability(state, player).sounding_altitude_km > 0
+
+    def can_land_safely(state: CollectionState) -> bool:
+        cap = get_capability(state, player)
+        return (cap.sounding_altitude_km > 0
+                and (cap.has_parachutes or cap.has_throttleable_engine))
 
     def has_orbit(state: CollectionState) -> bool:
         return get_capability(state, player).bodies["Kerbin"].can_orbit_low
@@ -188,6 +230,9 @@ def _set_kerbin_rules(world: KSP1World, player: int) -> None:
     def has_crewed_orbit(state: CollectionState) -> bool:
         cap = get_capability(state, player)
         return cap.has_capsule and cap.bodies["Kerbin"].can_orbit_low
+
+    world.get_location("Kerbin First Launch").access_rule = has_any_propulsion
+    world.get_location("Kerbin First Landing").access_rule = can_land_safely
 
     for name, threshold_km in _ALTITUDE_THRESHOLDS_KM.items():
         world.get_location(name).access_rule = _make_altitude_rule(player, threshold_km)

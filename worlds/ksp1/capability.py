@@ -109,6 +109,8 @@ class EquipmentFlags:
     has_isru: bool = False
     has_thermometer: bool = False
     has_barometer: bool = False
+    has_wheel: bool = False
+    has_throttleable_engine: bool = False
 
     # Tiered values
     landing_leg_tier: int = 0       # 0 = no legs
@@ -176,6 +178,8 @@ class RocketCapability:
     has_launch_clamp: bool = False
     has_thermometer: bool = False
     has_barometer: bool = False
+    has_wheel: bool = False
+    has_throttleable_engine: bool = False
 
     # Sounding rocket: best achievable altitude (km) with a single stage
     sounding_altitude_km: float = 0.0
@@ -331,6 +335,9 @@ def _pre_pass(item_count_fn: Callable[[str], int],
     # produce lighter stages, helping the optimizer's upper-bound pruning.
     flags.available_engines.sort(key=lambda e: (-e.vac_isp, e.mass))
 
+    # Throttleable engine flag (for powered landing)
+    flags.has_throttleable_engine = any(e.throttleable for e in flags.available_engines)
+
     # Build fuel-type index for tanks, sorted for best-first search.
     # Deduplicate by optimizer-relevant fields (dry_mass, fuel_mass, size_class)
     # since many structural variants (adapters, mk2/mk3 fuselages) share stats.
@@ -415,6 +422,8 @@ def _apply_misc(flags: EquipmentFlags, part: MiscEquipment, count: int) -> None:
             flags.has_thermometer = True
         elif flag == "barometer":
             flags.has_barometer = True
+        elif flag == "wheel":
+            flags.has_wheel = True
         elif flag.startswith("relay_"):
             _apply_misc_relay(flags, flag)
 
@@ -1212,6 +1221,8 @@ def compute_capability_from_items(
         has_launch_clamp=flags.has_launch_clamp,
         has_thermometer=flags.has_thermometer,
         has_barometer=flags.has_barometer,
+        has_wheel=flags.has_wheel,
+        has_throttleable_engine=flags.has_throttleable_engine,
         bodies=body_profiles,
     )
 

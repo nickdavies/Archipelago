@@ -1,13 +1,17 @@
 """
 Location definitions for KSP1 Archipelago.
 
-Three location sources (total 462 max, filtered by difficulty):
+Four location sources (total 475 max, filtered by difficulty):
 
-  1. KSC Starting Locations  (5/10/15/20 by difficulty)
+  1. Starting Inventory Locations  (5/10/15/20 by difficulty)
      Zero access requirements; AP fill places the items needed to bootstrap.
 
-  2. Mission Event Locations  (227 total)
-     11 Kerbin-specific + 216 per-body event-scaled checks.
+  2. KSC Biome Locations  (11 total, always all 11)
+     Earned by performing science experiments at KSC buildings.
+     Requires EVA (capsule) or rover (probe + wheels + power + instrument).
+
+  3. Mission Event Locations  (229 total)
+     13 Kerbin-specific + 216 per-body event-scaled checks.
      Eve Return/Sample Return exist but require all progression parts.
      Scale is by event difficulty, not body distance:
        Flyby/SOI Leave/Orbit = 1 slot each,
@@ -16,13 +20,13 @@ Three location sources (total 462 max, filtered by difficulty):
      Per landable body: 3×1 + 3×2 + 2×3 = 15 locations.
      Per non-landable body (Jool, Kerbol): 3×1 = 3 locations.
 
-  3. Tech Tree Locations  (129–215 by difficulty)
+  4. Tech Tree Locations  (129–215 by difficulty)
      3–5 locations per node × 43 nodes, scaled by difficulty.
      Access rule: player can earn enough science to afford the node's tier.
 
 Location IDs use KSP1_BASE_ID + offset.  The registry includes all 20
-possible KSC start slots and max (5) tech slots so the world can create
-the correct subset at runtime based on difficulty.
+possible starting inventory slots and max (5) tech slots so the world can
+create the correct subset at runtime based on difficulty.
 """
 from __future__ import annotations
 
@@ -39,10 +43,11 @@ if TYPE_CHECKING:
 KSP1_BASE_ID = 7_700_000
 
 # Offset ranges (items use 0–1999, locations use 2000–3999)
-_KSC_OFFSET_START = 2000       # KSC starts: 2000-2099
-_KERBIN_OFFSET_START = 2100    # Kerbin special: 2100-2199
-_MISSION_OFFSET_START = 2200   # Per-body mission events: 2200-2999
-_TECH_OFFSET_START = 3000      # Tech tree: 3000-3999
+_STARTING_INV_OFFSET_START = 2000  # Starting inventory: 2000-2019
+_KSC_BIOME_OFFSET_START = 2080     # KSC biomes: 2080-2099
+_KERBIN_OFFSET_START = 2100        # Kerbin special: 2100-2199
+_MISSION_OFFSET_START = 2200       # Per-body mission events: 2200-2999
+_TECH_OFFSET_START = 3000          # Tech tree: 3000-3999
 
 
 class KSP1Location(Location):
@@ -85,25 +90,45 @@ _KERBIN_EXCLUDED: frozenset[str] = frozenset({"Kerbin"})
 
 
 # ---------------------------------------------------------------------------
-# KSC starting locations (registry includes all 20; world creates N of them)
+# Starting inventory locations (registry includes all 20; world creates N)
 # ---------------------------------------------------------------------------
 
-MAX_KSC_STARTS = 20
+MAX_STARTING_INV = 20
 MAX_TECH_SLOTS = 5
 
 #: Tech tree slots per node, scaled by difficulty.
 #: Keys are Difficulty option values (casual=0, normal=1, expert=2, insane=3).
 TECH_SLOTS_BY_DIFFICULTY: dict[int, int] = {0: 5, 1: 5, 2: 4, 3: 3}
 
-KSC_LOCATION_NAMES: list[str] = [
-    f"KSC Start {i + 1}" for i in range(MAX_KSC_STARTS)
+STARTING_INV_NAMES: list[str] = [
+    f"Starting Inventory {i + 1}" for i in range(MAX_STARTING_INV)
 ]
 
 # ---------------------------------------------------------------------------
-# Kerbin-specific mission locations (11 total, fixed)
+# KSC biome locations (always all 11, no difficulty scaling)
+# ---------------------------------------------------------------------------
+
+KSC_BIOME_NAMES: list[str] = [
+    "KSC LaunchPad",
+    "KSC Runway",
+    "KSC VAB",
+    "KSC SPH",
+    "KSC Tracking Station",
+    "KSC Astronaut Complex",
+    "KSC Administration",
+    "KSC Mission Control",
+    "KSC R&D",
+    "KSC Crawlerway",
+    "KSC Flag Pole",
+]
+
+# ---------------------------------------------------------------------------
+# Kerbin-specific mission locations (13 total, fixed)
 # ---------------------------------------------------------------------------
 
 KERBIN_LOCATION_NAMES: list[str] = [
+    "Kerbin First Launch",
+    "Kerbin First Landing",
     "Kerbin 5km Altitude",
     "Kerbin 15km Altitude",
     "Kerbin 25km Altitude",
@@ -117,7 +142,7 @@ KERBIN_LOCATION_NAMES: list[str] = [
     "Kerbin EVA in Orbit",
 ]
 
-assert len(KERBIN_LOCATION_NAMES) == 11
+assert len(KERBIN_LOCATION_NAMES) == 13
 
 # ---------------------------------------------------------------------------
 # Per-body mission location names (233 total, generated from body data)
@@ -156,8 +181,13 @@ assert len(MISSION_LOCATION_NAMES) == 216, (
 
 def _build_location_table() -> dict[str, int]:
     table: dict[str, int] = {}
-    offset = _KSC_OFFSET_START
-    for name in KSC_LOCATION_NAMES:
+    offset = _STARTING_INV_OFFSET_START
+    for name in STARTING_INV_NAMES:
+        table[name] = offset
+        offset += 1
+
+    offset = _KSC_BIOME_OFFSET_START
+    for name in KSC_BIOME_NAMES:
         table[name] = offset
         offset += 1
 
@@ -203,7 +233,8 @@ def create_all_locations(world: KSP1World) -> None:
     """
     Create and attach all locations to the Menu region.
 
-    KSC start locations: only the first N (by difficulty) are created.
+    Starting inventory locations: only the first N (by difficulty) are created.
+    KSC biome locations: always all 11.
     Tech tree slots per node: 3–5 by difficulty.
     All mission locations are always created.
     """
@@ -211,23 +242,27 @@ def create_all_locations(world: KSP1World) -> None:
     from .tech_tree import TECH_NODES
 
     difficulty = world.options.difficulty.value
-    ksc_counts = {
+    starting_inv_counts = {
         Difficulty.option_casual: 20,
         Difficulty.option_normal: 15,
         Difficulty.option_expert: 10,
         Difficulty.option_insane: 5,
     }
-    num_ksc = ksc_counts[difficulty]
+    num_starting = starting_inv_counts[difficulty]
     num_tech_slots = TECH_SLOTS_BY_DIFFICULTY[difficulty]
 
     menu = world.get_region("Menu")
 
-    # KSC starts (zero-requirement bootstrapping locations)
-    ksc_locs = {
+    # Starting inventory (zero-requirement bootstrapping locations)
+    starting_locs = {
         name: LOCATION_NAME_TO_ID[name]
-        for name in KSC_LOCATION_NAMES[:num_ksc]
+        for name in STARTING_INV_NAMES[:num_starting]
     }
-    menu.add_locations(ksc_locs, KSP1Location)
+    menu.add_locations(starting_locs, KSP1Location)
+
+    # KSC biome locations (earned by doing science at KSC buildings)
+    biome_locs = {name: LOCATION_NAME_TO_ID[name] for name in KSC_BIOME_NAMES}
+    menu.add_locations(biome_locs, KSP1Location)
 
     # Kerbin-specific events
     kerbin_locs = {name: LOCATION_NAME_TO_ID[name] for name in KERBIN_LOCATION_NAMES}
