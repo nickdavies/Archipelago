@@ -81,6 +81,24 @@ class KSP1ExcludeLocations(ExcludeLocations):
     })
 
 
+class ItemPacing(Choice):
+    """
+    Controls whether high-impact items are restricted from early locations.
+
+    off     -- No restrictions. Any item can appear anywhere.
+    gentle  -- Tier 2 items (big engines, decouplers, large tanks) excluded
+               from Starting Inventory and KSC biome locations.
+    strict  -- Additionally restricts tier 2 from early tech tree (tiers 1-3).
+    """
+    display_name = "Item Pacing"
+
+    option_off = 0
+    option_gentle = 1
+    option_strict = 2
+
+    default = option_gentle
+
+
 class ExcludeLateTechTree(Toggle):
     """
     Exclude tier-8 tech tree locations from containing progression items.
@@ -98,5 +116,6 @@ class KSP1Options(PerGameCommonOptions):
     goal: Goal
     difficulty: Difficulty
     start_with_launch_clamps: StartWithLaunchClamps
+    item_pacing: ItemPacing
     exclude_locations: KSP1ExcludeLocations
     exclude_late_tech_tree: ExcludeLateTechTree

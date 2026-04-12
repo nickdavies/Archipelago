@@ -21,16 +21,17 @@ from BaseClasses import CollectionState, ItemClassification
 
 from .bodies import ALL_BODIES, BODY_BY_NAME, science_budget
 from .capability import get_capability
-from .items import ITEM_TABLE
+from .items import ITEM_TABLE, SCIENCE_PACK_NAMES
 from .locations import (
     KSC_BIOME_NAMES,
     KERBIN_LOCATION_NAMES,
     MISSION_LOCATION_NAMES,
+    STARTING_INV_NAMES,
     TECH_SLOTS_BY_DIFFICULTY,
     TECH_TREE_LOCATION_NAMES,
     event_location_names,
 )
-from .options import Difficulty, Goal
+from .options import Difficulty, Goal, ItemPacing
 from .tech_tree import MAX_TIER, NODES_BY_TIER, NODE_BY_ID, cumulative_tier_cost, TECH_NODES
 
 if TYPE_CHECKING:
@@ -138,6 +139,7 @@ def set_all_rules(world: KSP1World) -> None:
     _set_kerbin_rules(world, player)
     _set_mission_rules(world, player)
     _set_tech_tree_rules(world, player, difficulty)
+    _set_item_pacing_rules(world, player, difficulty)
 
 
 def set_completion_condition(world: KSP1World) -> None:
@@ -356,6 +358,92 @@ def _set_tech_tree_rules(world: KSP1World, player: int, difficulty: int) -> None
             loc_name = f"{node.display_name} {slot}"
             loc = world.get_location(loc_name)
             loc.access_rule = rule
+
+
+# ---------------------------------------------------------------------------
+# Item pacing rules (item_rules on early locations)
+# ---------------------------------------------------------------------------
+
+# Starting inventory slot counts by difficulty (mirrors locations.py)
+_STARTING_INV_COUNTS: dict[int, int] = {
+    Difficulty.option_casual: 20,
+    Difficulty.option_normal: 15,
+    Difficulty.option_expert: 10,
+    Difficulty.option_insane: 5,
+}
+
+# Early tech tree: tiers 1-3
+_EARLY_TECH_MAX_TIER = 3
+
+
+def _make_power_rule(player: int, item_tiers: dict[str, int], max_tier: int):
+    """
+    Item rule: reject KSP items above max_tier.
+
+    Non-KSP items (other worlds in multiworld) always pass.
+    Items not in item_tiers are tier 0 and always pass.
+    """
+    def rule(item) -> bool:
+        return item.player != player or item_tiers.get(item.name, 0) <= max_tier
+    return rule
+
+
+def _make_science_pack_rule():
+    """Item rule: reject science pack filler items."""
+    names = SCIENCE_PACK_NAMES
+    def rule(item) -> bool:
+        return item.name not in names
+    return rule
+
+
+def _set_item_pacing_rules(world: KSP1World, player: int, difficulty: int) -> None:
+    """
+    Apply item_rules that prevent high-power items from appearing in
+    early locations, creating a gradual power curve.
+
+    Also restricts science packs from flooding early tech tree slots.
+    """
+    from worlds.generic.Rules import add_item_rule
+    from .item_power import ITEM_TIERS
+
+    pacing = world.options.item_pacing.value
+    if pacing == ItemPacing.option_off:
+        return
+
+    item_tiers = ITEM_TIERS
+    num_slots = TECH_SLOTS_BY_DIFFICULTY[difficulty]
+
+    # Band A: Starting Inventory — reject tier 2
+    num_starting = _STARTING_INV_COUNTS[difficulty]
+    power_rule = _make_power_rule(player, item_tiers, max_tier=1)
+    for name in STARTING_INV_NAMES[:num_starting]:
+        add_item_rule(world.get_location(name), power_rule)
+
+    # Band B: KSC biomes + pre-orbit Kerbin — reject tier 2
+    for name in KSC_BIOME_NAMES:
+        add_item_rule(world.get_location(name), power_rule)
+    for name in KERBIN_LOCATION_NAMES:
+        add_item_rule(world.get_location(name), power_rule)
+
+    # Band C: Early tech tree (tiers 1-3) — reject tier 2, strict mode only
+    if pacing >= ItemPacing.option_strict:
+        for node in TECH_NODES:
+            if node.tier > _EARLY_TECH_MAX_TIER:
+                continue
+            for slot in range(1, num_slots + 1):
+                # 95% of slots restricted; 5% unrestricted for fill flexibility
+                if world.random.random() >= 0.05:
+                    loc = world.get_location(f"{node.display_name} {slot}")
+                    add_item_rule(loc, _make_power_rule(player, item_tiers, max_tier=1))
+
+    # Science pack restriction on early tech tree (both gentle and strict)
+    science_rule = _make_science_pack_rule()
+    for node in TECH_NODES:
+        if node.tier > _EARLY_TECH_MAX_TIER:
+            continue
+        for slot in range(1, num_slots + 1):
+            if world.random.random() >= 0.05:
+                add_item_rule(world.get_location(f"{node.display_name} {slot}"), science_rule)
 
 
 # ---------------------------------------------------------------------------

@@ -156,6 +156,12 @@ def create_item(world: KSP1World, name: str) -> KSP1Item:
     return KSP1Item(name, classification, KSP1_BASE_ID + offset, world.player)
 
 
+# Science pack names for item_rule restrictions (excludes non-science filler)
+SCIENCE_PACK_NAMES: frozenset[str] = frozenset(
+    name for name in _FILLER_ITEMS
+    if name not in ("Engineering Report", "Cosmetic Unlock")
+)
+
 _FILLER_NAMES_WEIGHTED: list[str] = (
     # ~40% useful science packs (weighted by list frequency)
     ["Science Pack 50"] * 8

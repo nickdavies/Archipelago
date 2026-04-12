@@ -74,7 +74,7 @@ class KSP1World(World):
         return items.get_filler_item_name(self)
 
     def fill_slot_data(self) -> dict[str, Any]:
-        d = self.options.as_dict("goal", "difficulty", "start_with_launch_clamps")
+        d = self.options.as_dict("goal", "difficulty", "start_with_launch_clamps", "item_pacing")
         d["tech_slots_per_node"] = TECH_SLOTS_BY_DIFFICULTY[self.options.difficulty.value]
         return d
 
