@@ -134,13 +134,11 @@ def _make_flags(
         if leg.tier > flags.landing_leg_tier:
             flags.landing_leg_tier = leg.tier
 
-    # Staging tier
+    # Staging tier (docking ports don't affect staging_tier)
     if staging_tier is not None:
         flags.staging_tier = staging_tier
     else:
-        if docking_port:
-            flags.staging_tier = 3
-        elif decoupler_radial:
+        if decoupler_radial:
             flags.staging_tier = 2
         elif decoupler_stack:
             flags.staging_tier = 1
@@ -933,31 +931,20 @@ class TestSoundingRocketAltitude(unittest.TestCase):
 
 
 class TestStagingGroupPreservation(unittest.TestCase):
-    """Tier 3 (docking ports) preserves all natural stage groups."""
+    """Any decoupler (tier 1+) preserves all natural stage groups."""
 
-    def test_staging_tier_3_preserves_all_return_groups(self) -> None:
-        """Tylo sample_return at tier 3 should preserve all natural groups."""
+    def test_any_decoupler_preserves_all_return_groups(self) -> None:
+        """Tylo sample_return at tier 1+ should preserve all natural groups."""
         profiles = MISSION_PROFILES.get(("Tylo", "sample_return"), [])
         if not profiles:
             self.skipTest("No Tylo sample_return profiles")
         profile = profiles[0]
-        # Find how many natural groups exist (use a very high tier)
         groups_natural = _group_edges(profile, staging_tier=99)
-        groups_tier3 = _group_edges(profile, staging_tier=3)
-        self.assertEqual(len(groups_tier3), len(groups_natural),
-                         "Tier 3 should preserve all natural groups")
-        # Return profiles should have >4 natural groups (the old tier 3 cap)
-        self.assertGreater(len(groups_tier3), 4,
-                           f"Expected >4 groups, got {len(groups_tier3)}")
-
-    def test_staging_tier_1_still_merges(self) -> None:
-        """Tier 1 should still merge down to staging_tier+1 stages."""
-        profiles = MISSION_PROFILES.get(("Mun", "return"), [])
-        self.assertTrue(len(profiles) > 0)
-        profile = profiles[0]
-        groups = _group_edges(profile, staging_tier=1)
-        self.assertLessEqual(len(groups), 2,
-                             f"Tier 1 should merge to <=2 groups, got {len(groups)}")
+        groups_tier1 = _group_edges(profile, staging_tier=1)
+        self.assertEqual(len(groups_tier1), len(groups_natural),
+                         "Tier 1+ should preserve all natural groups")
+        self.assertGreater(len(groups_tier1), 4,
+                           f"Expected >4 groups, got {len(groups_tier1)}")
 
     def test_constraint_aware_merge_skips_incompatible(self) -> None:
         """When forced to merge (tier 0), incompatible groups are skipped."""

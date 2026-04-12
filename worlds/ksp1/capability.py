@@ -111,11 +111,12 @@ class EquipmentFlags:
     has_barometer: bool = False
     has_wheel: bool = False
     has_throttleable_engine: bool = False
+    _has_inline_chute: bool = False     # internal: cap inline chutes at 1
 
     # Tiered values
     landing_leg_tier: int = 0       # 0 = no legs
     relay_tier: int = 0             # 0 = no relay
-    staging_tier: int = 0           # 0=none, 1=stack, 2=radial, 3=docking
+    staging_tier: int = 0           # 0=none, 1=stack, 2=radial
 
     # Derived values
     max_heat_shield_size: Optional[float] = None   # largest heat shield size_class
@@ -124,6 +125,12 @@ class EquipmentFlags:
     parachute_count: int = 0
     heaviest_capsule_mass: float = 0.0
     lightest_probe_mass: float = float("inf")
+
+    # Support equipment mass tracking (lightest available per category)
+    lightest_relay_mass: dict[int, float] = field(default_factory=dict)  # tier → mass
+    lightest_solar_mass: float = float("inf")
+    lightest_solar_retractable_mass: float = float("inf")
+    lightest_rtg_mass: float = float("inf")
 
     # Solar distance for ION logic (set from the edge being evaluated)
     target_solar_au: float = 1.0
@@ -297,10 +304,19 @@ def _pre_pass(item_count_fn: Callable[[str], int],
 
             elif isinstance(part, Parachute):
                 if not part.is_drogue:  # drogue chutes excluded from all logic
-                    flags.has_parachutes = True
-                    flags.total_chute_drag_area += part.drag_area * count
-                    flags.parachute_count += count
-                    flags.available_parachutes.extend([part] * count)
+                    if part.is_radial:
+                        # Radial chutes mount on side — unlimited
+                        flags.has_parachutes = True
+                        flags.total_chute_drag_area += part.drag_area * count
+                        flags.parachute_count += count
+                        flags.available_parachutes.extend([part] * count)
+                    elif not flags._has_inline_chute:
+                        # Inline chutes: cap at 1 per rocket (one free top node)
+                        flags._has_inline_chute = True
+                        flags.has_parachutes = True
+                        flags.total_chute_drag_area += part.drag_area
+                        flags.parachute_count += 1
+                        flags.available_parachutes.append(part)
 
             elif isinstance(part, LandingLeg):
                 if part.tier > flags.landing_leg_tier:
@@ -316,9 +332,9 @@ def _pre_pass(item_count_fn: Callable[[str], int],
             elif isinstance(part, MiscEquipment):
                 _apply_misc(flags, part, count)
 
-    # Docking port upgrades staging tier to 3
-    if flags.has_docking_port and flags.staging_tier < 3:
-        flags.staging_tier = 3
+    # Docking ports don't affect staging_tier — they can't be used for
+    # practical stage separation (can't attach below engines, no automatic
+    # staging). They set has_docking_port for future orbital assembly support.
 
     # Asparagus requires both radial decouplers AND fuel lines
     # (staging_tier=2 is only valid asparagus if has_fuel_lines)
@@ -364,14 +380,15 @@ def _pre_pass(item_count_fn: Callable[[str], int],
     return flags
 
 
-def _apply_misc_relay(flags: EquipmentFlags, flag: str) -> None:
-    """Set relay tier from a provides flag string."""
-    if flag == "relay_t1" and flags.relay_tier < 1:
-        flags.relay_tier = 1
-    elif flag == "relay_t2" and flags.relay_tier < 2:
-        flags.relay_tier = 2
-    elif flag == "relay_t3" and flags.relay_tier < 3:
-        flags.relay_tier = 3
+def _apply_misc_relay(flags: EquipmentFlags, flag: str, mass: float) -> None:
+    """Set relay tier and track lightest relay mass per tier."""
+    tier = {"relay_t1": 1, "relay_t2": 2, "relay_t3": 3}.get(flag, 0)
+    if tier == 0:
+        return
+    if tier > flags.relay_tier:
+        flags.relay_tier = tier
+    if mass < flags.lightest_relay_mass.get(tier, float("inf")):
+        flags.lightest_relay_mass[tier] = mass
 
 
 def _compute_relay_tier(flags: EquipmentFlags) -> int:
@@ -395,13 +412,24 @@ def _apply_misc(flags: EquipmentFlags, part: MiscEquipment, count: int) -> None:
             flags.has_rcs = True
         elif flag in ("solar_fixed", "solar_retractable"):
             flags.has_solar = True
+            if part.mass < flags.lightest_solar_mass:
+                flags.lightest_solar_mass = part.mass
             if flag == "solar_retractable":
                 flags.has_solar_retractable = True
+                if part.mass < flags.lightest_solar_retractable_mass:
+                    flags.lightest_solar_retractable_mass = part.mass
         elif flag == "solar_array_large":
             flags.has_solar_array_large = True
             flags.has_solar = True
+            flags.has_solar_retractable = True
+            if part.mass < flags.lightest_solar_mass:
+                flags.lightest_solar_mass = part.mass
+            if part.mass < flags.lightest_solar_retractable_mass:
+                flags.lightest_solar_retractable_mass = part.mass
         elif flag == "rtg":
             flags.has_rtg = True
+            if part.mass < flags.lightest_rtg_mass:
+                flags.lightest_rtg_mass = part.mass
         elif flag == "battery_large":
             flags.has_battery_large = True
         elif flag == "docking_port":
@@ -425,7 +453,7 @@ def _apply_misc(flags: EquipmentFlags, part: MiscEquipment, count: int) -> None:
         elif flag == "wheel":
             flags.has_wheel = True
         elif flag.startswith("relay_"):
-            _apply_misc_relay(flags, flag)
+            _apply_misc_relay(flags, flag, part.mass)
 
 
 # ---------------------------------------------------------------------------
@@ -714,8 +742,6 @@ def _group_edges(profile: list[MissionEdge], staging_tier: int) -> list[list[Mis
     staging_tier=0: everything is one stage (no decouplers).
     staging_tier=1-2: limited staging (staging_tier + 1 stages). Excess
       natural groups are merged (smallest-dv pairs first).
-    staging_tier>=3: docking ports enable orbital assembly; all natural
-      stage groups are preserved.
 
     Natural stage boundaries:
       - After Kerbin ascent (always own stage if staging_tier >= 1)
@@ -769,14 +795,12 @@ def _group_edges(profile: list[MissionEdge], staging_tier: int) -> list[list[Mis
     groups = [g for g in groups if g]
 
     # Tier 0 = no decouplers = single stage.
-    # Tier 1-2 = limited decouplers (staging_tier + 1 stages).
-    # Tier 3 = docking ports enable orbital assembly → all natural groups preserved.
+    # Tier 1+ = any decoupler allows all natural stage groups (stack
+    # decouplers are cheap and stackable in KSP — no practical limit).
     if staging_tier == 0:
         max_stages = 1
-    elif staging_tier >= 3:
-        max_stages = len(groups)
     else:
-        max_stages = staging_tier + 1
+        max_stages = len(groups)
 
     # Constraint-aware merging: skip incompatible pairs when forced to merge.
     atmo_types = {ET.ATMOSPHERIC_ASCENT, ET.ATMO_LANDING_PROPULSIVE}
@@ -815,11 +839,73 @@ def _group_edges(profile: list[MissionEdge], staging_tier: int) -> list[list[Mis
     return groups
 
 
+def _support_equipment_mass(
+    flags: EquipmentFlags, profile: list[MissionEdge],
+) -> tuple[float, list[str]]:
+    """
+    Return (mass, part_names) for required support equipment (antenna, power)
+    based on the most demanding body in the mission profile.
+    """
+    mass = 0.0
+    parts: list[str] = []
+
+    # Find the most demanding relay tier and power requirement across all edges
+    max_relay = 0
+    power_req = "none"
+    needs_retractable = False
+    for edge in profile:
+        body = BODY_BY_NAME.get(edge.body)
+        if body is None:
+            continue
+        if body.min_relay_tier > max_relay:
+            max_relay = body.min_relay_tier
+        # Power: rtg > solar_marginal > solar > none
+        prio = {"none": 0, "solar": 1, "solar_marginal": 2, "rtg": 3}
+        if prio.get(body.power_requirement, 0) > prio.get(power_req, 0):
+            power_req = body.power_requirement
+        # If any edge involves aerobraking, we need retractable solar
+        if edge.needs_heat_shield:
+            needs_retractable = True
+
+    # Relay: find lightest antenna meeting the required tier
+    if max_relay > 0:
+        # Walk tiers from required up to find cheapest option
+        best_relay_mass = float("inf")
+        for tier in range(max_relay, 4):
+            m = flags.lightest_relay_mass.get(tier, float("inf"))
+            if m < best_relay_mass:
+                best_relay_mass = m
+        if best_relay_mass < float("inf"):
+            mass += best_relay_mass
+            parts.append(f"Relay T{max_relay}+ ({best_relay_mass:.3f}t)")
+
+    # Power: find lightest power source meeting requirement
+    if power_req == "rtg":
+        if flags.lightest_rtg_mass < float("inf"):
+            mass += flags.lightest_rtg_mass
+            parts.append(f"RTG ({flags.lightest_rtg_mass:.3f}t)")
+    elif power_req in ("solar", "solar_marginal"):
+        if needs_retractable:
+            if flags.lightest_solar_retractable_mass < float("inf"):
+                mass += flags.lightest_solar_retractable_mass
+                parts.append(f"Solar retractable ({flags.lightest_solar_retractable_mass:.3f}t)")
+            elif flags.lightest_rtg_mass < float("inf"):
+                mass += flags.lightest_rtg_mass
+                parts.append(f"RTG ({flags.lightest_rtg_mass:.3f}t)")
+        else:
+            if flags.lightest_solar_mass < float("inf"):
+                mass += flags.lightest_solar_mass
+                parts.append(f"Solar ({flags.lightest_solar_mass:.3f}t)")
+
+    return mass, parts
+
+
 def _terminal_equipment_mass(profile: list[MissionEdge],
                               flags: EquipmentFlags) -> float:
     """
     Equipment mass carried all the way to the terminal destination.
 
+    Includes landing legs, ladder, and support equipment (antenna, power).
     Legs are only included if the LAST edge in the profile needs landing legs.
     On return missions the last edge is Kerbin reentry (no legs); the legs
     used at intermediate bodies are left on the surface, not returned.
@@ -834,6 +920,9 @@ def _terminal_equipment_mass(profile: list[MissionEdge],
     # Ladder — only if last edge needs one (same logic: left at surface otherwise)
     if profile and profile[-1].needs_ladder:
         mass += 0.005  # Pegasus ladder mass
+    # Support equipment (antenna + power source)
+    support_mass, _ = _support_equipment_mass(flags, profile)
+    mass += support_mass
     return mass
 
 

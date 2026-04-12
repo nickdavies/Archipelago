@@ -36,6 +36,7 @@ from worlds.ksp1.capability import (
     compute_capability_from_items, evaluate_mission_detailed,
     get_capability,
     _required_chute_count,
+    _support_equipment_mass,
 )
 from worlds.ksp1.locations import (
     event_location_names, get_body_events,
@@ -335,7 +336,7 @@ def _edge_desc(edge: MissionEdge) -> str:
     return f"{edge.source} -> {edge.destination} ({edge.base_dv:.0f} m/s)"
 
 
-def cmd_rocket(ap: APState, check_name: str) -> None:
+def cmd_rocket(ap: APState, check_name: str, verbose: bool = False) -> None:
     """Show detailed rocket design for a specific check."""
     multiworld, player = build_world_and_state(ap)
     state = multiworld.state
@@ -359,7 +360,8 @@ def cmd_rocket(ap: APState, check_name: str) -> None:
         # Not a per-body mission check — just report in-logic status
         print(f"\n'{check_name}' — In logic: {'YES' if in_logic else 'NO'}")
         print("(Not a per-body mission; no rocket design to show.)")
-        _print_item_dump(ap)
+        if verbose:
+            _print_item_dump(ap)
         return
 
     difficulty_name = ["casual", "normal", "expert", "insane"][
@@ -394,11 +396,13 @@ def cmd_rocket(ap: APState, check_name: str) -> None:
     print(f"{'=' * 60}")
 
     if not result.feasible:
-        _print_item_dump(ap)
+        if verbose:
+            _print_item_dump(ap)
         return
 
-    # --- Per-stage breakdown ---
+    # --- Per-stage breakdown (KSP convention: stage 0 = last to fire) ---
     num_stages = len(result.stage_results)
+    asparagus = (flags.staging_tier >= 2 and flags.has_fuel_lines)
     for i, stage in enumerate(result.stage_results):
         group = result.edge_groups[i] if i < len(result.edge_groups) else []
         is_terminal = (i == num_stages - 1)
@@ -409,14 +413,21 @@ def cmd_rocket(ap: APState, check_name: str) -> None:
         edge_names = [f"{e.source} -> {e.destination}" for e in group]
         header = ", ".join(edge_names) if edge_names else "unknown"
 
-        print(f"\n  Stage {i + 1} ({header}):")
+        ksp_stage_num = num_stages - 1 - i
+        asp_tag = " [ASPARAGUS]" if asparagus and not is_terminal else ""
+        print(f"\n  Stage {ksp_stage_num} ({header}):{asp_tag}")
         print(f"    Parts:")
 
-        # Command module (terminal stage only)
+        # Command module + support equipment (terminal stage only)
         if is_terminal:
             cmd_name = _find_command_module(flags, crewed)
             if cmd_name:
                 print(f"      1x {cmd_name}")
+            # Support equipment (antenna, power)
+            all_edges = [e for g in result.edge_groups for e in g]
+            _, support_parts = _support_equipment_mass(flags, all_edges)
+            for sp in support_parts:
+                print(f"      1x {sp}")
 
         # Propulsion
         print(f"      {stage.engine_count}x {stage.engine_name}")
@@ -465,10 +476,12 @@ def cmd_rocket(ap: APState, check_name: str) -> None:
     # --- Edge → stage summary ---
     print(f"\n  Edge -> Stage Summary:")
     for i, group in enumerate(result.edge_groups):
+        ksp_stage_num = num_stages - 1 - i
         for edge in group:
-            print(f"    {edge.source} -> {edge.destination}: Stage {i + 1}")
+            print(f"    {edge.source} -> {edge.destination}: Stage {ksp_stage_num}")
 
-    _print_item_dump(ap)
+    if verbose:
+        _print_item_dump(ap)
 
 
 def _print_item_dump(ap: APState) -> None:
@@ -503,6 +516,8 @@ def main() -> None:
                         help="Player slot name")
     parser.add_argument("--password", default="",
                         help="Server password (optional)")
+    parser.add_argument("--verbose", "-v", action="store_true",
+                        help="Show received items list")
 
     args = parser.parse_args()
 
@@ -517,7 +532,7 @@ def main() -> None:
     if args.command == "in-logic":
         cmd_in_logic(ap)
     elif args.command == "rocket":
-        cmd_rocket(ap, args.check_name)
+        cmd_rocket(ap, args.check_name, verbose=args.verbose)
 
 
 if __name__ == "__main__":

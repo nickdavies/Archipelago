@@ -71,6 +71,7 @@ class Parachute:
     mass: float             # tonnes
     drag_area: float        # effective drag area (m²), from KSP fullyDeployedDrag
     is_drogue: bool         # drogue chutes are NEVER counted in logic
+    is_radial: bool = False # radial chutes mount on sides (unlimited); inline cap at 1
 
 
 @dataclass(frozen=True)
@@ -307,11 +308,11 @@ PART_REGISTRY: list[PartMapping] = [
     PartMapping("parachuteLarge", Parachute, "Mk16-XL Parachute", 1152,
                 {"is_drogue": False}),
     PartMapping("parachuteRadial", Parachute, "Mk2-R Radial-Mount Parachute", 1167,
-                {"is_drogue": False}),
+                {"is_drogue": False, "is_radial": True}),
     PartMapping("parachuteSingle", Parachute, "Mk16 Parachute", 1151,
                 {"is_drogue": False}),
     PartMapping("radialDrogue", Parachute, "Mk12-R Radial-Mount Drogue Chute", 1150,
-                {"is_drogue": True}),
+                {"is_drogue": True, "is_radial": True}),
     # --- Landing Legs (3) ---
     PartMapping("landingLeg1", LandingLeg, "LT-1 Landing Struts", 1111,
                 {"tier": 1}),
@@ -1052,6 +1053,7 @@ def _build_part(part_type: type, cfg: dict, overrides: dict, name: str) -> AnyPa
             mass=mass,
             drag_area=chute.get("fully_deployed_drag", 0.0),
             is_drogue=overrides.get("is_drogue", False),
+            is_radial=overrides.get("is_radial", False),
         )
 
     if part_type is LandingLeg:
