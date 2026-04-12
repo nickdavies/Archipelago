@@ -41,7 +41,7 @@ from worlds.ksp1.capability import (
 from worlds.ksp1.locations import (
     event_location_names, get_body_events,
 )
-from worlds.ksp1.parts import PART_DB, MiscEquipment
+from worlds.ksp1.parts import PART_DB, PART_REGISTRY, MiscEquipment
 from worlds.ksp1.world import KSP1World
 
 
@@ -212,7 +212,7 @@ def build_world_and_state(ap: APState) -> tuple[MultiWorld, int]:
 # in-logic command
 # ---------------------------------------------------------------------------
 
-def cmd_in_logic(ap: APState) -> None:
+def cmd_in_logic(ap: APState, parts_list: bool = False) -> None:
     """Show all in-logic unchecked locations."""
     multiworld, player = build_world_and_state(ap)
     state = multiworld.state
@@ -263,6 +263,9 @@ def cmd_in_logic(ap: APState) -> None:
             print(f"    - {loc}")
 
     print()
+
+    if parts_list:
+        _print_parts_list(ap)
 
 
 def _location_group(loc_name: str) -> str:
@@ -497,6 +500,54 @@ def _print_item_dump(ap: APState) -> None:
     print()
 
 
+# ksp_name → human-readable title from PART_REGISTRY
+_ITEM_TITLES: dict[str, str] = {m.ksp_name: m.title for m in PART_REGISTRY}
+
+# ksp_name → part type name (Engine, FuelTank, etc.)
+_ITEM_TYPES: dict[str, str] = {m.ksp_name: m.part_type.__name__ for m in PART_REGISTRY}
+
+
+def _print_parts_list(ap: APState) -> None:
+    """Print received items grouped by type, with human-readable names."""
+    items_by_name: list[tuple[str, int]] = []
+    for item_id, count in ap.item_id_counts.items():
+        name = ap.item_id_to_name.get(item_id, f"Unknown ({item_id})")
+        items_by_name.append((name, count))
+
+    # Group by part type
+    groups: dict[str, list[tuple[str, str, int]]] = defaultdict(list)
+    for name, count in sorted(items_by_name):
+        part_type = _ITEM_TYPES.get(name, "Other")
+        title = _ITEM_TITLES.get(name, name)
+        groups[part_type].append((name, title, count))
+
+    total = sum(ap.item_id_counts.values())
+    print(f"\n=== Received Parts ({total} items) ===\n")
+
+    # Print part types in a useful order, then "Other" last
+    type_order = [
+        "Engine", "SolidBooster", "FuelTank", "Decoupler",
+        "HeatShield", "Parachute", "LandingLeg", "MiscEquipment", "Other",
+    ]
+    seen = set()
+    for type_name in type_order:
+        if type_name not in groups:
+            continue
+        seen.add(type_name)
+        print(f"  {type_name}:")
+        for name, title, count in groups[type_name]:
+            print(f"    {count}x {name:<35s} {title}")
+    # Any types not in the ordering
+    for type_name in sorted(groups):
+        if type_name in seen:
+            continue
+        print(f"  {type_name}:")
+        for name, title, count in groups[type_name]:
+            print(f"    {count}x {name:<35s} {title}")
+
+    print()
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -518,6 +569,8 @@ def main() -> None:
                         help="Server password (optional)")
     parser.add_argument("--verbose", "-v", action="store_true",
                         help="Show received items list")
+    parser.add_argument("--parts-list", action="store_true",
+                        help="Show received parts with human-readable names")
 
     args = parser.parse_args()
 
@@ -530,7 +583,7 @@ def main() -> None:
           f"{len(ap.checked_locations)} checked / {len(ap.missing_locations)} missing locations.")
 
     if args.command == "in-logic":
-        cmd_in_logic(ap)
+        cmd_in_logic(ap, parts_list=args.parts_list)
     elif args.command == "rocket":
         cmd_rocket(ap, args.check_name, verbose=args.verbose)
 
