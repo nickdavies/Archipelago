@@ -336,9 +336,10 @@ def _pre_pass(item_count_fn: Callable[[str], int],
     # practical stage separation (can't attach below engines, no automatic
     # staging). They set has_docking_port for future orbital assembly support.
 
-    # Asparagus requires both radial decouplers AND fuel lines
-    # (staging_tier=2 is only valid asparagus if has_fuel_lines)
-    # The optimizer checks flags.staging_tier >= 2 AND flags.has_fuel_lines
+    # Parallel staging mode (determined per-stage in _evaluate_profile):
+    #   staging_tier >= 2 + fuel lines → asparagus (50% dry mass factor)
+    #   staging_tier >= 2, no fuel lines → onion (75% dry mass factor)
+    #   staging_tier < 2 → none (no parallel staging)
 
     # Derive relay tier from available relays
     flags.relay_tier = _compute_relay_tier(flags)
@@ -697,9 +698,14 @@ def _evaluate_profile(
                     return ProfileResult(False,
                         failure_reason=f"parachute terminal velocity check failed at {_aero_body.name}")
 
-        asparagus = (flags.staging_tier >= 2 and flags.has_fuel_lines)
+        if flags.staging_tier >= 2 and flags.has_fuel_lines:
+            parallel_mode = "asparagus"
+        elif flags.staging_tier >= 2:
+            parallel_mode = "onion"
+        else:
+            parallel_mode = "none"
 
-        result = find_optimal_stage(
+        stage_kwargs = dict(
             available_engines=eligible_engines,
             available_srbs=flags.available_srbs,
             available_tanks=flags.available_tanks,
@@ -712,12 +718,21 @@ def _evaluate_profile(
             max_heat_shield_size=flags.max_heat_shield_size,
             heat_shield_mass=equip_mass if needs_hs else 0.0,
             in_atmosphere=in_atmo,
-            asparagus=asparagus,
             srb_needs_rcs=diff.srb_needs_rcs,
             player_has_rcs=flags.has_rcs,
             tanks_by_fuel_type=flags.tanks_by_fuel_type,
             available_multi_mounts=flags.available_multi_mounts,
         )
+
+        result = find_optimal_stage(parallel_mode=parallel_mode, **stage_kwargs)
+        # Parallel staging constrains engine counts to symmetric values,
+        # which may be heavier than non-parallel (more engines). Try both
+        # and keep the lighter result.
+        if parallel_mode != "none":
+            result_np = find_optimal_stage(parallel_mode="none", **stage_kwargs)
+            if result_np is not None:
+                if result is None or result_np.stage_mass_wet < result.stage_mass_wet:
+                    result = result_np
 
         if result is None:
             return ProfileResult(False,

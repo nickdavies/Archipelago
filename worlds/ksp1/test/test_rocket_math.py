@@ -10,6 +10,7 @@ from worlds.ksp1.parts import (
 from worlds.ksp1.rocket_math import (
     G0, stage_delta_v, srb_delta_v, required_tanks, twr,
     terminal_velocity, find_optimal_stage, StageResult,
+    KSP_SYMMETRY_MODES, ASPARAGUS_DRY_MASS_FACTOR, ONION_DRY_MASS_FACTOR,
 )
 
 
@@ -21,12 +22,16 @@ def _p(cfg_name: str, idx: int = 0):
 _SWIVEL = _p("liquidEngine2.v2")
 _TERRIER = _p("liquidEngine3.v2")
 _MAINSAIL = _p("liquidEngineMainsail.v2")
+_SPIDER = _p("radialEngineMini.v2")  # radial-mountable
 _DAWN = _p("ionEngine")
 _HAMMER = _p("solidBooster.v2")
 _FL_T400 = _p("fuelTank")
 _FL_T800 = _p("fuelTank.long")
 _X200_32 = _p("Rockomax32.BW")
 _MK1_LF = _p("MK1Fuselage")
+
+# Valid engine counts for parallel staging: 1 core + symmetric radial boosters
+_VALID_PARALLEL_ENGINE_COUNTS = frozenset(1 + s for s in KSP_SYMMETRY_MODES)
 
 
 class TestStageDeltaV(unittest.TestCase):
@@ -310,6 +315,127 @@ class TestFindOptimalStage(unittest.TestCase):
             gravity=0.049,
         )
         self.assertIsNone(result)
+
+
+class TestParallelStagingDryMassFactor(unittest.TestCase):
+    """Verify asparagus/onion dry mass factors in stage_delta_v and required_tanks."""
+
+    def test_asparagus_more_dv_than_none(self) -> None:
+        dv_none = stage_delta_v(_SWIVEL, 1, _FL_T800, 2, 1.0, 1.0, parallel_mode="none")
+        dv_asp = stage_delta_v(_SWIVEL, 1, _FL_T800, 2, 1.0, 1.0, parallel_mode="asparagus")
+        self.assertGreater(dv_asp, dv_none)
+
+    def test_onion_more_dv_than_none(self) -> None:
+        dv_none = stage_delta_v(_SWIVEL, 1, _FL_T800, 2, 1.0, 1.0, parallel_mode="none")
+        dv_onion = stage_delta_v(_SWIVEL, 1, _FL_T800, 2, 1.0, 1.0, parallel_mode="onion")
+        self.assertGreater(dv_onion, dv_none)
+
+    def test_asparagus_more_dv_than_onion(self) -> None:
+        dv_onion = stage_delta_v(_SWIVEL, 1, _FL_T800, 2, 1.0, 1.0, parallel_mode="onion")
+        dv_asp = stage_delta_v(_SWIVEL, 1, _FL_T800, 2, 1.0, 1.0, parallel_mode="asparagus")
+        self.assertGreater(dv_asp, dv_onion)
+
+    def test_onion_fewer_tanks_than_none(self) -> None:
+        n_none = required_tanks(_SWIVEL, 1, _FL_T800, 1.0, 2000.0, 1.0, parallel_mode="none")
+        n_onion = required_tanks(_SWIVEL, 1, _FL_T800, 1.0, 2000.0, 1.0, parallel_mode="onion")
+        self.assertGreater(n_none, 0)
+        self.assertGreater(n_onion, 0)
+        self.assertLessEqual(n_onion, n_none)
+
+    def test_asparagus_fewer_tanks_than_onion(self) -> None:
+        n_onion = required_tanks(_SWIVEL, 1, _FL_T800, 1.0, 2000.0, 1.0, parallel_mode="onion")
+        n_asp = required_tanks(_SWIVEL, 1, _FL_T800, 1.0, 2000.0, 1.0, parallel_mode="asparagus")
+        self.assertGreater(n_onion, 0)
+        self.assertGreater(n_asp, 0)
+        self.assertLessEqual(n_asp, n_onion)
+
+
+class TestSymmetricEngineCounts(unittest.TestCase):
+    """Verify parallel staging constrains engine counts to KSP symmetry modes."""
+
+    def test_asparagus_engine_count_is_symmetric(self) -> None:
+        """Asparagus result must have an engine count in the valid set."""
+        result = find_optimal_stage(
+            available_engines=[_SWIVEL],
+            available_srbs=[],
+            available_tanks=[_FL_T400, _FL_T800],
+            required_dv=1000.0,
+            payload_mass=1.0,
+            gravity=9.81,
+            parallel_mode="asparagus",
+        )
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertIn(result.engine_count, _VALID_PARALLEL_ENGINE_COUNTS,
+                      f"engine_count={result.engine_count} not in {_VALID_PARALLEL_ENGINE_COUNTS}")
+
+    def test_onion_engine_count_is_symmetric(self) -> None:
+        """Onion result must have an engine count in the valid set."""
+        result = find_optimal_stage(
+            available_engines=[_SWIVEL],
+            available_srbs=[],
+            available_tanks=[_FL_T400, _FL_T800],
+            required_dv=1000.0,
+            payload_mass=1.0,
+            gravity=9.81,
+            parallel_mode="onion",
+        )
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertIn(result.engine_count, _VALID_PARALLEL_ENGINE_COUNTS,
+                      f"engine_count={result.engine_count} not in {_VALID_PARALLEL_ENGINE_COUNTS}")
+
+    def test_no_parallel_allows_any_engine_count(self) -> None:
+        """Without parallel mode, engine_count=1 should be valid."""
+        result = find_optimal_stage(
+            available_engines=[_SWIVEL],
+            available_srbs=[],
+            available_tanks=[_FL_T400, _FL_T800],
+            required_dv=1000.0,
+            payload_mass=1.0,
+            gravity=9.81,
+            parallel_mode="none",
+        )
+        self.assertIsNotNone(result)
+        assert result is not None
+        # Non-parallel should pick 1 engine (minimum mass)
+        self.assertEqual(result.engine_count, 1)
+
+    def test_radial_srb_symmetric_in_parallel(self) -> None:
+        """Radial SRBs should also use symmetric counts in parallel mode."""
+        result = find_optimal_stage(
+            available_engines=[],
+            available_srbs=[_HAMMER],
+            available_tanks=[],
+            required_dv=300.0,
+            payload_mass=1.0,
+            gravity=9.81,
+            requires_throttleable=False,
+            parallel_mode="asparagus",
+            srb_needs_rcs=False,
+        )
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertIn(result.engine_count, KSP_SYMMETRY_MODES,
+                      f"SRB count={result.engine_count} not a symmetry mode")
+
+    def test_non_parallel_srb_allows_one(self) -> None:
+        """Without parallel mode, a single SRB is valid."""
+        result = find_optimal_stage(
+            available_engines=[],
+            available_srbs=[_HAMMER],
+            available_tanks=[],
+            required_dv=300.0,
+            payload_mass=1.0,
+            gravity=9.81,
+            requires_throttleable=False,
+            parallel_mode="none",
+            srb_needs_rcs=False,
+        )
+        self.assertIsNotNone(result)
+        assert result is not None
+        # Should pick minimum = 1 SRB
+        self.assertEqual(result.engine_count, 1)
 
 
 if __name__ == "__main__":

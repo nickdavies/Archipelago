@@ -22,9 +22,19 @@ G0: float = 9.80665  # standard gravity, m/s²
 
 FILL_LEVELS: tuple[float, ...] = (1.0, 0.75, 0.5, 0.25)
 
-# Asparagus staging reduces effective tank dry mass.
-# We model only 50% of the theoretical benefit (golden rule).
+# Parallel staging (asparagus/onion) reduces effective tank dry mass.
+# We model only a fraction of the theoretical benefit (golden rule).
 ASPARAGUS_DRY_MASS_FACTOR: float = 0.5
+ONION_DRY_MASS_FACTOR: float = 0.75
+
+# KSP symmetry tool modes. Radial boosters must use one of these counts.
+KSP_SYMMETRY_MODES: tuple[int, ...] = (2, 3, 4, 6, 8)
+
+# Lookup: parallel_mode string → dry mass factor
+_PARALLEL_DRY_FACTORS: dict[str, float] = {
+    "asparagus": ASPARAGUS_DRY_MASS_FACTOR,
+    "onion": ONION_DRY_MASS_FACTOR,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -61,7 +71,7 @@ def stage_delta_v(
     fill_fraction: float,
     payload_mass: float,           # tonnes
     in_atmosphere: bool = False,
-    asparagus: bool = False,
+    parallel_mode: str = "none",
 ) -> float:
     """Compute the delta-v produced by a single stage."""
     isp = engine.atm_isp if in_atmosphere else engine.vac_isp
@@ -71,9 +81,9 @@ def stage_delta_v(
     m_tank_dry = tank.dry_mass * tank_count
     m_fuel = tank.fuel_mass * tank_count * fill_fraction
 
-    # Asparagus: side boosters are dropped mid-burn.  Model as reduced dry mass.
-    if asparagus:
-        m_tank_dry *= ASPARAGUS_DRY_MASS_FACTOR
+    # Parallel staging: side boosters are dropped mid-burn → reduced dry mass.
+    dry_factor = _PARALLEL_DRY_FACTORS.get(parallel_mode, 1.0)
+    m_tank_dry *= dry_factor
 
     m_dry = payload_mass + m_engine + m_tank_dry
     m_wet = m_dry + m_fuel
@@ -111,7 +121,7 @@ def required_tanks(
     delta_v: float,
     payload_mass: float,
     in_atmosphere: bool = False,
-    asparagus: bool = False,
+    parallel_mode: str = "none",
 ) -> int:
     """
     Return the minimum number of *tank* units to achieve *delta_v* with
@@ -126,7 +136,7 @@ def required_tanks(
     R = math.exp(delta_v / (isp * G0))
     m_engine = engine.mass * engine_count
 
-    dry_mass_factor = ASPARAGUS_DRY_MASS_FACTOR if asparagus else 1.0
+    dry_mass_factor = _PARALLEL_DRY_FACTORS.get(parallel_mode, 1.0)
     effective_dry = tank.dry_mass * dry_mass_factor
 
     numerator = (R - 1) * (payload_mass + m_engine)
@@ -210,7 +220,7 @@ def find_optimal_stage(
     max_heat_shield_size: Optional[float] = None,
     heat_shield_mass: float = 0.0,
     in_atmosphere: bool = False,
-    asparagus: bool = False,
+    parallel_mode: str = "none",    # "none", "asparagus", or "onion"
     srb_needs_rcs: bool = True,     # if True, SRBs only valid when player has RCS
     player_has_rcs: bool = False,
     tanks_by_fuel_type: Optional[dict[str, list[FuelTank]]] = None,
@@ -237,8 +247,9 @@ def find_optimal_stage(
     # Full payload = caller-supplied payload + heat shield (if needed)
     full_payload = payload_mass + (heat_shield_mass if needs_heat_shield else 0.0)
 
-    # Asparagus dry-mass factor (applied to tank dry mass)
-    dry_factor = ASPARAGUS_DRY_MASS_FACTOR if asparagus else 1.0
+    # Parallel staging dry-mass factor (applied to tank dry mass)
+    _parallel = parallel_mode != "none"
+    dry_factor = _PARALLEL_DRY_FACTORS.get(parallel_mode, 1.0)
 
     # Pre-check: TWR denom component that depends only on engine
     has_twr = min_twr > 0 and gravity > 0
@@ -335,8 +346,9 @@ def find_optimal_stage(
                 max_eng = max(adapter_max, _max_radial)
                 use_radial_tank_constraint = True
 
-            if asparagus:
-                max_eng *= 6
+            if _parallel:
+                # Parallel staging: need room for 1 core + largest symmetry ring
+                max_eng = max(max_eng, 1 + KSP_SYMMETRY_MODES[-1])
 
             for fill in _fills:
                 # Denominator for required tank count (depends on tank+fill+R)
@@ -355,7 +367,14 @@ def find_optimal_stage(
                     if min_engines > max_eng:
                         continue
 
-                for n_eng in range(min_engines, max_eng + 1):
+                # Parallel staging: only symmetric booster counts (1 core + ring)
+                if _parallel:
+                    eng_counts = [1 + s for s in KSP_SYMMETRY_MODES
+                                  if min_engines <= 1 + s <= max_eng]
+                else:
+                    eng_counts = range(min_engines, max_eng + 1)
+
+                for n_eng in eng_counts:
                     # Inline required_tanks: n = ceil(R_minus_1 * (payload + m_eng) / denom)
                     m_engine = e_mass * n_eng
                     n_tanks = _ceil(R_minus_1 * (full_payload + m_engine) / denom)
@@ -384,7 +403,7 @@ def find_optimal_stage(
 
                     # Verify delta-v (required_tanks rounds up, so check actual)
                     # Inline stage_delta_v to avoid function call overhead.
-                    verify_dry = m_tank_dry * dry_factor if asparagus else m_tank_dry
+                    verify_dry = m_tank_dry * dry_factor if _parallel else m_tank_dry
                     v_dry = full_payload + m_engine + verify_dry
                     v_wet = v_dry + m_fuel
                     if v_dry <= 0 or v_wet <= v_dry:
@@ -442,7 +461,13 @@ def find_optimal_stage(
             continue
         srb_thrust = (srb.atm_thrust if in_atmosphere else srb.vac_thrust)
 
-        for n_srb in range(1, max_srb + 1):
+        # Parallel staging: radial SRBs must use symmetric counts
+        if srb.radial_mountable and _parallel:
+            srb_counts = [s for s in KSP_SYMMETRY_MODES if s <= max_srb]
+        else:
+            srb_counts = range(1, max_srb + 1)
+
+        for n_srb in srb_counts:
             # Inline srb_delta_v
             m_dry = full_payload + srb.dry_mass * n_srb
             m_wet = m_dry + srb.fuel_mass * n_srb
