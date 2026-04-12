@@ -267,11 +267,11 @@ def _mission_rule_for_event(
     All check-slots for one event share this single rule (they fire together).
     """
     # Eve surface ascent is beyond the capability model.
-    # Tylo/Laythe sample returns cascade too much payload mass to Kerbin ascent
+    # Tylo/Laythe returns cascade too much payload mass to Kerbin ascent
     # for the greedy backward pass to handle (~200t Tylo, ~1100t Laythe).
     if body_name == "Eve" and event in ("Return", "Sample Return"):
         return _make_all_parts_rule(player)
-    if body_name in ("Tylo", "Laythe") and event == "Sample Return":
+    if body_name in ("Tylo", "Laythe") and event in ("Return", "Sample Return"):
         return _make_all_parts_rule(player)
 
     def _can_orbit(state: CollectionState) -> bool:
