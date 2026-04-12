@@ -10,8 +10,8 @@ Four location sources (total ~508 max, filtered by difficulty):
      Earned by performing science experiments at KSC buildings.
      Requires EVA (capsule) or rover (probe + wheels + power + instrument).
 
-  3. Mission Event Locations  (229 total)
-     13 Kerbin-specific + 216 per-body event-scaled checks.
+  3. Mission Event Locations  (243 total)
+     12 Kerbin-specific + 231 per-body event-scaled checks.
      Eve Return/Sample Return exist but require all progression parts.
      Scale is by event difficulty, not body distance:
        Flyby/SOI Leave/Orbit = 1 slot each,
@@ -85,9 +85,6 @@ EVENT_SCALE: dict[str, int] = {
     "Return": 3, "Sample Return": 3,
 }
 
-#: Bodies excluded from the per-body event table (have their own Kerbin events).
-_KERBIN_EXCLUDED: frozenset[str] = frozenset({"Kerbin"})
-
 
 # ---------------------------------------------------------------------------
 # Starting inventory locations (registry includes all 20; world creates N)
@@ -145,16 +142,15 @@ KERBIN_LOCATION_NAMES: list[str] = [
     "Kerbin 45km Altitude",
     "Kerbin 55km Altitude",
     "Kerbin 70km Altitude",
-    "Kerbin Orbit",
     "Kerbin Splashdown",
     "Kerbin First Staging",
     "Kerbin EVA in Orbit",
 ]
 
-assert len(KERBIN_LOCATION_NAMES) == 13
+assert len(KERBIN_LOCATION_NAMES) == 12
 
 # ---------------------------------------------------------------------------
-# Per-body mission location names (233 total, generated from body data)
+# Per-body mission location names (217 total, generated from body data)
 # ---------------------------------------------------------------------------
 
 def get_body_events(body) -> tuple[str, ...]:
@@ -165,12 +161,10 @@ def get_body_events(body) -> tuple[str, ...]:
 def _build_mission_locations() -> list[str]:
     """
     Generate all per-body event-scaled mission location names.
-    Order: body order in ALL_BODIES (skipping Kerbin), then events, then slots.
+    Order: body order in ALL_BODIES, then events, then slots.
     """
     names: list[str] = []
     for body in ALL_BODIES:
-        if body.name in _KERBIN_EXCLUDED:
-            continue
         for event in get_body_events(body):
             for slot in range(1, EVENT_SCALE[event] + 1):
                 names.append(f"{body.name} {event} {slot}")
@@ -179,9 +173,9 @@ def _build_mission_locations() -> list[str]:
 
 MISSION_LOCATION_NAMES: list[str] = _build_mission_locations()
 
-# 14 landable × 15 + 2 non-landable × 3 = 216
-assert len(MISSION_LOCATION_NAMES) == 216, (
-    f"Expected 216 per-body mission locations, got {len(MISSION_LOCATION_NAMES)}"
+# 15 landable × 15 + 2 non-landable × 3 = 231
+assert len(MISSION_LOCATION_NAMES) == 231, (
+    f"Expected 231 per-body mission locations, got {len(MISSION_LOCATION_NAMES)}"
 )
 
 # ---------------------------------------------------------------------------

@@ -158,8 +158,10 @@ class EquipmentFlags:
 class BodyAccessProfile:
     can_orbit_low: bool = False
     can_orbit_high: bool = False
+    can_escape: bool = False
     can_land_unmanned: bool = False
     can_land_crewed: bool = False
+    can_flag_plant: bool = False
     can_return_to_kerbin: bool = False
     can_return_crewed: bool = False
     can_sample_return: bool = False
@@ -1076,10 +1078,19 @@ def _assess_one_body(
 
     if not orbit_ok:
         prof.blocking_reason = "orbit not achievable"
-        return prof
+
+    # --- Escape (leave SOI) ---
+    if orbit_ok:
+        escape_profiles = MISSION_PROFILES.get((body.name, "escape"), [])
+        if escape_profiles:
+            prof.can_escape = _try_profiles(escape_profiles, flags, diff, "escape", crewed=False)
+        else:
+            # Non-home bodies: reaching orbit implies you've already escaped Kerbin
+            # and can leave this body's SOI on a return trajectory.
+            prof.can_escape = True
 
     # --- Landing (unmanned) ---
-    if body.can_land and body.name not in _ORBITAL_ONLY_BODIES:
+    if orbit_ok and body.can_land and body.name not in _ORBITAL_ONLY_BODIES:
         land_profiles = MISSION_PROFILES.get((body.name, "land"), [])
         ok, reason = _try_profiles_reason(land_profiles, flags, diff, "land", crewed=False)
         prof.can_land_unmanned = ok
@@ -1092,6 +1103,16 @@ def _assess_one_body(
             prof.can_land_crewed = ok
             if not ok and not prof.blocking_reason:
                 prof.blocking_reason = f"crewed land: {reason}"
+
+    # --- Flag plant ---
+    fp_profiles = MISSION_PROFILES.get((body.name, "flag_plant"), [])
+    if fp_profiles:
+        # Explicit profile (e.g. Kerbin: empty profile = 0 dv, just walk out)
+        prof.can_flag_plant = flags.has_capsule and \
+            _try_profiles(fp_profiles, flags, diff, "flag_plant", crewed=True)
+    else:
+        # Other bodies: flag plant = crewed landing
+        prof.can_flag_plant = prof.can_land_crewed
 
     # --- Return (unmanned) ---
     return_profiles = MISSION_PROFILES.get((body.name, "return"), [])
@@ -1109,9 +1130,9 @@ def _assess_one_body(
                 prof.blocking_reason = f"crewed return: {reason}"
 
     # --- Sample return (crewed + ladder check) ---
-    if body.can_land and body.name not in _ORBITAL_ONLY_BODIES:
-        sr_profiles = MISSION_PROFILES.get((body.name, "sample_return"), [])
-        if sr_profiles and flags.has_capsule:
+    sr_profiles = MISSION_PROFILES.get((body.name, "sample_return"), [])
+    if sr_profiles and flags.has_capsule:
+        if body.can_land and body.name not in _ORBITAL_ONLY_BODIES:
             # Inject ladder requirement if EVA jetpack can't lift off
             if body.eva_jetpack_twr < _MIN_EVA_JETPACK_TWR:
                 sr_profiles_with_ladder = _inject_ladder(sr_profiles)

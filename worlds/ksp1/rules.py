@@ -23,6 +23,7 @@ from .bodies import ALL_BODIES, BODY_BY_NAME, science_budget
 from .capability import get_capability
 from .items import ITEM_TABLE, SCIENCE_PACK_NAMES
 from .locations import (
+    EVENT_SCALE,
     KSC_BIOME_NAMES,
     KERBIN_LOCATION_NAMES,
     MISSION_LOCATION_NAMES,
@@ -205,12 +206,12 @@ def _make_altitude_rule(player: int, threshold_km: float) -> Callable[[Collectio
 
 def _set_kerbin_rules(world: KSP1World, player: int) -> None:
     """
-    Rules for the 13 Kerbin-specific locations.
+    Rules for the 12 Kerbin-specific locations.
 
     First Launch: any propulsion OR capsule (kerbal EVA counts as launch).
     First Landing: propulsion + safe descent OR capsule (EVA landing).
     Altitude milestones: sounding rocket must reach the stated altitude.
-    Kerbin Orbit / EVA in Orbit: full orbital capability (computed, not free).
+    EVA in Orbit: crewed orbital capability.
     First Staging: decoupler.
     Splashdown: 1 km sounding altitude + safe landing.
     """
@@ -228,9 +229,6 @@ def _set_kerbin_rules(world: KSP1World, player: int) -> None:
         # EVA path: capsule alone (kerbal hops off pad, lands on feet)
         return cap.has_capsule
 
-    def has_orbit(state: CollectionState) -> bool:
-        return get_capability(state, player).bodies["Kerbin"].can_orbit_low
-
     def has_staging(state: CollectionState) -> bool:
         return get_capability(state, player).staging_tier >= 1
 
@@ -244,7 +242,6 @@ def _set_kerbin_rules(world: KSP1World, player: int) -> None:
     for name, threshold_km in _ALTITUDE_THRESHOLDS_KM.items():
         world.get_location(name).access_rule = _make_altitude_rule(player, threshold_km)
 
-    world.get_location("Kerbin Orbit").access_rule = has_orbit
     world.get_location("Kerbin EVA in Orbit").access_rule = has_crewed_orbit
     world.get_location("Kerbin First Staging").access_rule = has_staging
 
@@ -276,29 +273,40 @@ def _mission_rule_for_event(
     if body_name in ("Tylo", "Laythe") and event in ("Return", "Sample Return"):
         return _make_all_parts_rule(player)
 
-    def _can_orbit(state: CollectionState) -> bool:
-        return get_capability(state, player).bodies.get(body_name,
-               type("_", (), {"can_orbit_low": False})()).can_orbit_low  # type: ignore[return-value]
-
-    if event in ("Flyby", "SOI Leave", "Orbit"):
+    if event == "Flyby":
         def rule(state: CollectionState) -> bool:
-            cap = get_capability(state, player)
-            bp = cap.bodies.get(body_name)
+            bp = get_capability(state, player).bodies.get(body_name)
+            return bp is not None and bp.can_escape
+        return rule
+
+    if event == "Orbit":
+        def rule(state: CollectionState) -> bool:
+            bp = get_capability(state, player).bodies.get(body_name)
             return bp is not None and bp.can_orbit_low
+        return rule
+
+    if event == "SOI Leave":
+        def rule(state: CollectionState) -> bool:
+            bp = get_capability(state, player).bodies.get(body_name)
+            return bp is not None and bp.can_escape
         return rule
 
     if event == "Landing":
         def rule(state: CollectionState) -> bool:
-            cap = get_capability(state, player)
-            bp = cap.bodies.get(body_name)
+            bp = get_capability(state, player).bodies.get(body_name)
             return bp is not None and bp.can_land_unmanned
         return rule
 
-    if event in ("Crewed Landing", "Flag Plant"):
+    if event == "Crewed Landing":
         def rule(state: CollectionState) -> bool:
-            cap = get_capability(state, player)
-            bp = cap.bodies.get(body_name)
+            bp = get_capability(state, player).bodies.get(body_name)
             return bp is not None and bp.can_land_crewed
+        return rule
+
+    if event == "Flag Plant":
+        def rule(state: CollectionState) -> bool:
+            bp = get_capability(state, player).bodies.get(body_name)
+            return bp is not None and bp.can_flag_plant
         return rule
 
     if event == "Return":
@@ -332,8 +340,6 @@ def _set_mission_rules(world: KSP1World, player: int) -> None:
     from .locations import get_body_events
 
     for body in ALL_BODIES:
-        if body.name == "Kerbin":
-            continue
         for event in get_body_events(body):
             rule = _mission_rule_for_event(player, body.name, event)
             for loc_name in event_location_names(body.name, event):
@@ -419,11 +425,15 @@ def _set_item_pacing_rules(world: KSP1World, player: int, difficulty: int) -> No
     for name in STARTING_INV_NAMES[:num_starting]:
         add_item_rule(world.get_location(name), power_rule)
 
-    # Band B: KSC biomes + pre-orbit Kerbin — reject tier 2
+    # Band B: KSC biomes + early Kerbin — reject tier 2
     for name in KSC_BIOME_NAMES:
         add_item_rule(world.get_location(name), power_rule)
     for name in KERBIN_LOCATION_NAMES:
         add_item_rule(world.get_location(name), power_rule)
+    # Early Kerbin mission events (everything except Flyby/SOI Leave which need escape)
+    for event in ("Orbit", "Landing", "Crewed Landing", "Flag Plant", "Return", "Sample Return"):
+        for slot in range(1, EVENT_SCALE[event] + 1):
+            add_item_rule(world.get_location(f"Kerbin {event} {slot}"), power_rule)
 
     # Band C: Early tech tree (tiers 1-3) — reject tier 2, strict mode only
     if pacing >= ItemPacing.option_strict:
