@@ -508,6 +508,40 @@ def find_optimal_stage(
 
 
 # ---------------------------------------------------------------------------
+# CommNet range calculations
+# ---------------------------------------------------------------------------
+
+#: Deep Space Network power by tracking station level (watts).
+DSN_POWER: dict[int, float] = {1: 2e9, 2: 50e9, 3: 250e9}
+
+#: Antenna power ratings from KSP game data (watts), keyed by part internal name.
+ANTENNA_POWER: dict[str, float] = {
+    "SurfAntenna": 500_000,             # Communotron 16-S
+    "longAntenna": 500_000,             # Communotron 16
+    "HighGainAntenna5_v2": 5_000_000,   # HG-5 High Gain Antenna
+    "RelayAntenna5": 2e9,               # RA-2 Relay Antenna
+    "mediumDishAntenna": 2e9,           # Communotron DTS-M1
+    "HighGainAntenna": 15e9,            # Communotron HG-55
+    "RelayAntenna50": 15e9,             # RA-15 Relay Antenna
+    "commDish": 100e9,                  # Communotron 88-88
+    "RelayAntenna100": 100e9,           # RA-100 Relay Antenna
+}
+
+#: 1 Kerbin AU in meters (Kerbin's orbital radius).
+KERBIN_AU_M: float = 13_599_840_256.0
+
+
+def commnet_range(power_a: float, power_b: float) -> float:
+    """Max CommNet range in meters between two antenna powers."""
+    return math.sqrt(power_a * power_b)
+
+
+def max_body_distance_m(solar_distance_au: float) -> float:
+    """Worst-case distance from Kerbin to a body (opposition, circular orbits)."""
+    return (solar_distance_au + 1.0) * KERBIN_AU_M
+
+
+# ---------------------------------------------------------------------------
 # Stage group merging helper
 # ---------------------------------------------------------------------------
 

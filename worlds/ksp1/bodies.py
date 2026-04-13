@@ -100,7 +100,7 @@ class Body:
     low_orbit_alt_km: float         # defines "low orbit" for location checks
     solar_distance_au: float        # Kerbin = 1.0, used for ION/solar logic
     landing_leg_tier: int           # minimum leg tier required for landing
-    min_relay_tier: int             # 0=none, 1=t1, 2=t2, 3=t3
+    min_relay_tier: int             # 0=none, 1=local, 2=inner, 3=mid, 4=outer
     power_requirement: str          # "solar" | "solar_marginal" | "rtg"
     eva_jetpack_twr: float          # precomputed: 0.5/(0.09375*surface_gravity)
     dv: BodyDeltaV
@@ -222,7 +222,7 @@ MOHO = Body(
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=20,
     solar_distance_au=0.34,
-    landing_leg_tier=2, min_relay_tier=1,
+    landing_leg_tier=2, min_relay_tier=2,
     power_requirement="solar",
     eva_jetpack_twr=_jetpack_twr(2.70),
     dv=BodyDeltaV(
@@ -240,7 +240,7 @@ EVE = Body(
     atm_pressure_kpa=506.625, atm_density_kg_m3=5.0,
     can_land=True, low_orbit_alt_km=90,
     solar_distance_au=0.72,
-    landing_leg_tier=2, min_relay_tier=1,
+    landing_leg_tier=2, min_relay_tier=3,
     power_requirement="solar",
     eva_jetpack_twr=_jetpack_twr(16.7),
     dv=BodyDeltaV(
@@ -259,7 +259,7 @@ GILLY = Body(
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=6,
     solar_distance_au=0.72,
-    landing_leg_tier=1, min_relay_tier=1,
+    landing_leg_tier=1, min_relay_tier=3,
     power_requirement="solar",
     eva_jetpack_twr=_jetpack_twr(0.049),
     dv=BodyDeltaV(
@@ -277,7 +277,7 @@ DUNA = Body(
     atm_pressure_kpa=6.755, atm_density_kg_m3=0.096,
     can_land=True, low_orbit_alt_km=50,
     solar_distance_au=1.52,
-    landing_leg_tier=2, min_relay_tier=1,
+    landing_leg_tier=2, min_relay_tier=3,
     power_requirement="solar_marginal",
     eva_jetpack_twr=_jetpack_twr(2.94),
     dv=BodyDeltaV(
@@ -296,7 +296,7 @@ IKE = Body(
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=10,
     solar_distance_au=1.52,
-    landing_leg_tier=2, min_relay_tier=1,
+    landing_leg_tier=2, min_relay_tier=3,
     power_requirement="solar_marginal",
     eva_jetpack_twr=_jetpack_twr(1.10),
     dv=BodyDeltaV(
@@ -314,7 +314,7 @@ DRES = Body(
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=25,
     solar_distance_au=2.65,
-    landing_leg_tier=2, min_relay_tier=2,
+    landing_leg_tier=2, min_relay_tier=3,
     power_requirement="solar_marginal",
     eva_jetpack_twr=_jetpack_twr(2.94),
     dv=BodyDeltaV(
@@ -332,7 +332,7 @@ JOOL = Body(
     atm_pressure_kpa=1519.88, atm_density_kg_m3=10.0,
     can_land=False, low_orbit_alt_km=210,
     solar_distance_au=5.20,
-    landing_leg_tier=0, min_relay_tier=2,
+    landing_leg_tier=0, min_relay_tier=4,
     power_requirement="rtg",
     eva_jetpack_twr=_jetpack_twr(7.85),
     dv=BodyDeltaV(
@@ -350,7 +350,7 @@ LAYTHE = Body(
     atm_pressure_kpa=60.795, atm_density_kg_m3=0.73,
     can_land=True, low_orbit_alt_km=60,
     solar_distance_au=5.20,
-    landing_leg_tier=2, min_relay_tier=2,
+    landing_leg_tier=2, min_relay_tier=4,
     power_requirement="rtg",
     eva_jetpack_twr=_jetpack_twr(7.85),
     dv=BodyDeltaV(
@@ -369,7 +369,7 @@ VALL = Body(
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=15,
     solar_distance_au=5.20,
-    landing_leg_tier=2, min_relay_tier=2,
+    landing_leg_tier=2, min_relay_tier=4,
     power_requirement="rtg",
     eva_jetpack_twr=_jetpack_twr(2.31),
     dv=BodyDeltaV(
@@ -387,7 +387,7 @@ TYLO = Body(
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=30,
     solar_distance_au=5.20,
-    landing_leg_tier=2, min_relay_tier=2,
+    landing_leg_tier=2, min_relay_tier=4,
     power_requirement="rtg",
     eva_jetpack_twr=_jetpack_twr(7.85),
     dv=BodyDeltaV(
@@ -405,7 +405,7 @@ BOP = Body(
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=10,
     solar_distance_au=5.20,
-    landing_leg_tier=1, min_relay_tier=2,
+    landing_leg_tier=1, min_relay_tier=4,
     power_requirement="rtg",
     eva_jetpack_twr=_jetpack_twr(0.589),
     dv=BodyDeltaV(
@@ -423,7 +423,7 @@ POL = Body(
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=6,
     solar_distance_au=5.20,
-    landing_leg_tier=1, min_relay_tier=2,
+    landing_leg_tier=1, min_relay_tier=4,
     power_requirement="rtg",
     eva_jetpack_twr=_jetpack_twr(0.373),
     dv=BodyDeltaV(
@@ -441,7 +441,7 @@ EELOO = Body(
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=10,
     solar_distance_au=6.0,
-    landing_leg_tier=2, min_relay_tier=3,
+    landing_leg_tier=2, min_relay_tier=4,
     power_requirement="rtg",
     eva_jetpack_twr=_jetpack_twr(1.72),
     dv=BodyDeltaV(

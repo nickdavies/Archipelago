@@ -104,9 +104,10 @@ class MiscEquipment:
     #   "solar_retractable"     retractable panels, survive aero
     #   "solar_array_large"     large array, enables ION engine
     #   "rtg"                   power regardless of distance/orientation
-    #   "relay_t1"              Communotron-class relay
-    #   "relay_t2"              HG-5-class relay
-    #   "relay_t3"              RA-2+-class relay
+    #   "relay_t1"              local-range antennas (Com 16, HG-5)
+    #   "relay_t2"              inner-planet antennas (RA-2, DTS-M1)
+    #   "relay_t3"              mid-system antennas (HG-55, RA-15)
+    #   "relay_t4"              outer-system antennas (88-88, RA-100)
     #   "battery_small"         small EC storage
     #   "battery_large"         large EC storage (sustains ION burns)
     #   "docking_port"          enables docking-based staging (tier 3)
@@ -367,9 +368,9 @@ PART_REGISTRY: list[PartMapping] = [
     PartMapping("HECS2_ProbeCore", MiscEquipment, "Probodobodyne HECS2", 1214,
                 {"provides": frozenset({"probe_core", "reaction_wheel"})}),
     PartMapping("HighGainAntenna", MiscEquipment, "Communotron HG-55", 1042,
-                {"provides": frozenset({"relay_t2"})}),
+                {"provides": frozenset({"relay_t3"})}),
     PartMapping("HighGainAntenna5_v2", MiscEquipment, "HG-5 High Gain Antenna", 1086,
-                {"provides": frozenset({"relay_t2"})}),
+                {"provides": frozenset({"relay_t1"})}),
     PartMapping("ISRU", MiscEquipment, "Convert-O-Tron 250", 1044,
                 {"provides": frozenset({"isru"})}),
     PartMapping("InfraredTelescope", MiscEquipment, "SENTINEL Infrared Telescope", 1262,
@@ -421,11 +422,11 @@ PART_REGISTRY: list[PartMapping] = [
     PartMapping("RadialOreTank", MiscEquipment, "Radial Holding Tank", 1242,
                 {"provides": frozenset()}),
     PartMapping("RelayAntenna100", MiscEquipment, "RA-100 Relay Antenna", 1225,
-                {"provides": frozenset({"relay_t3"})}),
+                {"provides": frozenset({"relay_t4"})}),
     PartMapping("RelayAntenna5", MiscEquipment, "RA-2 Relay Antenna", 1227,
-                {"provides": frozenset({"relay_t3"})}),
-    PartMapping("RelayAntenna50", MiscEquipment, "RA-15 Relay Antenna", 1226,
                 {"provides": frozenset({"relay_t2"})}),
+    PartMapping("RelayAntenna50", MiscEquipment, "RA-15 Relay Antenna", 1226,
+                {"provides": frozenset({"relay_t3"})}),
     PartMapping("ReleaseValve", MiscEquipment, "FTE-1 Drain Valve", 1080,
                 {"provides": frozenset()}),
     PartMapping("ScienceBox", MiscEquipment, "Experiment Storage Unit", 1065,
@@ -491,7 +492,7 @@ PART_REGISTRY: list[PartMapping] = [
     PartMapping("cargoContainer", MiscEquipment, "SEQ-9 Container Module", 1266,
                 {"provides": frozenset()}),
     PartMapping("commDish", MiscEquipment, "Communotron 88-88", 1040,
-                {"provides": frozenset({"relay_t2"})}),
+                {"provides": frozenset({"relay_t4"})}),
     PartMapping("crewCabin", MiscEquipment, "PPD-10 Hitchhiker Storage Container", 1206,
                 {"provides": frozenset({"capsule"})}),
     PartMapping("cupola", MiscEquipment, "PPD-12 Cupola Module", 1207,

@@ -172,7 +172,7 @@ class RocketCapability:
     has_rtg: bool
     has_isru: bool
     has_docking_port: bool
-    relay_tier: int               # 0=none, 1=Kerbin SOI, 2=inner planets, 3=outer planets
+    relay_tier: int               # 0=none, 1=local, 2=inner planets, 3=mid system, 4=outer system
     power_profile: str            # "solar" | "solar_marginal" | "rtg"
     staging_tier: int
 
@@ -442,7 +442,7 @@ Beyond raw delta-V, some hardware combinations create controllability soft-locks
 - `solar_marginal` — adequate for Duna/Dres with large panels
 - `rtg` — required for Jool system and beyond
 
-**Communication range:** Unmanned missions beyond Kerbin SOI require relay infrastructure. Modelled as `relay_tier` in the capability profile, with each body specifying its minimum relay tier requirement.
+**Communication range:** Missions beyond Kerbin SOI require sufficient antenna power. Modelled as `relay_tier` (4 tiers) derived from CommNet range formula `sqrt(antenna_power * DSN_power)`. Tier 1 = local (Mun/Minmus), tier 2 = inner planets (Moho), tier 3 = mid system (Eve, Duna, Dres), tier 4 = outer system (Jool, Eeloo). See `rocket_math.py` for the underlying power/range data.
 
 ### Landing Leg Tier
 

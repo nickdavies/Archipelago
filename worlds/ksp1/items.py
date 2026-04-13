@@ -53,6 +53,7 @@ _PROGRESSION_PROVIDES: frozenset[str] = frozenset({
     "relay_t1",
     "relay_t2",
     "relay_t3",
+    "relay_t4",
     "launch_clamp",
     "docking_port",        # gates staging tier 3 (enables 4-stage missions)
     "fuel_line",           # gates asparagus staging

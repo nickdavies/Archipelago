@@ -236,7 +236,7 @@ class TestHeatShieldGate(unittest.TestCase):
             engines=[_MAINSAIL], tanks=[_FL_T400, _FL_T800],
             probe_core=True, reaction_wheels=True,
             solar=True, solar_retractable=True, rtg=True,
-            relay_tier=1, launch_clamp=True,
+            relay_tier=3, launch_clamp=True,
             decoupler_stack=True,
             parachutes=[_MK16, _MK16, _MK16, _MK16],
         )
@@ -289,7 +289,7 @@ class TestLaunchClampGate(unittest.TestCase):
             engines=[_MAINSAIL, _SWIVEL],
             tanks=[_FL_T400, _FL_T800, _X200_32],
             probe_core=True, reaction_wheels=True,
-            solar=True, relay_tier=1,
+            solar=True, relay_tier=3,
             launch_clamp=False,   # <-- no clamp
             decoupler_stack=True,
         )
@@ -463,7 +463,7 @@ class TestParentGating(unittest.TestCase):
             tanks=[_FL_T400, _FL_T800, _X200_32],
             probe_core=True, reaction_wheels=True, solar=True,
             heat_shields=[_SHIELD_25],
-            relay_tier=1, launch_clamp=True, decoupler_stack=True,
+            relay_tier=3, launch_clamp=True, decoupler_stack=True,
         )
         computed = {
             "Eve": type("BodyAccessProfile", (), {"can_orbit_low": True})()
@@ -667,7 +667,7 @@ class TestDunaReturn(unittest.TestCase):
     2.5m tanks (single engine without adapter), which can't close the dv/TWR tradeoff.
 
     Equipment: heat shield (2.5m), parachutes (3x Mk16), landing legs (LT-2),
-    RTG (Duna power at solar distance ~1.5 AU), relay_tier=1.
+    RTG (Duna power at solar distance ~1.5 AU), relay_tier=3.
     Staging tier 2 (radial decouplers) to enable 3 distinct stages.
     """
 
@@ -677,7 +677,7 @@ class TestDunaReturn(unittest.TestCase):
             tanks=[_S3_3600, _JUMBO_64, _X200_32, _FL_T800, _FL_T400],
             probe_core=True, reaction_wheels=True,
             solar=True, solar_retractable=True, rtg=True,
-            relay_tier=1,
+            relay_tier=3,
             heat_shields=[_SHIELD_25],
             parachutes=[_MK16, _MK16, _MK16],
             legs=[_LT2],
@@ -701,7 +701,7 @@ class TestDunaReturn(unittest.TestCase):
             tanks=[_JUMBO_64, _X200_32, _FL_T800, _FL_T400],
             probe_core=True, reaction_wheels=True,
             solar=True, solar_retractable=True, rtg=True,
-            relay_tier=1,
+            relay_tier=3,
             # No heat shield
             parachutes=[_MK16, _MK16, _MK16],
             legs=[_LT2],
@@ -715,8 +715,9 @@ class TestDunaReturn(unittest.TestCase):
 class TestInterplanetaryBodies(unittest.TestCase):
     """
     A full-kit rocket (3-engine tiers, large S3-3600 first stage, full support
-    gear, relay_tier=2) should reach orbit of all inner/middle solar system
-    bodies.  Eeloo requires relay_tier=3 and should be blocked at tier 2.
+    gear, relay_tier=3) should reach orbit of all inner/mid solar system
+    bodies.  Jool system and Eeloo require relay_tier=4 and should be blocked
+    at tier 3.
 
     Staging tier 2 (radial decouplers) is required so the optimizer can split
     the Kerbin ascent stage from the interplanetary transfer stages.
@@ -728,7 +729,7 @@ class TestInterplanetaryBodies(unittest.TestCase):
             tanks=[_JUMBO_64, _S3_3600, _X200_32, _FL_T800, _FL_T400],
             probe_core=True, reaction_wheels=True,
             solar=True, solar_retractable=True, rtg=True,
-            relay_tier=2,
+            relay_tier=3,
             heat_shields=[_SHIELD_25],
             parachutes=[_MK16, _MK16, _MK16],
             legs=[_LT2],
@@ -738,7 +739,7 @@ class TestInterplanetaryBodies(unittest.TestCase):
     def test_inner_and_middle_bodies_orbitally_reachable(self) -> None:
         flags = self._full_kit_flags()
         results = _assess_bodies(flags, _normal_diff())
-        for body_name in ("Mun", "Minmus", "Moho", "Eve", "Duna", "Dres", "Jool"):
+        for body_name in ("Mun", "Minmus", "Moho", "Eve", "Duna", "Dres"):
             prof = results[body_name]
             self.assertTrue(
                 prof.can_orbit_low,
@@ -746,16 +747,17 @@ class TestInterplanetaryBodies(unittest.TestCase):
                 f"Blocking reason: {prof.blocking_reason}",
             )
 
-    def test_eeloo_not_reachable_with_relay_tier_2(self) -> None:
-        # Eeloo requires min_relay_tier=3.  Tier 2 relay should block it.
+    def test_outer_bodies_blocked_at_relay_tier_3(self) -> None:
+        # Jool and Eeloo require min_relay_tier=4.  Tier 3 should block them.
         flags = self._full_kit_flags()
-        self.assertEqual(flags.relay_tier, 2)
+        self.assertEqual(flags.relay_tier, 3)
         results = _assess_bodies(flags, _normal_diff())
-        eeloo = results["Eeloo"]
-        self.assertFalse(
-            eeloo.can_orbit_low,
-            "Eeloo orbit should be blocked at relay_tier=2 (requires tier 3)",
-        )
+        for body_name in ("Jool", "Eeloo"):
+            prof = results[body_name]
+            self.assertFalse(
+                prof.can_orbit_low,
+                f"{body_name} orbit should be blocked at relay_tier=3 (requires tier 4)",
+            )
 
 
 class TestKerbinOrbitIsEarlyGame(unittest.TestCase):

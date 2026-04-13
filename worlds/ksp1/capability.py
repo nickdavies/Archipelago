@@ -385,7 +385,7 @@ def _pre_pass(item_count_fn: Callable[[str], int],
 
 def _apply_misc_relay(flags: EquipmentFlags, flag: str, mass: float) -> None:
     """Set relay tier and track lightest relay mass per tier."""
-    tier = {"relay_t1": 1, "relay_t2": 2, "relay_t3": 3}.get(flag, 0)
+    tier = {"relay_t1": 1, "relay_t2": 2, "relay_t3": 3, "relay_t4": 4}.get(flag, 0)
     if tier == 0:
         return
     if tier > flags.relay_tier:

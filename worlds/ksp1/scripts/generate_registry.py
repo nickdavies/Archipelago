@@ -171,16 +171,16 @@ PROVIDES: dict[str, frozenset] = {
     "largeSolarPanel": frozenset({"solar_retractable", "solar_array_large"}),
     # RTG
     "rtg": frozenset({"rtg"}),
-    # Antennas (t1=short range, t2=medium, t3=long range relay)
+    # Antennas (t1=local, t2=inner planets, t3=mid system, t4=outer system)
     "longAntenna": frozenset({"relay_t1"}),
     "SurfAntenna": frozenset({"relay_t1"}),
+    "HighGainAntenna5_v2": frozenset({"relay_t1"}),
+    "RelayAntenna5": frozenset({"relay_t2"}),
     "mediumDishAntenna": frozenset({"relay_t2"}),
-    "HighGainAntenna": frozenset({"relay_t2"}),
-    "commDish": frozenset({"relay_t2"}),
-    "HighGainAntenna5_v2": frozenset({"relay_t2"}),
-    "RelayAntenna50": frozenset({"relay_t2"}),
-    "RelayAntenna5": frozenset({"relay_t3"}),
-    "RelayAntenna100": frozenset({"relay_t3"}),
+    "HighGainAntenna": frozenset({"relay_t3"}),
+    "RelayAntenna50": frozenset({"relay_t3"}),
+    "commDish": frozenset({"relay_t4"}),
+    "RelayAntenna100": frozenset({"relay_t4"}),
     # RCS (includes vernor engine which functions as RCS)
     "RCSBlock_v2": frozenset({"rcs"}),
     "RCSLinearSmall": frozenset({"rcs"}),
