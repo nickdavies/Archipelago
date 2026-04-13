@@ -21,7 +21,7 @@ from BaseClasses import CollectionState, ItemClassification
 
 from .bodies import ALL_BODIES, BODY_BY_NAME, science_budget
 from .capability import get_capability
-from .items import ITEM_TABLE, SCIENCE_PACK_NAMES
+from .items import ITEM_TABLE, PROGRESSIVE_RD_NAME, SCIENCE_PACK_NAMES
 from .locations import (
     EVENT_SCALE,
     KSC_BIOME_NAMES,
@@ -33,7 +33,7 @@ from .locations import (
     event_location_names,
 )
 from .options import Difficulty, Goal, ItemPacing
-from .tech_tree import MAX_TIER, NODES_BY_TIER, NODE_BY_ID, cumulative_tier_cost, TECH_NODES
+from .tech_tree import MAX_TIER, MAX_RD_BAND, NODES_BY_TIER, NODE_BY_ID, TIER_TO_BAND, cumulative_tier_cost, TECH_NODES
 
 if TYPE_CHECKING:
     from .world import KSP1World
@@ -103,7 +103,11 @@ def _can_afford_tier(state: CollectionState, player: int, tier: int, difficulty:
 # ---------------------------------------------------------------------------
 
 def _make_tier_rule(player: int, tier: int, difficulty: int) -> Callable[[CollectionState], bool]:
+    band = TIER_TO_BAND[tier]
+
     def rule(state: CollectionState) -> bool:
+        if band > 0 and not state.has(PROGRESSIVE_RD_NAME, player, band):
+            return False
         return _can_afford_tier(state, player, tier, difficulty)
     return rule
 
@@ -546,8 +550,13 @@ def _make_goal_rule(
         return rule
 
     if goal == Goal.option_complete_tech_tree:
-        # Victory when the player can afford all 62 nodes
-        return _make_science_threshold_rule(player, _TECH_TREE_COMPLETE_SCIENCE, difficulty)
+        # Victory when the player has all R&D upgrades and can afford all 62 nodes
+        science_rule = _make_science_threshold_rule(player, _TECH_TREE_COMPLETE_SCIENCE, difficulty)
+        def rule(state: CollectionState) -> bool:
+            if not state.has(PROGRESSIVE_RD_NAME, player, MAX_RD_BAND):
+                return False
+            return science_rule(state)
+        return rule
 
     # Fallback (should never be reached)
     def rule(state: CollectionState) -> bool:

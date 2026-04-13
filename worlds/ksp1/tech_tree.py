@@ -66,6 +66,12 @@ for _tier in range(1, MAX_TIER + 1):
 
 TOTAL_TECH_COST: int = _CUMULATIVE[MAX_TIER]
 
+# Progressive R&D bands — pairs of tiers locked behind the same R&D item.
+TIER_TO_BAND: dict[int, int] = {
+    1: 0, 2: 0, 3: 1, 4: 1, 5: 2, 6: 2, 7: 3, 8: 3,
+}
+MAX_RD_BAND: int = 3
+
 
 def cumulative_tier_cost(tier: int) -> int:
     """Return the total science needed to purchase all nodes through *tier*."""

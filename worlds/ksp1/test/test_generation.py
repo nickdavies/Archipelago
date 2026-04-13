@@ -10,9 +10,12 @@ import unittest
 from test.bases import WorldTestBase
 from BaseClasses import ItemClassification
 
-from worlds.ksp1.items import _SORTED_PART_NAMES, ALWAYS_PRECOLLECTED, CLAMP_PRECOLLECTED
+from worlds.ksp1.items import (
+    _SORTED_PART_NAMES, ALWAYS_PRECOLLECTED, CLAMP_PRECOLLECTED,
+    PROGRESSIVE_RD_NAME, PROGRESSIVE_RD_COUNT,
+)
 from worlds.ksp1.rules import _accessible_science, _can_afford_tier
-from worlds.ksp1.tech_tree import TECH_NODES, cumulative_tier_cost
+from worlds.ksp1.tech_tree import TECH_NODES, TIER_TO_BAND, MAX_RD_BAND, cumulative_tier_cost
 from worlds.ksp1.options import Difficulty
 from worlds.ksp1.capability import get_capability, explain_body_unreachable
 
@@ -201,6 +204,96 @@ class TestItemClassification(KSP1TestBase):
             self._classification("ladder1"),  # Pegasus I
             ItemClassification.progression,
             "Ladder should be progression (gates sample returns on high-g bodies)",
+        )
+
+
+class TestProgressiveRD(KSP1TestBase):
+    """Progressive R&D items gate higher tech tree bands."""
+
+    def test_progressive_rd_in_pool(self):
+        """Pool must contain exactly PROGRESSIVE_RD_COUNT copies."""
+        count = sum(
+            1 for item in self.multiworld.itempool
+            if item.name == PROGRESSIVE_RD_NAME
+        )
+        self.assertEqual(
+            count, PROGRESSIVE_RD_COUNT,
+            f"Expected {PROGRESSIVE_RD_COUNT} Progressive R&D items, got {count}",
+        )
+
+    def test_progressive_rd_is_progression(self):
+        """Progressive R&D must be classified as progression."""
+        for item in self.multiworld.itempool:
+            if item.name == PROGRESSIVE_RD_NAME:
+                self.assertEqual(
+                    item.classification,
+                    ItemClassification.progression,
+                    "Progressive R&D must be progression",
+                )
+                return
+        self.fail("Progressive R&D not found in item pool")
+
+    def test_tier3_unreachable_without_rd(self):
+        """Tier 3+ tech locations must be unreachable without Progressive R&D."""
+        # Collect everything except Progressive R&D
+        self.collect_all_but([PROGRESSIVE_RD_NAME])
+        state = self.multiworld.state
+        for node in TECH_NODES:
+            band = TIER_TO_BAND[node.tier]
+            if band == 0:
+                continue
+            loc_name = f"{node.display_name} 1"
+            loc = self.multiworld.get_location(loc_name, self.player)
+            self.assertFalse(
+                loc.can_reach(state),
+                f"Tier {node.tier} (band {band}) location '{loc_name}' should be "
+                f"unreachable without Progressive R&D",
+            )
+
+    def test_all_tiers_reachable_with_rd(self):
+        """All tiers reachable when all items (including Progressive R&D) collected."""
+        self.collect_all_but([])
+        state = self.multiworld.state
+        for node in TECH_NODES:
+            loc_name = f"{node.display_name} 1"
+            loc = self.multiworld.get_location(loc_name, self.player)
+            self.assertTrue(
+                loc.can_reach(state),
+                f"Tier {node.tier} location '{loc_name}' unreachable with all items",
+            )
+
+    def test_progressive_rd_not_in_all_progression_items(self):
+        """Progressive R&D must NOT be in _ALL_PROGRESSION_ITEMS (Eve/Tylo proxy)."""
+        from worlds.ksp1.rules import _ALL_PROGRESSION_ITEMS
+        self.assertNotIn(
+            PROGRESSIVE_RD_NAME, _ALL_PROGRESSION_ITEMS,
+            "Progressive R&D should not be in _ALL_PROGRESSION_ITEMS "
+            "(built from ITEM_TABLE, not _PROGRESSIVE_ITEMS)",
+        )
+
+
+class TestCompleteTechTreeGoalRD(KSP1TestBase):
+    """complete_tech_tree goal requires Progressive R&D x MAX_RD_BAND."""
+    options = {"goal": "complete_tech_tree"}
+
+    def test_goal_unreachable_without_rd(self):
+        """Victory location must be unreachable without Progressive R&D."""
+        self.collect_all_but([PROGRESSIVE_RD_NAME])
+        state = self.multiworld.state
+        victory = self.multiworld.get_location("Victory", self.player)
+        self.assertFalse(
+            victory.can_reach(state),
+            "complete_tech_tree victory should be unreachable without Progressive R&D",
+        )
+
+    def test_goal_reachable_with_rd(self):
+        """Victory location must be reachable with all items."""
+        self.collect_all_but([])
+        state = self.multiworld.state
+        victory = self.multiworld.get_location("Victory", self.player)
+        self.assertTrue(
+            victory.can_reach(state),
+            "complete_tech_tree victory should be reachable with all items",
         )
 
 

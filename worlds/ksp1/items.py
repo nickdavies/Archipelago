@@ -122,12 +122,21 @@ _VICTORY_ITEM: dict[str, tuple[int, ItemClassification]] = {
     "Victory": (0, ItemClassification.progression),
 }
 
+# Progressive items: offsets 50–99 (special range, not physical parts)
+_PROGRESSIVE_ITEMS: dict[str, tuple[int, ItemClassification]] = {
+    "Progressive R&D": (50, ItemClassification.progression),
+}
+
+PROGRESSIVE_RD_NAME: str = "Progressive R&D"
+PROGRESSIVE_RD_COUNT: int = 3
+
 ITEM_NAME_TO_ID: dict[str, int] = {
     name: KSP1_BASE_ID + offset
     for name, (offset, _) in {
         **ITEM_TABLE,
         **_FILLER_ITEMS,
         **_VICTORY_ITEM,
+        **_PROGRESSIVE_ITEMS,
     }.items()
 }
 
@@ -152,6 +161,8 @@ def create_item(world: KSP1World, name: str) -> KSP1Item:
         offset, classification = _FILLER_ITEMS[name]
     elif name in _VICTORY_ITEM:
         offset, classification = _VICTORY_ITEM[name]
+    elif name in _PROGRESSIVE_ITEMS:
+        offset, classification = _PROGRESSIVE_ITEMS[name]
     else:
         raise KeyError(f"Unknown KSP1 item: {name!r}")
     return KSP1Item(name, classification, KSP1_BASE_ID + offset, world.player)
@@ -199,6 +210,10 @@ def create_all_items(world: KSP1World) -> None:
         for name in _SORTED_PART_NAMES
         if name not in precollected
     ]
+
+    # Progressive R&D items (gates higher tech tree bands).
+    for _ in range(PROGRESSIVE_RD_COUNT):
+        pool.append(create_item(world, PROGRESSIVE_RD_NAME))
 
     # Pad the pool with filler items so item count == location count.
     # create_regions() runs before create_items(), so all locations exist.
