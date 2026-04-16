@@ -80,6 +80,12 @@ def _build_check_map() -> dict[str, CheckInfo]:
             mission_type, crewed = EVENT_TO_MISSION[event]
             for loc_name in event_location_names(body.name, event):
                 result[loc_name] = CheckInfo(body.name, event, mission_type, crewed)
+
+    # Kerbin uses hand-crafted location names, not the standard {body} {event} {slot}
+    # pattern. EVA in Orbit is the only one that uses the mission profile system —
+    # the rest are sounding rocket altitude checks, equipment gates, or trivial.
+    result["Kerbin EVA in Orbit"] = CheckInfo("Kerbin", "Orbit", "orbit", True)
+
     return result
 
 
