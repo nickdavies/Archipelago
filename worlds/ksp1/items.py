@@ -108,13 +108,13 @@ ITEM_TABLE: dict[str, tuple[int, ItemClassification]] = {
 
 # Filler items: offsets 100–199 (not in the main part pool)
 _FILLER_ITEMS: dict[str, tuple[int, ItemClassification]] = {
+    "Science Pack 1":    (107, ItemClassification.filler),
+    "Science Pack 5":    (108, ItemClassification.filler),
     "Science Pack 10":   (100, ItemClassification.filler),
     "Science Pack 25":   (101, ItemClassification.filler),
     "Science Pack 50":   (102, ItemClassification.filler),
     "Science Pack 100":  (103, ItemClassification.filler),
     "Science Pack 250":  (104, ItemClassification.filler),
-    "Engineering Report": (105, ItemClassification.filler),
-    "Cosmetic Unlock":   (106, ItemClassification.filler),
 }
 
 # Victory item: offset 0 (Special range 0–99)
@@ -168,22 +168,16 @@ def create_item(world: KSP1World, name: str) -> KSP1Item:
     return KSP1Item(name, classification, KSP1_BASE_ID + offset, world.player)
 
 
-# Science pack names for item_rule restrictions (excludes non-science filler)
-SCIENCE_PACK_NAMES: frozenset[str] = frozenset(
-    name for name in _FILLER_ITEMS
-    if name not in ("Engineering Report", "Cosmetic Unlock")
-)
+SCIENCE_PACK_NAMES: frozenset[str] = frozenset(_FILLER_ITEMS)
 
 _FILLER_NAMES_WEIGHTED: list[str] = (
-    # ~40% useful science packs (weighted by list frequency)
-    ["Science Pack 50"] * 8
-    + ["Science Pack 100"] * 6
-    + ["Science Pack 250"] * 4
-    + ["Science Pack 10"] * 4
+    ["Science Pack 1"] * 10
+    + ["Science Pack 5"] * 8
+    + ["Science Pack 10"] * 6
     + ["Science Pack 25"] * 4
-    # ~60% junk / cosmetic
-    + ["Engineering Report"] * 12
-    + ["Cosmetic Unlock"] * 12
+    + ["Science Pack 50"] * 3
+    + ["Science Pack 100"] * 2
+    + ["Science Pack 250"] * 1
 )
 
 
