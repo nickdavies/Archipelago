@@ -408,6 +408,53 @@ class TestSymmetricEngineCounts(unittest.TestCase):
         assert result is not None
         self.assertEqual(result.engine_count, 1)
 
+    def test_radial_engine_minimum_two(self) -> None:
+        """Radial-only engines must have >= 2 for symmetric thrust."""
+        result = find_optimal_stage(
+            available_engines=[_SPIDER],
+            available_srbs=[],
+            available_tanks=[_FL_T400],
+            required_dv=200.0,
+            payload_mass=0.5,
+            gravity=0.0,  # no TWR constraint
+            parallel_mode="none",
+        )
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertGreaterEqual(result.engine_count, 2,
+            "Radial-only engine should never recommend 1x (off-center thrust)")
+
+    def test_radial_engine_not_one_even_with_twr(self) -> None:
+        """TWR calculation should also respect the radial minimum of 2."""
+        result = find_optimal_stage(
+            available_engines=[_SPIDER],
+            available_srbs=[],
+            available_tanks=[_FL_T400],
+            required_dv=100.0,
+            payload_mass=0.1,
+            gravity=1.63,  # Mun gravity — light enough that 1 engine suffices for TWR
+            parallel_mode="none",
+        )
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertGreaterEqual(result.engine_count, 2,
+            "TWR floor must not override radial minimum of 2")
+
+    def test_stack_engine_allows_one(self) -> None:
+        """Stack-mountable engines should still allow engine_count=1."""
+        result = find_optimal_stage(
+            available_engines=[_TERRIER],
+            available_srbs=[],
+            available_tanks=[_FL_T400],
+            required_dv=500.0,
+            payload_mass=1.0,
+            gravity=0.0,
+            parallel_mode="none",
+        )
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.engine_count, 1)
+
     def test_srb_finds_minimum(self) -> None:
         """SRBs should find the lightest valid count."""
         result = find_optimal_stage(

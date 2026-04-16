@@ -363,13 +363,14 @@ def find_optimal_stage(
 
             for fill in _fills:
                 # TWR minimum engine count (independent of dry factor)
-                min_engines = 1
+                # Radial-only engines need >= 2 for symmetric thrust
+                min_engines = 2 if engine.radial_mountable else 1
                 if has_twr:
                     if twr_eng_denom <= 0:
                         continue  # engine too heavy for this TWR at any count
                     m_tank_1 = t_dry + t_fuel * fill
                     numer = twr_g * (full_payload + m_tank_1)
-                    min_engines = max(1, _ceil(numer / twr_eng_denom))
+                    min_engines = max(min_engines, _ceil(numer / twr_eng_denom))
 
                 for sm_df, sm_symmetric in _sub_modes:
                     sm_max = max_eng_parallel if sm_symmetric else max_eng_base
