@@ -425,32 +425,32 @@ def cmd_rocket(ap: APState, check_name: str, verbose: bool = False) -> None:
         if is_terminal:
             cmd_name = _find_command_module(flags, crewed)
             if cmd_name:
-                print(f"      1x {cmd_name}")
+                print(f"      1x {_titled(cmd_name)}")
             # Support equipment (antenna, power)
             all_edges = [e for g in result.edge_groups for e in g]
             _, support_parts = _support_equipment_mass(flags, all_edges)
             for sp in support_parts:
-                print(f"      1x {sp}")
+                print(f"      1x {_titled(sp)}")
 
         # Propulsion
-        print(f"      {stage.engine_count}x {stage.engine_name}")
+        print(f"      {stage.engine_count}x {_titled(stage.engine_name)}")
         if stage.tank_count > 0:
             fill_pct = stage.fill_fraction * 100
             fill_str = f" ({fill_pct:.0f}% fill)" if fill_pct < 100 else ""
-            print(f"      {stage.tank_count}x {stage.tank_name}{fill_str}")
+            print(f"      {stage.tank_count}x {_titled(stage.tank_name)}{fill_str}")
 
         # Heat shield
         if any(e.needs_heat_shield for e in group):
             hs_name = _find_best_heat_shield(flags)
             if hs_name:
-                print(f"      1x {hs_name}")
+                print(f"      1x {_titled(hs_name)}")
 
         # Landing legs
         if any(e.needs_landing_legs for e in group):
             leg_tier = stage_body.landing_leg_tier if stage_body else 1
             leg_name = _find_best_legs(flags, leg_tier)
             if leg_name:
-                print(f"      4x {leg_name}")
+                print(f"      4x {_titled(leg_name)}")
 
         # Parachutes (aero landing edges)
         aero_edges = [e for e in group if e.edge_type == EdgeType.ATMO_LANDING_AERO]
@@ -460,7 +460,7 @@ def cmd_rocket(ap: APState, check_name: str, verbose: bool = False) -> None:
                 stage.stage_mass_dry, aero_body_name, flags, diff,
             )
             if chute_name and chute_count > 0:
-                print(f"      {chute_count}x {chute_name}")
+                print(f"      {chute_count}x {_titled(chute_name)}")
 
         # Ladder
         if any(e.needs_ladder for e in group):
@@ -505,6 +505,14 @@ _ITEM_TITLES: dict[str, str] = {m.ksp_name: m.title for m in PART_REGISTRY}
 
 # ksp_name → part type name (Engine, FuelTank, etc.)
 _ITEM_TYPES: dict[str, str] = {m.ksp_name: m.part_type.__name__ for m in PART_REGISTRY}
+
+
+def _titled(ksp_name: str) -> str:
+    """Format a part name with its human-readable title, e.g. 'liquidEngine_v2 (LV-T30 "Reliant")'."""
+    title = _ITEM_TITLES.get(ksp_name)
+    if title:
+        return f"{ksp_name} ({title})"
+    return ksp_name
 
 
 def _print_parts_list(ap: APState) -> None:
