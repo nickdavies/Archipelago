@@ -295,6 +295,15 @@ def _find_best_heat_shield(flags: EquipmentFlags) -> Optional[str]:
     return best.name
 
 
+def _find_lightest_decoupler(flags: EquipmentFlags) -> Optional[tuple[str, float]]:
+    """Return (name, mass) of the lightest stack decoupler, or None."""
+    stack = [d for d in flags.available_decouplers if d.kind == "stack"]
+    if not stack:
+        return None
+    best = min(stack, key=lambda d: d.mass)
+    return best.name, best.mass
+
+
 def _find_best_legs(flags: EquipmentFlags, required_tier: int) -> Optional[str]:
     """Return name of the lightest legs meeting the tier."""
     for leg in sorted(flags.available_landing_legs, key=lambda l: l.mass):
@@ -471,6 +480,13 @@ def cmd_rocket(ap: APState, check_name: str, verbose: bool = False) -> None:
         # Ladder
         if any(e.needs_ladder for e in group):
             print(f"      1x Pegasus I Mobility Enhancer")
+
+        # Decoupler (on the lower stage, separates it from the stage above)
+        if not is_terminal and num_stages > 1:
+            dec = _find_lightest_decoupler(flags)
+            if dec:
+                dec_name, dec_mass = dec
+                print(f"      1x {_titled(dec_name)} ({dec_mass:.3f}t)")
 
         # Edges
         print(f"    Edges:")

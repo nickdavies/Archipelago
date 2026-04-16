@@ -146,6 +146,9 @@ class EquipmentFlags:
     # Multi-mount adapters/plates available to the player
     available_multi_mounts: list[MultiMount] = field(default_factory=list)
 
+    # Decouplers available to the player (for CLI display)
+    available_decouplers: list[Decoupler] = field(default_factory=list)
+
     # Pre-indexed tanks by fuel type (built once after pre-pass)
     tanks_by_fuel_type: Optional[dict[str, list[FuelTank]]] = None
 
@@ -330,6 +333,7 @@ def _pre_pass(item_count_fn: Callable[[str], int],
                     flags.staging_tier = 1
                 elif part.kind == "radial" and flags.staging_tier < 2:
                     flags.staging_tier = 2
+                flags.available_decouplers.append(part)
 
             elif isinstance(part, MiscEquipment):
                 _apply_misc(flags, part, count)
@@ -619,6 +623,14 @@ def _evaluate_profile(
     # Kerbin ascent is always its own stage.
 
     groups = _group_edges(profile, flags.staging_tier)
+
+    # Staging feasibility: if merging couldn't reduce groups to what the
+    # player's decouplers allow, the profile is physically impossible.
+    max_stages = 1 if flags.staging_tier == 0 else len(groups)
+    if len(groups) > max_stages:
+        return ProfileResult(False,
+            failure_reason=f"need {len(groups)} stages but staging_tier={flags.staging_tier} "
+                           f"only allows {max_stages}")
 
     # ------------------------------------------------------------------
     # Backward pass — compute masses from destination back to Kerbin
