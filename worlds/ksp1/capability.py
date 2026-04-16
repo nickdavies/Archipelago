@@ -727,14 +727,6 @@ def _evaluate_profile(
         )
 
         result = find_optimal_stage(parallel_mode=parallel_mode, **stage_kwargs)
-        # Parallel staging constrains engine counts to symmetric values,
-        # which may be heavier than non-parallel (more engines). Try both
-        # and keep the lighter result.
-        if parallel_mode != "none":
-            result_np = find_optimal_stage(parallel_mode="none", **stage_kwargs)
-            if result_np is not None:
-                if result is None or result_np.stage_mass_wet < result.stage_mass_wet:
-                    result = result_np
 
         if result is None:
             return ProfileResult(False,

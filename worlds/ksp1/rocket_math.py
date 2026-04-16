@@ -240,6 +240,10 @@ def find_optimal_stage(
             Use best-so-far as upper bound to skip unpromising combos
       Also evaluate SRBs (fixed config, no fill levels)
       Return best result or None
+
+    When parallel_mode != "none", both parallel-benefit (symmetric engine
+    counts with reduced tank dry mass) and non-parallel (all engine counts,
+    full dry mass) are searched in a single pass.
     """
     best: Optional[StageResult] = None
     best_wet: float = float("inf")
@@ -250,6 +254,14 @@ def find_optimal_stage(
     # Parallel staging dry-mass factor (applied to tank dry mass)
     _parallel = parallel_mode != "none"
     dry_factor = _PARALLEL_DRY_FACTORS.get(parallel_mode, 1.0)
+
+    # Sub-modes: (dry_factor, use_symmetric_counts)
+    # When parallel, try symmetric counts with dry benefit first (usually
+    # finds a good bound), then try all counts without benefit.
+    _sub_modes: list[tuple[float, bool]] = []
+    if _parallel:
+        _sub_modes.append((dry_factor, True))
+    _sub_modes.append((1.0, False))
 
     # Pre-check: TWR denom component that depends only on engine
     has_twr = min_twr > 0 and gravity > 0
@@ -339,24 +351,18 @@ def find_optimal_stage(
                 _adapter_cache[_size_key] = adapter_max
 
             if engine.radial_mountable:
-                max_eng = _max_radial
+                max_eng_base = _max_radial
                 use_radial_tank_constraint = False
             else:
                 # Best of adapter mode or radial-tank mode
-                max_eng = max(adapter_max, _max_radial)
+                max_eng_base = max(adapter_max, _max_radial)
                 use_radial_tank_constraint = True
 
-            if _parallel:
-                # Parallel staging: need room for 1 core + largest symmetry ring
-                max_eng = max(max_eng, 1 + KSP_SYMMETRY_MODES[-1])
+            max_eng_parallel = (max(max_eng_base, 1 + KSP_SYMMETRY_MODES[-1])
+                                if _parallel else max_eng_base)
 
             for fill in _fills:
-                # Denominator for required tank count (depends on tank+fill+R)
-                denom = t_fuel * fill - R_minus_1 * effective_dry
-                if denom <= 0:
-                    continue  # impossible at this fill level
-
-                # Find minimum engine count that satisfies TWR analytically.
+                # TWR minimum engine count (independent of dry factor)
                 min_engines = 1
                 if has_twr:
                     if twr_eng_denom <= 0:
@@ -364,77 +370,84 @@ def find_optimal_stage(
                     m_tank_1 = t_dry + t_fuel * fill
                     numer = twr_g * (full_payload + m_tank_1)
                     min_engines = max(1, _ceil(numer / twr_eng_denom))
-                    if min_engines > max_eng:
+
+                for sm_df, sm_symmetric in _sub_modes:
+                    sm_max = max_eng_parallel if sm_symmetric else max_eng_base
+                    if min_engines > sm_max:
                         continue
 
-                # Parallel staging: only symmetric booster counts (1 core + ring)
-                if _parallel:
-                    eng_counts = [1 + s for s in KSP_SYMMETRY_MODES
-                                  if min_engines <= 1 + s <= max_eng]
-                else:
-                    eng_counts = range(min_engines, max_eng + 1)
-
-                for n_eng in eng_counts:
-                    # Inline required_tanks: n = ceil(R_minus_1 * (payload + m_eng) / denom)
-                    m_engine = e_mass * n_eng
-                    n_tanks = _ceil(R_minus_1 * (full_payload + m_engine) / denom)
-                    if n_tanks <= 0:
-                        continue
-                    if tank.max_count > 0 and n_tanks > tank.max_count:
+                    # Denominator for required tank count
+                    sm_ed = t_dry * sm_df
+                    denom = t_fuel * fill - R_minus_1 * sm_ed
+                    if denom <= 0:
                         continue
 
-                    # Radial-tank constraint: each stack engine needs its own
-                    # tank unless an adapter/plate covers this engine count
-                    if (use_radial_tank_constraint and n_eng > 1
-                            and n_eng > adapter_max):
-                        n_tanks = max(n_tanks, n_eng)
+                    if sm_symmetric:
+                        eng_counts = [1 + s for s in KSP_SYMMETRY_MODES
+                                      if min_engines <= 1 + s <= sm_max]
+                    else:
+                        eng_counts = range(min_engines, sm_max + 1)
 
-                    m_tank_dry = t_dry * n_tanks
-                    m_fuel = t_fuel * n_tanks * fill
-                    m_dry = full_payload + m_engine + m_tank_dry
-                    m_wet = m_dry + m_fuel
+                    for n_eng in eng_counts:
+                        m_engine = e_mass * n_eng
+                        n_tanks = _ceil(R_minus_1 * (full_payload + m_engine) / denom)
+                        if n_tanks <= 0:
+                            continue
+                        if tank.max_count > 0 and n_tanks > tank.max_count:
+                            continue
 
-                    # Skip if can't beat current best
-                    if m_wet >= best_wet:
-                        break  # more engines only adds mass
+                        # Radial-tank constraint: each stack engine needs its own
+                        # tank unless an adapter/plate covers this engine count
+                        if (use_radial_tank_constraint and n_eng > 1
+                                and n_eng > adapter_max):
+                            n_tanks = max(n_tanks, n_eng)
 
-                    # Verify TWR at ignition with the actual tank count
-                    thrust = thrust_per_eng * n_eng
-                    if has_twr and thrust < twr_g * m_wet:
-                        continue
+                        m_tank_dry = t_dry * n_tanks
+                        m_fuel = t_fuel * n_tanks * fill
+                        m_dry = full_payload + m_engine + m_tank_dry
+                        m_wet = m_dry + m_fuel
 
-                    # Verify delta-v (required_tanks rounds up, so check actual)
-                    # Inline stage_delta_v to avoid function call overhead.
-                    verify_dry = m_tank_dry * dry_factor if _parallel else m_tank_dry
-                    v_dry = full_payload + m_engine + verify_dry
-                    v_wet = v_dry + m_fuel
-                    if v_dry <= 0 or v_wet <= v_dry:
-                        continue
-                    actual_dv = isp_g0 * _log(v_wet / v_dry)
-                    if actual_dv < required_dv:
-                        continue
+                        # Skip if can't beat current best
+                        if m_wet >= best_wet:
+                            break  # more engines only adds mass
 
-                    twr_ign = thrust / (m_wet * gravity) if gravity > 0 else 0.0
-                    twr_bur = thrust / (m_dry * gravity) if gravity > 0 else 0.0
+                        # Verify TWR at ignition with the actual tank count
+                        thrust = thrust_per_eng * n_eng
+                        if has_twr and thrust < twr_g * m_wet:
+                            continue
 
-                    best = StageResult(
-                        delta_v=actual_dv,
-                        twr_at_ignition=twr_ign,
-                        twr_at_burnout=twr_bur,
-                        engine_is_throttleable=engine.throttleable,
-                        engine_has_gimbal=engine.has_gimbal,
-                        stage_mass_wet=m_wet,
-                        stage_mass_dry=m_dry,
-                        engine_count=n_eng,
-                        tank_count=n_tanks,
-                        fill_fraction=fill,
-                        engine_name=engine.name,
-                        tank_name=tank.name,
-                    )
-                    best_wet = m_wet
+                        # Verify delta-v (required_tanks rounds up, so check actual)
+                        # Inline stage_delta_v to avoid function call overhead.
+                        verify_dry = m_tank_dry * sm_df if sm_df != 1.0 else m_tank_dry
+                        v_dry = full_payload + m_engine + verify_dry
+                        v_wet = v_dry + m_fuel
+                        if v_dry <= 0 or v_wet <= v_dry:
+                            continue
+                        actual_dv = isp_g0 * _log(v_wet / v_dry)
+                        if actual_dv < required_dv:
+                            continue
 
-                    # Once we've found a valid n_eng, no need to try more
-                    break
+                        twr_ign = thrust / (m_wet * gravity) if gravity > 0 else 0.0
+                        twr_bur = thrust / (m_dry * gravity) if gravity > 0 else 0.0
+
+                        best = StageResult(
+                            delta_v=actual_dv,
+                            twr_at_ignition=twr_ign,
+                            twr_at_burnout=twr_bur,
+                            engine_is_throttleable=engine.throttleable,
+                            engine_has_gimbal=engine.has_gimbal,
+                            stage_mass_wet=m_wet,
+                            stage_mass_dry=m_dry,
+                            engine_count=n_eng,
+                            tank_count=n_tanks,
+                            fill_fraction=fill,
+                            engine_name=engine.name,
+                            tank_name=tank.name,
+                        )
+                        best_wet = m_wet
+
+                        # Once we've found a valid n_eng, no need to try more
+                        break
 
     # -----------------------------------------------------------------------
     # Evaluate SRBs
@@ -463,11 +476,7 @@ def find_optimal_stage(
             continue
         srb_thrust = (srb.atm_thrust if in_atmosphere else srb.vac_thrust)
 
-        # Parallel staging: radial SRBs must use symmetric counts
-        if srb.radial_mountable and _parallel:
-            srb_counts = [s for s in KSP_SYMMETRY_MODES if s <= max_srb]
-        else:
-            srb_counts = range(1, max_srb + 1)
+        srb_counts = range(1, max_srb + 1)
 
         for n_srb in srb_counts:
             # Inline srb_delta_v
