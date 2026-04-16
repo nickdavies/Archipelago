@@ -579,6 +579,123 @@ def _print_parts_list(ap: APState) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Bug report JSON output
+# ---------------------------------------------------------------------------
+
+import dataclasses
+
+def _to_json_serializable(obj):
+    """Convert dataclasses, sets, and other non-JSON types for serialization."""
+    if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+        return {k: _to_json_serializable(v)
+                for k, v in dataclasses.asdict(obj).items()
+                if not k.startswith("_")}
+    if isinstance(obj, (set, frozenset)):
+        return sorted(obj) if all(isinstance(x, (str, int, float)) for x in obj) else list(obj)
+    if isinstance(obj, dict):
+        return {str(k): _to_json_serializable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_json_serializable(x) for x in obj]
+    if isinstance(obj, float) and (obj == float("inf") or obj == float("-inf")):
+        return None
+    return obj
+
+
+def cmd_bug_report(ap: APState, check_name: Optional[str] = None) -> None:
+    """Dump full state as JSON for bug reports."""
+    difficulty_name = ["casual", "normal", "expert", "insane"][
+        ap.slot_data.get("difficulty", 1)
+    ]
+
+    # Received items by name
+    items_by_name: dict[str, int] = {}
+    for item_id, count in ap.item_id_counts.items():
+        name = ap.item_id_to_name.get(item_id, f"unknown_{item_id}")
+        items_by_name[name] = count
+
+    # Checked locations by name
+    checked_names = sorted(
+        ap.location_id_to_name.get(loc_id, f"unknown_{loc_id}")
+        for loc_id in ap.checked_locations
+    )
+
+    report: dict = {
+        "slot_data": ap.slot_data,
+        "difficulty": difficulty_name,
+        "received_items": items_by_name,
+        "checked_locations": checked_names,
+        "missing_location_count": len(ap.missing_locations),
+    }
+
+    # Equipment flags
+    _, flags = compute_capability_from_items(
+        lambda name: items_by_name.get(name, 0),
+        difficulty_name,
+        bool(ap.slot_data.get("start_with_launch_clamps", 1)),
+    )
+    report["equipment_flags"] = {
+        "staging_tier": flags.staging_tier,
+        "has_heat_shield": flags.has_heat_shield,
+        "has_parachutes": flags.has_parachutes,
+        "has_probe_core": flags.has_probe_core,
+        "has_capsule": flags.has_capsule,
+        "has_rcs": flags.has_rcs,
+        "has_reaction_wheels": flags.has_reaction_wheels,
+        "has_rtg": flags.has_rtg,
+        "has_solar": flags.has_solar,
+        "has_fuel_lines": flags.has_fuel_lines,
+        "has_launch_clamp": flags.has_launch_clamp,
+        "relay_tier": flags.relay_tier,
+        "landing_leg_tier": flags.landing_leg_tier,
+        "engines": [e.name for e in flags.available_engines],
+        "srbs": [s.name for s in flags.available_srbs],
+        "tanks": [t.name for t in flags.available_tanks],
+        "decouplers": [d.name for d in flags.available_decouplers],
+    }
+
+    # Rocket evaluation for specific check
+    if check_name:
+        info = CHECK_MAP.get(check_name)
+        if info:
+            diff = DIFFICULTY_PROFILES[difficulty_name]
+            result = evaluate_mission_detailed(
+                flags, diff, info.body_name, info.mission_type, info.crewed,
+            )
+            report["rocket"] = {
+                "check_name": check_name,
+                "body": info.body_name,
+                "mission_type": info.mission_type,
+                "crewed": info.crewed,
+                "feasible": result.feasible,
+                "launch_mass": result.launch_mass,
+                "failure_reason": result.failure_reason,
+                "stages": _to_json_serializable(result.stage_results),
+                "edge_groups": [
+                    [_to_json_serializable({"source": e.source, "destination": e.destination,
+                                            "base_dv": e.base_dv, "edge_type": e.edge_type.name})
+                     for e in group]
+                    for group in result.edge_groups
+                ],
+            }
+
+    # In-logic locations
+    multiworld, player = build_world_and_state(ap)
+    state = multiworld.state
+    in_logic_locs = []
+    for loc in multiworld.get_locations(player):
+        if loc.address is None:
+            continue
+        loc_id = ap.location_name_to_id.get(loc.name)
+        if loc_id is None or loc_id not in ap.missing_locations:
+            continue
+        if loc.access_rule(state):
+            in_logic_locs.append(loc.name)
+    report["in_logic_locations"] = sorted(in_logic_locs)
+
+    print(json.dumps(report, indent=2))
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -587,10 +704,10 @@ def main() -> None:
         description="KSP1 Archipelago capability inspector",
         prog="python -m worlds.ksp1.scripts.capability_cli",
     )
-    parser.add_argument("command", choices=["in-logic", "rocket"],
+    parser.add_argument("command", choices=["in-logic", "rocket", "bug-report"],
                         help="Command to run")
     parser.add_argument("check_name", nargs="?", default=None,
-                        help="Check name for 'rocket' command (e.g. 'Mun Return 1')")
+                        help="Check name for 'rocket' / 'bug-report' command")
     parser.add_argument("--host", required=True,
                         help="AP server host:port (e.g. localhost:38281)")
     parser.add_argument("--slot", required=True,
@@ -607,15 +724,18 @@ def main() -> None:
     if args.command == "rocket" and not args.check_name:
         parser.error("'rocket' command requires a check_name argument")
 
-    print(f"Connecting to {args.host} as {args.slot}...")
+    print(f"Connecting to {args.host} as {args.slot}...", file=sys.stderr)
     ap = fetch_ap_state(args.host, args.slot, args.password)
     print(f"Connected. Received {sum(ap.item_id_counts.values())} items, "
-          f"{len(ap.checked_locations)} checked / {len(ap.missing_locations)} missing locations.")
+          f"{len(ap.checked_locations)} checked / {len(ap.missing_locations)} missing locations.",
+          file=sys.stderr)
 
     if args.command == "in-logic":
         cmd_in_logic(ap, parts_list=args.parts_list)
     elif args.command == "rocket":
         cmd_rocket(ap, args.check_name, verbose=args.verbose)
+    elif args.command == "bug-report":
+        cmd_bug_report(ap, args.check_name)
 
 
 if __name__ == "__main__":
