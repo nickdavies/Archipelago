@@ -819,6 +819,27 @@ def _evaluate_profile(
                     return ProfileResult(False,
                         failure_reason=f"parachute terminal velocity check failed at {_aero_body.name}")
 
+        # Aero-landing groups are passive — heat shield + parachutes do all
+        # the work.  Skip the engine optimizer entirely.
+        if all(e.edge_type == ET.ATMO_LANDING_AERO for e in group):
+            passive_mass = stage_payload + equip_mass
+            stage_results_list.append(StageResult(
+                delta_v=0.0,
+                twr_at_ignition=0.0,
+                twr_at_burnout=0.0,
+                engine_is_throttleable=False,
+                engine_has_gimbal=False,
+                stage_mass_wet=passive_mass,
+                stage_mass_dry=passive_mass,
+                engine_count=0,
+                tank_count=0,
+                fill_fraction=0.0,
+                engine_name="none",
+                tank_name="none",
+            ))
+            payload = passive_mass
+            continue
+
         if flags.staging_tier >= 2 and flags.has_fuel_lines:
             parallel_mode = "asparagus"
         elif flags.staging_tier >= 2:

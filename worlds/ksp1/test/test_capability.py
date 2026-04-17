@@ -1237,5 +1237,91 @@ class TestEngineMounting(unittest.TestCase):
         self.assertTrue(_HAMMER.radial_mountable, "Hammer should be radial")
 
 
+class TestAeroLandingPassiveStage(unittest.TestCase):
+    """
+    Bug 057: aero-landing stages should be passive (no engines, no fuel).
+
+    The ATMO_LANDING_AERO edge represents atmospheric drag + parachutes,
+    not a propulsive burn.  The optimizer must not add engines to these stages.
+    """
+
+    def _return_flags(self) -> EquipmentFlags:
+        """Parts sufficient for a Mun return mission."""
+        return _make_flags(
+            engines=[_MAMMOTH, _MAINSAIL, _SWIVEL, _TERRIER],
+            tanks=[_S3_3600, _JUMBO_64, _X200_32, _FL_T800, _FL_T400],
+            probe_core=True, reaction_wheels=True, solar=True,
+            heat_shields=[_SHIELD_125],
+            parachutes=[_MK16, _MK16, _MK16],
+            legs=[_LT2],
+            launch_clamp=True, decoupler_stack=True,
+        )
+
+    def test_mun_return_reentry_stage_has_no_engines(self) -> None:
+        """The final stage of a Mun return (Kerbin reentry) should be passive."""
+        flags = self._return_flags()
+        profiles = MISSION_PROFILES.get(("Mun", "return"), [])
+        self.assertTrue(len(profiles) > 0)
+
+        # Find a feasible profile and inspect its last stage
+        for profile in profiles:
+            result = _evaluate_profile(profile, flags, _normal_diff(), "return", is_crewed=False)
+            if result.feasible:
+                last_stage = result.stage_results[-1]
+                self.assertEqual(last_stage.engine_count, 0,
+                                 "Aero-landing stage should have no engines")
+                self.assertEqual(last_stage.tank_count, 0,
+                                 "Aero-landing stage should have no fuel tanks")
+                self.assertEqual(last_stage.delta_v, 0.0,
+                                 "Aero-landing stage produces no delta-v")
+                return
+
+        self.fail("No feasible Mun return profile found — can't test reentry stage")
+
+    def test_aero_landing_stage_mass_is_payload_plus_equipment(self) -> None:
+        """Passive stage mass = payload (prior stage wet mass) + heat shield only."""
+        flags = self._return_flags()
+        profiles = MISSION_PROFILES.get(("Mun", "return"), [])
+
+        for profile in profiles:
+            result = _evaluate_profile(profile, flags, _normal_diff(), "return", is_crewed=False)
+            if result.feasible:
+                last_stage = result.stage_results[-1]
+                self.assertEqual(last_stage.stage_mass_wet, last_stage.stage_mass_dry,
+                                 "Passive stage has no fuel — wet == dry")
+                # Mass should include heat shield but no engine/tank mass
+                self.assertGreater(last_stage.stage_mass_wet, 0.0,
+                                   "Passive stage must have non-zero mass (payload + shield)")
+                return
+
+        self.fail("No feasible Mun return profile found")
+
+    def test_duna_return_reentry_stage_has_no_engines(self) -> None:
+        """Duna return also ends with a Kerbin aero-landing — same passive requirement."""
+        flags = _make_flags(
+            engines=[_MAMMOTH, _MAINSAIL, _SWIVEL, _TERRIER],
+            tanks=[_S3_3600, _JUMBO_64, _X200_32, _FL_T800, _FL_T400],
+            probe_core=True, reaction_wheels=True,
+            solar=True, solar_retractable=True, rtg=True,
+            relay_tier=3,
+            heat_shields=[_SHIELD_25],
+            parachutes=[_MK16, _MK16, _MK16],
+            legs=[_LT2],
+            launch_clamp=True, decoupler_radial=True,
+        )
+        profiles = MISSION_PROFILES.get(("Duna", "return"), [])
+        self.assertTrue(len(profiles) > 0)
+
+        for profile in profiles:
+            result = _evaluate_profile(profile, flags, _normal_diff(), "return", is_crewed=False)
+            if result.feasible:
+                last_stage = result.stage_results[-1]
+                self.assertEqual(last_stage.engine_count, 0,
+                                 "Duna return reentry stage should have no engines")
+                return
+
+        self.fail("No feasible Duna return profile found")
+
+
 if __name__ == "__main__":
     unittest.main()
