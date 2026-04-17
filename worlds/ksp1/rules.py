@@ -446,10 +446,8 @@ def _set_item_pacing_rules(world: KSP1World, player: int, difficulty: int) -> No
             if node.tier > _EARLY_TECH_MAX_TIER:
                 continue
             for slot in range(1, num_slots + 1):
-                # 95% of slots restricted; 5% unrestricted for fill flexibility
-                if world.random.random() >= 0.05:
-                    loc = world.get_location(f"{node.display_name} {slot}")
-                    add_item_rule(loc, _make_power_rule(player, item_tiers, max_tier=1))
+                loc = world.get_location(f"{node.display_name} {slot}")
+                add_item_rule(loc, _make_power_rule(player, item_tiers, max_tier=1))
 
     # Science pack restriction on early tech tree (both gentle and strict)
     science_rule = _make_science_pack_rule()
@@ -457,8 +455,7 @@ def _set_item_pacing_rules(world: KSP1World, player: int, difficulty: int) -> No
         if node.tier > _EARLY_TECH_MAX_TIER:
             continue
         for slot in range(1, num_slots + 1):
-            if world.random.random() >= 0.05:
-                add_item_rule(world.get_location(f"{node.display_name} {slot}"), science_rule)
+            add_item_rule(world.get_location(f"{node.display_name} {slot}"), science_rule)
 
 
 # ---------------------------------------------------------------------------
