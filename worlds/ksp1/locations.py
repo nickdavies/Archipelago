@@ -274,10 +274,11 @@ def create_all_locations(world: KSP1World) -> None:
     mission_locs = {name: LOCATION_NAME_TO_ID[name] for name in MISSION_LOCATION_NAMES}
     menu.add_locations(mission_locs, KSP1Location)
 
-    # Tech tree node slots (filtered by difficulty)
-    tech_locs: dict[str, int] = {}
+    # Tech tree node slots — each node's slots go into its own region.
     for node in TECH_NODES:
+        region = world.get_region(node.display_name)
+        node_locs: dict[str, int] = {}
         for slot in range(1, num_tech_slots + 1):
             name = f"{node.display_name} {slot}"
-            tech_locs[name] = LOCATION_NAME_TO_ID[name]
-    menu.add_locations(tech_locs, KSP1Location)
+            node_locs[name] = LOCATION_NAME_TO_ID[name]
+        region.add_locations(node_locs, KSP1Location)

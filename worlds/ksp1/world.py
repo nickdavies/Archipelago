@@ -37,6 +37,11 @@ class KSP1World(World):
     game = "Kerbal Space Program"
     web = KSP1WebWorld()
 
+    # Tech tree entrance rules use can_reach_region() for parent dependencies.
+    # The auto version retries blocked connections when new regions are reached;
+    # the explicit version requires manual indirect condition registration.
+    explicit_indirect_conditions = False
+
     options_dataclass = KSP1Options
     options: KSP1Options
 

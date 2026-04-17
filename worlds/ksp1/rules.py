@@ -1,15 +1,17 @@
 """
 Access rules for KSP1 Archipelago locations and victory conditions.
 
-Three rule families:
+Rule families:
 
   1. Mission event rules  — delegate to get_capability() body access profiles.
      All check-slots for one event share a single rule (they trigger together).
 
-  2. Tech tree rules  — science heuristic.  Gate on cumulative science the
-     player can earn from accessible bodies given their current instruments.
+  2. Victory conditions  — goal-specific rules set on the completion event.
 
-  3. Victory conditions  — goal-specific rules set on the completion event.
+  3. Item pacing rules  — item_rules on early locations to prevent
+     high-tier items from appearing too early.
+
+Tech tree rules are region entrance rules (see regions.py).
 
 Golden rule: when in doubt, say something is NOT achievable.
 """
@@ -29,11 +31,10 @@ from .locations import (
     MISSION_LOCATION_NAMES,
     STARTING_INV_NAMES,
     TECH_SLOTS_BY_DIFFICULTY,
-    TECH_TREE_LOCATION_NAMES,
     event_location_names,
 )
 from .options import Difficulty, Goal, ItemPacing
-from .tech_tree import MAX_TIER, MAX_RD_BAND, NODES_BY_TIER, NODE_BY_ID, TIER_TO_BAND, cumulative_tier_cost, TECH_NODES
+from .tech_tree import MAX_TIER, MAX_RD_BAND, cumulative_tier_cost, TECH_NODES
 
 if TYPE_CHECKING:
     from .world import KSP1World
@@ -103,16 +104,6 @@ def _can_afford_tier(state: CollectionState, player: int, tier: int, difficulty:
 # Rule factories
 # ---------------------------------------------------------------------------
 
-def _make_tier_rule(player: int, tier: int, difficulty: int) -> Callable[[CollectionState], bool]:
-    band = TIER_TO_BAND[tier]
-
-    def rule(state: CollectionState) -> bool:
-        if band > 0 and not state.has(PROGRESSIVE_RD_NAME, player, band):
-            return False
-        return _can_afford_tier(state, player, tier, difficulty)
-    return rule
-
-
 def _make_science_threshold_rule(
     player: int, threshold: float, difficulty: int
 ) -> Callable[[CollectionState], bool]:
@@ -144,7 +135,7 @@ def set_all_rules(world: KSP1World) -> None:
     _set_ksc_biome_rules(world, player)
     _set_kerbin_rules(world, player)
     _set_mission_rules(world, player)
-    _set_tech_tree_rules(world, player, difficulty)
+    # Tech tree rules are now region entrance rules (see regions.py).
     _set_item_pacing_rules(world, player, difficulty)
 
 
@@ -350,25 +341,6 @@ def _set_mission_rules(world: KSP1World, player: int) -> None:
             for loc_name in event_location_names(body.name, event):
                 loc = world.get_location(loc_name)
                 loc.access_rule = rule
-
-
-# ---------------------------------------------------------------------------
-# Tech tree location rules
-# ---------------------------------------------------------------------------
-
-def _set_tech_tree_rules(world: KSP1World, player: int, difficulty: int) -> None:
-    """
-    Each tech tree slot is gated on the player being able to earn enough
-    science to afford all nodes through that slot's tier.
-    Slot count per node is scaled by difficulty (3–5).
-    """
-    num_slots = TECH_SLOTS_BY_DIFFICULTY[difficulty]
-    for node in TECH_NODES:
-        rule = _make_tier_rule(player, node.tier, difficulty)
-        for slot in range(1, num_slots + 1):
-            loc_name = f"{node.display_name} {slot}"
-            loc = world.get_location(loc_name)
-            loc.access_rule = rule
 
 
 # ---------------------------------------------------------------------------
