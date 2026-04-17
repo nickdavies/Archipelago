@@ -37,6 +37,7 @@ _NERV = _part("nuclearEngine")
 _DAWN = _part("ionEngine")
 _SPIDER = _part("radialEngineMini.v2")   # radial-mountable engine
 _THUD = _part("radialLiquidEngine1-2")   # radial-mountable engine
+_DART = _part("toroidalAerospike")       # no gimbal, high-Isp aerospike
 
 # SRBs
 _FLEA = _part("solidBooster.sm.v2")
@@ -77,6 +78,7 @@ _RA2 = _part("RelayAntenna5")
 _LAUNCH_CLAMP = _part("launchClamp1")
 _FUEL_LINE = _part("fuelLine")
 _LADDER = _part("ladder1")
+_BASIC_FIN = _part("basicFin")
 
 
 # ---------------------------------------------------------------------------
@@ -654,6 +656,106 @@ class TestKerbinOrbit(unittest.TestCase):
         )
 
 
+class TestAtmosphericAscentControl(unittest.TestCase):
+    """
+    Atmospheric-ascent gate (bug 049): steering a gravity turn in atmosphere
+    requires either a gimballed engine or actuated aero control surfaces.
+    Reaction wheels/RCS alone are insufficient.  Vacuum ascents and sounding
+    rockets (altitude checks) are unaffected.
+    """
+
+    def _add_aero_control(self, flags: EquipmentFlags, part) -> None:
+        flags.has_aero_control_surface = True
+        flags.available_aero_controls.append(part)
+        if part.mass < flags.lightest_aero_control_mass:
+            flags.lightest_aero_control_mass = part.mass
+
+    def test_atmo_ascent_requires_gimbal_or_aero(self) -> None:
+        # Dart engine (no gimbal) + reaction wheels + fuel, no fins.
+        # Kerbin orbit should be infeasible — reaction wheels cannot steer
+        # a gravity turn in atmosphere.
+        flags = _make_flags(
+            engines=[_DART],
+            tanks=[_FL_T400, _FL_T800, _X200_32],
+            probe_core=True, reaction_wheels=True, solar=True,
+            launch_clamp=True, staging_tier=1,
+        )
+        profiles = MISSION_PROFILES.get(("Kerbin", "orbit"), [])
+        ok = _try_profiles(profiles, flags, _normal_diff(), "orbit", crewed=False)
+        self.assertFalse(
+            ok,
+            "Dart + reaction wheels (no fins) must not claim Kerbin orbit",
+        )
+
+    def test_atmo_ascent_ok_with_gimbal_engine(self) -> None:
+        # LV-T45 Swivel (has gimbal) + reaction wheels.  Kerbin orbit should
+        # be feasible — gimbal steers the gravity turn.
+        flags = _make_flags(
+            engines=[_SWIVEL, _MAINSAIL],
+            tanks=[_FL_T400, _FL_T800, _X200_32],
+            probe_core=True, reaction_wheels=True, solar=True,
+            launch_clamp=True, staging_tier=1,
+        )
+        profiles = MISSION_PROFILES.get(("Kerbin", "orbit"), [])
+        ok = _try_profiles(profiles, flags, _normal_diff(), "orbit", crewed=False)
+        self.assertTrue(
+            ok,
+            "LV-T45 has gimbal — Kerbin orbit must be feasible",
+        )
+
+    def test_atmo_ascent_ok_with_aero_surface(self) -> None:
+        # Dart + Basic Fin + reaction wheels.  Kerbin orbit feasible —
+        # the fin provides atmospheric steering; optimizer adds 4x fin mass.
+        flags = _make_flags(
+            engines=[_DART],
+            tanks=[_FL_T400, _FL_T800, _X200_32],
+            probe_core=True, reaction_wheels=True, solar=True,
+            launch_clamp=True, staging_tier=1,
+        )
+        self._add_aero_control(flags, _BASIC_FIN)
+        profiles = MISSION_PROFILES.get(("Kerbin", "orbit"), [])
+        ok = _try_profiles(profiles, flags, _normal_diff(), "orbit", crewed=False)
+        self.assertTrue(
+            ok,
+            "Dart + Basic Fin should reach Kerbin orbit (fins provide control)",
+        )
+
+    def test_vacuum_ascent_unaffected(self) -> None:
+        # Vacuum ascent does not need gimbal/fins — the optimizer with
+        # require_gimbal=False must accept a non-gimbal engine like the Dart.
+        result = find_optimal_stage(
+            available_engines=[_DART],
+            available_srbs=[],
+            available_tanks=[_X200_32],
+            required_dv=800.0,
+            payload_mass=0.5,
+            gravity=1.63,           # Mun surface gravity
+            min_twr=1.2,
+            in_atmosphere=False,
+            available_multi_mounts=[],
+            require_gimbal=False,
+        )
+        self.assertIsNotNone(
+            result,
+            "Dart should be a valid vacuum-ascent engine (no gimbal required)",
+        )
+
+    def test_sounding_altitude_unaffected(self) -> None:
+        # Dart + fuel (no gimbal, no fins) — sounding altitude is not gated
+        # by control authority; the altitude path doesn't go through the
+        # ascent stage optimizer.
+        flags = _make_flags(
+            engines=[_DART],
+            tanks=[_FL_T800],
+            probe_core=True,
+        )
+        alt = _compute_sounding_altitude(flags)
+        self.assertGreater(
+            alt, 70.0,
+            f"Dart sounding altitude should exceed 70 km, got {alt:.1f} km",
+        )
+
+
 class TestDunaReturn(unittest.TestCase):
     """
     3-stage Duna return chain with realistic parts.
@@ -799,11 +901,15 @@ class TestKerbinOrbitIsEarlyGame(unittest.TestCase):
         )
         from worlds.ksp1.parts import MULTI_MOUNT_TABLE
         flags.available_multi_mounts = [MULTI_MOUNT_TABLE["stackQuadCoupler"]]
+        # Reliant has no gimbal; add a Basic Fin for atmospheric control.
+        flags.has_aero_control_surface = True
+        flags.available_aero_controls.append(_BASIC_FIN)
+        flags.lightest_aero_control_mass = _BASIC_FIN.mass
         profiles = MISSION_PROFILES.get(("Kerbin", "orbit"), [])
         ok = _try_profiles(profiles, flags, _normal_diff(), "orbit", crewed=False)
         self.assertTrue(
             ok,
-            "Reliant + X200-32 + quad coupler should reach Kerbin orbit",
+            "Reliant + X200-32 + quad coupler + fin should reach Kerbin orbit",
         )
 
 

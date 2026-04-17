@@ -30,6 +30,7 @@ from .parts import (
     PART_DB, Engine, FuelTank, SolidBooster, HeatShield,
     Parachute, LandingLeg, Decoupler, MiscEquipment,
     MultiMount, MULTI_MOUNT_TABLE,
+    PROGRESSIVE_PART_TIERS, PROGRESSIVE_PART_NAMES, PROGRESSIVE_PART_COUNTS,
 )
 from .rocket_math import (
     StageResult, find_optimal_stage, terminal_velocity,
@@ -42,7 +43,8 @@ if TYPE_CHECKING:
 # Item names that affect capability computation. Built once at module load
 # from PART_DB: any item containing an Engine, FuelTank, SolidBooster,
 # HeatShield, Parachute, LandingLeg, Decoupler, or MiscEquipment with
-# non-empty `provides`.
+# non-empty `provides`.  Includes parts in progressive chains (they're useful
+# items in the pool and individually receivable).
 _CAPABILITY_PART_TYPES = (
     Engine, FuelTank, SolidBooster, HeatShield,
     Parachute, LandingLeg, Decoupler, MiscEquipment,
@@ -55,7 +57,7 @@ CAPABILITY_ITEMS: frozenset[str] = frozenset(
         )
         for p in parts
     )
-)
+) | frozenset(PROGRESSIVE_PART_COUNTS.keys())
 
 # Terminal velocity threshold for parachute adequacy (m/s)
 _MAX_SAFE_LANDING_SPEED: float = 6.0
@@ -111,7 +113,14 @@ class EquipmentFlags:
     has_barometer: bool = False
     has_wheel: bool = False
     has_throttleable_engine: bool = False
+    has_aero_control_surface: bool = False
     _has_inline_chute: bool = False     # internal: cap inline chutes at 1
+
+    # Progressive-item binary gates (set by _pre_pass from progressive counts)
+    has_launch_engine: bool = False     # Progressive Launch Engine ≥1
+    has_vacuum_engine: bool = False     # Progressive Vacuum Engine ≥1
+    has_lfo_fuel: bool = False          # Progressive LFO Tank ≥1
+    has_srb_fuel: bool = False          # Progressive SRB ≥1
 
     # Tiered values
     landing_leg_tier: int = 0       # 0 = no legs
@@ -131,6 +140,7 @@ class EquipmentFlags:
     lightest_solar_mass: float = float("inf")
     lightest_solar_retractable_mass: float = float("inf")
     lightest_rtg_mass: float = float("inf")
+    lightest_aero_control_mass: float = float("inf")
 
     # Solar distance for ION logic (set from the edge being evaluated)
     target_solar_au: float = 1.0
@@ -145,6 +155,9 @@ class EquipmentFlags:
 
     # Multi-mount adapters/plates available to the player
     available_multi_mounts: list[MultiMount] = field(default_factory=list)
+
+    # Aero control surfaces available (elevon/fin/winglet)
+    available_aero_controls: list[MiscEquipment] = field(default_factory=list)
 
     # Decouplers available to the player (for CLI display)
     available_decouplers: list[Decoupler] = field(default_factory=list)
@@ -192,6 +205,7 @@ class RocketCapability:
     has_barometer: bool = False
     has_wheel: bool = False
     has_throttleable_engine: bool = False
+    has_aero_control_surface: bool = False
 
     # Sounding rocket: best achievable altitude (km) with a single stage
     sounding_altitude_km: float = 0.0
@@ -207,9 +221,21 @@ class RocketCapability:
 # Cache accessor — only public entry point for rules
 # ---------------------------------------------------------------------------
 
-def _capability_fingerprint(state: CollectionState, player: int) -> frozenset[str]:
-    """Return the set of capability-affecting items the player has collected."""
-    return frozenset(name for name in CAPABILITY_ITEMS if state.count(name, player))
+def _capability_fingerprint(state: CollectionState, player: int) -> frozenset[tuple[str, int]]:
+    """Return the set of (name, count) for capability-affecting items.
+
+    For progressive items, the count matters (unlocks different tiers).
+    For individual items, count is capped at 1 (presence/absence).
+    """
+    result: list[tuple[str, int]] = []
+    for name in CAPABILITY_ITEMS:
+        c = state.count(name, player)
+        if c > 0:
+            if name in PROGRESSIVE_PART_COUNTS:
+                result.append((name, min(c, PROGRESSIVE_PART_COUNTS[name])))
+            else:
+                result.append((name, 1))
+    return frozenset(result)
 
 
 def get_capability(state: CollectionState, player: int) -> RocketCapability:
@@ -277,6 +303,10 @@ def _pre_pass(item_count_fn: Callable[[str], int],
               start_with_clamps: bool) -> EquipmentFlags:
     """
     Iterate every item the player has collected and build EquipmentFlags.
+
+    Progressive items are expanded first: for each progressive item the player
+    has N copies of, unlock the parts from tiers 1..N.  Then individual items
+    (non-absorbed) are processed as before.
     """
     flags = EquipmentFlags()
 
@@ -284,59 +314,36 @@ def _pre_pass(item_count_fn: Callable[[str], int],
     if start_with_clamps:
         flags.has_launch_clamp = True
 
-    for item_name, parts in PART_DB.items():
-        count = item_count_fn(item_name)
-        if count == 0:
+    # Build the set of part names unlocked by progressive items
+    progressive_unlocked: set[str] = set()
+    for prog_name, tiers in PROGRESSIVE_PART_TIERS.items():
+        count = item_count_fn(prog_name)
+        if count <= 0:
             continue
+        max_tier = max(tiers.keys())
+        for t in range(1, min(count, max_tier) + 1):
+            progressive_unlocked.update(tiers[t])
+
+    # Set progressive binary gate flags
+    flags.has_launch_engine = item_count_fn("Progressive Launch Engine") > 0
+    flags.has_vacuum_engine = item_count_fn("Progressive Vacuum Engine") > 0
+    flags.has_lfo_fuel = item_count_fn("Progressive LFO Tank") > 0
+    flags.has_srb_fuel = item_count_fn("Progressive SRB") > 0
+
+    # Process parts: both progressive-unlocked and individual non-absorbed items
+    for item_name, parts in PART_DB.items():
+        if item_name in PROGRESSIVE_PART_NAMES:
+            # Absorbed part: only available if unlocked by progressive tier
+            if item_name not in progressive_unlocked:
+                continue
+            count = 1  # progressive unlocking grants 1 copy
+        else:
+            count = item_count_fn(item_name)
+            if count == 0:
+                continue
 
         for part in parts:
-            if isinstance(part, Engine):
-                flags.available_engines.append(part)
-
-            elif isinstance(part, SolidBooster):
-                flags.available_srbs.append(part)
-
-            elif isinstance(part, FuelTank):
-                flags.available_tanks.append(part)
-
-            elif isinstance(part, HeatShield):
-                flags.has_heat_shield = True
-                flags.available_heat_shields.append(part)
-                if flags.max_heat_shield_size is None or \
-                        part.size_class > flags.max_heat_shield_size:
-                    flags.max_heat_shield_size = part.size_class
-                    flags.best_heat_shield_mass = part.mass
-
-            elif isinstance(part, Parachute):
-                if not part.is_drogue:  # drogue chutes excluded from all logic
-                    if part.is_radial:
-                        # Radial chutes mount on side — unlimited
-                        flags.has_parachutes = True
-                        flags.total_chute_drag_area += part.drag_area * count
-                        flags.parachute_count += count
-                        flags.available_parachutes.extend([part] * count)
-                    elif not flags._has_inline_chute:
-                        # Inline chutes: cap at 1 per rocket (one free top node)
-                        flags._has_inline_chute = True
-                        flags.has_parachutes = True
-                        flags.total_chute_drag_area += part.drag_area
-                        flags.parachute_count += 1
-                        flags.available_parachutes.append(part)
-
-            elif isinstance(part, LandingLeg):
-                if part.tier > flags.landing_leg_tier:
-                    flags.landing_leg_tier = part.tier
-                flags.available_landing_legs.append(part)
-
-            elif isinstance(part, Decoupler):
-                if part.kind == "stack" and flags.staging_tier < 1:
-                    flags.staging_tier = 1
-                elif part.kind == "radial" and flags.staging_tier < 2:
-                    flags.staging_tier = 2
-                flags.available_decouplers.append(part)
-
-            elif isinstance(part, MiscEquipment):
-                _apply_misc(flags, part, count)
+            _add_part_to_flags(flags, part, count)
 
     # Docking ports don't affect staging_tier — they can't be used for
     # practical stage separation (can't attach below engines, no automatic
@@ -385,6 +392,55 @@ def _pre_pass(item_count_fn: Callable[[str], int],
     flags.tanks_by_fuel_type = tank_index
 
     return flags
+
+
+def _add_part_to_flags(flags: EquipmentFlags, part, count: int) -> None:
+    """Add a single part object to EquipmentFlags."""
+    if isinstance(part, Engine):
+        flags.available_engines.append(part)
+
+    elif isinstance(part, SolidBooster):
+        flags.available_srbs.append(part)
+
+    elif isinstance(part, FuelTank):
+        flags.available_tanks.append(part)
+
+    elif isinstance(part, HeatShield):
+        flags.has_heat_shield = True
+        flags.available_heat_shields.append(part)
+        if flags.max_heat_shield_size is None or \
+                part.size_class > flags.max_heat_shield_size:
+            flags.max_heat_shield_size = part.size_class
+            flags.best_heat_shield_mass = part.mass
+
+    elif isinstance(part, Parachute):
+        if not part.is_drogue:  # drogue chutes excluded from all logic
+            if part.is_radial:
+                flags.has_parachutes = True
+                flags.total_chute_drag_area += part.drag_area * count
+                flags.parachute_count += count
+                flags.available_parachutes.extend([part] * count)
+            elif not flags._has_inline_chute:
+                flags._has_inline_chute = True
+                flags.has_parachutes = True
+                flags.total_chute_drag_area += part.drag_area
+                flags.parachute_count += 1
+                flags.available_parachutes.append(part)
+
+    elif isinstance(part, LandingLeg):
+        if part.tier > flags.landing_leg_tier:
+            flags.landing_leg_tier = part.tier
+        flags.available_landing_legs.append(part)
+
+    elif isinstance(part, Decoupler):
+        if part.kind == "stack" and flags.staging_tier < 1:
+            flags.staging_tier = 1
+        elif part.kind == "radial" and flags.staging_tier < 2:
+            flags.staging_tier = 2
+        flags.available_decouplers.append(part)
+
+    elif isinstance(part, MiscEquipment):
+        _apply_misc(flags, part, count)
 
 
 def _apply_misc_relay(flags: EquipmentFlags, flag: str, mass: float) -> None:
@@ -459,6 +515,11 @@ def _apply_misc(flags: EquipmentFlags, part: MiscEquipment, count: int) -> None:
             flags.has_barometer = True
         elif flag == "wheel":
             flags.has_wheel = True
+        elif flag == "aero_control":
+            flags.has_aero_control_surface = True
+            flags.available_aero_controls.append(part)
+            if part.mass < flags.lightest_aero_control_mass:
+                flags.lightest_aero_control_mass = part.mass
         elif flag.startswith("relay_"):
             _apply_misc_relay(flags, flag, part.mass)
 
@@ -615,6 +676,35 @@ def _evaluate_profile(
                 failure_reason=f"relay tier too low for {body.name}: "
                                f"need {body.min_relay_tier}, have {flags.relay_tier}")
 
+    # Propulsion gate: bail if the player has no engines or fuel at all.
+    # Progressive flags are set by _pre_pass; also check actual part lists
+    # (tests may construct EquipmentFlags directly with parts).
+    has_any_engine = (flags.has_launch_engine or flags.has_vacuum_engine
+                      or bool(flags.available_engines))
+    has_launch_engine = (flags.has_launch_engine
+                         or any(e.atm_isp > 200 for e in flags.available_engines))
+    has_any_fuel = (flags.has_lfo_fuel or flags.has_srb_fuel
+                    or bool(flags.available_tanks) or bool(flags.available_srbs))
+
+    from .bodies import EdgeType as _ET
+    for edge in profile:
+        et = edge.edge_type
+        if et == _ET.ATMOSPHERIC_ASCENT or et == _ET.ATMO_LANDING_PROPULSIVE:
+            if not has_launch_engine:
+                return ProfileResult(False,
+                    failure_reason=f"no launch engine for {et.name}")
+            if not has_any_fuel:
+                return ProfileResult(False,
+                    failure_reason=f"no fuel for {et.name}")
+        elif et in (_ET.VACUUM_ASCENT, _ET.PURE_VACUUM,
+                    _ET.PLANET_TRANSFER, _ET.VACUUM_LANDING):
+            if not has_any_engine:
+                return ProfileResult(False,
+                    failure_reason=f"no engine for {et.name}")
+            if not has_any_fuel:
+                return ProfileResult(False,
+                    failure_reason=f"no fuel for {et.name}")
+
     # ------------------------------------------------------------------
     # Stage grouping
     # ------------------------------------------------------------------
@@ -698,6 +788,23 @@ def _evaluate_profile(
             leg_body = BODY_BY_NAME[next(e.body for e in group if e.needs_landing_legs)]
             equip_mass += _leg_mass_for_tier(flags, leg_body.landing_leg_tier)
 
+        # Atmospheric-ascent gate: steering a gravity turn in atmosphere
+        # requires either a gimballed engine or actuated aero surfaces.
+        # Reaction wheels/RCS are not enough.  When no aero surface is
+        # available we force the optimizer to pick a gimbal engine.
+        # When aero surfaces ARE available, include 4x the lightest
+        # surface's mass (min. needed for control on all axes) in the
+        # stage payload so the optimizer accounts for it.
+        has_atmo_ascent_in_group = any(
+            e.edge_type == ET.ATMOSPHERIC_ASCENT for e in group
+        )
+        needs_gimbal_engine = (
+            has_atmo_ascent_in_group and not flags.has_aero_control_surface
+        )
+        stage_payload = payload
+        if has_atmo_ascent_in_group and flags.has_aero_control_surface:
+            stage_payload += 4.0 * flags.lightest_aero_control_mass
+
         # Parachute consumption check for aero landing edges in this group.
         # Use the landing edge's actual body (not the group's first body) since
         # groups may be merged across bodies.  The heat shield is jettisoned
@@ -724,7 +831,7 @@ def _evaluate_profile(
             available_srbs=flags.available_srbs,
             available_tanks=flags.available_tanks,
             required_dv=req_dv,
-            payload_mass=payload,
+            payload_mass=stage_payload,
             gravity=body.surface_gravity,
             min_twr=min_twr,
             requires_throttleable=req_throttle,
@@ -736,6 +843,7 @@ def _evaluate_profile(
             player_has_rcs=flags.has_rcs,
             tanks_by_fuel_type=flags.tanks_by_fuel_type,
             available_multi_mounts=flags.available_multi_mounts,
+            require_gimbal=needs_gimbal_engine,
         )
 
         result = find_optimal_stage(parallel_mode=parallel_mode, **stage_kwargs)
@@ -1352,6 +1460,7 @@ def compute_capability_from_items(
         has_barometer=flags.has_barometer,
         has_wheel=flags.has_wheel,
         has_throttleable_engine=flags.has_throttleable_engine,
+        has_aero_control_surface=flags.has_aero_control_surface,
         bodies=body_profiles,
     )
 

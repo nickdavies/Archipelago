@@ -295,6 +295,13 @@ def _find_best_heat_shield(flags: EquipmentFlags) -> Optional[str]:
     return best.name
 
 
+def _find_lightest_aero_control(flags: EquipmentFlags) -> Optional[str]:
+    """Return name of the lightest available aero control surface, or None."""
+    if not flags.available_aero_controls:
+        return None
+    return min(flags.available_aero_controls, key=lambda p: p.mass).name
+
+
 def _find_lightest_decoupler(flags: EquipmentFlags) -> Optional[tuple[str, float]]:
     """Return (name, mass) of the lightest stack decoupler, or None."""
     stack = [d for d in flags.available_decouplers if d.kind == "stack"]
@@ -466,6 +473,15 @@ def cmd_rocket(ap: APState, check_name: str, verbose: bool = False) -> None:
             leg_name = _find_best_legs(flags, leg_tier)
             if leg_name:
                 print(f"      4x {_titled(leg_name)}")
+
+        # Aero control surfaces (atmospheric ascent without a gimbal engine
+        # requires actuated fins/elevons; we always show them when available
+        # on atmospheric-ascent stages so the player knows they're needed).
+        if (flags.has_aero_control_surface
+                and any(e.edge_type == EdgeType.ATMOSPHERIC_ASCENT for e in group)):
+            fin_name = _find_lightest_aero_control(flags)
+            if fin_name:
+                print(f"      4x {_titled(fin_name)}")
 
         # Parachutes (aero landing edges)
         aero_edges = [e for e in group if e.edge_type == EdgeType.ATMO_LANDING_AERO]

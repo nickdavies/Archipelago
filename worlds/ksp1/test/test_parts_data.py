@@ -163,14 +163,14 @@ class TestSolidBoosterSanity(unittest.TestCase):
 
 
 class TestPartDbItemTableSync(unittest.TestCase):
-    """Every key in PART_DB must exist in items.py's ITEM_TABLE."""
+    """Every PART_DB key must exist in ITEM_TABLE and vice versa."""
 
     def test_part_db_keys_in_item_table(self) -> None:
         from worlds.ksp1.items import ITEM_TABLE
         for name in PART_DB:
             self.assertIn(
                 name, ITEM_TABLE,
-                f"PART_DB key {name!r} not found in ITEM_TABLE",
+                f"PART_DB key {name!r} not in ITEM_TABLE",
             )
 
     def test_item_table_part_keys_in_part_db(self) -> None:
@@ -196,6 +196,7 @@ class TestProvidesFlags(unittest.TestCase):
         "thermometer", "barometer", "wheel",
         "science_instrument",  # classification only, not a capability flag
         "multi_mount",         # adapter/coupler/engine plate
+        "aero_control",        # actuated aero control surface (fin/elevon/winglet)
     })
 
     def test_all_provides_flags_known(self) -> None:

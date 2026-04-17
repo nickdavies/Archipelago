@@ -5,7 +5,8 @@ from worlds.AutoWorld import LogicMixin, WebWorld, World
 
 from . import items, locations, regions, rules
 from .capability import RocketCapability
-from .items import ITEM_NAME_TO_ID, PROGRESSIVE_RD_NAME, PROGRESSIVE_RD_COUNT
+from .items import ITEM_NAME_TO_ID
+from .parts import PROGRESSIVE_PART_TIERS
 from .locations import LOCATION_NAME_TO_ID, MAX_TECH_SLOTS, TECH_SLOTS_BY_DIFFICULTY
 from .options import KSP1Options
 from .tech_tree import MAX_TIER, NODES_BY_TIER, TECH_NODES, TIER_TO_BAND
@@ -43,7 +44,11 @@ class KSP1World(World):
     location_name_to_id = LOCATION_NAME_TO_ID
 
     # Fingerprint → RocketCapability, shared across all CollectionState copies
-    capability_cache: dict[frozenset[str], RocketCapability]
+    capability_cache: dict[frozenset[tuple[str, int]], RocketCapability]
+
+    # Per progressive tier, the randomly-selected representative part name.
+    # Set during create_items(); included in slot_data for the client.
+    progressive_representatives: dict[str, dict[int, str]]
 
     def generate_early(self) -> None:
         """Apply ExcludeLateTechTree to the exclude_locations option set."""
@@ -62,9 +67,6 @@ class KSP1World(World):
 
     def create_items(self) -> None:
         items.create_all_items(self)
-        # Bias Progressive R&D toward early locations so the fill can open up
-        # higher tech tree bands before running out of placement room.
-        self.multiworld.local_early_items[self.player][PROGRESSIVE_RD_NAME] = PROGRESSIVE_RD_COUNT
 
     def set_rules(self) -> None:
         rules.set_all_rules(self)
@@ -80,6 +82,16 @@ class KSP1World(World):
         d = self.options.as_dict("goal", "difficulty", "start_with_launch_clamps", "item_pacing")
         d["tech_slots_per_node"] = TECH_SLOTS_BY_DIFFICULTY[self.options.difficulty.value]
         d["node_bands"] = {n.node_id: TIER_TO_BAND[n.tier] for n in TECH_NODES}
+        # Progressive tier data for the client mod
+        d["progressive_tiers"] = {
+            name: {str(t): parts for t, parts in tiers.items()}
+            for name, tiers in PROGRESSIVE_PART_TIERS.items()
+        }
+        # Server-selected representative per progressive tier
+        d["progressive_representatives"] = {
+            name: {str(t): rep for t, rep in reps.items()}
+            for name, reps in self.progressive_representatives.items()
+        }
         return d
 
     def collect(self, state: CollectionState, item: Item) -> bool:

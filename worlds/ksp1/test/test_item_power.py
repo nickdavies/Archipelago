@@ -70,8 +70,9 @@ class TestItemTierAssignments(unittest.TestCase):
     def test_flea_tier0(self):
         self.assertEqual(self._tier("solidBooster.sm.v2"), 0)
 
-    def test_hammer_tier0(self):
-        self.assertEqual(self._tier("solidBooster.v2"), 0)
+    def test_hammer_tier1(self):
+        """Hammer is Progressive SRB T2 → floor 1."""
+        self.assertEqual(self._tier("solidBooster.v2"), 1)
 
     def test_terrier_tier0(self):
         self.assertEqual(self._tier("liquidEngine3.v2"), 0)
@@ -131,9 +132,10 @@ class TestJsonSync(unittest.TestCase):
     def test_json_matches_computation(self):
         """Regenerate tiers from PART_DB and verify they match the shipped JSON."""
         from worlds.ksp1.scripts.compute_item_tiers import compute_item_tiers
+        from worlds.ksp1.item_power import _load_item_tiers
         computed = compute_item_tiers()
         self.assertEqual(
-            ITEM_TIERS, computed,
+            _load_item_tiers(), computed,
             "data/item_tiers.json is stale — run: "
             "python -m worlds.ksp1.scripts.compute_item_tiers",
         )

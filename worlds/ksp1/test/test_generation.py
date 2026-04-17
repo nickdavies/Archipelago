@@ -41,7 +41,14 @@ class TestItemLocationBalance(KSP1TestBase):
 
     def test_no_negative_filler_count(self):
         """Pool should never have more part items than locations."""
-        part_item_count = len(_SORTED_PART_NAMES) - len(ALWAYS_PRECOLLECTED) - len(CLAMP_PRECOLLECTED)
+        from worlds.ksp1.parts import PROGRESSIVE_PART_COUNTS
+        rep_count = sum(PROGRESSIVE_PART_COUNTS.values())
+        part_item_count = (
+            len(_SORTED_PART_NAMES)
+            - len(ALWAYS_PRECOLLECTED)
+            - len(CLAMP_PRECOLLECTED)
+            - rep_count  # representatives removed from pool
+        )
         real_loc_count = sum(
             1 for loc in self.multiworld.get_locations(self.player)
             if loc.address is not None
@@ -180,11 +187,11 @@ class TestItemClassification(KSP1TestBase):
                 return item.classification
         raise KeyError(name)
 
-    def test_engines_are_progression(self):
+    def test_progressive_engine_items_are_progression(self):
+        """Progressive engine items should be progression-classified."""
         for name in (
-            "liquidEngine2.v2",   # Swivel
-            "liquidEngine3.v2",   # Terrier
-            "liquidEngineMainsail.v2",  # Mainsail
+            "Progressive Launch Engine",
+            "Progressive Vacuum Engine",
         ):
             self.assertEqual(
                 self._classification(name),

@@ -198,3 +198,5 @@ _speedups.html
 .LSOverride
 Thumbs.db
 [Dd]esktop.ini
+
+worlds/ksp1/test/profile_*.py

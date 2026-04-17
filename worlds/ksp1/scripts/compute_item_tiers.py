@@ -50,6 +50,10 @@ _ENGINE_TIER_2_DV = 3000.0   # above → tier 2
 # surface capability (e.g. Nerv 800s, Wolfhound 380s, Ion 4200s).
 _EXCEPTIONAL_VAC_ISP = 370.0
 
+# Thrust threshold — engines above this are interplanetary-class hardware
+# regardless of atmospheric performance (e.g. Rhino 2000 kN, 340s vac).
+_INTERPLANETARY_THRUST = 1500.0
+
 # Tank: fuel_mass / dry_mass ratio
 _TANK_TIER_1_RATIO = 4.0
 _TANK_TIER_2_RATIO = 7.0
@@ -136,6 +140,8 @@ def _score_tank(tank: FuelTank) -> float:
 
 def _tier_from_engine(engine: Engine, surface_dv: float) -> int:
     if engine.vac_isp >= _EXCEPTIONAL_VAC_ISP:
+        return 2
+    if engine.vac_thrust >= _INTERPLANETARY_THRUST:
         return 2
     if surface_dv >= _ENGINE_TIER_2_DV:
         return 2

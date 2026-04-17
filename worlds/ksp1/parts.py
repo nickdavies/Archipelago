@@ -116,6 +116,7 @@ class MiscEquipment:
     #   "launch_clamp"          hold-down + fuelling (interplanetary gate)
     #   "isru"                  in-situ resource utilisation
     #   "wheel"                 rover wheel or landing gear (enables KSC rover path)
+    #   "aero_control"          actuated aero control surface (elevon/fin/winglet)
 
 
 # ---------------------------------------------------------------------------
@@ -408,7 +409,7 @@ PART_REGISTRY: list[PartMapping] = [
     PartMapping("OrbitalScanner", MiscEquipment, "M4435 Narrow-Band Scanner", 1133,
                 {"provides": frozenset()}),
     PartMapping("R8winglet", MiscEquipment, "AV-R8 Winglet", 1008,
-                {"provides": frozenset()}),
+                {"provides": frozenset({"aero_control"})}),
     PartMapping("RAPIER", MiscEquipment, "CR-7 R.A.P.I.E.R. Engine", 1032,
                 {"provides": frozenset()}),
     PartMapping("RCSBlock_v2", MiscEquipment, "RV-105 RCS Thruster Block", 1240,
@@ -440,7 +441,7 @@ PART_REGISTRY: list[PartMapping] = [
     PartMapping("SmallTank", MiscEquipment, "Small Holding Tank", 1279,
                 {"provides": frozenset()}),
     PartMapping("StandardCtrlSrf", MiscEquipment, "Elevon 1", 1058,
-                {"provides": frozenset()}),
+                {"provides": frozenset({"aero_control"})}),
     PartMapping("SurfAntenna", MiscEquipment, "Communotron 16-S", 1039,
                 {"provides": frozenset({"relay_t1"})}),
     PartMapping("SurfaceScanner", MiscEquipment, "Surface Scanning Module", 1295,
@@ -466,11 +467,11 @@ PART_REGISTRY: list[PartMapping] = [
     PartMapping("airbrake1", MiscEquipment, "A.I.R.B.R.A.K.E.S", 1004,
                 {"provides": frozenset()}),
     PartMapping("airlinerCtrlSrf", MiscEquipment, "FAT-455 Aeroplane Control Surface", 1067,
-                {"provides": frozenset()}),
+                {"provides": frozenset({"aero_control"})}),
     PartMapping("airlinerMainWing", MiscEquipment, "FAT-455 Aeroplane Main Wing", 1068,
                 {"provides": frozenset()}),
     PartMapping("airlinerTailFin", MiscEquipment, "FAT-455 Aeroplane Tail Fin", 1069,
-                {"provides": frozenset()}),
+                {"provides": frozenset({"aero_control"})}),
     PartMapping("airplaneTail", MiscEquipment, "Tail Connector A", 1318,
                 {"provides": frozenset()}),
     PartMapping("airplaneTailB", MiscEquipment, "Tail Connector B", 1319,
@@ -480,7 +481,7 @@ PART_REGISTRY: list[PartMapping] = [
     PartMapping("avionicsNoseCone", MiscEquipment, "CH-J3 Fly-By-Wire Avionics Hub", 1031,
                 {"provides": frozenset()}),
     PartMapping("basicFin", MiscEquipment, "Basic Fin", 1023,
-                {"provides": frozenset()}),
+                {"provides": frozenset({"aero_control"})}),
     PartMapping("batteryBank", MiscEquipment, "Z-1k Rechargeable Battery Bank", 1336,
                 {"provides": frozenset({"battery_large", "battery_small"})}),
     PartMapping("batteryBankLarge", MiscEquipment, "Z-4K Rechargeable Battery Bank", 1339,
@@ -514,11 +515,11 @@ PART_REGISTRY: list[PartMapping] = [
     PartMapping("domeLight1", MiscEquipment, "Domelight Mk1", 1048,
                 {"provides": frozenset()}),
     PartMapping("elevon2", MiscEquipment, "Elevon 2", 1059,
-                {"provides": frozenset()}),
+                {"provides": frozenset({"aero_control"})}),
     PartMapping("elevon3", MiscEquipment, "Elevon 3", 1060,
-                {"provides": frozenset()}),
+                {"provides": frozenset({"aero_control"})}),
     PartMapping("elevon5", MiscEquipment, "Elevon 5", 1062,
-                {"provides": frozenset()}),
+                {"provides": frozenset({"aero_control"})}),
     PartMapping("evaChute", MiscEquipment, "Personal Parachute", 1209,
                 {"provides": frozenset()}),
     PartMapping("evaCylinder", MiscEquipment, "EVA Fuel Cylinders", 1055,
@@ -690,7 +691,7 @@ PART_REGISTRY: list[PartMapping] = [
     PartMapping("smallClaw", MiscEquipment, "Advanced Grabbing Unit Jr.", 1014,
                 {"provides": frozenset()}),
     PartMapping("smallCtrlSrf", MiscEquipment, "Elevon 4", 1061,
-                {"provides": frozenset()}),
+                {"provides": frozenset({"aero_control"})}),
     PartMapping("smallHardpoint", MiscEquipment, "Small Hardpoint", 1278,
                 {"provides": frozenset()}),
     PartMapping("solarPanelOX10C", MiscEquipment, "OX-10C Photovoltaic Panels", 1194,
@@ -766,7 +767,7 @@ PART_REGISTRY: list[PartMapping] = [
     PartMapping("sweptWing2", MiscEquipment, "Swept Wing Type B", 1297,
                 {"provides": frozenset()}),
     PartMapping("tailfin", MiscEquipment, "Tail Fin", 1320,
-                {"provides": frozenset()}),
+                {"provides": frozenset({"aero_control"})}),
     PartMapping("telescopicLadder", MiscEquipment, "Kelus Mobility Enhancer", 1102,
                 {"provides": frozenset({"ladder"})}),
     PartMapping("telescopicLadderBay", MiscEquipment, "Kelus-LV Bay Mobility Enhancer", 1103,
@@ -800,19 +801,19 @@ PART_REGISTRY: list[PartMapping] = [
     PartMapping("wingShuttleDelta", MiscEquipment, "Big-S Delta Wing", 1024,
                 {"provides": frozenset()}),
     PartMapping("wingShuttleElevon1", MiscEquipment, "Big-S Elevon 1", 1025,
-                {"provides": frozenset()}),
+                {"provides": frozenset({"aero_control"})}),
     PartMapping("wingShuttleElevon2", MiscEquipment, "Big-S Elevon 2", 1026,
-                {"provides": frozenset()}),
+                {"provides": frozenset({"aero_control"})}),
     PartMapping("wingShuttleRudder", MiscEquipment, "Big-S Spaceplane Tail Fin", 1027,
-                {"provides": frozenset()}),
+                {"provides": frozenset({"aero_control"})}),
     PartMapping("wingShuttleStrake", MiscEquipment, "Big-S Wing Strake", 1028,
                 {"provides": frozenset()}),
     PartMapping("wingStrake", MiscEquipment, "Wing Strake", 1331,
                 {"provides": frozenset()}),
     PartMapping("winglet", MiscEquipment, "AV-T1 Winglet", 1009,
-                {"provides": frozenset()}),
+                {"provides": frozenset({"aero_control"})}),
     PartMapping("winglet3", MiscEquipment, "Delta-Deluxe Winglet", 1047,
-                {"provides": frozenset()}),
+                {"provides": frozenset({"aero_control"})}),
     # ===================================================================
     # Making History DLC parts (offsets 1400+)
     # ===================================================================
@@ -1124,3 +1125,282 @@ def _load_part_db() -> dict[str, list[AnyPart]]:
 
 
 PART_DB: dict[str, list[AnyPart]] = _load_part_db()
+
+
+# ---------------------------------------------------------------------------
+# Progressive part tier definitions
+# ---------------------------------------------------------------------------
+# Maps progressive item name → {tier: [ksp_names]}
+# Tier numbers are 1-based; receiving N copies unlocks tiers 1..N.
+
+PROGRESSIVE_PART_TIERS: dict[str, dict[int, list[str]]] = {
+    # --- Launch Engines (atmosphere-capable, by thrust class) ---
+    "Progressive Launch Engine": {
+        1: [
+            "liquidEngine.v2",           # LV-T30 Reliant (240kN)
+            "liquidEngine2.v2",          # LV-T45 Swivel (215kN)
+            "LiquidEngineRV-1",          # RV-1 Cub (32kN, MH)
+        ],
+        2: [
+            "engineLargeSkipper.v2",     # RE-I5 Skipper (650kN)
+            "LiquidEngineLV-TX87",       # LV-TX87 Bobcat (400kN, MH)
+            "LiquidEngineRK-7",          # RK-7 Kodiak (260kN, MH)
+            "LiquidEngineRE-I2",         # RE-I2 Skiff (300kN, MH)
+            "toroidalAerospike",         # T-1 Dart (180kN)
+            "radialLiquidEngine1-2",     # Mk-55 Thud (120kN)
+            "smallRadialEngine.v2",      # 24-77 Twitch (16kN)
+        ],
+        3: [
+            "liquidEngineMainsail.v2",   # RE-M3 Mainsail (1500kN)
+            "Size2LFB.v2",              # LFB KR-1x2 Twin-Boar (2000kN)
+            "SSME",                      # S3 KS-25 Vector (1000kN)
+            "LiquidEngineKE-1",          # KE-1 Mastodon (1350kN, MH)
+            "Size3EngineCluster",        # S3 KS-25x4 Mammoth (4000kN)
+            "Size3AdvancedEngine",       # KR-2L+ Rhino (2000kN)
+        ],
+    },
+    # --- Vacuum Engines (high-ISP transfer + specialty fuel) ---
+    "Progressive Vacuum Engine": {
+        1: [
+            "liquidEngine3.v2",          # LV-909 Terrier (60kN, 345s vac)
+            "liquidEngineMini.v2",       # 48-7S Spark (20kN, 320s vac)
+            "microEngine.v2",            # LV-1 Ant (2kN, 315s vac)
+            "radialEngineMini.v2",       # LV-1R Spider (2kN, 290s vac)
+        ],
+        2: [
+            "liquidEngine2-2.v2",        # RE-L10 Poodle (250kN, 350s vac)
+            "LiquidEngineLV-T91",        # LV-T91 Cheetah (125kN, 355s vac, MH)
+            "LiquidEngineRE-J10",        # RE-J10 Wolfhound (375kN, 380s vac, MH)
+        ],
+        3: [
+            # Advanced propulsion engines
+            "nuclearEngine",             # LV-N Nerv (60kN, 800s vac)
+            "ionEngine",                 # IX-6315 Dawn (2kN, 4200s vac)
+            # LF-only tanks (useless without Nerv)
+            "miniFuselage",              # Mk0 LF Fuselage (0.25t fuel)
+            "MK1Fuselage",              # Mk1 LF Fuselage (2.0t fuel)
+            # Xenon tanks (useless without Dawn)
+            "xenonTank",                 # PB-X150 Xenon Container
+            "xenonTankLarge",            # PB-X750 Xenon Container
+            "xenonTankRadial",           # PB-X50R Xenon Container
+        ],
+    },
+    # --- Solid Rocket Boosters (by thrust/total impulse class) ---
+    "Progressive SRB": {
+        1: [
+            "Mite",                      # FM1 Mite (12kN)
+            "Shrimp",                    # F3S0 Shrimp (30kN)
+            "solidBooster.sm.v2",        # RT-5 Flea (192kN)
+        ],
+        2: [
+            "solidBooster.v2",           # RT-10 Hammer (227kN)
+            "solidBooster1-1",           # BACC Thumper (300kN)
+            "Pollux",                    # THK Pollux (1300kN, MH)
+        ],
+        3: [
+            "MassiveBooster",            # S1 SRB-KD25k Kickback (670kN)
+            "Thoroughbred",              # S2-17 Thoroughbred (1700kN)
+            "Clydesdale",                # S2-33 Clydesdale (3300kN)
+        ],
+    },
+    # --- LFO Tanks (by fuel mass, not size class) ---
+    "Progressive LFO Tank": {
+        1: [  # Tiny (< 1.0t fuel)
+            "miniFuelTank",              # Oscar-B (0.2t)
+            "fuelTankSmallFlat",         # FL-T100 (0.5t)
+        ],
+        2: [  # Small (1.0 - 4.5t fuel)
+            "fuelTankSmall",             # FL-T200 (1.0t)
+            "Size1p5.Tank.01",           # FL-TX220 (1.1t, MH)
+            "fuelTank",                  # FL-T400 (2.0t)
+            "Size1p5.Tank.02",           # FL-TX440 (2.2t, MH)
+            "fuelTank.long",             # FL-T800 (4.0t)
+            "Rockomax8BW",              # X200-8 (4.0t)
+            "Size1p5.Tank.03",           # FL-TX900 (4.5t, MH)
+        ],
+        3: [  # Medium (5.0 - 18.0t fuel)
+            "Size1p5.Tank.05",           # FL-C1000 (6.03t, MH)
+            "Size1p5.Size2.Adapter.01",  # FL-A215 (6.0t, MH)
+            "Rockomax16.BW",            # X200-16 (8.0t)
+            "Size1p5.Tank.04",           # FL-TX1800 (9.0t, MH)
+            "Rockomax32.BW",            # X200-32 (16.0t)
+            "Size3SmallTank",            # S3-3600 (18.0t)
+        ],
+        4: [  # Large (> 18.0t fuel)
+            "Rockomax64.BW",            # Jumbo-64 (32.0t)
+            "Size3MediumTank",           # S3-7200 (36.0t)
+            "Size3LargeTank",            # S3-14400 (72.0t)
+            "Size3.Size4.Adapter.01",    # S3-S4 Adapter (32.0t, MH)
+            "Size4.Tank.01",             # S4-64 (32.0t, MH)
+            "Size4.Tank.02",             # S4-128 (64.0t, MH)
+            "Size4.Tank.03",             # S4-256 (128.0t, MH)
+            "Size4.Tank.04",             # S4-512 (256.0t, MH)
+        ],
+    },
+    # --- Heat Shields (by size class) ---
+    "Progressive Heat Shield": {
+        1: [
+            "HeatShield0",              # 0.625m
+            "HeatShield1",              # 1.25m
+            "HeatShield1p5",            # 1.875m (MH)
+        ],
+        2: [
+            "HeatShield2",              # 2.5m
+            "HeatShield3",              # 3.75m
+            "InflatableHeatShield",      # 10m inflatable
+        ],
+    },
+    # --- Stack Decouplers (serial staging) ---
+    "Progressive Stack Decoupler": {
+        1: [  # Small/medium
+            "Decoupler.0",              # TD-06
+            "Decoupler.1",              # TD-12
+            "Decoupler.1p5",            # TD-18 (MH)
+            "Separator.0",              # TS-06
+            "Separator.1",              # TS-12
+            "Separator.1p5",            # TS-18 (MH)
+            "Size1p5.Strut.Decoupler",  # Size 1.5 Decoupler (MH)
+        ],
+        2: [  # Large
+            "Decoupler.2",              # TD-25
+            "Decoupler.3",              # TD-37
+            "Decoupler.4",              # TD-50 (MH)
+            "Separator.2",              # TS-25
+            "Separator.3",              # TS-37
+            "Separator.4",              # TS-50 (MH)
+        ],
+    },
+    # --- Radial Decouplers (parallel/asparagus staging) ---
+    "Progressive Radial Decoupler": {
+        1: [
+            "radialDecoupler",           # TT-38K
+            "radialDecoupler2",          # TT-70
+            "radialDecoupler1-2",        # Hydraulic Detachment Manifold
+        ],
+    },
+    # --- Capsules (crewed command pods) ---
+    "Progressive Capsule": {
+        1: [  # Basic: 1-crew pods
+            "mk1pod.v2",                # Mk1 Command Pod
+            "kv1Pod",                    # KV-1 (MH)
+            "seatExternalCmd",           # External Command Seat
+        ],
+        2: [  # Landers, 2-crew, planes
+            "landerCabinSmall",          # Mk1 Lander Can
+            "kv2Pod",                    # KV-2 (MH)
+            "Mk2Pod",                   # Mk2 Command Pod (MH)
+            "MEMLander",                 # M.E.M. (MH)
+            "MK1CrewCabin",             # Mk1 Crew Cabin
+            "Mark1Cockpit",              # Mk1 Cockpit
+            "Mark2Cockpit",              # Mk1 Inline Cockpit
+            "cupola",                    # Cupola
+        ],
+        3: [  # Heavy/3+ crew, stations, spaceplanes
+            "mk1-3pod",                 # Mk1-3 Command Pod
+            "mk2LanderCabin.v2",        # Mk2 Lander Can
+            "kv3Pod",                    # KV-3 (MH)
+            "mk2Cockpit.Standard",       # Mk2 Cockpit
+            "mk2Cockpit.Inline",         # Mk2 Inline Cockpit
+            "mk2CrewCabin",              # Mk2 Crew Cabin
+            "mk3Cockpit.Shuttle",        # Mk3 Cockpit
+            "mk3CrewCabin",              # Mk3 Passenger Module
+            "crewCabin",                 # Hitchhiker
+            "Large.Crewed.Lab",          # Mobile Processing Lab
+        ],
+    },
+    # --- Probe Cores (by SAS level) ---
+    "Progressive Probe Core": {
+        1: [  # SAS 0-1, no reaction wheel
+            "probeCoreSphere.v2",        # Stayputnik (SAS 0)
+            "probeCoreOcto.v2",          # OKTO (SAS 1)
+            "probeCoreOcto2.v2",         # OKTO2 (SAS 1)
+            "probeCoreCube",             # QBE (SAS 1)
+            "roverBody.v2",              # RoveMate (SAS 1)
+        ],
+        2: [  # SAS 2+
+            "probeCoreHex.v2",           # HECS (SAS 2, has reaction_wheel)
+            "probeStackSmall",           # RC-001S (SAS 2, has reaction_wheel)
+            "MpoProbe",                  # MPO Probe (MH)
+            "MtmStage",                  # MTM Stage (MH)
+        ],
+        3: [  # SAS 3, all have reaction_wheel
+            "HECS2.ProbeCore",           # HECS2 (SAS 3)
+            "probeStackLarge",           # RC-L01 (SAS 3)
+            "mk2DroneCore",              # Mk2 Drone Core (SAS 3)
+        ],
+    },
+    # --- Solar Panels (fixed < retractable < giant) ---
+    "Progressive Solar Panel": {
+        1: [  # Fixed panels
+            "solarPanels5",              # OX-STAT
+            "LgRadialSolarPanel",        # OX-STAT-XL
+            "solarPanelOX10C",           # OX-10C
+            "solarPanelSP10C",           # SP-10C
+        ],
+        2: [  # Retractable panels
+            "solarPanels3",              # OX-4W
+            "solarPanels4",              # OX-4L
+            "solarPanels1",              # SP-W
+            "solarPanels2",              # SP-L
+            "solarPanelOX10L",           # OX-10L
+            "solarPanelSP10L",           # SP-10L
+        ],
+        3: [  # Giant array
+            "largeSolarPanel",           # Gigantor XL Solar Array
+        ],
+    },
+    # --- Relay Antennas (by comm range) ---
+    "Progressive Relay": {
+        1: [
+            "longAntenna",               # Communotron 16
+            "SurfAntenna",               # Communotron 16-S
+            "HighGainAntenna5.v2",       # HG-5
+        ],
+        2: [
+            "RelayAntenna5",             # RA-2
+            "mediumDishAntenna",          # Communotron DTS-M1
+        ],
+        3: [
+            "HighGainAntenna",           # Communotron HG-55
+            "RelayAntenna50",            # RA-15
+        ],
+        4: [
+            "commDish",                  # Communotron 88-88
+            "RelayAntenna100",           # RA-100
+        ],
+    },
+}
+
+# Max tier count per progressive item (number of copies in the AP pool)
+PROGRESSIVE_PART_COUNTS: dict[str, int] = {
+    name: max(tiers.keys()) for name, tiers in PROGRESSIVE_PART_TIERS.items()
+}
+
+# All ksp_names that belong to progressive chains. During generation, one per
+# tier is selected as the representative (removed from pool); the rest stay
+# as gated useful items. This set is used to identify absorbed parts.
+PROGRESSIVE_PART_NAMES: frozenset[str] = frozenset(
+    ksp_name
+    for tiers in PROGRESSIVE_PART_TIERS.values()
+    for tier_parts in tiers.values()
+    for ksp_name in tier_parts
+)
+
+# Validation: no part in multiple progressive categories
+def _validate_progressive_tiers() -> None:
+    seen: dict[str, str] = {}  # ksp_name → category
+    for category, tiers in PROGRESSIVE_PART_TIERS.items():
+        for tier, names in tiers.items():
+            for name in names:
+                if name in seen:
+                    raise ValueError(
+                        f"Part {name!r} in both {seen[name]!r} and {category!r}"
+                    )
+                seen[name] = category
+                if name not in PART_DB:
+                    raise ValueError(
+                        f"Progressive tier part {name!r} ({category} T{tier}) "
+                        f"not found in PART_DB"
+                    )
+
+_validate_progressive_tiers()

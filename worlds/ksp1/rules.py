@@ -21,7 +21,7 @@ from BaseClasses import CollectionState, ItemClassification
 
 from .bodies import ALL_BODIES, BODY_BY_NAME, science_budget
 from .capability import get_capability
-from .items import ITEM_TABLE, PROGRESSIVE_RD_NAME, SCIENCE_PACK_NAMES
+from .items import ITEM_TABLE, PROGRESSIVE_RD_NAME, PROGRESSIVE_PART_ITEM_NAMES, SCIENCE_PACK_NAMES
 from .locations import (
     EVENT_SCALE,
     KSC_BIOME_NAMES,
@@ -52,13 +52,14 @@ _SCIENCE_SAFETY: dict[int, float] = {
 # Science needed to declare the tech tree complete (buy all 62 nodes)
 _TECH_TREE_COMPLETE_SCIENCE = cumulative_tier_cost(MAX_TIER)
 
-# All progression-classified part items.  Eve Return/Sample Return require
-# these — the capability system can't compute Eve ascent so we use this as a
-# proxy for "you have everything needed to attempt it."
+# All progression-classified items (individual parts + progressive part items).
+# Eve Return/Sample Return require these — the capability system can't compute
+# Eve ascent so we use this as a proxy for "you have everything needed."
+# Progressive R&D is excluded (separate tech tree gate, not rocket capability).
 _ALL_PROGRESSION_ITEMS: frozenset[str] = frozenset(
     name for name, (_, cls) in ITEM_TABLE.items()
     if cls == ItemClassification.progression
-)
+) | PROGRESSIVE_PART_ITEM_NAMES
 
 
 def _make_all_parts_rule(player: int) -> Callable[[CollectionState], bool]:

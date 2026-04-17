@@ -8,17 +8,22 @@ part type:
                   decouplers, capsules, probe cores, RTGs, relay antennas,
                   solar panels, launch clamps, fuel lines, ladders, docking
                   ports, science instruments.
-  Useful       -- RCS, reaction wheels, batteries, ISRU.
+  Useful       -- RCS, reaction wheels, batteries, ISRU, monoprop/external/
+                  adapter tanks, Mk2/Mk3 aircraft tanks, Sepratron, LES.
   Filler       -- MiscEquipment with no provides flags (wings, structural,
                   lights, etc.) and generated filler (science packs, cosmetic
                   unlocks) from get_filler_item_name().
 
-The world creates (P - precollected) items.  AP auto-fills remaining location
-slots via get_filler_item_name().
+Progressive items (e.g. "Progressive Launch Engine" ×3) gate access to part
+tiers. Per tier, one part is randomly selected as the representative and
+removed from the pool (it IS the progressive item — a rename). Remaining
+tier parts stay in pool as useful items with placement rules: they cannot
+be placed in locations reachable before the player has the corresponding
+progressive item count. See plans/progressive_parts.md for full spec.
+
 """
 from __future__ import annotations
 
-import random
 from typing import TYPE_CHECKING
 
 from BaseClasses import Item, ItemClassification
@@ -27,6 +32,7 @@ from .parts import (
     PART_DB, PART_REGISTRY,
     Engine, FuelTank, SolidBooster, HeatShield, Parachute,
     LandingLeg, Decoupler, MiscEquipment,
+    PROGRESSIVE_PART_NAMES, PROGRESSIVE_PART_COUNTS, PROGRESSIVE_PART_TIERS,
 )
 
 if TYPE_CHECKING:
@@ -69,14 +75,52 @@ _USEFUL_PROVIDES: frozenset[str] = frozenset({
     "isru",
 })
 
+# Parts reclassified from progression → useful.
+# These are niche items that don't gate meaningful missions individually:
+# monoprop engine, monoprop tanks, Mk2/Mk3 aircraft tanks, external tanks,
+# adapter fuel tanks, Sepratron, Launch Escape System.
+_RECLASSIFY_USEFUL: frozenset[str] = frozenset({
+    # Monoprop engine (niche)
+    "omsEngine",
+    # Monoprop tanks (all)
+    "RCSFuelTank", "RCSTank1-2", "Size1p5.Monoprop",
+    "mk2FuselageShortMono", "mk3FuselageMONO",
+    "monopropMiniSphere", "radialRCSTank", "rcsTankMini", "rcsTankRadialLong",
+    # Mk2/Mk3 aircraft LFO tanks
+    "mk2FuselageShortLFO", "mk2FuselageLongLFO",
+    "mk2SpacePlaneAdapter", "mk2.1m.AdapterLong",
+    "mk3FuselageLFO.25", "mk3FuselageLFO.50", "mk3FuselageLFO.100",
+    # Mk2/Mk3 aircraft LF-only tanks
+    "mk2Fuselage", "mk2FuselageShortLiquid",
+    "mk3FuselageLF.25", "mk3FuselageLF.50", "mk3FuselageLF.100",
+    # External tanks (Baguette, Dumpling, Doughnut)
+    "externalTankCapsule", "externalTankRound", "externalTankToroid",
+    # Adapter fuel tanks (structural role)
+    "adapterSize2-Size1", "adapterSize2-Size1Slant",
+    "adapterSize2-Mk2", "adapterMk3-Mk2",
+    "adapterMk3-Size2", "adapterMk3-Size2Slant",
+    "adapterSize3-Mk3", "Size3To2Adapter.v2",
+    "noseConeAdapter",
+    # MH size adapter tanks
+    "Size1p5.Size0.Adapter.01", "Size1p5.Size1.Adapter.01",
+    "Size1p5.Size1.Adapter.02",
+    # Sepratron and Launch Escape System (not real boosters)
+    "sepMotor1", "LaunchEscapeSystem",
+})
+
 
 def _classify_part_item(item_name: str) -> ItemClassification:
     """
     Return the AP classification for a part item based on its part list.
 
-    A item is Progression if any of its parts gate new mission capability.
-    It is Useful if it helps but rarely gates.  Otherwise Filler.
+    Parts in progressive chains are classified as useful — the progressive
+    item is the progression gate, and the representative (removed from pool
+    during generation) IS the progressive item.  Parts in _RECLASSIFY_USEFUL
+    are also downgraded from progression to useful.
     """
+    if item_name in PROGRESSIVE_PART_NAMES or item_name in _RECLASSIFY_USEFUL:
+        return ItemClassification.useful
+
     parts = PART_DB.get(item_name, [])
     if not parts:
         return ItemClassification.filler
@@ -98,7 +142,7 @@ def _classify_part_item(item_name: str) -> ItemClassification:
 # Build ITEM_TABLE from PART_REGISTRY (stable offsets in 1000–1999)
 # ---------------------------------------------------------------------------
 
-# Sorted names for deterministic pool iteration
+# Sorted names for deterministic pool iteration.
 _SORTED_PART_NAMES: list[str] = sorted(PART_DB.keys())
 
 ITEM_TABLE: dict[str, tuple[int, ItemClassification]] = {
@@ -124,11 +168,27 @@ _VICTORY_ITEM: dict[str, tuple[int, ItemClassification]] = {
 
 # Progressive items: offsets 50–99 (special range, not physical parts)
 _PROGRESSIVE_ITEMS: dict[str, tuple[int, ItemClassification]] = {
-    "Progressive R&D": (50, ItemClassification.progression),
+    "Progressive R&D":              (50, ItemClassification.progression),
+    "Progressive Launch Engine":    (51, ItemClassification.progression),
+    "Progressive Vacuum Engine":    (52, ItemClassification.progression),
+    "Progressive SRB":              (53, ItemClassification.progression),
+    "Progressive LFO Tank":         (54, ItemClassification.progression),
+    "Progressive Heat Shield":      (55, ItemClassification.progression),
+    "Progressive Stack Decoupler":  (56, ItemClassification.progression),
+    "Progressive Radial Decoupler": (57, ItemClassification.progression),
+    "Progressive Capsule":          (58, ItemClassification.progression),
+    "Progressive Probe Core":       (59, ItemClassification.progression),
+    "Progressive Solar Panel":      (60, ItemClassification.progression),
+    "Progressive Relay":            (61, ItemClassification.progression),
 }
 
 PROGRESSIVE_RD_NAME: str = "Progressive R&D"
 PROGRESSIVE_RD_COUNT: int = 3
+
+# All progressive part item names (excluding Progressive R&D)
+PROGRESSIVE_PART_ITEM_NAMES: frozenset[str] = frozenset(
+    name for name in _PROGRESSIVE_ITEMS if name != PROGRESSIVE_RD_NAME
+)
 
 ITEM_NAME_TO_ID: dict[str, int] = {
     name: KSP1_BASE_ID + offset
@@ -187,10 +247,11 @@ def get_filler_item_name(world: KSP1World) -> str:
 
 def create_all_items(world: KSP1World) -> None:
     """
-    Add (P - precollected) part items to the multiworld item pool.
+    Add part items and progressive items to the multiworld item pool.
 
-    Precollected items are pushed to the player's starting inventory and
-    removed from the pool so AP fills their location slots with other items.
+    Per progressive tier, one part is randomly selected as the "representative"
+    and removed from the pool — it IS the progressive item (a rename).
+    Remaining tier parts stay in pool as useful items with power-tier pacing.
     """
     precollected: set[str] = set(ALWAYS_PRECOLLECTED)
     if world.options.start_with_launch_clamps:
@@ -199,11 +260,29 @@ def create_all_items(world: KSP1World) -> None:
     for name in precollected:
         world.multiworld.push_precollected(create_item(world, name))
 
+    # Select one representative per progressive tier (deterministic via world.random).
+    representatives: dict[str, dict[int, str]] = {}
+    all_representatives: set[str] = set()
+    for prog_name, tiers in PROGRESSIVE_PART_TIERS.items():
+        representatives[prog_name] = {}
+        for tier_num, parts in sorted(tiers.items()):
+            rep = world.random.choice(parts)
+            representatives[prog_name][tier_num] = rep
+            all_representatives.add(rep)
+
+    world.progressive_representatives = representatives
+
+    # Build pool: skip precollected and representatives (they ARE the progressive items).
     pool: list[KSP1Item] = [
         create_item(world, name)
         for name in _SORTED_PART_NAMES
-        if name not in precollected
+        if name not in precollected and name not in all_representatives
     ]
+
+    # Progressive part items (progression gates for part tiers).
+    for prog_name, count in PROGRESSIVE_PART_COUNTS.items():
+        for _ in range(count):
+            pool.append(create_item(world, prog_name))
 
     # Progressive R&D items (gates higher tech tree bands).
     for _ in range(PROGRESSIVE_RD_COUNT):

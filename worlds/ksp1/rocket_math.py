@@ -225,6 +225,7 @@ def find_optimal_stage(
     player_has_rcs: bool = False,
     tanks_by_fuel_type: Optional[dict[str, list[FuelTank]]] = None,
     available_multi_mounts: Optional[list[MultiMount]] = None,
+    require_gimbal: bool = False,
 ) -> Optional[StageResult]:
     """
     Find the minimum-mass engine+tank configuration that meets *required_dv*
@@ -287,6 +288,10 @@ def find_optimal_stage(
                 continue  # no shield at all
             if engine.size_class > max_heat_shield_size:
                 continue
+
+        # Gimbal filter (atmospheric gravity turn without aero surfaces)
+        if require_gimbal and not engine.has_gimbal:
+            continue
 
         # Throttle filter
         if requires_throttleable and not engine.throttleable:
@@ -456,6 +461,9 @@ def find_optimal_stage(
     for srb in available_srbs:
         # SRBs can't throttle — skip throttle-required edges
         if requires_throttleable:
+            continue
+        # Gimbal filter (atmospheric gravity turn without aero surfaces)
+        if require_gimbal and not srb.has_gimbal:
             continue
         # At casual/normal, SRBs need RCS for attitude/fine control
         if srb_needs_rcs and not player_has_rcs:
