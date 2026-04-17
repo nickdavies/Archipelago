@@ -6,12 +6,12 @@ Four location sources (total ~508 max, filtered by difficulty):
   1. Starting Inventory Locations  (5/10/15/20 by difficulty)
      Zero access requirements; AP fill places the items needed to bootstrap.
 
-  2. KSC Biome Locations  (11 total, always all 11)
-     Earned by performing science experiments at KSC buildings.
+  2. KSC Biome Locations  (12 total, always all 12)
+     Earned by performing science experiments at KSC buildings/grounds.
      Requires EVA (capsule) or rover (probe + wheels + power + instrument).
 
-  3. Mission Event Locations  (243 total)
-     12 Kerbin-specific + 231 per-body event-scaled checks.
+  3. Mission Event Locations  (244 total)
+     13 Kerbin-specific + 231 per-body event-scaled checks.
      Eve Return/Sample Return exist but require all progression parts.
      Scale is by event difficulty, not body distance:
        Flyby/SOI Leave/Orbit = 1 slot each,
@@ -111,7 +111,7 @@ TECH_TREE_LOCATION_NAMES: list[str] = [
 assert len(TECH_TREE_LOCATION_NAMES) == 248  # 62 nodes × 4 slots
 
 # ---------------------------------------------------------------------------
-# KSC biome locations (always all 11, no difficulty scaling)
+# KSC biome locations (always all 12, no difficulty scaling)
 # ---------------------------------------------------------------------------
 
 KSC_BIOME_NAMES: list[str] = [
@@ -126,6 +126,7 @@ KSC_BIOME_NAMES: list[str] = [
     "KSC R&D",
     "KSC Crawlerway",
     "KSC Flag Pole",
+    "KSC Grounds",
 ]
 
 # ---------------------------------------------------------------------------
@@ -135,6 +136,7 @@ KSC_BIOME_NAMES: list[str] = [
 KERBIN_LOCATION_NAMES: list[str] = [
     "Kerbin First Launch",
     "Kerbin First Landing",
+    "Kerbin First Crash",
     "Kerbin 5km Altitude",
     "Kerbin 15km Altitude",
     "Kerbin 25km Altitude",
@@ -147,7 +149,7 @@ KERBIN_LOCATION_NAMES: list[str] = [
     "Kerbin EVA in Orbit",
 ]
 
-assert len(KERBIN_LOCATION_NAMES) == 12
+assert len(KERBIN_LOCATION_NAMES) == 13
 
 # ---------------------------------------------------------------------------
 # Per-body mission location names (217 total, generated from body data)
@@ -237,7 +239,7 @@ def create_all_locations(world: KSP1World) -> None:
     Create and attach all locations to the Menu region.
 
     Starting inventory locations: only the first N (by difficulty) are created.
-    KSC biome locations: always all 11.
+    KSC biome locations: always all 12.
     Tech tree slots per node: 2–4 by difficulty.
     All mission locations are always created.
     """

@@ -169,7 +169,7 @@ def _can_do_ksc_science(state: CollectionState, player: int) -> bool:
 
 
 def _set_ksc_biome_rules(world: KSP1World, player: int) -> None:
-    """Apply the KSC science rule to all 11 KSC biome locations."""
+    """Apply the KSC science rule to all KSC biome locations."""
     def rule(state: CollectionState) -> bool:
         return _can_do_ksc_science(state, player)
 
@@ -202,10 +202,11 @@ def _make_altitude_rule(player: int, threshold_km: float) -> Callable[[Collectio
 
 def _set_kerbin_rules(world: KSP1World, player: int) -> None:
     """
-    Rules for the 12 Kerbin-specific locations.
+    Rules for the 13 Kerbin-specific locations.
 
     First Launch: any propulsion OR capsule (kerbal EVA counts as launch).
     First Landing: propulsion + safe descent OR capsule (EVA landing).
+    First Crash: sounding rocket to 0.1 km (must get airborne to crash).
     Altitude milestones: sounding rocket must reach the stated altitude.
     EVA in Orbit: crewed orbital capability.
     First Staging: decoupler.
@@ -233,6 +234,7 @@ def _set_kerbin_rules(world: KSP1World, player: int) -> None:
         return cap.has_capsule and cap.bodies["Kerbin"].can_orbit_low
 
     world.get_location("Kerbin First Launch").access_rule = has_any_propulsion_or_capsule
+    world.get_location("Kerbin First Crash").access_rule = _make_altitude_rule(player, 0.1)
     world.get_location("Kerbin First Landing").access_rule = can_land_safely
 
     for name, threshold_km in _ALTITUDE_THRESHOLDS_KM.items():
