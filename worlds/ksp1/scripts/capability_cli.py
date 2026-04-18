@@ -232,7 +232,7 @@ def cmd_in_logic(ap: APState, parts_list: bool = False) -> None:
         loc_id = loc_name_to_id.get(loc.name)
         if loc_id is None or loc_id not in ap.missing_locations:
             continue
-        if not loc.access_rule(state):
+        if not loc.can_reach(state):
             continue
 
         # Group by body name (first word) or "Tech Tree" / "KSC"
@@ -301,7 +301,7 @@ def cmd_rocket(ap: APState, check_name: str, verbose: bool = False) -> None:
         print(f"Unknown check: '{check_name}'", file=sys.stderr)
         sys.exit(1)
 
-    in_logic = loc_obj.access_rule(state)
+    in_logic = loc_obj.can_reach(state)
 
     # Look up in the mission map for rocket details
     info = CHECK_MAP.get(check_name)
@@ -588,7 +588,7 @@ def cmd_bug_report(ap: APState, check_name: Optional[str] = None) -> None:
         loc_id = ap.location_name_to_id.get(loc.name)
         if loc_id is None or loc_id not in ap.missing_locations:
             continue
-        if loc.access_rule(state):
+        if loc.can_reach(state):
             in_logic_locs.append(loc.name)
     report["in_logic_locations"] = sorted(in_logic_locs)
 
