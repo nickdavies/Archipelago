@@ -12,7 +12,7 @@ from worlds.ksp1.parts import (
 
 
 class KSP1TestBase(WorldTestBase):
-    game = "Kerbal Space Program"
+    game = "Kerbal Space Program 1"
 
 
 class TestRepresentativeSelection(KSP1TestBase):

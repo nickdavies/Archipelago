@@ -115,12 +115,12 @@ def fetch_ap_state(host: str, slot: str, password: str = "") -> APState:
 
         ws.send(json.dumps([{
             "cmd": "GetDataPackage",
-            "games": ["Kerbal Space Program"],
+            "games": ["Kerbal Space Program 1"],
         }]))
         dp_msg = json.loads(ws.recv())
         assert dp_msg[0]["cmd"] == "DataPackage", f"Expected DataPackage, got {dp_msg[0]['cmd']}"
 
-        game_data = dp_msg[0]["data"]["games"]["Kerbal Space Program"]
+        game_data = dp_msg[0]["data"]["games"]["Kerbal Space Program 1"]
         item_name_to_id: dict[str, int] = game_data["item_name_to_id"]
         location_name_to_id: dict[str, int] = game_data["location_name_to_id"]
         item_id_to_name = {v: k for k, v in item_name_to_id.items()}
@@ -128,7 +128,7 @@ def fetch_ap_state(host: str, slot: str, password: str = "") -> APState:
 
         ws.send(json.dumps([{
             "cmd": "Connect",
-            "game": "Kerbal Space Program",
+            "game": "Kerbal Space Program 1",
             "name": slot,
             "uuid": "capability-cli",
             "version": {"major": 0, "minor": 5, "build": 1, "class": "Version"},

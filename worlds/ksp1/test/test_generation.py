@@ -21,7 +21,7 @@ from worlds.ksp1.capability import get_capability, explain_body_unreachable
 
 
 class KSP1TestBase(WorldTestBase):
-    game = "Kerbal Space Program"
+    game = "Kerbal Space Program 1"
 
 
 class TestItemLocationBalance(KSP1TestBase):

@@ -51,7 +51,7 @@ _TECH_OFFSET_START = 3000          # Tech tree: 3000-3999
 
 
 class KSP1Location(Location):
-    game = "Kerbal Space Program"
+    game = "Kerbal Space Program 1"
 
 
 # ---------------------------------------------------------------------------

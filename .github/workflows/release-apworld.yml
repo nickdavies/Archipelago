@@ -1,0 +1,35 @@
+name: Release APWorld
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build ksp1.apworld
+        working-directory: worlds
+        run: |
+          zip -r "$GITHUB_WORKSPACE/ksp1.apworld" ksp1/ \
+            -x 'ksp1/__pycache__/*' \
+            -x 'ksp1/test/*' \
+            -x 'ksp1/scripts/*' \
+            -x 'ksp1/reference/*' \
+            -x 'ksp1/.apignore' \
+            -x 'ksp1/.gitignore' \
+            -x 'ksp1/.git/*' \
+            -x 'ksp1/ksp_archipelago_design.md'
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ksp1.apworld
+          generate_release_notes: true

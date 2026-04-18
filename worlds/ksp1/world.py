@@ -18,7 +18,7 @@ class KSP1State(LogicMixin):
     ksp1_cap_result: dict[int, RocketCapability]
 
     def init_mixin(self, multiworld: MultiWorld) -> None:
-        self.ksp1_cap_stale = {p: True for p in multiworld.get_game_players("Kerbal Space Program")}
+        self.ksp1_cap_stale = {p: True for p in multiworld.get_game_players("Kerbal Space Program 1")}
         self.ksp1_cap_result = {}
 
 
@@ -34,7 +34,7 @@ class KSP1World(World):
     multiworld, and mission completions are the location checks.
     """
 
-    game = "Kerbal Space Program"
+    game = "Kerbal Space Program 1"
     web = KSP1WebWorld()
 
     # Tech tree entrance rules use can_reach_region() for parent dependencies.

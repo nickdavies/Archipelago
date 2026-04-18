@@ -42,7 +42,7 @@ KSP1_BASE_ID = 7_700_000
 
 
 class KSP1Item(Item):
-    game = "Kerbal Space Program"
+    game = "Kerbal Space Program 1"
 
 
 # ---------------------------------------------------------------------------
