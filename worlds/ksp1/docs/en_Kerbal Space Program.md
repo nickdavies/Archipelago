@@ -2,6 +2,7 @@
 
 **This world is experimental.** Only the default (Normal) difficulty has been thoroughly tested.
 Only vanilla (unmodded) KSP is supported - no part mods, planet packs, or other gameplay mods have been tested.
+[Kerbal Engineer Redux](https://github.com/jrbudda/KerbalEngineer) is known to work and is recommended for delta-v readouts.
 Please report issues at the [GitHub issue tracker](https://github.com/nickdavies/Archipelago/issues).
 Include your player YAML, the AP `.zip` output, your `.apsave` file, and a screenshot if possible.
 
