@@ -79,6 +79,7 @@ class KSP1World(World):
     def create_regions(self) -> None:
         regions.create_all_regions(self)
         locations.create_all_locations(self)
+        rules.create_victory_location(self)
 
     def create_items(self) -> None:
         items.create_all_items(self)

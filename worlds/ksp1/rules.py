@@ -144,7 +144,7 @@ def set_completion_condition(world: KSP1World) -> None:
     difficulty = world.options.difficulty.value
     goal = world.options.goal.value
 
-    _place_victory_event(world, player, goal, difficulty)
+    _set_victory_rules(world, player, goal, difficulty)
 
 
 # ---------------------------------------------------------------------------
@@ -486,14 +486,12 @@ def goal_display_name(goal: int) -> str:
     return _GOAL_DISPLAY_NAMES.get(goal, "Unknown")
 
 
-def _place_victory_event(
-    world: KSP1World, player: int, goal: int, difficulty: int
-) -> None:
+def create_victory_location(world: KSP1World) -> None:
+    """Create the Victory event location with a locked Victory item.
+
+    Called during create_regions so location count is stable before set_rules.
     """
-    Create an event location named "Victory" and set the completion condition.
-    The event location has a locked "Victory" item and no location ID (event).
-    """
-    from BaseClasses import Location, Region
+    from BaseClasses import Location
     from .items import create_item
 
     menu = world.get_region("Menu")
@@ -501,9 +499,13 @@ def _place_victory_event(
     menu.locations.append(victory_location)
     victory_location.place_locked_item(create_item(world, "Victory"))
 
-    # Assign the access rule based on the selected goal
-    rule = _make_goal_rule(player, goal, difficulty)
-    victory_location.access_rule = rule
+
+def _set_victory_rules(
+    world: KSP1World, player: int, goal: int, difficulty: int
+) -> None:
+    """Set the access rule and completion condition on the Victory event."""
+    victory_location = world.get_location("Victory")
+    victory_location.access_rule = _make_goal_rule(player, goal, difficulty)
 
     world.multiworld.completion_condition[player] = (
         lambda state: state.can_reach("Victory", "Location", player)
