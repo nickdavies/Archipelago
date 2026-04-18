@@ -447,6 +447,44 @@ _ALL_LANDABLE_BODIES: tuple[str, ...] = (
     "Bop", "Pol", "Eeloo",
 )
 
+_GOAL_DISPLAY_NAMES: dict[int, str] = {
+    Goal.option_duna_return: "Duna Return",
+    Goal.option_eeloo_return: "Eeloo Return",
+    Goal.option_flag_every_body: "Flag Every Body",
+    Goal.option_standard_returns: "Standard Returns",
+    Goal.option_standard_sample_returns: "Standard Sample Returns",
+    Goal.option_complete_tech_tree: "Complete Tech Tree",
+    Goal.option_eve_return: "Eve Return",
+}
+
+
+def goal_location_names(goal: int) -> list[str]:
+    """Return the sentinel location names whose checks indicate goal completion.
+
+    Each entry is the slot-1 location for a required event. The client caches
+    these IDs at connect time and polls checkedLocationIds to detect victory.
+    """
+    if goal == Goal.option_duna_return:
+        return ["Duna Return 1"]
+    if goal == Goal.option_eeloo_return:
+        return ["Eeloo Return 1"]
+    if goal == Goal.option_eve_return:
+        return ["Eve Return 1"]
+    if goal == Goal.option_flag_every_body:
+        return [f"{b} Flag Plant 1" for b in _ALL_LANDABLE_BODIES]
+    if goal == Goal.option_standard_returns:
+        return [f"{b} Return 1" for b in _STANDARD_RETURN_BODIES]
+    if goal == Goal.option_standard_sample_returns:
+        return [f"{b} Sample Return 1" for b in _STANDARD_RETURN_BODIES]
+    if goal == Goal.option_complete_tech_tree:
+        return [f"{n.display_name} 1" for n in TECH_NODES]
+    return []
+
+
+def goal_display_name(goal: int) -> str:
+    """Return a human-readable label for the goal."""
+    return _GOAL_DISPLAY_NAMES.get(goal, "Unknown")
+
 
 def _place_victory_event(
     world: KSP1World, player: int, goal: int, difficulty: int

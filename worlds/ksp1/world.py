@@ -4,6 +4,7 @@ from BaseClasses import CollectionState, Item, MultiWorld, Tutorial
 from worlds.AutoWorld import LogicMixin, WebWorld, World
 
 from . import items, locations, regions, rules
+from .rules import goal_display_name, goal_location_names
 from .capability import RocketCapability
 from .items import ITEM_NAME_TO_ID
 from .parts import PROGRESSIVE_PART_TIERS
@@ -96,6 +97,9 @@ class KSP1World(World):
         d = self.options.as_dict("goal", "difficulty", "start_with_launch_clamps", "item_pacing")
         d["tech_slots_per_node"] = TECH_SLOTS_BY_DIFFICULTY[self.options.difficulty.value]
         d["node_bands"] = {n.node_id: TIER_TO_BAND[n.tier] for n in TECH_NODES}
+        goal = self.options.goal.value
+        d["goal_locations"] = goal_location_names(goal)
+        d["goal_display_name"] = goal_display_name(goal)
         # Progressive tier data for the client mod
         d["progressive_tiers"] = {
             name: {str(t): parts for t, parts in tiers.items()}
