@@ -28,20 +28,17 @@ from test.general import setup_multiworld
 from worlds.AutoWorld import call_all
 
 from worlds.ksp1.bodies import (
-    ALL_BODIES, BODY_BY_NAME, DIFFICULTY_PROFILES,
-    DifficultyProfile, EdgeType, MissionEdge,
+    ALL_BODIES, BODY_BY_NAME, DIFFICULTY_PROFILES, MissionEdge,
 )
 from worlds.ksp1.capability import (
     EquipmentFlags, ProfileResult,
     compute_capability_from_items, evaluate_mission_detailed,
     get_capability,
-    _required_chute_count,
-    _support_equipment_mass,
 )
 from worlds.ksp1.locations import (
     event_location_names, get_body_events,
 )
-from worlds.ksp1.parts import PART_DB, PART_REGISTRY, MiscEquipment
+from worlds.ksp1.parts import PART_REGISTRY
 from worlds.ksp1.world import KSP1World
 
 
@@ -283,79 +280,6 @@ def _location_group(loc_name: str) -> str:
     return "Tech Tree"
 
 
-# ---------------------------------------------------------------------------
-# rocket command — per-stage equipment reconstruction
-# ---------------------------------------------------------------------------
-
-def _find_best_heat_shield(flags: EquipmentFlags) -> Optional[str]:
-    """Return name of the best heat shield (largest size_class)."""
-    if not flags.available_heat_shields:
-        return None
-    best = max(flags.available_heat_shields, key=lambda hs: hs.size_class)
-    return best.name
-
-
-def _find_lightest_aero_control(flags: EquipmentFlags) -> Optional[str]:
-    """Return name of the lightest available aero control surface, or None."""
-    if not flags.available_aero_controls:
-        return None
-    return min(flags.available_aero_controls, key=lambda p: p.mass).name
-
-
-def _find_lightest_decoupler(flags: EquipmentFlags) -> Optional[tuple[str, float]]:
-    """Return (name, mass) of the lightest stack decoupler, or None."""
-    stack = [d for d in flags.available_decouplers if d.kind == "stack"]
-    if not stack:
-        return None
-    best = min(stack, key=lambda d: d.mass)
-    return best.name, best.mass
-
-
-def _find_best_legs(flags: EquipmentFlags, required_tier: int) -> Optional[str]:
-    """Return name of the lightest legs meeting the tier."""
-    for leg in sorted(flags.available_landing_legs, key=lambda l: l.mass):
-        if leg.tier >= required_tier:
-            return leg.name
-    if flags.available_landing_legs:
-        return min(flags.available_landing_legs, key=lambda l: l.mass).name
-    return None
-
-
-def _find_command_module(flags: EquipmentFlags, crewed: bool) -> Optional[str]:
-    """Find the command module matching what _evaluate_profile selects."""
-    target_mass = flags.heaviest_capsule_mass if crewed else flags.lightest_probe_mass
-    provides_flag = "capsule" if crewed else "probe_core"
-
-    for item_name, parts in PART_DB.items():
-        for part in parts:
-            if isinstance(part, MiscEquipment):
-                if provides_flag in part.provides and abs(part.mass - target_mass) < 1e-6:
-                    return part.name
-    return f"{'Capsule' if crewed else 'Probe Core'} ({target_mass:.3f}t)"
-
-
-def _estimate_chute_count(
-    landing_mass: float,
-    body_name: str,
-    flags: EquipmentFlags,
-    diff: DifficultyProfile,
-) -> tuple[Optional[str], int]:
-    """Estimate parachute count for aero landing. Returns (chute_name, count)."""
-    body = BODY_BY_NAME.get(body_name)
-    if body is None or not body.has_atmosphere:
-        return None, 0
-
-    non_drogue = [p for p in flags.available_parachutes if not p.is_drogue]
-    if not non_drogue:
-        return None, 0
-
-    chute = non_drogue[0]
-    count = _required_chute_count(landing_mass, body, flags, diff)
-    if count <= 0:
-        return chute.name, max(1, count)
-    return chute.name, count
-
-
 def _edge_desc(edge: MissionEdge) -> str:
     """Human-readable edge description."""
     return f"{edge.source} -> {edge.destination} ({edge.base_dv:.0f} m/s)"
@@ -432,77 +356,37 @@ def cmd_rocket(ap: APState, check_name: str, verbose: bool = False) -> None:
         group = result.edge_groups[i] if i < len(result.edge_groups) else []
         is_terminal = (i == num_stages - 1)
 
-        stage_body_name = group[0].body if group else body_name
-        stage_body = BODY_BY_NAME.get(stage_body_name)
-
         edge_names = [f"{e.source} -> {e.destination}" for e in group]
         header = ", ".join(edge_names) if edge_names else "unknown"
 
         ksp_stage_num = num_stages - 1 - i
-        asp_tag = " [ASPARAGUS]" if asparagus and not is_terminal else ""
-        print(f"\n  Stage {ksp_stage_num} ({header}):{asp_tag}")
+
+        # Stage header with symmetry/asparagus tags
+        tags: list[str] = []
+        if asparagus and not is_terminal:
+            tags.append("ASPARAGUS")
+        if stage.engine_count > 1:
+            tags.append(f"{stage.engine_count}-WAY")
+        tag_str = f"  [{', '.join(tags)}]" if tags else ""
+        print(f"\n  Stage {ksp_stage_num} ({header}):{tag_str}")
         print(f"    Parts:")
 
-        # Command module + support equipment (terminal stage only)
+        # Terminal parts (command module + support equipment)
         if is_terminal:
-            cmd_name = _find_command_module(flags, crewed)
-            if cmd_name:
-                print(f"      1x {_titled(cmd_name)}")
-            # Support equipment (antenna, power)
-            all_edges = [e for g in result.edge_groups for e in g]
-            _, support_parts = _support_equipment_mass(flags, all_edges)
-            for sp in support_parts:
-                print(f"      1x {_titled(sp)}")
+            for count, part_id in result.terminal_parts:
+                print(f"      {count}x {_titled(part_id)}")
 
         # Propulsion
-        print(f"      {stage.engine_count}x {_titled(stage.engine_name)}")
-        if stage.tank_count > 0:
+        if stage.engine_count > 0 and stage.engine_name != "none":
+            print(f"      {stage.engine_count}x {_titled(stage.engine_name)}")
+        if stage.tank_count > 0 and stage.tank_name != "none":
             fill_pct = stage.fill_fraction * 100
             fill_str = f" ({fill_pct:.0f}% fill)" if fill_pct < 100 else ""
             print(f"      {stage.tank_count}x {_titled(stage.tank_name)}{fill_str}")
 
-        # Heat shield
-        if any(e.needs_heat_shield for e in group):
-            hs_name = _find_best_heat_shield(flags)
-            if hs_name:
-                print(f"      1x {_titled(hs_name)}")
-
-        # Landing legs
-        if any(e.needs_landing_legs for e in group):
-            leg_tier = stage_body.landing_leg_tier if stage_body else 1
-            leg_name = _find_best_legs(flags, leg_tier)
-            if leg_name:
-                print(f"      4x {_titled(leg_name)}")
-
-        # Aero control surfaces (atmospheric ascent without a gimbal engine
-        # requires actuated fins/elevons; we always show them when available
-        # on atmospheric-ascent stages so the player knows they're needed).
-        if (flags.has_aero_control_surface
-                and any(e.edge_type == EdgeType.ATMOSPHERIC_ASCENT for e in group)):
-            fin_name = _find_lightest_aero_control(flags)
-            if fin_name:
-                print(f"      4x {_titled(fin_name)}")
-
-        # Parachutes (aero landing edges)
-        aero_edges = [e for e in group if e.edge_type == EdgeType.ATMO_LANDING_AERO]
-        if aero_edges:
-            aero_body_name = aero_edges[0].body
-            chute_name, chute_count = _estimate_chute_count(
-                stage.stage_mass_dry, aero_body_name, flags, diff,
-            )
-            if chute_name and chute_count > 0:
-                print(f"      {chute_count}x {_titled(chute_name)}")
-
-        # Ladder
-        if any(e.needs_ladder for e in group):
-            print(f"      1x Pegasus I Mobility Enhancer")
-
-        # Decoupler (on the lower stage, separates it from the stage above)
-        if not is_terminal and num_stages > 1:
-            dec = _find_lightest_decoupler(flags)
-            if dec:
-                dec_name, dec_mass = dec
-                print(f"      1x {_titled(dec_name)} ({dec_mass:.3f}t)")
+        # Non-propulsion equipment (from capability manifest)
+        for count, part_id in stage.equipment:
+            print(f"      {count}x {_titled(part_id)}")
 
         # Edges
         print(f"    Edges:")

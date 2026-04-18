@@ -162,7 +162,7 @@ def _can_do_ksc_science(state: CollectionState, player: int) -> bool:
     if cap.has_capsule:
         return True
     if (cap.has_probe_core and cap.has_wheel
-            and (cap.has_solar or cap.has_rtg)
+            and cap.power_profile != "none"
             and (cap.has_thermometer or cap.has_barometer)):
         return True
     return False

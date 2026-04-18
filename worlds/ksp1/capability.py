@@ -127,20 +127,21 @@ class EquipmentFlags:
     relay_tier: int = 0             # 0 = no relay
     staging_tier: int = 0           # 0=none, 1=stack, 2=radial
 
-    # Derived values
-    max_heat_shield_size: Optional[float] = None   # largest heat shield size_class
-    best_heat_shield_mass: float = 0.0             # mass of that shield
+    # Part references — None means not available.
+    # Each stores the selected part so both .mass and .name are accessible.
+    best_heat_shield: Optional[HeatShield] = None
     total_chute_drag_area: float = 0.0             # sum of non-drogue drag areas
     parachute_count: int = 0
-    heaviest_capsule_mass: float = 0.0
-    lightest_probe_mass: float = float("inf")
+    heaviest_capsule: Optional[MiscEquipment] = None
+    lightest_probe: Optional[MiscEquipment] = None
 
-    # Support equipment mass tracking (lightest available per category)
-    lightest_relay_mass: dict[int, float] = field(default_factory=dict)  # tier → mass
-    lightest_solar_mass: float = float("inf")
-    lightest_solar_retractable_mass: float = float("inf")
-    lightest_rtg_mass: float = float("inf")
-    lightest_aero_control_mass: float = float("inf")
+    # Support equipment — part references per category
+    lightest_relay: dict[int, MiscEquipment] = field(default_factory=dict)  # tier → part
+    lightest_solar: Optional[MiscEquipment] = None
+    lightest_solar_retractable: Optional[MiscEquipment] = None
+    lightest_rtg: Optional[MiscEquipment] = None
+    lightest_aero_control: Optional[MiscEquipment] = None
+    lightest_ladder: Optional[MiscEquipment] = None
 
     # Solar distance for ION logic (set from the edge being evaluated)
     target_solar_au: float = 1.0
@@ -357,9 +358,7 @@ def _pre_pass(item_count_fn: Callable[[str], int],
     # Derive relay tier from available relays
     flags.relay_tier = _compute_relay_tier(flags)
 
-    # Capsule/probe mass defaults if not found
-    if flags.lightest_probe_mass == float("inf"):
-        flags.lightest_probe_mass = 0.0  # no probe: will be blocked by gate
+    # (lightest_probe=None when no probe found — gate blocks before use)
 
     # Sort engines by Isp desc, mass asc — high-Isp lightweight engines
     # produce lighter stages, helping the optimizer's upper-bound pruning.
@@ -408,10 +407,8 @@ def _add_part_to_flags(flags: EquipmentFlags, part, count: int) -> None:
     elif isinstance(part, HeatShield):
         flags.has_heat_shield = True
         flags.available_heat_shields.append(part)
-        if flags.max_heat_shield_size is None or \
-                part.size_class > flags.max_heat_shield_size:
-            flags.max_heat_shield_size = part.size_class
-            flags.best_heat_shield_mass = part.mass
+        if flags.best_heat_shield is None or part.size_class > flags.best_heat_shield.size_class:
+            flags.best_heat_shield = part
 
     elif isinstance(part, Parachute):
         if not part.is_drogue:  # drogue chutes excluded from all logic
@@ -443,15 +440,16 @@ def _add_part_to_flags(flags: EquipmentFlags, part, count: int) -> None:
         _apply_misc(flags, part, count)
 
 
-def _apply_misc_relay(flags: EquipmentFlags, flag: str, mass: float) -> None:
-    """Set relay tier and track lightest relay mass per tier."""
+def _apply_misc_relay(flags: EquipmentFlags, flag: str, part: MiscEquipment) -> None:
+    """Set relay tier and track lightest relay per tier."""
     tier = {"relay_t1": 1, "relay_t2": 2, "relay_t3": 3, "relay_t4": 4}.get(flag, 0)
     if tier == 0:
         return
     if tier > flags.relay_tier:
         flags.relay_tier = tier
-    if mass < flags.lightest_relay_mass.get(tier, float("inf")):
-        flags.lightest_relay_mass[tier] = mass
+    existing = flags.lightest_relay.get(tier)
+    if existing is None or part.mass < existing.mass:
+        flags.lightest_relay[tier] = part
 
 
 def _compute_relay_tier(flags: EquipmentFlags) -> int:
@@ -463,36 +461,36 @@ def _apply_misc(flags: EquipmentFlags, part: MiscEquipment, count: int) -> None:
     for flag in part.provides:
         if flag == "probe_core":
             flags.has_probe_core = True
-            if part.mass < flags.lightest_probe_mass:
-                flags.lightest_probe_mass = part.mass
+            if flags.lightest_probe is None or part.mass < flags.lightest_probe.mass:
+                flags.lightest_probe = part
         elif flag == "capsule":
             flags.has_capsule = True
-            if part.mass > flags.heaviest_capsule_mass:
-                flags.heaviest_capsule_mass = part.mass
+            if flags.heaviest_capsule is None or part.mass > flags.heaviest_capsule.mass:
+                flags.heaviest_capsule = part
         elif flag == "reaction_wheel":
             flags.has_reaction_wheels = True
         elif flag == "rcs":
             flags.has_rcs = True
         elif flag in ("solar_fixed", "solar_retractable"):
             flags.has_solar = True
-            if part.mass < flags.lightest_solar_mass:
-                flags.lightest_solar_mass = part.mass
+            if flags.lightest_solar is None or part.mass < flags.lightest_solar.mass:
+                flags.lightest_solar = part
             if flag == "solar_retractable":
                 flags.has_solar_retractable = True
-                if part.mass < flags.lightest_solar_retractable_mass:
-                    flags.lightest_solar_retractable_mass = part.mass
+                if flags.lightest_solar_retractable is None or part.mass < flags.lightest_solar_retractable.mass:
+                    flags.lightest_solar_retractable = part
         elif flag == "solar_array_large":
             flags.has_solar_array_large = True
             flags.has_solar = True
             flags.has_solar_retractable = True
-            if part.mass < flags.lightest_solar_mass:
-                flags.lightest_solar_mass = part.mass
-            if part.mass < flags.lightest_solar_retractable_mass:
-                flags.lightest_solar_retractable_mass = part.mass
+            if flags.lightest_solar is None or part.mass < flags.lightest_solar.mass:
+                flags.lightest_solar = part
+            if flags.lightest_solar_retractable is None or part.mass < flags.lightest_solar_retractable.mass:
+                flags.lightest_solar_retractable = part
         elif flag == "rtg":
             flags.has_rtg = True
-            if part.mass < flags.lightest_rtg_mass:
-                flags.lightest_rtg_mass = part.mass
+            if flags.lightest_rtg is None or part.mass < flags.lightest_rtg.mass:
+                flags.lightest_rtg = part
         elif flag == "battery_large":
             flags.has_battery_large = True
         elif flag == "docking_port":
@@ -501,6 +499,8 @@ def _apply_misc(flags: EquipmentFlags, part: MiscEquipment, count: int) -> None:
             flags.has_fuel_lines = True
         elif flag == "ladder":
             flags.has_ladder = True
+            if flags.lightest_ladder is None or part.mass < flags.lightest_ladder.mass:
+                flags.lightest_ladder = part
         elif flag == "launch_clamp":
             flags.has_launch_clamp = True
         elif flag == "isru":
@@ -518,10 +518,10 @@ def _apply_misc(flags: EquipmentFlags, part: MiscEquipment, count: int) -> None:
         elif flag == "aero_control":
             flags.has_aero_control_surface = True
             flags.available_aero_controls.append(part)
-            if part.mass < flags.lightest_aero_control_mass:
-                flags.lightest_aero_control_mass = part.mass
+            if flags.lightest_aero_control is None or part.mass < flags.lightest_aero_control.mass:
+                flags.lightest_aero_control = part
         elif flag.startswith("relay_"):
-            _apply_misc_relay(flags, flag, part.mass)
+            _apply_misc_relay(flags, flag, part)
 
 
 # ---------------------------------------------------------------------------
@@ -535,6 +535,8 @@ class ProfileResult:
     stage_results: list[StageResult] = field(default_factory=list)
     edge_groups: list[list[MissionEdge]] = field(default_factory=list)
     failure_reason: str = ""
+    # Command module + support equipment for the terminal stage: [(count, part_id), ...]
+    terminal_parts: list[tuple[int, str]] = field(default_factory=list)
 
 
 def _has_attitude_control(flags: EquipmentFlags) -> bool:
@@ -728,9 +730,11 @@ def _evaluate_profile(
 
     # Terminal payload mass
     if is_crewed:
-        terminal_mass = max(flags.heaviest_capsule_mass, 0.08)  # min capsule
+        capsule_mass = flags.heaviest_capsule.mass if flags.heaviest_capsule else 0.0
+        terminal_mass = max(capsule_mass, 0.08)  # min capsule
     else:
-        terminal_mass = max(flags.lightest_probe_mass, 0.04)    # min probe
+        probe_mass = flags.lightest_probe.mass if flags.lightest_probe else 0.0
+        terminal_mass = max(probe_mass, 0.04)    # min probe
 
     # Add equipment mass for the terminal stage
     # (legs, ladder, heat shield on the last edge in the profile)
@@ -782,11 +786,16 @@ def _evaluate_profile(
 
         # Equipment mass for this stage
         equip_mass = 0.0
-        if needs_hs:
-            equip_mass += flags.best_heat_shield_mass
+        stage_equipment: list[tuple[int, str]] = []
+        if needs_hs and flags.best_heat_shield:
+            equip_mass += flags.best_heat_shield.mass
+            stage_equipment.append((1, flags.best_heat_shield.name))
         if needs_legs_g:
             leg_body = BODY_BY_NAME[next(e.body for e in group if e.needs_landing_legs)]
-            equip_mass += _leg_mass_for_tier(flags, leg_body.landing_leg_tier)
+            leg_mass, leg_id = _leg_mass_for_tier(flags, leg_body.landing_leg_tier)
+            equip_mass += leg_mass
+            if leg_id:
+                stage_equipment.append((_LANDING_LEG_COUNT, leg_id))
 
         # Atmospheric-ascent gate: steering a gravity turn in atmosphere
         # requires either a gimballed engine or actuated aero surfaces.
@@ -802,8 +811,9 @@ def _evaluate_profile(
             has_atmo_ascent_in_group and not flags.has_aero_control_surface
         )
         stage_payload = payload
-        if has_atmo_ascent_in_group and flags.has_aero_control_surface:
-            stage_payload += 4.0 * flags.lightest_aero_control_mass
+        if has_atmo_ascent_in_group and flags.lightest_aero_control:
+            stage_payload += 4.0 * flags.lightest_aero_control.mass
+            stage_equipment.append((4, flags.lightest_aero_control.name))
 
         # Parachute consumption check for aero landing edges in this group.
         # Use the landing edge's actual body (not the group's first body) since
@@ -822,6 +832,14 @@ def _evaluate_profile(
         # Aero-landing groups are passive — heat shield + parachutes do all
         # the work.  Skip the engine optimizer entirely.
         if all(e.edge_type == ET.ATMO_LANDING_AERO for e in group):
+            # Add chutes to the manifest
+            for _aero_e in aero_land_edges:
+                _aero_body = BODY_BY_NAME[_aero_e.body]
+                chute_count, chute_id = _best_chute_for_body(
+                    payload, _aero_body, flags, diff,
+                )
+                if chute_id and chute_count > 0:
+                    stage_equipment.append((chute_count, chute_id))
             passive_mass = stage_payload + equip_mass
             stage_results_list.append(StageResult(
                 delta_v=0.0,
@@ -836,6 +854,7 @@ def _evaluate_profile(
                 fill_fraction=0.0,
                 engine_name="none",
                 tank_name="none",
+                equipment=stage_equipment,
             ))
             payload = passive_mass
             continue
@@ -857,7 +876,7 @@ def _evaluate_profile(
             min_twr=min_twr,
             requires_throttleable=req_throttle,
             needs_heat_shield=needs_hs,
-            max_heat_shield_size=flags.max_heat_shield_size,
+            max_heat_shield_size=flags.best_heat_shield.size_class if flags.best_heat_shield else None,
             heat_shield_mass=equip_mass if needs_hs else 0.0,
             in_atmosphere=in_atmo,
             srb_needs_rcs=diff.srb_needs_rcs,
@@ -873,15 +892,49 @@ def _evaluate_profile(
             return ProfileResult(False,
                 failure_reason=f"no viable stage for group dv={req_dv:.0f} m/s at {body.name}")
 
+        # Chutes for aero-landing edges in mixed groups
+        if aero_land_edges:
+            for _aero_e in aero_land_edges:
+                _aero_body = BODY_BY_NAME[_aero_e.body]
+                chute_count, chute_id = _best_chute_for_body(
+                    payload, _aero_body, flags, diff,
+                )
+                if chute_id and chute_count > 0:
+                    stage_equipment.append((chute_count, chute_id))
+
+        # Ladder
+        if any(e.needs_ladder for e in group) and flags.lightest_ladder:
+            stage_equipment.append((1, flags.lightest_ladder.name))
+
+        result.equipment = stage_equipment
         stage_results_list.append(result)
         # The stage's wet mass becomes the payload for the next stage back
         payload = result.stage_mass_wet
+
+    # Add decouplers to non-terminal stages (not in mass budget, just for build guide)
+    num_stages = len(stage_results_list)
+    if num_stages > 1:
+        stack_decs = [d for d in flags.available_decouplers if d.kind == "stack"]
+        if stack_decs:
+            best_dec = min(stack_decs, key=lambda d: d.mass)
+            for sr in stage_results_list[:-1]:
+                sr.equipment.append((1, best_dec.name))
+
+    # Build terminal parts list (command module + support equipment)
+    terminal_parts: list[tuple[int, str]] = []
+    if is_crewed and flags.heaviest_capsule:
+        terminal_parts.append((1, flags.heaviest_capsule.name))
+    elif not is_crewed and flags.lightest_probe:
+        terminal_parts.append((1, flags.lightest_probe.name))
+    support_mass, support_parts = _support_equipment_mass(flags, profile)
+    terminal_parts.extend(support_parts)
 
     return ProfileResult(
         feasible=True,
         launch_mass=payload,
         stage_results=list(reversed(stage_results_list)),
         edge_groups=groups,
+        terminal_parts=terminal_parts,
     )
 
 
@@ -991,13 +1044,14 @@ def _group_edges(profile: list[MissionEdge], staging_tier: int) -> list[list[Mis
 
 def _support_equipment_mass(
     flags: EquipmentFlags, profile: list[MissionEdge],
-) -> tuple[float, list[str]]:
+) -> tuple[float, list[tuple[int, str]]]:
     """
-    Return (mass, part_names) for required support equipment (antenna, power)
+    Return (mass, parts) for required support equipment (antenna, power)
     based on the most demanding body in the mission profile.
+    Each part entry is (count, part_id).
     """
     mass = 0.0
-    parts: list[str] = []
+    parts: list[tuple[int, str]] = []
 
     # Find the most demanding relay tier and power requirement across all edges
     max_relay = 0
@@ -1019,33 +1073,32 @@ def _support_equipment_mass(
 
     # Relay: find lightest antenna meeting the required tier
     if max_relay > 0:
-        # Walk tiers from required up to find cheapest option
-        best_relay_mass = float("inf")
+        best_relay: Optional[MiscEquipment] = None
         for tier in range(max_relay, 4):
-            m = flags.lightest_relay_mass.get(tier, float("inf"))
-            if m < best_relay_mass:
-                best_relay_mass = m
-        if best_relay_mass < float("inf"):
-            mass += best_relay_mass
-            parts.append(f"Relay T{max_relay}+ ({best_relay_mass:.3f}t)")
+            candidate = flags.lightest_relay.get(tier)
+            if candidate and (best_relay is None or candidate.mass < best_relay.mass):
+                best_relay = candidate
+        if best_relay:
+            mass += best_relay.mass
+            parts.append((1, best_relay.name))
 
     # Power: find lightest power source meeting requirement
     if power_req == "rtg":
-        if flags.lightest_rtg_mass < float("inf"):
-            mass += flags.lightest_rtg_mass
-            parts.append(f"RTG ({flags.lightest_rtg_mass:.3f}t)")
+        if flags.lightest_rtg:
+            mass += flags.lightest_rtg.mass
+            parts.append((1, flags.lightest_rtg.name))
     elif power_req in ("solar", "solar_marginal"):
         if needs_retractable:
-            if flags.lightest_solar_retractable_mass < float("inf"):
-                mass += flags.lightest_solar_retractable_mass
-                parts.append(f"Solar retractable ({flags.lightest_solar_retractable_mass:.3f}t)")
-            elif flags.lightest_rtg_mass < float("inf"):
-                mass += flags.lightest_rtg_mass
-                parts.append(f"RTG ({flags.lightest_rtg_mass:.3f}t)")
+            if flags.lightest_solar_retractable:
+                mass += flags.lightest_solar_retractable.mass
+                parts.append((1, flags.lightest_solar_retractable.name))
+            elif flags.lightest_rtg:
+                mass += flags.lightest_rtg.mass
+                parts.append((1, flags.lightest_rtg.name))
         else:
-            if flags.lightest_solar_mass < float("inf"):
-                mass += flags.lightest_solar_mass
-                parts.append(f"Solar ({flags.lightest_solar_mass:.3f}t)")
+            if flags.lightest_solar:
+                mass += flags.lightest_solar.mass
+                parts.append((1, flags.lightest_solar.name))
 
     return mass, parts
 
@@ -1066,25 +1119,32 @@ def _terminal_equipment_mass(profile: list[MissionEdge],
         if last_edge.needs_landing_legs:
             body = BODY_BY_NAME.get(last_edge.body)
             if body:
-                mass += _leg_mass_for_tier(flags, body.landing_leg_tier)
+                leg_mass, _ = _leg_mass_for_tier(flags, body.landing_leg_tier)
+                mass += leg_mass
     # Ladder — only if last edge needs one (same logic: left at surface otherwise)
-    if profile and profile[-1].needs_ladder:
-        mass += 0.005  # Pegasus ladder mass
+    if profile and profile[-1].needs_ladder and flags.lightest_ladder:
+        mass += flags.lightest_ladder.mass
     # Support equipment (antenna + power source)
     support_mass, _ = _support_equipment_mass(flags, profile)
     mass += support_mass
     return mass
 
 
-def _leg_mass_for_tier(flags: EquipmentFlags, required_tier: int) -> float:
-    """Return the mass of the lightest available legs that meet the tier."""
+_LANDING_LEG_COUNT = 4  # conservative: 4 legs per landing
+
+
+def _leg_mass_for_tier(
+    flags: EquipmentFlags, required_tier: int,
+) -> tuple[float, str]:
+    """Return (total_mass, part_id) of the lightest available legs meeting the tier."""
     for leg in sorted(flags.available_landing_legs, key=lambda l: l.mass):
         if leg.tier >= required_tier:
-            return leg.mass * 4  # conservative: 4 legs per landing
+            return leg.mass * _LANDING_LEG_COUNT, leg.name
     # Fall back: if we have any legs at all, use them
     if flags.available_landing_legs:
-        return min(l.mass for l in flags.available_landing_legs) * 4
-    return 0.0
+        best = min(flags.available_landing_legs, key=lambda l: l.mass)
+        return best.mass * _LANDING_LEG_COUNT, best.name
+    return 0.0, ""
 
 
 def _required_chute_count(
@@ -1131,6 +1191,19 @@ def _required_chute_count(
             return n
 
     return -1  # even all chutes aren't enough
+
+
+def _best_chute_for_body(
+    landing_mass: float, body: Body, flags: EquipmentFlags,
+    diff: DifficultyProfile,
+) -> tuple[int, str]:
+    """Return (count, part_id) for the chute used in aero landing, or (0, "")."""
+    non_drogue = [p for p in flags.available_parachutes if not p.is_drogue]
+    if not non_drogue:
+        return 0, ""
+    chute = non_drogue[0]
+    count = _required_chute_count(landing_mass, body, flags, diff)
+    return (max(1, count), chute.name) if count != 0 else (0, "")
 
 
 # ---------------------------------------------------------------------------
@@ -1386,12 +1459,12 @@ def _compute_sounding_altitude(flags: EquipmentFlags) -> float:
     best_km = 0.0
 
     payloads: list[float] = []
-    if flags.has_probe_core and flags.lightest_probe_mass < float("inf"):
-        payloads.append(flags.lightest_probe_mass)
-    if flags.has_capsule and flags.heaviest_capsule_mass > 0:
+    if flags.lightest_probe:
+        payloads.append(flags.lightest_probe.mass)
+    if flags.heaviest_capsule and flags.heaviest_capsule.mass > 0:
         # Crewed: survivable iff (decoupler + at least one parachute)
         if flags.has_parachutes and flags.staging_tier >= 1:
-            payloads.append(flags.heaviest_capsule_mass)
+            payloads.append(flags.heaviest_capsule.mass)
 
     if not payloads:
         return 0.0

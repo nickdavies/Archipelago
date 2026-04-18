@@ -104,10 +104,10 @@ def _make_flags(
 
     if probe_core:
         flags.has_probe_core = True
-        flags.lightest_probe_mass = _PROBE_CORE.mass
+        flags.lightest_probe = _PROBE_CORE
     if capsule:
         flags.has_capsule = True
-        flags.heaviest_capsule_mass = _COMMAND_POD.mass
+        flags.heaviest_capsule = _COMMAND_POD
 
     if reaction_wheels:
         flags.has_reaction_wheels = True
@@ -118,9 +118,8 @@ def _make_flags(
     for hs in heat_shields:
         flags.has_heat_shield = True
         flags.available_heat_shields.append(hs)
-        if flags.max_heat_shield_size is None or hs.size_class > flags.max_heat_shield_size:
-            flags.max_heat_shield_size = hs.size_class
-            flags.best_heat_shield_mass = hs.mass
+        if flags.best_heat_shield is None or hs.size_class > flags.best_heat_shield.size_class:
+            flags.best_heat_shield = hs
 
     parachutes = parachutes or []
     for p in parachutes:
@@ -152,10 +151,18 @@ def _make_flags(
     flags.has_solar = solar or solar_retractable or solar_large
     flags.has_solar_retractable = solar_retractable or solar_large
     flags.has_solar_array_large = solar_large
+    if solar or solar_retractable or solar_large:
+        flags.lightest_solar = _OX_STAT
+    if solar_retractable or solar_large:
+        flags.lightest_solar_retractable = _SOLAR_ARRAY if solar_large else _OX_STAT
     flags.has_rtg = rtg
+    if rtg:
+        flags.lightest_rtg = _RTG
     flags.has_battery_large = battery_large
     flags.relay_tier = relay_tier
     flags.has_ladder = ladder
+    if ladder:
+        flags.lightest_ladder = _LADDER
     flags.has_launch_clamp = launch_clamp
 
     return flags
@@ -270,8 +277,7 @@ class TestHeatShieldGate(unittest.TestCase):
         flags = self._duna_flags_no_shield()
         flags.has_heat_shield = True
         flags.available_heat_shields = [_SHIELD_125]
-        flags.max_heat_shield_size = 1.25
-        flags.best_heat_shield_mass = _SHIELD_125.mass
+        flags.best_heat_shield = _SHIELD_125
         profiles = MISSION_PROFILES.get(("Duna", "land"), [])
         aero_profiles = [p for p in profiles
                          if any(e.needs_heat_shield for e in p)]
@@ -429,7 +435,7 @@ class TestCrewedVsUnmanned(unittest.TestCase):
     def test_unmanned_with_probe_core(self) -> None:
         flags = self._base_flags()
         flags.has_probe_core = True
-        flags.lightest_probe_mass = _PROBE_CORE.mass
+        flags.lightest_probe = _PROBE_CORE
         profiles = MISSION_PROFILES.get(("Mun", "orbit"), [])
         ok = _try_profiles(profiles, flags, _normal_diff(), "orbit", crewed=False)
         self.assertTrue(ok)
@@ -667,8 +673,8 @@ class TestAtmosphericAscentControl(unittest.TestCase):
     def _add_aero_control(self, flags: EquipmentFlags, part) -> None:
         flags.has_aero_control_surface = True
         flags.available_aero_controls.append(part)
-        if part.mass < flags.lightest_aero_control_mass:
-            flags.lightest_aero_control_mass = part.mass
+        if flags.lightest_aero_control is None or part.mass < flags.lightest_aero_control.mass:
+            flags.lightest_aero_control = part
 
     def test_atmo_ascent_requires_gimbal_or_aero(self) -> None:
         # Dart engine (no gimbal) + reaction wheels + fuel, no fins.
@@ -904,7 +910,7 @@ class TestKerbinOrbitIsEarlyGame(unittest.TestCase):
         # Reliant has no gimbal; add a Basic Fin for atmospheric control.
         flags.has_aero_control_surface = True
         flags.available_aero_controls.append(_BASIC_FIN)
-        flags.lightest_aero_control_mass = _BASIC_FIN.mass
+        flags.lightest_aero_control = _BASIC_FIN
         profiles = MISSION_PROFILES.get(("Kerbin", "orbit"), [])
         ok = _try_profiles(profiles, flags, _normal_diff(), "orbit", crewed=False)
         self.assertTrue(

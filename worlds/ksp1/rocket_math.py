@@ -10,7 +10,7 @@ underestimate delta-v margin, underestimate asparagus benefit.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from .parts import (
@@ -57,6 +57,9 @@ class StageResult:
     fill_fraction: float
     engine_name: str
     tank_name: str
+    # Non-propulsion parts: [(count, part_id), ...]
+    # Populated by _evaluate_profile after stage optimisation.
+    equipment: list[tuple[int, str]] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
