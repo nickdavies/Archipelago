@@ -1,6 +1,6 @@
 from typing import Any
 
-from BaseClasses import CollectionState, Item, MultiWorld
+from BaseClasses import CollectionState, Item, MultiWorld, Tutorial
 from worlds.AutoWorld import LogicMixin, WebWorld, World
 
 from . import items, locations, regions, rules
@@ -24,7 +24,16 @@ class KSP1State(LogicMixin):
 
 class KSP1WebWorld(WebWorld):
     theme = "ocean"
-    # TODO: Add tutorial entries once setup docs are written.
+    tutorials = [
+        Tutorial(
+            "Setup Guide",
+            "A guide to setting up the Kerbal Space Program Archipelago client",
+            "English",
+            "setup_en.md",
+            "setup/en",
+            ["nickdavies"],
+        )
+    ]
 
 
 class KSP1World(World):
