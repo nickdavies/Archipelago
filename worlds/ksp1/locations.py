@@ -1,7 +1,7 @@
 """
 Location definitions for KSP1 Archipelago.
 
-Four location sources (total ~508 max, filtered by difficulty):
+Four location sources (total ~524 max, filtered by difficulty):
 
   1. Starting Inventory Locations  (5/10/15/20 by difficulty)
      Zero access requirements; AP fill places the items needed to bootstrap.
@@ -10,15 +10,15 @@ Four location sources (total ~508 max, filtered by difficulty):
      Earned by performing science experiments at KSC buildings/grounds.
      Requires EVA (capsule) or rover (probe + wheels + power + instrument).
 
-  3. Mission Event Locations  (244 total)
-     13 Kerbin-specific + 231 per-body event-scaled checks.
+  3. Mission Event Locations  (260 total)
+     12 Kerbin-specific + 248 per-body event-scaled checks.
      Eve Return/Sample Return exist but require all progression parts.
      Scale is by event difficulty, not body distance:
-       Flyby/SOI Leave/Orbit = 1 slot each,
+       Flyby/SOI Leave/Orbit/EVA in Orbit = 1 slot each,
        Landing/Crewed Landing/Flag Plant = 2 slots each,
        Return/Sample Return = 3 slots each.
-     Per landable body: 3×1 + 3×2 + 2×3 = 15 locations.
-     Per non-landable body (Jool, Kerbol): 3×1 = 3 locations.
+     Per landable body: 4×1 + 3×2 + 2×3 = 16 locations.
+     Per non-landable body (Jool, Kerbol): 4×1 = 4 locations.
 
   4. Tech Tree Locations  (124–248 by difficulty)
      2–4 locations per node × 62 nodes, scaled by difficulty.
@@ -63,6 +63,7 @@ LANDABLE_EVENTS: tuple[str, ...] = (
     "Flyby",
     "SOI Leave",
     "Orbit",
+    "EVA in Orbit",
     "Landing",
     "Crewed Landing",
     "Flag Plant",
@@ -75,12 +76,13 @@ ORBITAL_ONLY_EVENTS: tuple[str, ...] = (
     "Flyby",
     "SOI Leave",
     "Orbit",
+    "EVA in Orbit",
 )
 
 #: Location slots per event, scaled by achievement difficulty.
 #: Easy events (fly past) get 1 slot; hard events (sample return) get 3.
 EVENT_SCALE: dict[str, int] = {
-    "Flyby": 1, "SOI Leave": 1, "Orbit": 1,
+    "Flyby": 1, "SOI Leave": 1, "Orbit": 1, "EVA in Orbit": 1,
     "Landing": 2, "Crewed Landing": 2, "Flag Plant": 2,
     "Return": 3, "Sample Return": 3,
 }
@@ -130,7 +132,7 @@ KSC_BIOME_NAMES: list[str] = [
 ]
 
 # ---------------------------------------------------------------------------
-# Kerbin-specific mission locations (13 total, fixed)
+# Kerbin-specific mission locations (12 total, fixed)
 # ---------------------------------------------------------------------------
 
 KERBIN_LOCATION_NAMES: list[str] = [
@@ -146,10 +148,9 @@ KERBIN_LOCATION_NAMES: list[str] = [
     "Kerbin 70km Altitude",
     "Kerbin Splashdown",
     "Kerbin First Staging",
-    "Kerbin EVA in Orbit",
 ]
 
-assert len(KERBIN_LOCATION_NAMES) == 13
+assert len(KERBIN_LOCATION_NAMES) == 12
 
 # ---------------------------------------------------------------------------
 # Per-body mission location names (217 total, generated from body data)
@@ -175,9 +176,9 @@ def _build_mission_locations() -> list[str]:
 
 MISSION_LOCATION_NAMES: list[str] = _build_mission_locations()
 
-# 15 landable × 15 + 2 non-landable × 3 = 231
-assert len(MISSION_LOCATION_NAMES) == 231, (
-    f"Expected 231 per-body mission locations, got {len(MISSION_LOCATION_NAMES)}"
+# 15 landable × 16 + 2 non-landable × 4 = 248
+assert len(MISSION_LOCATION_NAMES) == 248, (
+    f"Expected 248 per-body mission locations, got {len(MISSION_LOCATION_NAMES)}"
 )
 
 # ---------------------------------------------------------------------------
