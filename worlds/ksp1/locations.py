@@ -181,6 +181,19 @@ assert len(MISSION_LOCATION_NAMES) == 248, (
     f"Expected 248 per-body mission locations, got {len(MISSION_LOCATION_NAMES)}"
 )
 
+# Bodies in the Kerbin system (used to identify interplanetary locations).
+KERBIN_SYSTEM_BODY_NAMES: frozenset[str] = frozenset({"Kerbin", "Mun", "Minmus"})
+
+# All mission locations outside the Kerbin system.
+# Used by generate_early() to exclude interplanetary progression for short goals.
+INTERPLANETARY_LOCATION_NAMES: frozenset[str] = frozenset(
+    f"{body.name} {event} {slot}"
+    for body in ALL_BODIES
+    if body.name not in KERBIN_SYSTEM_BODY_NAMES
+    for event in get_body_events(body)
+    for slot in range(1, EVENT_SCALE[event] + 1)
+)
+
 # ---------------------------------------------------------------------------
 # Build the full LOCATION_TABLE (name → id offset)
 # ---------------------------------------------------------------------------

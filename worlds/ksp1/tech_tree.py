@@ -76,3 +76,13 @@ MAX_RD_BAND: int = 3
 def cumulative_tier_cost(tier: int) -> int:
     """Return the total science needed to purchase all nodes through *tier*."""
     return _CUMULATIVE[tier]
+
+
+# Leaf nodes: nodes whose node_id never appears as a parent of another node.
+# KSP enforces parent prerequisites, so all leaves checked = full tree complete.
+_all_parent_ids: frozenset[str] = frozenset(
+    pid for n in TECH_NODES for pid in n.parents
+)
+LEAF_TECH_NODES: list[TechNode] = [
+    n for n in TECH_NODES if n.node_id not in _all_parent_ids
+]

@@ -195,6 +195,23 @@ def build_world_and_state(ap: APState) -> tuple[MultiWorld, int]:
         "goal": sd.get("goal", 0),
     }
 
+    # For custom goals, reconstruct body lists from goal_locations in slot_data.
+    # Entries follow "{Body} {Event} 1" — e.g. "Mun Flag Plant 1", "Duna Return 1".
+    if options["goal"] == 99:  # Goal.option_custom
+        flag_bodies = set()
+        return_bodies = set()
+        sample_return_bodies = set()
+        for loc in sd.get("goal_locations", []):
+            if loc.endswith(" Flag Plant 1"):
+                flag_bodies.add(loc.replace(" Flag Plant 1", ""))
+            elif loc.endswith(" Sample Return 1"):
+                sample_return_bodies.add(loc.replace(" Sample Return 1", ""))
+            elif loc.endswith(" Return 1"):
+                return_bodies.add(loc.replace(" Return 1", ""))
+        options["flag_bodies"] = flag_bodies
+        options["return_bodies"] = return_bodies
+        options["sample_return_bodies"] = sample_return_bodies
+
     multiworld = setup_multiworld(
         KSP1World,
         steps=("generate_early", "create_regions", "create_items", "set_rules"),

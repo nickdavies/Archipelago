@@ -4,7 +4,7 @@ from BaseClasses import CollectionState, Item, MultiWorld, Tutorial
 from worlds.AutoWorld import LogicMixin, WebWorld, World
 
 from . import items, locations, regions, rules
-from .rules import goal_display_name, goal_location_names
+from .rules import GoalSpec, resolve_goal_spec, goal_spec_location_names
 from .capability import RocketCapability
 from .items import ITEM_NAME_TO_ID
 from .parts import PROGRESSIVE_PART_TIERS
@@ -65,9 +65,13 @@ class KSP1World(World):
     # Set during create_items(); included in slot_data for the client.
     progressive_representatives: dict[str, dict[int, str]]
 
+    # Resolved goal specification (preset or custom).
+    goal_spec: GoalSpec
+
     def generate_early(self) -> None:
-        """Apply ExcludeLateTechTree to the exclude_locations option set."""
+        """Resolve goal spec and apply ExcludeLateTechTree."""
         self.capability_cache = {}
+        self.goal_spec = resolve_goal_spec(self.options)
         if self.options.exclude_late_tech_tree:
             late_tier_locs: set[str] = {
                 f"{node.display_name} {slot}"
@@ -86,7 +90,7 @@ class KSP1World(World):
 
     def set_rules(self) -> None:
         rules.set_all_rules(self)
-        rules.set_completion_condition(self)
+        rules.set_completion_condition(self, self.goal_spec)
 
     def create_item(self, name: str) -> items.KSP1Item:
         return items.create_item(self, name)
@@ -98,9 +102,8 @@ class KSP1World(World):
         d = self.options.as_dict("goal", "difficulty", "start_with_launch_clamps", "item_pacing")
         d["tech_slots_per_node"] = TECH_SLOTS_BY_DIFFICULTY[self.options.difficulty.value]
         d["node_bands"] = {n.node_id: TIER_TO_BAND[n.tier] for n in TECH_NODES}
-        goal = self.options.goal.value
-        d["goal_locations"] = goal_location_names(goal)
-        d["goal_display_name"] = goal_display_name(goal)
+        d["goal_locations"] = goal_spec_location_names(self.goal_spec)
+        d["goal_display_name"] = self.goal_spec.display_name
         # Progressive tier data for the client mod
         d["progressive_tiers"] = {
             name: {str(t): parts for t, parts in tiers.items()}

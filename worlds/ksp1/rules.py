@@ -17,6 +17,7 @@ Golden rule: when in doubt, say something is NOT achievable.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
 from BaseClasses import CollectionState, ItemClassification
@@ -26,6 +27,7 @@ from .capability import get_capability
 from .items import ITEM_TABLE, PROGRESSIVE_RD_NAME, PROGRESSIVE_PART_ITEM_NAMES, SCIENCE_PACK_NAMES
 from .locations import (
     EVENT_SCALE,
+    KERBIN_SYSTEM_BODY_NAMES,
     KSC_BIOME_NAMES,
     KERBIN_LOCATION_NAMES,
     MISSION_LOCATION_NAMES,
@@ -34,7 +36,7 @@ from .locations import (
     event_location_names,
 )
 from .options import Difficulty, Goal, ItemPacing
-from .tech_tree import MAX_TIER, MAX_RD_BAND, cumulative_tier_cost, TECH_NODES
+from .tech_tree import MAX_TIER, MAX_RD_BAND, cumulative_tier_cost, TECH_NODES, LEAF_TECH_NODES
 
 if TYPE_CHECKING:
     from .world import KSP1World
@@ -137,14 +139,15 @@ def set_all_rules(world: KSP1World) -> None:
     _set_mission_rules(world, player)
     # Tech tree rules are now region entrance rules (see regions.py).
     _set_item_pacing_rules(world, player, difficulty)
+    if world.goal_spec.is_kerbin_system_only:
+        _set_interplanetary_item_rules(world, player)
 
 
-def set_completion_condition(world: KSP1World) -> None:
+def set_completion_condition(world: KSP1World, goal_spec: GoalSpec) -> None:
     player = world.player
     difficulty = world.options.difficulty.value
-    goal = world.options.goal.value
 
-    _set_victory_rules(world, player, goal, difficulty)
+    _set_victory_rules(world, player, goal_spec, difficulty)
 
 
 # ---------------------------------------------------------------------------
@@ -434,7 +437,29 @@ def _set_item_pacing_rules(world: KSP1World, player: int, difficulty: int) -> No
 
 
 # ---------------------------------------------------------------------------
-# Victory conditions
+# Interplanetary progression restriction (Kerbin-system-only goals)
+# ---------------------------------------------------------------------------
+
+def _set_interplanetary_item_rules(world: KSP1World, player: int) -> None:
+    """
+    For Kerbin-system-only goals, prevent progression items from appearing
+    in interplanetary mission locations.
+
+    Uses item_rules (not exclude_locations) so that useful and filler items
+    can still fill these slots — avoids FillError at higher difficulties.
+    """
+    from worlds.generic.Rules import add_item_rule
+    from .locations import INTERPLANETARY_LOCATION_NAMES
+
+    def no_advancement(item) -> bool:
+        return item.player != player or not item.advancement
+
+    for name in INTERPLANETARY_LOCATION_NAMES:
+        add_item_rule(world.get_location(name), no_advancement)
+
+
+# ---------------------------------------------------------------------------
+# Victory conditions — GoalSpec system
 # ---------------------------------------------------------------------------
 
 _STANDARD_RETURN_BODIES: tuple[str, ...] = (
@@ -442,49 +467,135 @@ _STANDARD_RETURN_BODIES: tuple[str, ...] = (
     "Dres", "Vall", "Bop", "Pol", "Eeloo",
 )
 
-_ALL_LANDABLE_BODIES: tuple[str, ...] = (
-    "Kerbin", "Mun", "Minmus", "Moho", "Eve", "Gilly",
-    "Duna", "Ike", "Dres", "Laythe", "Vall", "Tylo",
-    "Bop", "Pol", "Eeloo",
+# Derived from bodies.py — single source of truth.
+_ALL_LANDABLE_BODIES: tuple[str, ...] = tuple(
+    b.name for b in ALL_BODIES if b.can_land
 )
 
-_GOAL_DISPLAY_NAMES: dict[int, str] = {
-    Goal.option_duna_return: "Duna Return",
-    Goal.option_eeloo_return: "Eeloo Return",
-    Goal.option_flag_every_body: "Flag Every Body",
-    Goal.option_standard_returns: "Standard Returns",
-    Goal.option_standard_sample_returns: "Standard Sample Returns",
-    Goal.option_complete_tech_tree: "Complete Tech Tree",
-    Goal.option_eve_return: "Eve Return",
+# Bodies whose return/sample-return rules use the all-parts proxy
+# (capability system can't model their ascent profiles).
+_ALL_PARTS_PROXY_BODIES: frozenset[str] = frozenset({"Eve", "Tylo", "Laythe"})
+
+
+@dataclass(frozen=True)
+class GoalSpec:
+    """Decomposed goal: every goal (preset or custom) becomes one of these."""
+    display_name: str
+    flag_bodies: tuple[str, ...] = ()
+    return_bodies: tuple[str, ...] = ()
+    sample_return_bodies: tuple[str, ...] = ()
+    complete_tech_tree: bool = False
+
+    @property
+    def is_kerbin_system_only(self) -> bool:
+        """True when every goal body is in the Kerbin system (Kerbin/Mun/Minmus)."""
+        if self.complete_tech_tree:
+            return False
+        all_bodies = set(self.flag_bodies) | set(self.return_bodies) | set(self.sample_return_bodies)
+        return bool(all_bodies) and all_bodies <= KERBIN_SYSTEM_BODY_NAMES
+
+
+_PRESET_GOALS: dict[int, GoalSpec] = {
+    Goal.option_duna_return: GoalSpec(
+        display_name="Duna Return",
+        return_bodies=("Duna",),
+    ),
+    Goal.option_eeloo_return: GoalSpec(
+        display_name="Eeloo Return",
+        return_bodies=("Eeloo",),
+    ),
+    Goal.option_eve_return: GoalSpec(
+        display_name="Eve Return",
+        return_bodies=("Eve",),
+    ),
+    Goal.option_flag_every_body: GoalSpec(
+        display_name="Flag Every Body",
+        flag_bodies=_ALL_LANDABLE_BODIES,
+    ),
+    Goal.option_standard_returns: GoalSpec(
+        display_name="Standard Returns",
+        return_bodies=_STANDARD_RETURN_BODIES,
+    ),
+    Goal.option_standard_sample_returns: GoalSpec(
+        display_name="Standard Sample Returns",
+        sample_return_bodies=_STANDARD_RETURN_BODIES,
+    ),
+    Goal.option_complete_tech_tree: GoalSpec(
+        display_name="Complete Tech Tree",
+        complete_tech_tree=True,
+    ),
+    Goal.option_mun_flag: GoalSpec(
+        display_name="Mun Flag Plant",
+        flag_bodies=("Mun",),
+    ),
+    Goal.option_mun_sample_return: GoalSpec(
+        display_name="Mun Sample Return",
+        sample_return_bodies=("Mun",),
+    ),
 }
 
 
-def goal_location_names(goal: int) -> list[str]:
-    """Return the sentinel location names whose checks indicate goal completion.
+def resolve_goal_spec(options) -> GoalSpec:
+    """Build a GoalSpec from the player's option values.
 
-    Each entry is the slot-1 location for a required event. The client caches
-    these IDs at connect time and polls checkedLocationIds to detect victory.
+    Raises if the configuration is ambiguous or incomplete.
     """
-    if goal == Goal.option_duna_return:
-        return ["Duna Return 1"]
-    if goal == Goal.option_eeloo_return:
-        return ["Eeloo Return 1"]
-    if goal == Goal.option_eve_return:
-        return ["Eve Return 1"]
-    if goal == Goal.option_flag_every_body:
-        return [f"{b} Flag Plant 1" for b in _ALL_LANDABLE_BODIES]
-    if goal == Goal.option_standard_returns:
-        return [f"{b} Return 1" for b in _STANDARD_RETURN_BODIES]
-    if goal == Goal.option_standard_sample_returns:
-        return [f"{b} Sample Return 1" for b in _STANDARD_RETURN_BODIES]
-    if goal == Goal.option_complete_tech_tree:
-        return [f"{n.display_name} 1" for n in TECH_NODES]
-    return []
+    goal_value = options.goal.value
+    has_body_lists = bool(
+        options.flag_bodies.value
+        or options.return_bodies.value
+        or options.sample_return_bodies.value
+    )
+
+    if goal_value != Goal.option_custom and has_body_lists:
+        raise RuntimeError(
+            f"Body-list options (flag_bodies, return_bodies, sample_return_bodies) "
+            f"are set but goal is '{options.goal.current_option_name}', not 'custom'. "
+            f"Set goal to 'custom' to use body-list options."
+        )
+
+    if goal_value == Goal.option_custom:
+        if not has_body_lists:
+            raise RuntimeError(
+                "Goal is 'custom' but all body-list options are empty. "
+                "Set at least one of flag_bodies, return_bodies, or sample_return_bodies."
+            )
+        # Build display name from the body lists.
+        parts = []
+        if options.flag_bodies.value:
+            parts.append("Flag " + ", ".join(sorted(options.flag_bodies.value)))
+        if options.return_bodies.value:
+            parts.append("Return " + ", ".join(sorted(options.return_bodies.value)))
+        if options.sample_return_bodies.value:
+            parts.append("Sample Return " + ", ".join(sorted(options.sample_return_bodies.value)))
+        display = "Custom: " + " + ".join(parts)
+
+        return GoalSpec(
+            display_name=display,
+            flag_bodies=tuple(sorted(options.flag_bodies.value)),
+            return_bodies=tuple(sorted(options.return_bodies.value)),
+            sample_return_bodies=tuple(sorted(options.sample_return_bodies.value)),
+        )
+
+    spec = _PRESET_GOALS.get(goal_value)
+    if spec is None:
+        raise RuntimeError(f"Unknown goal value: {goal_value}")
+    return spec
 
 
-def goal_display_name(goal: int) -> str:
-    """Return a human-readable label for the goal."""
-    return _GOAL_DISPLAY_NAMES.get(goal, "Unknown")
+def goal_spec_location_names(spec: GoalSpec) -> list[str]:
+    """Return sentinel location names whose checks indicate goal completion."""
+    names: list[str] = []
+    for b in spec.flag_bodies:
+        names.append(f"{b} Flag Plant 1")
+    for b in spec.return_bodies:
+        names.append(f"{b} Return 1")
+    for b in spec.sample_return_bodies:
+        names.append(f"{b} Sample Return 1")
+    if spec.complete_tech_tree:
+        for n in LEAF_TECH_NODES:
+            names.append(f"{n.display_name} 1")
+    return names
 
 
 def create_victory_location(world: KSP1World) -> None:
@@ -502,76 +613,85 @@ def create_victory_location(world: KSP1World) -> None:
 
 
 def _set_victory_rules(
-    world: KSP1World, player: int, goal: int, difficulty: int
+    world: KSP1World, player: int, spec: GoalSpec, difficulty: int
 ) -> None:
     """Set the access rule and completion condition on the Victory event."""
     victory_location = world.get_location("Victory")
-    victory_location.access_rule = _make_goal_rule(player, goal, difficulty)
+    victory_location.access_rule = _make_goal_spec_rule(player, spec, difficulty)
 
     world.multiworld.completion_condition[player] = (
         lambda state: state.can_reach("Victory", "Location", player)
     )
 
 
-def _make_goal_rule(
-    player: int, goal: int, difficulty: int
+def _make_goal_spec_rule(
+    player: int, spec: GoalSpec, difficulty: int
 ) -> Callable[[CollectionState], bool]:
-    if goal == Goal.option_duna_return:
-        def rule(state: CollectionState) -> bool:
-            cap = get_capability(state, player)
-            bp = cap.bodies.get("Duna")
-            return bp is not None and (bp.can_return_to_kerbin or bp.can_return_crewed)
-        return rule
+    """Build a composite access rule from a GoalSpec."""
+    sub_rules: list[Callable[[CollectionState], bool]] = []
 
-    if goal == Goal.option_eeloo_return:
-        def rule(state: CollectionState) -> bool:
+    # Flag bodies
+    if spec.flag_bodies:
+        flag_bodies = spec.flag_bodies
+        def flag_rule(state: CollectionState) -> bool:
             cap = get_capability(state, player)
-            bp = cap.bodies.get("Eeloo")
-            return bp is not None and (bp.can_return_to_kerbin or bp.can_return_crewed)
-        return rule
+            for b in flag_bodies:
+                bp = cap.bodies.get(b)
+                if bp is None or not bp.can_flag_plant:
+                    return False
+            return True
+        sub_rules.append(flag_rule)
 
-    if goal == Goal.option_eve_return:
-        return _make_all_parts_rule(player)
-
-    if goal == Goal.option_flag_every_body:
-        def rule(state: CollectionState) -> bool:
+    # Return bodies
+    proxy_return = [b for b in spec.return_bodies if b in _ALL_PARTS_PROXY_BODIES]
+    normal_return = [b for b in spec.return_bodies if b not in _ALL_PARTS_PROXY_BODIES]
+    if normal_return:
+        nr = tuple(normal_return)
+        def return_rule(state: CollectionState) -> bool:
             cap = get_capability(state, player)
-            return all(
-                cap.bodies.get(b, type("_", (), {"can_land_crewed": False})()).can_land_crewed  # type: ignore[return-value]
-                for b in _ALL_LANDABLE_BODIES
-            )
-        return rule
-
-    if goal == Goal.option_standard_returns:
-        def rule(state: CollectionState) -> bool:
-            cap = get_capability(state, player)
-            for b in _STANDARD_RETURN_BODIES:
+            for b in nr:
                 bp = cap.bodies.get(b)
                 if bp is None or not (bp.can_return_to_kerbin or bp.can_return_crewed):
                     return False
             return True
-        return rule
+        sub_rules.append(return_rule)
+    if proxy_return:
+        sub_rules.append(_make_all_parts_rule(player))
 
-    if goal == Goal.option_standard_sample_returns:
-        def rule(state: CollectionState) -> bool:
+    # Sample return bodies
+    proxy_sample = [b for b in spec.sample_return_bodies if b in _ALL_PARTS_PROXY_BODIES]
+    normal_sample = [b for b in spec.sample_return_bodies if b not in _ALL_PARTS_PROXY_BODIES]
+    if normal_sample:
+        ns = tuple(normal_sample)
+        def sample_rule(state: CollectionState) -> bool:
             cap = get_capability(state, player)
-            for b in _STANDARD_RETURN_BODIES:
+            for b in ns:
                 bp = cap.bodies.get(b)
                 if bp is None or not bp.can_sample_return:
                     return False
             return True
-        return rule
+        sub_rules.append(sample_rule)
+    if proxy_sample:
+        sub_rules.append(_make_all_parts_rule(player))
 
-    if goal == Goal.option_complete_tech_tree:
-        # Victory when the player has all R&D upgrades and can afford all 62 nodes
+    # Complete tech tree
+    if spec.complete_tech_tree:
         science_rule = _make_science_threshold_rule(player, _TECH_TREE_COMPLETE_SCIENCE, difficulty)
-        def rule(state: CollectionState) -> bool:
+        def tech_rule(state: CollectionState) -> bool:
             if not state.has(PROGRESSIVE_RD_NAME, player, MAX_RD_BAND):
                 return False
             return science_rule(state)
-        return rule
+        sub_rules.append(tech_rule)
 
-    # Fallback (should never be reached)
-    def rule(state: CollectionState) -> bool:
-        return True
-    return rule
+    if not sub_rules:
+        # Should not happen — resolve_goal_spec prevents empty specs.
+        def always_true(state: CollectionState) -> bool:
+            return True
+        return always_true
+
+    if len(sub_rules) == 1:
+        return sub_rules[0]
+
+    def composite(state: CollectionState) -> bool:
+        return all(r(state) for r in sub_rules)
+    return composite

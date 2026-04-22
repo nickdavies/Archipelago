@@ -94,7 +94,7 @@ Science packs are added to your science balance immediately.
 
 ## What is the victory condition?
 
-The victory condition is configurable. Options include:
+The victory condition is configurable. Preset goals include:
 
 - **Duna Return** (default) — Return a vessel or crew from Duna.
 - **Eeloo Return** — Return from Eeloo.
@@ -103,6 +103,15 @@ The victory condition is configurable. Options include:
 - **Standard Returns** — Return from 11 bodies (excluding Eve, Tylo, Laythe).
 - **Standard Sample Returns** — Crewed sample return from the same 11 bodies.
 - **Complete Tech Tree** — Purchase all 62 tech tree nodes.
+- **Mun Flag** — Plant a flag on the Mun (short run).
+- **Mun Sample Return** — Crewed sample return from the Mun (short run).
+- **Custom** — Build your own goal from three body-list options: `flag_bodies`, `return_bodies`, and
+  `sample_return_bodies`. Set goal to `custom` and populate one or more of these lists with body names.
+
+**Short run goals:** When all goal bodies are in the Kerbin system (Kerbin, Mun, Minmus), progression items are
+automatically restricted from appearing at interplanetary locations. You will never be forced to fly to Duna or
+beyond to complete a Mun-only goal. Interplanetary missions are still available as optional content — they just
+won't contain items required for progression.
 
 ## Key options
 

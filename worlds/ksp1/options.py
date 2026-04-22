@@ -1,6 +1,13 @@
 from dataclasses import dataclass
 
-from Options import Choice, ExcludeLocations, PerGameCommonOptions, Toggle
+from Options import Choice, ExcludeLocations, OptionSet, PerGameCommonOptions, Toggle
+
+from .bodies import ALL_BODIES
+
+# All landable body names, derived from bodies.py (single source of truth).
+LANDABLE_BODY_NAMES: frozenset[str] = frozenset(
+    b.name for b in ALL_BODIES if b.can_land
+)
 
 
 class Goal(Choice):
@@ -14,6 +21,9 @@ class Goal(Choice):
     standard_sample_returns -- Crewed sample return from the same 11 bodies.
     complete_tech_tree     -- Purchase all 62 tech tree nodes with science.
     eve_return             -- Return a vessel (or crew) from Eve (challenge).
+    mun_flag               -- Plant a flag on the Mun.
+    mun_sample_return      -- Crewed sample return from the Mun.
+    custom                 -- Build a goal from the body-list options below.
     """
     display_name = "Goal"
 
@@ -24,8 +34,29 @@ class Goal(Choice):
     option_standard_sample_returns = 4
     option_complete_tech_tree = 5
     option_eve_return = 6
+    option_mun_flag = 7
+    option_mun_sample_return = 8
+    option_custom = 99
 
     default = option_duna_return
+
+
+class FlagBodies(OptionSet):
+    """Bodies to plant flags on (custom goal). Leave empty for preset goals."""
+    display_name = "Flag Bodies"
+    valid_keys = LANDABLE_BODY_NAMES
+
+
+class ReturnBodies(OptionSet):
+    """Bodies to return from (custom goal). Leave empty for preset goals."""
+    display_name = "Return Bodies"
+    valid_keys = LANDABLE_BODY_NAMES
+
+
+class SampleReturnBodies(OptionSet):
+    """Bodies to sample-return from (custom goal). Leave empty for preset goals."""
+    display_name = "Sample Return Bodies"
+    valid_keys = LANDABLE_BODY_NAMES
 
 
 class Difficulty(Choice):
@@ -119,3 +150,6 @@ class KSP1Options(PerGameCommonOptions):
     item_pacing: ItemPacing
     exclude_locations: KSP1ExcludeLocations
     exclude_late_tech_tree: ExcludeLateTechTree
+    flag_bodies: FlagBodies
+    return_bodies: ReturnBodies
+    sample_return_bodies: SampleReturnBodies
