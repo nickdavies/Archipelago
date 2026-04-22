@@ -51,6 +51,7 @@ EVENT_TO_MISSION: dict[str, tuple[str, bool]] = {
     "Flyby":         ("orbit", False),
     "SOI Leave":     ("orbit", False),
     "Orbit":         ("orbit", False),
+    "EVA in Orbit":  ("orbit", True),
     "Landing":       ("land", False),
     "Crewed Landing": ("land", True),
     "Flag Plant":    ("land", True),
