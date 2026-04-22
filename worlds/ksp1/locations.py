@@ -127,7 +127,7 @@ KSC_BIOME_NAMES: list[str] = [
     "KSC Mission Control",
     "KSC R&D",
     "KSC Crawlerway",
-    "KSC Flag Pole",
+    "KSC Flag Pole (Astronaut Complex)",
     "KSC Grounds",
 ]
 
