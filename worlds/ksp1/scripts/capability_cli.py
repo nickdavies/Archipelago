@@ -72,18 +72,10 @@ def _build_check_map() -> dict[str, CheckInfo]:
     """Build mapping from location name → mission parameters."""
     result: dict[str, CheckInfo] = {}
     for body in ALL_BODIES:
-        if body.name == "Kerbin":
-            continue
         for event in get_body_events(body):
             mission_type, crewed = EVENT_TO_MISSION[event]
             for loc_name in event_location_names(body.name, event):
                 result[loc_name] = CheckInfo(body.name, event, mission_type, crewed)
-
-    # Kerbin uses hand-crafted location names, not the standard {body} {event} {slot}
-    # pattern. EVA in Orbit is the only one that uses the mission profile system —
-    # the rest are sounding rocket altitude checks, equipment gates, or trivial.
-    result["Kerbin EVA in Orbit"] = CheckInfo("Kerbin", "Orbit", "orbit", True)
-
     return result
 
 
@@ -320,12 +312,16 @@ def cmd_rocket(ap: APState, check_name: str, verbose: bool = False) -> None:
         sys.exit(1)
 
     in_logic = loc_obj.can_reach(state)
+    loc_id = ap.location_name_to_id.get(check_name)
+    already_checked = loc_id is not None and loc_id in ap.checked_locations
 
     # Look up in the mission map for rocket details
     info = CHECK_MAP.get(check_name)
     if info is None:
         # Not a per-body mission check — just report in-logic status
         print(f"\n'{check_name}' — In logic: {'YES' if in_logic else 'NO'}")
+        if already_checked:
+            print("(Already checked — won't appear in 'in-logic' listing.)")
         print("(Not a per-body mission; no rocket design to show.)")
         if verbose:
             _print_item_dump(ap)
@@ -354,7 +350,10 @@ def cmd_rocket(ap: APState, check_name: str, verbose: bool = False) -> None:
     print(f"  Mission: {check_name}")
     print(f"  Body: {body_name} | Type: {mission_type} | Crewed: {crewed}")
     print(f"  Difficulty: {difficulty_name}")
-    print(f"  In logic: {'YES' if in_logic else 'NO'}")
+    logic_str = "YES" if in_logic else "NO"
+    if already_checked:
+        logic_str += " (already checked)"
+    print(f"  In logic: {logic_str}")
     print(f"  Feasible: {'YES' if result.feasible else 'NO'}")
     if result.feasible:
         print(f"  Launch mass: {result.launch_mass:.2f} t")
@@ -363,6 +362,13 @@ def cmd_rocket(ap: APState, check_name: str, verbose: bool = False) -> None:
     print(f"{'=' * 60}")
 
     if not result.feasible:
+        if verbose:
+            _print_item_dump(ap)
+        return
+
+    if not result.stage_results:
+        # Trivial mission (e.g. Kerbin Flag Plant — no propulsion required)
+        print("\n  (Trivial mission — no propulsion required.)")
         if verbose:
             _print_item_dump(ap)
         return

@@ -562,8 +562,10 @@ _add("Kerbin", "orbit",  [_KERBIN_ASCENT])
 _add("Kerbin", "escape", [_KERBIN_ASCENT, _KERBIN_ESCAPE])
 _add("Kerbin", "land",   [_KERBIN_ASCENT, _KERBIN_DEORBIT])
 _add("Kerbin", "flag_plant",    [])  # 0 dv — walk out and plant
-_add("Kerbin", "return",        [])  # 0 dv — any vessel recovery
-_add("Kerbin", "sample_return", [])  # 0 dv — EVA + recovery
+_add("Kerbin", "return",        [_KERBIN_ASCENT, _KERBIN_DEORBIT])
+# WARNING: sample_return MUST stay empty — kerbal EVAs from the launchpad,
+# takes a surface sample, and recovers. No rocket needed. Do not add edges.
+_add("Kerbin", "sample_return", [])
 
 
 # ===========================================================================

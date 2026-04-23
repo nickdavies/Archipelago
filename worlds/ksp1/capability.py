@@ -1321,23 +1321,19 @@ def _assess_one_body(
         prof.can_flag_plant = prof.can_land_crewed
 
     # --- Return (unmanned) ---
-    # Gated on orbit: you must be able to orbit before you can return from it.
-    # (Kerbin's return profile is 0-dv, so without this gate a probe core alone
-    # would mark Kerbin Return as reachable.)
-    if orbit_ok:
-        return_profiles = MISSION_PROFILES.get((body.name, "return"), [])
-        if return_profiles:
-            ok, reason = _try_profiles_reason(return_profiles, flags, diff, "return", crewed=False)
-            prof.can_return_to_kerbin = ok
-            if not ok and not prof.blocking_reason:
-                prof.blocking_reason = f"return: {reason}"
+    return_profiles = MISSION_PROFILES.get((body.name, "return"), [])
+    if return_profiles:
+        ok, reason = _try_profiles_reason(return_profiles, flags, diff, "return", crewed=False)
+        prof.can_return_to_kerbin = ok
+        if not ok and not prof.blocking_reason:
+            prof.blocking_reason = f"return: {reason}"
 
-            # Return (crewed)
-            if flags.has_capsule:
-                ok, reason = _try_profiles_reason(return_profiles, flags, diff, "return", crewed=True)
-                prof.can_return_crewed = ok
-                if not ok and not prof.blocking_reason:
-                    prof.blocking_reason = f"crewed return: {reason}"
+        # Return (crewed)
+        if flags.has_capsule:
+            ok, reason = _try_profiles_reason(return_profiles, flags, diff, "return", crewed=True)
+            prof.can_return_crewed = ok
+            if not ok and not prof.blocking_reason:
+                prof.blocking_reason = f"crewed return: {reason}"
 
     # --- Sample return (crewed + ladder check) ---
     sr_profiles = MISSION_PROFILES.get((body.name, "sample_return"), [])
