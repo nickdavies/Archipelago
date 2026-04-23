@@ -1433,6 +1433,7 @@ def evaluate_mission_detailed(
     body_name: str,
     mission_type: str,
     crewed: bool | None,
+    threshold_km: float | None = None,
 ) -> ProfileResult:
     """
     Evaluate a specific mission and return the winning ProfileResult
@@ -1440,7 +1441,63 @@ def evaluate_mission_detailed(
     ProfileResult if no profile alternative succeeds.
 
     crewed: True = crewed only, False = unmanned only, None = try both.
+
+    For ``mission_type="sounding"``, evaluates sounding rocket altitude
+    against ``threshold_km``.  Other Kerbin-specific types (first_launch,
+    first_landing, first_staging, splashdown) evaluate the relevant
+    capability flags.
     """
+    # --- Sounding rocket (altitude milestones, first crash) ---
+    if mission_type == "sounding":
+        return _evaluate_sounding(flags, threshold_km or 0.0)
+
+    # --- Other Kerbin-specific mission types ---
+    if mission_type == "first_launch":
+        sounding = _compute_sounding_altitude(flags)
+        ok = sounding > 0 or flags.has_capsule
+        if ok:
+            return ProfileResult(True)
+        reasons = []
+        if not flags.has_capsule:
+            reasons.append("no capsule (kerbal EVA path)")
+        if sounding <= 0:
+            reasons.append("no sounding altitude (propulsion path)")
+        return ProfileResult(False, failure_reasons=reasons)
+
+    if mission_type == "first_landing":
+        sounding = _compute_sounding_altitude(flags)
+        # Capsule-only path (kerbal EVA)
+        if flags.has_capsule:
+            return ProfileResult(True)
+        # Engine path: sounding + safe descent
+        if sounding > 0 and (flags.has_parachutes or flags.has_throttleable_engine):
+            return ProfileResult(True)
+        reasons = []
+        if not flags.has_capsule:
+            reasons.append("no capsule (EVA path)")
+        if sounding <= 0:
+            reasons.append("no sounding altitude")
+        elif not flags.has_parachutes and not flags.has_throttleable_engine:
+            reasons.append("no safe descent (need parachute or throttleable engine)")
+        return ProfileResult(False, failure_reasons=reasons)
+
+    if mission_type == "first_staging":
+        if flags.staging_tier >= 1:
+            return ProfileResult(True)
+        return ProfileResult(False, failure_reasons=["no stack decoupler (staging_tier < 1)"])
+
+    if mission_type == "splashdown":
+        sounding = _compute_sounding_altitude(flags)
+        reasons = []
+        if sounding < (threshold_km or 1.0):
+            reasons.append(f"sounding altitude {sounding:.1f} km < {threshold_km or 1.0:.0f} km")
+        if not flags.has_parachutes and not flags.has_throttleable_engine:
+            reasons.append("no safe descent (need parachute or throttleable engine)")
+        if reasons:
+            return ProfileResult(False, failure_reasons=reasons)
+        return ProfileResult(True)
+
+    # --- Standard body mission profiles ---
     profiles = MISSION_PROFILES.get((body_name, mission_type), [])
     if not profiles:
         return ProfileResult(False,
@@ -1464,6 +1521,33 @@ def evaluate_mission_detailed(
                     all_reasons.append(r)
 
     return ProfileResult(False, failure_reasons=all_reasons)
+
+
+def _evaluate_sounding(flags: EquipmentFlags, threshold_km: float) -> ProfileResult:
+    """Evaluate sounding rocket capability against a target altitude."""
+    sounding_km = _compute_sounding_altitude(flags)
+    if sounding_km >= threshold_km:
+        return ProfileResult(True, launch_mass=0.0)
+
+    reasons: list[str] = []
+    if sounding_km > 0:
+        reasons.append(f"sounding altitude {sounding_km:.1f} km < {threshold_km:.0f} km (need bigger SRB/engine)")
+    else:
+        if not flags.has_probe_core and not flags.has_capsule:
+            reasons.append("no command module (need probe core or capsule)")
+        elif not flags.has_probe_core and flags.has_capsule:
+            missing = []
+            if not flags.has_parachutes:
+                missing.append("parachute")
+            if flags.staging_tier < 1:
+                missing.append("decoupler")
+            if missing:
+                reasons.append(f"capsule-only sounding needs: {', '.join(missing)}")
+        if not flags.available_srbs and not flags.available_engines:
+            reasons.append("no propulsion (need SRB or engine + fuel)")
+        elif flags.available_engines and not flags.available_tanks:
+            reasons.append("engines but no fuel tanks")
+    return ProfileResult(False, failure_reasons=reasons)
 
 
 # ---------------------------------------------------------------------------

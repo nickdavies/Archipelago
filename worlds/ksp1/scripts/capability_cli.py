@@ -242,21 +242,23 @@ def cmd_rocket(ap: APState, check_name: str, verbose: bool = False) -> None:
         ap.slot_data.get("difficulty", 1)
     ]
 
+    cap, flags = compute_capability_from_items(
+        lambda name: state.count(name, player),
+        difficulty_name,
+        bool(ap.slot_data.get("start_with_launch_clamps", 1)),
+    )
+
     result = None
-    flags = None
     if info is not None:
         diff = DIFFICULTY_PROFILES[difficulty_name]
-        _, flags = compute_capability_from_items(
-            lambda name: state.count(name, player),
-            difficulty_name,
-            bool(ap.slot_data.get("start_with_launch_clamps", 1)),
-        )
         result = evaluate_mission_detailed(
             flags, diff, info.body_name, info.mission_type, info.crewed,
+            threshold_km=info.threshold_km,
         )
 
     lines = format_rocket_output(
         check_name, in_logic, already_checked, info, result, flags, difficulty_name,
+        sounding_altitude_km=cap.sounding_altitude_km,
     )
     for line in lines:
         print(line)

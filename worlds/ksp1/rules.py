@@ -186,7 +186,7 @@ def _set_ksc_biome_rules(world: KSP1World, player: int) -> None:
 
 # Altitude (km) each sounding-rocket milestone requires.
 # Formula: h = Δv² · (twr−1) / (2·g·twr) — see capability._compute_sounding_altitude.
-_ALTITUDE_THRESHOLDS_KM: dict[str, float] = {
+ALTITUDE_THRESHOLDS_KM: dict[str, float] = {
     "Kerbin 5km Altitude":  5.0,
     "Kerbin 15km Altitude": 15.0,
     "Kerbin 25km Altitude": 25.0,
@@ -235,7 +235,7 @@ def _set_kerbin_rules(world: KSP1World, player: int) -> None:
     world.get_location("Kerbin First Crash").access_rule = _make_altitude_rule(player, 0.1)
     world.get_location("Kerbin First Landing").access_rule = can_land_safely
 
-    for name, threshold_km in _ALTITUDE_THRESHOLDS_KM.items():
+    for name, threshold_km in ALTITUDE_THRESHOLDS_KM.items():
         world.get_location(name).access_rule = _make_altitude_rule(player, threshold_km)
 
     world.get_location("Kerbin First Staging").access_rule = has_staging

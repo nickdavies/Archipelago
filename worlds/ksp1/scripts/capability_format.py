@@ -46,16 +46,36 @@ class CheckInfo:
     event: str
     mission_type: str
     crewed: bool | None  # True=crewed, False=unmanned, None=try both
+    threshold_km: float | None = None  # sounding rocket target altitude
 
 
 def _build_check_map() -> dict[str, CheckInfo]:
-    """Build mapping from location name -> mission parameters."""
+    """Build mapping from location name -> mission parameters.
+
+    Includes per-body mission events AND Kerbin-specific locations (altitude
+    milestones, first launch/crash/landing/staging, splashdown).
+    """
+    from worlds.ksp1.rules import ALTITUDE_THRESHOLDS_KM
+
     result: dict[str, CheckInfo] = {}
+    # Per-body mission events
     for body in ALL_BODIES:
         for event in get_body_events(body):
             mission_type, crewed = EVENT_TO_MISSION[event]
             for loc_name in event_location_names(body.name, event):
                 result[loc_name] = CheckInfo(body.name, event, mission_type, crewed)
+
+    # Kerbin altitude milestones — sounding rocket missions
+    for loc_name, km in ALTITUDE_THRESHOLDS_KM.items():
+        result[loc_name] = CheckInfo("Kerbin", loc_name, "sounding", None, threshold_km=km)
+
+    # Other Kerbin-specific locations
+    result["Kerbin First Launch"] = CheckInfo("Kerbin", "First Launch", "first_launch", None)
+    result["Kerbin First Crash"] = CheckInfo("Kerbin", "First Crash", "sounding", None, threshold_km=0.1)
+    result["Kerbin First Landing"] = CheckInfo("Kerbin", "First Landing", "first_landing", None)
+    result["Kerbin First Staging"] = CheckInfo("Kerbin", "First Staging", "first_staging", None)
+    result["Kerbin Splashdown"] = CheckInfo("Kerbin", "Splashdown", "splashdown", None, threshold_km=1.0)
+
     return result
 
 
@@ -164,6 +184,39 @@ def _format_profile_summary(info: CheckInfo) -> list[str]:
     """Return lines summarising the mission profile pre-checks for a check."""
     lines: list[str] = []
 
+    mt = info.mission_type
+
+    # --- Kerbin-specific mission types ---
+    if mt == "sounding":
+        lines.append(f"  Profile: [sounding rocket]")
+        lines.append(f"  Command: probe_core OR capsule (with parachute + decoupler)")
+        if info.threshold_km is not None:
+            lines.append(f"  Target altitude: {info.threshold_km:.1f} km")
+        lines.append(f"  Propulsion: SRB or engine + fuel tank")
+        return lines
+
+    if mt == "first_launch":
+        lines.append(f"  Profile: [first launch]")
+        lines.append(f"  Command: any propulsion OR capsule (kerbal EVA)")
+        return lines
+
+    if mt == "first_landing":
+        lines.append(f"  Profile: [first safe landing]")
+        lines.append(f"  Command: capsule (EVA) OR propulsion + safe descent")
+        return lines
+
+    if mt == "first_staging":
+        lines.append(f"  Profile: [first staging]")
+        lines.append(f"  Requires: stack decoupler (staging_tier >= 1)")
+        return lines
+
+    if mt == "splashdown":
+        lines.append(f"  Profile: [splashdown]")
+        lines.append(f"  Target altitude: >= {info.threshold_km or 1.0:.0f} km")
+        lines.append(f"  Requires: safe descent (parachute or throttleable engine)")
+        return lines
+
+    # --- Standard body mission profiles ---
     crewed = info.crewed
     if crewed is True:
         cmd = "capsule"
@@ -206,41 +259,40 @@ def format_rocket_output(
     result: Optional[ProfileResult],
     flags: Optional[EquipmentFlags],
     difficulty_name: str,
+    sounding_altitude_km: float = 0.0,
 ) -> list[str]:
     """Return lines of the rocket breakdown for a given check.
 
-    If ``info`` is None the check isn't a per-body mission; returns a short
-    status message.  If ``result`` is None, only the non-mission status is
-    returned.
+    All locations with a ``CheckInfo`` (body missions AND Kerbin-specific
+    locations) get the same header format.  Locations without info (KSC
+    biomes, starting inventory) get a short status line.
     """
     lines: list[str] = []
+    logic_str = "YES" if in_logic else "NO"
+    if already_checked:
+        logic_str += " (already checked)"
 
     if info is None:
-        logic_str = "YES" if in_logic else "NO"
         lines.append(f"\n'{check_name}' -- In logic: {logic_str}")
-        if already_checked:
-            lines.append("(Already checked -- won't appear in 'in-logic' listing.)")
-        lines.append("(Not a per-body mission; no rocket design to show.)")
+        lines.append("(Not a mission location; no rocket design to show.)")
         return lines
 
     assert result is not None and flags is not None
 
     body_name = info.body_name
-    mission_type = info.mission_type
-    crewed = info.crewed
-
-    logic_str = "YES" if in_logic else "NO"
-    if already_checked:
-        logic_str += " (already checked)"
 
     lines.append(f"\n{'=' * 60}")
     lines.append(f"  Mission: {check_name}")
     lines.append(f"  Body: {body_name} | Difficulty: {difficulty_name}")
     lines.append(f"  In logic: {logic_str}")
     lines.extend(_format_profile_summary(info))
+    if info.mission_type == "sounding" and info.threshold_km is not None:
+        lines.append(f"  Sounding altitude: {sounding_altitude_km:.1f} km "
+                     f"(need {info.threshold_km:.0f} km)")
     lines.append(f"  Feasible: {'YES' if result.feasible else 'NO'}")
     if result.feasible:
-        lines.append(f"  Launch mass: {result.launch_mass:.2f} t")
+        if result.launch_mass > 0:
+            lines.append(f"  Launch mass: {result.launch_mass:.2f} t")
     elif result.failure_reasons:
         if len(result.failure_reasons) == 1:
             lines.append(f"  Failure reason: {result.failure_reasons[0]}")
@@ -251,6 +303,11 @@ def format_rocket_output(
     lines.append(f"{'=' * 60}")
 
     if not result.feasible:
+        return lines
+
+    # Non-profile mission types (sounding, first_launch, etc.) have no stage breakdown
+    _NON_PROFILE_TYPES = {"sounding", "first_launch", "first_landing", "first_staging", "splashdown"}
+    if info.mission_type in _NON_PROFILE_TYPES:
         return lines
 
     if not result.stage_results:
@@ -435,6 +492,7 @@ def build_bug_report_dict(
             diff = DIFFICULTY_PROFILES[difficulty_name]
             result = evaluate_mission_detailed(
                 flags, diff, info.body_name, info.mission_type, info.crewed,
+                threshold_km=info.threshold_km,
             )
             report["rocket"] = {
                 "check_name": check_name,
