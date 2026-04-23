@@ -19,67 +19,26 @@ import json
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Optional
 
 from websockets.sync.client import connect as ws_connect
 
-from BaseClasses import CollectionState, MultiWorld
+from BaseClasses import MultiWorld
 from test.general import setup_multiworld
-from worlds.AutoWorld import call_all
 
-from worlds.ksp1.bodies import (
-    ALL_BODIES, BODY_BY_NAME, DIFFICULTY_PROFILES, MissionEdge,
-)
+from worlds.ksp1.bodies import ALL_BODIES, DIFFICULTY_PROFILES
 from worlds.ksp1.capability import (
-    EquipmentFlags, ProfileResult,
     compute_capability_from_items, evaluate_mission_detailed,
     get_capability,
 )
-from worlds.ksp1.locations import (
-    event_location_names, get_body_events,
-)
-from worlds.ksp1.parts import PART_REGISTRY
 from worlds.ksp1.world import KSP1World
 
-
-# ---------------------------------------------------------------------------
-# Event → (mission_type, crewed) — used only by rocket command to map
-# check names to evaluate_mission_detailed params
-# ---------------------------------------------------------------------------
-
-EVENT_TO_MISSION: dict[str, tuple[str, bool]] = {
-    "Flyby":         ("orbit", False),
-    "SOI Leave":     ("orbit", False),
-    "Orbit":         ("orbit", False),
-    "EVA in Orbit":  ("orbit", True),
-    "Landing":       ("land", False),
-    "Crewed Landing": ("land", True),
-    "Flag Plant":    ("land", True),
-    "Return":        ("return", False),
-    "Sample Return": ("sample_return", True),
-}
-
-
-@dataclass
-class CheckInfo:
-    body_name: str
-    event: str
-    mission_type: str
-    crewed: bool
-
-
-def _build_check_map() -> dict[str, CheckInfo]:
-    """Build mapping from location name → mission parameters."""
-    result: dict[str, CheckInfo] = {}
-    for body in ALL_BODIES:
-        for event in get_body_events(body):
-            mission_type, crewed = EVENT_TO_MISSION[event]
-            for loc_name in event_location_names(body.name, event):
-                result[loc_name] = CheckInfo(body.name, event, mission_type, crewed)
-    return result
-
-
-CHECK_MAP: dict[str, CheckInfo] = _build_check_map()
+from worlds.ksp1.scripts.capability_format import (
+    CHECK_MAP, CheckInfo,
+    titled, edge_desc, location_group,
+    format_rocket_output, format_parts_list,
+    format_in_logic_locations, build_bug_report_dict,
+    to_json_serializable, ITEM_TITLES, ITEM_TYPES,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -230,69 +189,32 @@ def cmd_in_logic(ap: APState, parts_list: bool = False) -> None:
     multiworld, player = build_world_and_state(ap)
     state = multiworld.state
 
-    # Build location_name → location_id for filtering checked/missing
     loc_name_to_id = ap.location_name_to_id
-
-    # Group results by body (or category)
     actionable: dict[str, list[str]] = defaultdict(list)
 
     for loc in multiworld.get_locations(player):
         if loc.address is None:
-            continue  # skip event locations (Victory)
+            continue
         loc_id = loc_name_to_id.get(loc.name)
         if loc_id is None or loc_id not in ap.missing_locations:
             continue
         if not loc.can_reach(state):
             continue
 
-        # Group by body name (first word) or "Tech Tree" / "KSC"
         if loc.name.startswith("KSC "):
             actionable["KSC"].append(loc.name)
         elif " " in loc.name:
-            group = _location_group(loc.name)
+            group = location_group(loc.name)
             actionable[group].append(loc.name)
         else:
             actionable["Other"].append(loc.name)
 
-    total = sum(len(v) for v in actionable.values())
-    print(f"\n=== In-Logic Unchecked Locations ({total}) ===\n")
-
-    if not actionable:
-        print("  (none)")
-        return
-
-    # Print in body order, then tech tree, then KSC
-    body_names = [b.name for b in ALL_BODIES]
-    ordered_groups = (
-        [n for n in body_names if n in actionable]
-        + sorted(k for k in actionable if k not in body_names and k != "KSC")
-        + (["KSC"] if "KSC" in actionable else [])
-    )
-
-    for group_name in ordered_groups:
-        locs = actionable[group_name]
-        print(f"  {group_name}:")
-        for loc in locs:
-            print(f"    - {loc}")
-
+    for line in format_in_logic_locations(actionable):
+        print(line)
     print()
 
     if parts_list:
         _print_parts_list(ap)
-
-
-def _location_group(loc_name: str) -> str:
-    """Extract the body/category name from a location name for grouping."""
-    for body in ALL_BODIES:
-        if loc_name.startswith(body.name + " "):
-            return body.name
-    # Tech tree nodes don't start with a body name
-    return "Tech Tree"
-
-
-def _edge_desc(edge: MissionEdge) -> str:
-    """Human-readable edge description."""
-    return f"{edge.source} -> {edge.destination} ({edge.base_dv:.0f} m/s)"
 
 
 def cmd_rocket(ap: APState, check_name: str, verbose: bool = False) -> None:
@@ -300,7 +222,6 @@ def cmd_rocket(ap: APState, check_name: str, verbose: bool = False) -> None:
     multiworld, player = build_world_and_state(ap)
     state = multiworld.state
 
-    # Check if this location is actually in-logic
     loc_obj = None
     for loc in multiworld.get_locations(player):
         if loc.name == check_name:
@@ -315,119 +236,30 @@ def cmd_rocket(ap: APState, check_name: str, verbose: bool = False) -> None:
     loc_id = ap.location_name_to_id.get(check_name)
     already_checked = loc_id is not None and loc_id in ap.checked_locations
 
-    # Look up in the mission map for rocket details
     info = CHECK_MAP.get(check_name)
-    if info is None:
-        # Not a per-body mission check — just report in-logic status
-        print(f"\n'{check_name}' — In logic: {'YES' if in_logic else 'NO'}")
-        if already_checked:
-            print("(Already checked — won't appear in 'in-logic' listing.)")
-        print("(Not a per-body mission; no rocket design to show.)")
-        if verbose:
-            _print_item_dump(ap)
-        return
 
     difficulty_name = ["casual", "normal", "expert", "insane"][
         ap.slot_data.get("difficulty", 1)
     ]
-    diff = DIFFICULTY_PROFILES[difficulty_name]
 
-    cap = get_capability(state, player)
-    _, flags = compute_capability_from_items(
-        lambda name: state.count(name, player),
-        difficulty_name,
-        bool(ap.slot_data.get("start_with_launch_clamps", 1)),
+    result = None
+    flags = None
+    if info is not None:
+        diff = DIFFICULTY_PROFILES[difficulty_name]
+        _, flags = compute_capability_from_items(
+            lambda name: state.count(name, player),
+            difficulty_name,
+            bool(ap.slot_data.get("start_with_launch_clamps", 1)),
+        )
+        result = evaluate_mission_detailed(
+            flags, diff, info.body_name, info.mission_type, info.crewed,
+        )
+
+    lines = format_rocket_output(
+        check_name, in_logic, already_checked, info, result, flags, difficulty_name,
     )
-
-    body_name = info.body_name
-    mission_type = info.mission_type
-    crewed = info.crewed
-
-    result = evaluate_mission_detailed(flags, diff, body_name, mission_type, crewed)
-
-    # --- Print mission summary ---
-    print(f"\n{'=' * 60}")
-    print(f"  Mission: {check_name}")
-    print(f"  Body: {body_name} | Type: {mission_type} | Crewed: {crewed}")
-    print(f"  Difficulty: {difficulty_name}")
-    logic_str = "YES" if in_logic else "NO"
-    if already_checked:
-        logic_str += " (already checked)"
-    print(f"  In logic: {logic_str}")
-    print(f"  Feasible: {'YES' if result.feasible else 'NO'}")
-    if result.feasible:
-        print(f"  Launch mass: {result.launch_mass:.2f} t")
-    elif result.failure_reason:
-        print(f"  Failure reason: {result.failure_reason}")
-    print(f"{'=' * 60}")
-
-    if not result.feasible:
-        if verbose:
-            _print_item_dump(ap)
-        return
-
-    if not result.stage_results:
-        # Trivial mission (e.g. Kerbin Flag Plant — no propulsion required)
-        print("\n  (Trivial mission — no propulsion required.)")
-        if verbose:
-            _print_item_dump(ap)
-        return
-
-    # --- Per-stage breakdown (KSP convention: stage 0 = last to fire) ---
-    num_stages = len(result.stage_results)
-    asparagus = (flags.staging_tier >= 2 and flags.has_fuel_lines)
-    for i, stage in enumerate(result.stage_results):
-        group = result.edge_groups[i] if i < len(result.edge_groups) else []
-        is_terminal = (i == num_stages - 1)
-
-        edge_names = [f"{e.source} -> {e.destination}" for e in group]
-        header = ", ".join(edge_names) if edge_names else "unknown"
-
-        ksp_stage_num = num_stages - 1 - i
-
-        # Stage header with symmetry/asparagus tags
-        tags: list[str] = []
-        if asparagus and not is_terminal:
-            tags.append("ASPARAGUS")
-        if stage.engine_count > 1:
-            tags.append(f"{stage.engine_count}-WAY")
-        tag_str = f"  [{', '.join(tags)}]" if tags else ""
-        print(f"\n  Stage {ksp_stage_num} ({header}):{tag_str}")
-        print(f"    Parts:")
-
-        # Terminal parts (command module + support equipment)
-        if is_terminal:
-            for count, part_id in result.terminal_parts:
-                print(f"      {count}x {_titled(part_id)}")
-
-        # Propulsion
-        if stage.engine_count > 0 and stage.engine_name != "none":
-            print(f"      {stage.engine_count}x {_titled(stage.engine_name)}")
-        if stage.tank_count > 0 and stage.tank_name != "none":
-            fill_pct = stage.fill_fraction * 100
-            fill_str = f" ({fill_pct:.0f}% fill)" if fill_pct < 100 else ""
-            print(f"      {stage.tank_count}x {_titled(stage.tank_name)}{fill_str}")
-
-        # Non-propulsion equipment (from capability manifest)
-        for count, part_id in stage.equipment:
-            print(f"      {count}x {_titled(part_id)}")
-
-        # Edges
-        print(f"    Edges:")
-        for edge in group:
-            print(f"      {_edge_desc(edge)}")
-
-        # Stats
-        print(f"    Stats:")
-        print(f"      dv: {stage.delta_v:.0f} m/s | TWR: {stage.twr_at_ignition:.2f} -> {stage.twr_at_burnout:.2f}")
-        print(f"      Wet: {stage.stage_mass_wet:.2f}t | Dry: {stage.stage_mass_dry:.2f}t")
-
-    # --- Edge → stage summary ---
-    print(f"\n  Edge -> Stage Summary:")
-    for i, group in enumerate(result.edge_groups):
-        ksp_stage_num = num_stages - 1 - i
-        for edge in group:
-            print(f"    {edge.source} -> {edge.destination}: Stage {ksp_stage_num}")
+    for line in lines:
+        print(line)
 
     if verbose:
         _print_item_dump(ap)
@@ -446,163 +278,35 @@ def _print_item_dump(ap: APState) -> None:
     print()
 
 
-# ksp_name → human-readable title from PART_REGISTRY
-_ITEM_TITLES: dict[str, str] = {m.ksp_name: m.title for m in PART_REGISTRY}
-
-# ksp_name → part type name (Engine, FuelTank, etc.)
-_ITEM_TYPES: dict[str, str] = {m.ksp_name: m.part_type.__name__ for m in PART_REGISTRY}
-
-
-def _titled(ksp_name: str) -> str:
-    """Format a part name with its human-readable title, e.g. 'liquidEngine_v2 (LV-T30 "Reliant")'."""
-    title = _ITEM_TITLES.get(ksp_name)
-    if title:
-        return f"{ksp_name} ({title})"
-    return ksp_name
-
-
 def _print_parts_list(ap: APState) -> None:
     """Print received items grouped by type, with human-readable names."""
-    items_by_name: list[tuple[str, int]] = []
+    items_by_name: dict[str, int] = {}
     for item_id, count in ap.item_id_counts.items():
         name = ap.item_id_to_name.get(item_id, f"Unknown ({item_id})")
-        items_by_name.append((name, count))
+        items_by_name[name] = count
 
-    # Group by part type
-    groups: dict[str, list[tuple[str, str, int]]] = defaultdict(list)
-    for name, count in sorted(items_by_name):
-        part_type = _ITEM_TYPES.get(name, "Other")
-        title = _ITEM_TITLES.get(name, name)
-        groups[part_type].append((name, title, count))
-
-    total = sum(ap.item_id_counts.values())
-    print(f"\n=== Received Parts ({total} items) ===\n")
-
-    # Print part types in a useful order, then "Other" last
-    type_order = [
-        "Engine", "SolidBooster", "FuelTank", "Decoupler",
-        "HeatShield", "Parachute", "LandingLeg", "MiscEquipment", "Other",
-    ]
-    seen = set()
-    for type_name in type_order:
-        if type_name not in groups:
-            continue
-        seen.add(type_name)
-        print(f"  {type_name}:")
-        for name, title, count in groups[type_name]:
-            print(f"    {count}x {name:<35s} {title}")
-    # Any types not in the ordering
-    for type_name in sorted(groups):
-        if type_name in seen:
-            continue
-        print(f"  {type_name}:")
-        for name, title, count in groups[type_name]:
-            print(f"    {count}x {name:<35s} {title}")
-
+    for line in format_parts_list(items_by_name):
+        print(line)
     print()
 
 
 # ---------------------------------------------------------------------------
-# Bug report JSON output
+# Bug report
 # ---------------------------------------------------------------------------
 
-import dataclasses
-
-def _to_json_serializable(obj):
-    """Convert dataclasses, sets, and other non-JSON types for serialization."""
-    if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
-        return {k: _to_json_serializable(v)
-                for k, v in dataclasses.asdict(obj).items()
-                if not k.startswith("_")}
-    if isinstance(obj, (set, frozenset)):
-        return sorted(obj) if all(isinstance(x, (str, int, float)) for x in obj) else list(obj)
-    if isinstance(obj, dict):
-        return {str(k): _to_json_serializable(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return [_to_json_serializable(x) for x in obj]
-    if isinstance(obj, float) and (obj == float("inf") or obj == float("-inf")):
-        return None
-    return obj
-
-
-def cmd_bug_report(ap: APState, check_name: Optional[str] = None) -> None:
+def cmd_bug_report(ap: APState, check_name: str | None = None) -> None:
     """Dump full state as JSON for bug reports."""
-    difficulty_name = ["casual", "normal", "expert", "insane"][
-        ap.slot_data.get("difficulty", 1)
-    ]
-
-    # Received items by name
     items_by_name: dict[str, int] = {}
     for item_id, count in ap.item_id_counts.items():
         name = ap.item_id_to_name.get(item_id, f"unknown_{item_id}")
         items_by_name[name] = count
 
-    # Checked locations by name
     checked_names = sorted(
         ap.location_id_to_name.get(loc_id, f"unknown_{loc_id}")
         for loc_id in ap.checked_locations
     )
 
-    report: dict = {
-        "slot_data": ap.slot_data,
-        "difficulty": difficulty_name,
-        "received_items": items_by_name,
-        "checked_locations": checked_names,
-        "missing_location_count": len(ap.missing_locations),
-    }
-
-    # Equipment flags
-    _, flags = compute_capability_from_items(
-        lambda name: items_by_name.get(name, 0),
-        difficulty_name,
-        bool(ap.slot_data.get("start_with_launch_clamps", 1)),
-    )
-    report["equipment_flags"] = {
-        "staging_tier": flags.staging_tier,
-        "has_heat_shield": flags.has_heat_shield,
-        "has_parachutes": flags.has_parachutes,
-        "has_probe_core": flags.has_probe_core,
-        "has_capsule": flags.has_capsule,
-        "has_rcs": flags.has_rcs,
-        "has_reaction_wheels": flags.has_reaction_wheels,
-        "has_rtg": flags.has_rtg,
-        "has_solar": flags.has_solar,
-        "has_fuel_lines": flags.has_fuel_lines,
-        "has_launch_clamp": flags.has_launch_clamp,
-        "relay_tier": flags.relay_tier,
-        "landing_leg_tier": flags.landing_leg_tier,
-        "engines": [e.name for e in flags.available_engines],
-        "srbs": [s.name for s in flags.available_srbs],
-        "tanks": [t.name for t in flags.available_tanks],
-        "decouplers": [d.name for d in flags.available_decouplers],
-    }
-
-    # Rocket evaluation for specific check
-    if check_name:
-        info = CHECK_MAP.get(check_name)
-        if info:
-            diff = DIFFICULTY_PROFILES[difficulty_name]
-            result = evaluate_mission_detailed(
-                flags, diff, info.body_name, info.mission_type, info.crewed,
-            )
-            report["rocket"] = {
-                "check_name": check_name,
-                "body": info.body_name,
-                "mission_type": info.mission_type,
-                "crewed": info.crewed,
-                "feasible": result.feasible,
-                "launch_mass": result.launch_mass,
-                "failure_reason": result.failure_reason,
-                "stages": _to_json_serializable(result.stage_results),
-                "edge_groups": [
-                    [_to_json_serializable({"source": e.source, "destination": e.destination,
-                                            "base_dv": e.base_dv, "edge_type": e.edge_type.name})
-                     for e in group]
-                    for group in result.edge_groups
-                ],
-            }
-
-    # In-logic locations
+    # Compute in-logic locations
     multiworld, player = build_world_and_state(ap)
     state = multiworld.state
     in_logic_locs = []
@@ -614,8 +318,15 @@ def cmd_bug_report(ap: APState, check_name: Optional[str] = None) -> None:
             continue
         if loc.can_reach(state):
             in_logic_locs.append(loc.name)
-    report["in_logic_locations"] = sorted(in_logic_locs)
 
+    report = build_bug_report_dict(
+        slot_data=ap.slot_data,
+        items_by_name=items_by_name,
+        checked_names=checked_names,
+        missing_count=len(ap.missing_locations),
+        in_logic_locs=in_logic_locs,
+        check_name=check_name,
+    )
     print(json.dumps(report, indent=2))
 
 

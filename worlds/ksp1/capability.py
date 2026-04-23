@@ -534,7 +534,7 @@ class ProfileResult:
     launch_mass: float = 0.0          # total wet mass at kerbin_surface
     stage_results: list[StageResult] = field(default_factory=list)
     edge_groups: list[list[MissionEdge]] = field(default_factory=list)
-    failure_reason: str = ""
+    failure_reasons: list[str] = field(default_factory=list)
     # Command module + support equipment for the terminal stage: [(count, part_id), ...]
     terminal_parts: list[tuple[int, str]] = field(default_factory=list)
 
@@ -614,18 +614,21 @@ def _evaluate_profile(
     needs_legs = any(e.needs_landing_legs for e in profile)
     needs_ladder = any(e.needs_ladder for e in profile)
 
+    # Collect all pre-check failures before attempting stage optimization.
+    reasons: list[str] = []
+
     # Command check
     if is_crewed:
         if not flags.has_capsule:
-            return ProfileResult(False, failure_reason="no capsule for crewed mission")
+            reasons.append("no capsule for crewed mission")
     else:
         if not flags.has_probe_core:
-            return ProfileResult(False, failure_reason="no probe core for unmanned mission")
+            reasons.append("no probe core for unmanned mission")
 
     # Attitude control (required by almost every edge via requires_attitude_control)
     if any(e.requires_attitude_control for e in profile):
         if not _has_attitude_control(flags):
-            return ProfileResult(False, failure_reason="no attitude control")
+            reasons.append("no attitude control")
 
     # Landing legs
     if needs_legs:
@@ -634,20 +637,20 @@ def _evaluate_profile(
         ]
         required_tier = max((b.landing_leg_tier for b in leg_bodies), default=0)
         if flags.landing_leg_tier < required_tier:
-            return ProfileResult(False,
-                failure_reason=f"need leg tier {required_tier}, have {flags.landing_leg_tier}")
+            reasons.append(
+                f"need leg tier {required_tier}, have {flags.landing_leg_tier}")
 
     # Ladder
     if needs_ladder and not flags.has_ladder:
-        return ProfileResult(False, failure_reason="need ladder for sample return")
+        reasons.append("need ladder for sample return")
 
     # Heat shield
     if has_aero_edge and not flags.has_heat_shield:
-        return ProfileResult(False, failure_reason="no heat shield for aero edge")
+        reasons.append("no heat shield for aero edge")
 
     # Parachutes (broad check: any parachutes at all for aero landing)
     if has_atmo_land_aero and not flags.has_parachutes:
-        return ProfileResult(False, failure_reason="no parachutes for aero landing")
+        reasons.append("no parachutes for aero landing")
 
     # Power: check each unique body in the profile
     # Detect if aero edges destroy fixed solar panels
@@ -666,17 +669,16 @@ def _evaluate_profile(
     for body_name, after_aero in body_aero_destroyed.items():
         body = BODY_BY_NAME[body_name]
         if not _check_power_for_body(flags, body, after_aero=after_aero):
-            return ProfileResult(False,
-                failure_reason=f"insufficient power at {body_name} "
-                               f"(after_aero={after_aero})")
+            reasons.append(f"insufficient power at {body_name} "
+                           f"(after_aero={after_aero})")
 
     # Relay tier
     for edge in profile:
         body = BODY_BY_NAME[edge.body]
         if flags.relay_tier < body.min_relay_tier:
-            return ProfileResult(False,
-                failure_reason=f"relay tier too low for {body.name}: "
-                               f"need {body.min_relay_tier}, have {flags.relay_tier}")
+            reasons.append(f"relay tier too low for {body.name}: "
+                           f"need {body.min_relay_tier}, have {flags.relay_tier}")
+            break  # one relay failure is sufficient
 
     # Propulsion gate: bail if the player has no engines or fuel at all.
     # Progressive flags are set by _pre_pass; also check actual part lists
@@ -689,23 +691,21 @@ def _evaluate_profile(
                     or bool(flags.available_tanks) or bool(flags.available_srbs))
 
     from .bodies import EdgeType as _ET
+    propulsion_reasons: set[str] = set()
     for edge in profile:
         et = edge.edge_type
         if et == _ET.ATMOSPHERIC_ASCENT or et == _ET.ATMO_LANDING_PROPULSIVE:
             if not has_launch_engine:
-                return ProfileResult(False,
-                    failure_reason=f"no launch engine for {et.name}")
+                propulsion_reasons.add(f"no launch engine for {et.name}")
             if not has_any_fuel:
-                return ProfileResult(False,
-                    failure_reason=f"no fuel for {et.name}")
+                propulsion_reasons.add(f"no fuel for {et.name}")
         elif et in (_ET.VACUUM_ASCENT, _ET.PURE_VACUUM,
                     _ET.PLANET_TRANSFER, _ET.VACUUM_LANDING):
             if not has_any_engine:
-                return ProfileResult(False,
-                    failure_reason=f"no engine for {et.name}")
+                propulsion_reasons.add(f"no engine for {et.name}")
             if not has_any_fuel:
-                return ProfileResult(False,
-                    failure_reason=f"no fuel for {et.name}")
+                propulsion_reasons.add(f"no fuel for {et.name}")
+    reasons.extend(sorted(propulsion_reasons))
 
     # ------------------------------------------------------------------
     # Stage grouping
@@ -720,9 +720,13 @@ def _evaluate_profile(
     # player's decouplers allow, the profile is physically impossible.
     max_stages = 1 if flags.staging_tier == 0 else len(groups)
     if len(groups) > max_stages:
-        return ProfileResult(False,
-            failure_reason=f"need {len(groups)} stages but staging_tier={flags.staging_tier} "
-                           f"only allows {max_stages}")
+        reasons.append(
+            f"need {len(groups)} stages but staging_tier={flags.staging_tier} "
+            f"only allows {max_stages}")
+
+    # Return all collected pre-check failures before attempting optimization.
+    if reasons:
+        return ProfileResult(False, failure_reasons=reasons)
 
     # ------------------------------------------------------------------
     # Backward pass — compute masses from destination back to Kerbin
@@ -827,7 +831,7 @@ def _evaluate_profile(
                 needed = _required_chute_count(payload, _aero_body, flags, diff)
                 if needed < 0:
                     return ProfileResult(False,
-                        failure_reason=f"parachute terminal velocity check failed at {_aero_body.name}")
+                        failure_reasons=[f"parachute terminal velocity check failed at {_aero_body.name}"])
 
         # Aero-landing groups are passive — heat shield + parachutes do all
         # the work.  Skip the engine optimizer entirely.
@@ -890,7 +894,7 @@ def _evaluate_profile(
 
         if result is None:
             return ProfileResult(False,
-                failure_reason=f"no viable stage for group dv={req_dv:.0f} m/s at {body.name}")
+                failure_reasons=[f"no viable stage for group dv={req_dv:.0f} m/s at {body.name}"])
 
         # Chutes for aero-landing edges in mixed groups
         if aero_land_edges:
@@ -1271,14 +1275,9 @@ def _assess_one_body(
     if not has_attitude:
         prof.blocking_reason = "no attitude control"
         return prof
-    # Orbit is always evaluated unmanned; gate on probe core.
-    if not flags.has_probe_core:
-        prof.blocking_reason = "no probe core for orbit"
-        return prof
-
     # --- Orbit ---
     orbit_profiles = MISSION_PROFILES.get((body.name, "orbit"), [])
-    orbit_ok = _try_profiles(orbit_profiles, flags, diff, "orbit", crewed=False)
+    orbit_ok = _try_profiles(orbit_profiles, flags, diff, "orbit", crewed=None)
     prof.can_orbit_low = orbit_ok
     prof.can_orbit_high = orbit_ok  # trivially extends from LKO
 
@@ -1289,7 +1288,7 @@ def _assess_one_body(
     if orbit_ok:
         escape_profiles = MISSION_PROFILES.get((body.name, "escape"), [])
         if escape_profiles:
-            prof.can_escape = _try_profiles(escape_profiles, flags, diff, "escape", crewed=False)
+            prof.can_escape = _try_profiles(escape_profiles, flags, diff, "escape", crewed=None)
         else:
             # Non-home bodies: reaching orbit implies you've already escaped Kerbin
             # and can leave this body's SOI on a return trajectory.
@@ -1298,17 +1297,17 @@ def _assess_one_body(
     # --- Landing (unmanned) ---
     if orbit_ok and body.can_land and body.name not in _ORBITAL_ONLY_BODIES:
         land_profiles = MISSION_PROFILES.get((body.name, "land"), [])
-        ok, reason = _try_profiles_reason(land_profiles, flags, diff, "land", crewed=False)
+        ok, reasons = _try_profiles_reason(land_profiles, flags, diff, "land", crewed=False)
         prof.can_land_unmanned = ok
         if not ok and not prof.blocking_reason:
-            prof.blocking_reason = f"land: {reason}"
+            prof.blocking_reason = f"land: {'; '.join(reasons)}"
 
         # Landing (crewed)
         if flags.has_capsule:
-            ok, reason = _try_profiles_reason(land_profiles, flags, diff, "land", crewed=True)
+            ok, reasons = _try_profiles_reason(land_profiles, flags, diff, "land", crewed=True)
             prof.can_land_crewed = ok
             if not ok and not prof.blocking_reason:
-                prof.blocking_reason = f"crewed land: {reason}"
+                prof.blocking_reason = f"crewed land: {'; '.join(reasons)}"
 
     # --- Flag plant ---
     fp_profiles = MISSION_PROFILES.get((body.name, "flag_plant"), [])
@@ -1323,17 +1322,17 @@ def _assess_one_body(
     # --- Return (unmanned) ---
     return_profiles = MISSION_PROFILES.get((body.name, "return"), [])
     if return_profiles:
-        ok, reason = _try_profiles_reason(return_profiles, flags, diff, "return", crewed=False)
+        ok, reasons = _try_profiles_reason(return_profiles, flags, diff, "return", crewed=False)
         prof.can_return_to_kerbin = ok
         if not ok and not prof.blocking_reason:
-            prof.blocking_reason = f"return: {reason}"
+            prof.blocking_reason = f"return: {'; '.join(reasons)}"
 
         # Return (crewed)
         if flags.has_capsule:
-            ok, reason = _try_profiles_reason(return_profiles, flags, diff, "return", crewed=True)
+            ok, reasons = _try_profiles_reason(return_profiles, flags, diff, "return", crewed=True)
             prof.can_return_crewed = ok
             if not ok and not prof.blocking_reason:
-                prof.blocking_reason = f"crewed return: {reason}"
+                prof.blocking_reason = f"crewed return: {'; '.join(reasons)}"
 
     # --- Sample return (crewed + ladder check) ---
     sr_profiles = MISSION_PROFILES.get((body.name, "sample_return"), [])
@@ -1344,12 +1343,12 @@ def _assess_one_body(
                 sr_profiles_with_ladder = _inject_ladder(sr_profiles)
             else:
                 sr_profiles_with_ladder = sr_profiles
-            ok, reason = _try_profiles_reason(
+            ok, reasons = _try_profiles_reason(
                 sr_profiles_with_ladder, flags, diff, "sample_return", crewed=True
             )
             prof.can_sample_return = ok
             if not ok and not prof.blocking_reason:
-                prof.blocking_reason = f"sample return: {reason}"
+                prof.blocking_reason = f"sample return: {'; '.join(reasons)}"
 
     return prof
 
@@ -1371,18 +1370,33 @@ def _inject_ladder(profiles: list[list[MissionEdge]]) -> list[list[MissionEdge]]
     return result
 
 
+def _crewed_options(crewed: bool | None, flags: EquipmentFlags) -> list[bool]:
+    """Return the list of is_crewed values to attempt for a mission.
+
+    crewed=True/False → single attempt.
+    crewed=None → try unmanned first, then crewed if the player has a capsule.
+    """
+    if crewed is not None:
+        return [crewed]
+    opts = [False]
+    if flags.has_capsule:
+        opts.append(True)
+    return opts
+
+
 def _try_profiles(
     profiles: list[list[MissionEdge]],
     flags: EquipmentFlags,
     diff: DifficultyProfile,
     mission_type: str,
-    crewed: bool,
+    crewed: bool | None,
 ) -> bool:
     """Return True if any profile alternative is feasible."""
-    for profile in profiles:
-        result = _evaluate_profile(profile, flags, diff, mission_type, is_crewed=crewed)
-        if result.feasible:
-            return True
+    for is_crewed in _crewed_options(crewed, flags):
+        for profile in profiles:
+            result = _evaluate_profile(profile, flags, diff, mission_type, is_crewed=is_crewed)
+            if result.feasible:
+                return True
     return False
 
 
@@ -1391,19 +1405,26 @@ def _try_profiles_reason(
     flags: EquipmentFlags,
     diff: DifficultyProfile,
     mission_type: str,
-    crewed: bool,
-) -> tuple[bool, str]:
+    crewed: bool | None,
+) -> tuple[bool, list[str]]:
     """
-    Like _try_profiles but also returns the failure reason from the best
-    (last) profile attempt on failure.
+    Like _try_profiles but also returns deduplicated failure reasons
+    collected across all profile attempts on failure.
     """
-    last_reason = "no profiles defined"
-    for profile in profiles:
-        result = _evaluate_profile(profile, flags, diff, mission_type, is_crewed=crewed)
-        if result.feasible:
-            return True, ""
-        last_reason = result.failure_reason
-    return False, last_reason
+    all_reasons: list[str] = []
+    seen: set[str] = set()
+    if not profiles:
+        return False, ["no profiles defined"]
+    for is_crewed in _crewed_options(crewed, flags):
+        for profile in profiles:
+            result = _evaluate_profile(profile, flags, diff, mission_type, is_crewed=is_crewed)
+            if result.feasible:
+                return True, []
+            for r in result.failure_reasons:
+                if r not in seen:
+                    seen.add(r)
+                    all_reasons.append(r)
+    return False, all_reasons
 
 
 def evaluate_mission_detailed(
@@ -1411,30 +1432,38 @@ def evaluate_mission_detailed(
     diff: DifficultyProfile,
     body_name: str,
     mission_type: str,
-    crewed: bool,
+    crewed: bool | None,
 ) -> ProfileResult:
     """
     Evaluate a specific mission and return the winning ProfileResult
     with full stage details + edge groups. Returns a non-feasible
     ProfileResult if no profile alternative succeeds.
+
+    crewed: True = crewed only, False = unmanned only, None = try both.
     """
     profiles = MISSION_PROFILES.get((body_name, mission_type), [])
     if not profiles:
         return ProfileResult(False,
-                             failure_reason=f"no profiles for ({body_name}, {mission_type})")
+                             failure_reasons=[f"no profiles for ({body_name}, {mission_type})"])
 
     if mission_type == "sample_return":
         body = BODY_BY_NAME[body_name]
         if body.eva_jetpack_twr < _MIN_EVA_JETPACK_TWR:
             profiles = _inject_ladder(profiles)
 
-    last_failure = ""
-    for profile in profiles:
-        result = _evaluate_profile(profile, flags, diff, mission_type, is_crewed=crewed)
-        if result.feasible:
-            return result
-        last_failure = result.failure_reason
-    return ProfileResult(False, failure_reason=last_failure)
+    all_reasons: list[str] = []
+    seen: set[str] = set()
+    for is_crewed in _crewed_options(crewed, flags):
+        for profile in profiles:
+            result = _evaluate_profile(profile, flags, diff, mission_type, is_crewed=is_crewed)
+            if result.feasible:
+                return result
+            for r in result.failure_reasons:
+                if r not in seen:
+                    seen.add(r)
+                    all_reasons.append(r)
+
+    return ProfileResult(False, failure_reasons=all_reasons)
 
 
 # ---------------------------------------------------------------------------

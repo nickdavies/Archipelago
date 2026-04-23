@@ -296,7 +296,7 @@ def _mission_rule_for_event(
     if event == "Landing":
         def rule(state: CollectionState) -> bool:
             bp = get_capability(state, player).bodies.get(body_name)
-            return bp is not None and bp.can_land_unmanned
+            return bp is not None and (bp.can_land_unmanned or bp.can_land_crewed)
         return rule
 
     if event == "Crewed Landing":

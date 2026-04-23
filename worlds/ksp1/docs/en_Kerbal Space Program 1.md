@@ -124,16 +124,46 @@ won't contain items required for progression.
 - **Start With Launch Clamps** — Enabled by default. Disabling makes launch clamps a progression gate for
   interplanetary missions. It is important to note that you might not get any landing legs so disabling this may be seed breaking.
 
+## Tracking In-Logic Locations
+
+### KSP1 Tracker (built-in)
+
+The `.apworld` ships with a dedicated **KSP1 Tracker** client. You can launch it from the Archipelago
+Launcher (it appears as "KSP1 Tracker" in the client list) or run it directly:
+
+```
+python -m worlds.ksp1.tracker_client --connect localhost:38281 --name TestPlayer
+```
+
+The tracker connects to the AP server and shows you which unchecked locations are currently in logic,
+grouped by body. It updates automatically as you receive items and complete checks.
+
+**Unique features:**
+
+- `/rocket <location>` — Shows a detailed rocket design for any location: which engines, tanks,
+  and equipment logic thinks you should use, and why a mission might not be in logic yet. You can also
+  double-click any location in the Tracker tab to see its rocket details.
+- `/parts [filter]` — Lists all parts you've received, grouped by type. Optionally filter by name.
+- `/bug_report [description]` — Dumps your full game state (items, checked locations, in-logic
+  locations, slot data) to a JSON file for easy bug reporting.
+
+### Universal Tracker (UT)
+
+[Universal Tracker](https://github.com/FarisTheAncient/Archipelago/releases) also works with KSP1 and
+is a more mature, general-purpose tracker that works across all AP games. It provides a map-style
+overview and broader feature set.
+
+Use the **KSP1 Tracker** when you want KSP-specific details like rocket designs and part-level
+explanations for why a mission is or isn't in logic. Use **Universal Tracker** if you prefer a
+general-purpose tracker with more features or are playing a multiworld and want one tracker for
+all your games.
+
 ## I am stuck!
 
-The game should function with Universal Tracker (UT) and it's highly recommended that you play with that to see what checks the game
-thinks you can perform first.
+Use the KSP1 Tracker's `/rocket` command to see exactly what the logic engine thinks you need for a
+mission and why it might not be reachable yet. This is the fastest way to understand what's blocking you.
 
-If you feel comfortable doing so there is a CLI in [the AP Repo](https://github.com/nickdavies/Archipelago/blob/ksp1/worlds/ksp1/scripts/capability_cli.py)
-that you can use for debugging also. It has a command for listing what the logic engine thinks will make that mission work:
-```
-$ python -m worlds.ksp1.scripts.capability_cli --host localhost:38281 --slot TestPlayer rocket "Minmus Return 3"
-```
-
-Otherwise if you feel that a location that is in logic according to Universal Tracker (UT) Is not possible with the parts you have
-please provide me with the location (mission name) and the parts you have unlocked (or your .zip and .apsave) and make an Issue
+If you believe a location shown as in-logic is not actually achievable with your current parts, please
+file an [issue](https://github.com/nickdavies/Archipelago/issues) with the location name and either your
+parts list (from `/parts`) or your `.zip` and `.apsave` files. The `/bug_report` command can generate a
+JSON dump of your full state to attach to the issue.
