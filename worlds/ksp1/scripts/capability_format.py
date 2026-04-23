@@ -19,7 +19,7 @@ from worlds.ksp1.capability import (
     EquipmentFlags, ProfileResult,
     compute_capability_from_items, evaluate_mission_detailed,
 )
-from worlds.ksp1.locations import event_location_names, get_body_events
+from worlds.ksp1.locations import KERBIN_LOCATIONS, event_location_names, get_body_events
 from worlds.ksp1.parts import PART_REGISTRY
 
 
@@ -52,11 +52,10 @@ class CheckInfo:
 def _build_check_map() -> dict[str, CheckInfo]:
     """Build mapping from location name -> mission parameters.
 
-    Includes per-body mission events AND Kerbin-specific locations (altitude
-    milestones, first launch/crash/landing/staging, splashdown).
+    Includes per-body mission events AND Kerbin-specific locations.
+    Kerbin locations are driven by KERBIN_LOCATIONS (locations.py) — the
+    single source of truth for names, mission types, and thresholds.
     """
-    from worlds.ksp1.rules import ALTITUDE_THRESHOLDS_KM
-
     result: dict[str, CheckInfo] = {}
     # Per-body mission events
     for body in ALL_BODIES:
@@ -65,16 +64,12 @@ def _build_check_map() -> dict[str, CheckInfo]:
             for loc_name in event_location_names(body.name, event):
                 result[loc_name] = CheckInfo(body.name, event, mission_type, crewed)
 
-    # Kerbin altitude milestones — sounding rocket missions
-    for loc_name, km in ALTITUDE_THRESHOLDS_KM.items():
-        result[loc_name] = CheckInfo("Kerbin", loc_name, "sounding", None, threshold_km=km)
-
-    # Other Kerbin-specific locations
-    result["Kerbin First Launch"] = CheckInfo("Kerbin", "First Launch", "first_launch", None)
-    result["Kerbin First Crash"] = CheckInfo("Kerbin", "First Crash", "sounding", None, threshold_km=0.1)
-    result["Kerbin First Landing"] = CheckInfo("Kerbin", "First Landing", "first_landing", None)
-    result["Kerbin First Staging"] = CheckInfo("Kerbin", "First Staging", "first_staging", None)
-    result["Kerbin Splashdown"] = CheckInfo("Kerbin", "Splashdown", "splashdown", None, threshold_km=1.0)
+    # Kerbin-specific locations (sounding, first_launch, etc.)
+    for loc in KERBIN_LOCATIONS:
+        result[loc.name] = CheckInfo(
+            "Kerbin", loc.name, loc.mission_type, None,
+            threshold_km=loc.threshold_km,
+        )
 
     return result
 

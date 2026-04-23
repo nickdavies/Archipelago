@@ -30,6 +30,7 @@ create the correct subset at runtime based on difficulty.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from BaseClasses import Location
@@ -135,20 +136,35 @@ KSC_BIOME_NAMES: list[str] = [
 # Kerbin-specific mission locations (12 total, fixed)
 # ---------------------------------------------------------------------------
 
-KERBIN_LOCATION_NAMES: list[str] = [
-    "Kerbin First Launch",
-    "Kerbin First Landing",
-    "Kerbin First Crash",
-    "Kerbin 5km Altitude",
-    "Kerbin 15km Altitude",
-    "Kerbin 25km Altitude",
-    "Kerbin 35km Altitude",
-    "Kerbin 45km Altitude",
-    "Kerbin 55km Altitude",
-    "Kerbin 70km Altitude",
-    "Kerbin Splashdown",
-    "Kerbin First Staging",
-]
+@dataclass(frozen=True)
+class KerbinLocationDef:
+    """Metadata for a Kerbin-specific mission location.
+
+    This is the single source of truth for Kerbin location names, mission types,
+    and altitude thresholds — used by rules.py (access rules) and
+    capability_format.py (CLI/tracker display).
+    """
+    name: str
+    mission_type: str  # sounding, first_launch, first_landing, first_staging, splashdown
+    threshold_km: float | None = None
+
+
+KERBIN_LOCATIONS: tuple[KerbinLocationDef, ...] = (
+    KerbinLocationDef("Kerbin First Launch", "first_launch"),
+    KerbinLocationDef("Kerbin First Landing", "first_landing"),
+    KerbinLocationDef("Kerbin First Crash", "sounding", 0.1),
+    KerbinLocationDef("Kerbin 5km Altitude", "sounding", 5.0),
+    KerbinLocationDef("Kerbin 15km Altitude", "sounding", 15.0),
+    KerbinLocationDef("Kerbin 25km Altitude", "sounding", 25.0),
+    KerbinLocationDef("Kerbin 35km Altitude", "sounding", 35.0),
+    KerbinLocationDef("Kerbin 45km Altitude", "sounding", 45.0),
+    KerbinLocationDef("Kerbin 55km Altitude", "sounding", 55.0),
+    KerbinLocationDef("Kerbin 70km Altitude", "sounding", 70.0),
+    KerbinLocationDef("Kerbin Splashdown", "splashdown", 1.0),
+    KerbinLocationDef("Kerbin First Staging", "first_staging"),
+)
+
+KERBIN_LOCATION_NAMES: list[str] = [loc.name for loc in KERBIN_LOCATIONS]
 
 assert len(KERBIN_LOCATION_NAMES) == 12
 

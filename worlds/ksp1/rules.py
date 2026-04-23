@@ -27,6 +27,7 @@ from .capability import get_capability
 from .items import ITEM_TABLE, PROGRESSIVE_RD_NAME, PROGRESSIVE_PART_ITEM_NAMES, SCIENCE_PACK_NAMES
 from .locations import (
     EVENT_SCALE,
+    KERBIN_LOCATIONS,
     KERBIN_SYSTEM_BODY_NAMES,
     KSC_BIOME_NAMES,
     KERBIN_LOCATION_NAMES,
@@ -182,20 +183,10 @@ def _set_ksc_biome_rules(world: KSP1World, player: int) -> None:
 
 # ---------------------------------------------------------------------------
 # Kerbin-specific location rules
+#
+# Mission types and thresholds are defined in locations.KERBIN_LOCATIONS
+# (single source of truth).  This module maps mission_type → access rule.
 # ---------------------------------------------------------------------------
-
-# Altitude (km) each sounding-rocket milestone requires.
-# Formula: h = Δv² · (twr−1) / (2·g·twr) — see capability._compute_sounding_altitude.
-ALTITUDE_THRESHOLDS_KM: dict[str, float] = {
-    "Kerbin 5km Altitude":  5.0,
-    "Kerbin 15km Altitude": 15.0,
-    "Kerbin 25km Altitude": 25.0,
-    "Kerbin 35km Altitude": 35.0,
-    "Kerbin 45km Altitude": 45.0,
-    "Kerbin 55km Altitude": 55.0,
-    "Kerbin 70km Altitude": 70.0,
-}
-
 
 def _make_altitude_rule(player: int, threshold_km: float) -> Callable[[CollectionState], bool]:
     def rule(state: CollectionState) -> bool:
@@ -203,49 +194,58 @@ def _make_altitude_rule(player: int, threshold_km: float) -> Callable[[Collectio
     return rule
 
 
-def _set_kerbin_rules(world: KSP1World, player: int) -> None:
-    """
-    Rules for the 12 Kerbin-specific locations.
-
-    First Launch: any propulsion OR capsule (kerbal EVA counts as launch).
-    First Landing: propulsion + safe descent OR capsule (EVA landing).
-    First Crash: sounding rocket to 0.1 km (must get airborne to crash).
-    Altitude milestones: sounding rocket must reach the stated altitude.
-    First Staging: decoupler.
-    Splashdown: 1 km sounding altitude + safe landing.
-    """
-
-    def has_any_propulsion_or_capsule(state: CollectionState) -> bool:
+def _make_first_launch_rule(player: int) -> Callable[[CollectionState], bool]:
+    """Any propulsion OR capsule (kerbal EVA counts as launch)."""
+    def rule(state: CollectionState) -> bool:
         cap = get_capability(state, player)
-        # Engine path OR capsule-only path (kerbal EVA = "launch")
         return cap.sounding_altitude_km > 0 or cap.has_capsule
+    return rule
 
-    def can_land_safely(state: CollectionState) -> bool:
+
+def _make_first_landing_rule(player: int) -> Callable[[CollectionState], bool]:
+    """Propulsion + safe descent OR capsule (EVA landing)."""
+    def rule(state: CollectionState) -> bool:
         cap = get_capability(state, player)
-        # Engine path: sounding rocket + safe descent
         if cap.sounding_altitude_km > 0 and (cap.has_parachutes or cap.has_throttleable_engine):
             return True
-        # EVA path: capsule alone (kerbal hops off pad, lands on feet)
         return cap.has_capsule
+    return rule
 
-    def has_staging(state: CollectionState) -> bool:
+
+def _make_staging_rule(player: int) -> Callable[[CollectionState], bool]:
+    def rule(state: CollectionState) -> bool:
         return get_capability(state, player).staging_tier >= 1
+    return rule
 
-    world.get_location("Kerbin First Launch").access_rule = has_any_propulsion_or_capsule
-    world.get_location("Kerbin First Crash").access_rule = _make_altitude_rule(player, 0.1)
-    world.get_location("Kerbin First Landing").access_rule = can_land_safely
 
-    for name, threshold_km in ALTITUDE_THRESHOLDS_KM.items():
-        world.get_location(name).access_rule = _make_altitude_rule(player, threshold_km)
-
-    world.get_location("Kerbin First Staging").access_rule = has_staging
-
-    def can_splashdown(state: CollectionState) -> bool:
+def _make_splashdown_rule(player: int, threshold_km: float) -> Callable[[CollectionState], bool]:
+    def rule(state: CollectionState) -> bool:
         cap = get_capability(state, player)
-        return (cap.sounding_altitude_km >= 1.0
+        return (cap.sounding_altitude_km >= threshold_km
                 and (cap.has_parachutes or cap.has_throttleable_engine))
+    return rule
 
-    world.get_location("Kerbin Splashdown").access_rule = can_splashdown
+
+_KERBIN_RULE_FACTORIES = {
+    "sounding": lambda player, loc: _make_altitude_rule(player, loc.threshold_km or 0.0),
+    "first_launch": lambda player, loc: _make_first_launch_rule(player),
+    "first_landing": lambda player, loc: _make_first_landing_rule(player),
+    "first_staging": lambda player, loc: _make_staging_rule(player),
+    "splashdown": lambda player, loc: _make_splashdown_rule(player, loc.threshold_km or 1.0),
+}
+
+
+def _set_kerbin_rules(world: KSP1World, player: int) -> None:
+    """Apply access rules to all Kerbin-specific locations.
+
+    Iterates KERBIN_LOCATIONS and dispatches to the appropriate rule factory
+    based on mission_type.
+    """
+    for loc in KERBIN_LOCATIONS:
+        factory = _KERBIN_RULE_FACTORIES.get(loc.mission_type)
+        if factory is None:
+            raise ValueError(f"Unknown Kerbin mission type: {loc.mission_type!r}")
+        world.get_location(loc.name).access_rule = factory(player, loc)
 
 
 # ---------------------------------------------------------------------------
