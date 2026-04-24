@@ -16,28 +16,11 @@ from worlds.ksp1.bodies import (
     MISSION_PROFILES, MissionEdge,
 )
 from worlds.ksp1.capability import (
-    EquipmentFlags, ProfileResult,
+    EVENT_TO_MISSION, EquipmentFlags, ProfileResult,
     compute_capability_from_items, evaluate_mission_detailed,
 )
 from worlds.ksp1.locations import KERBIN_LOCATIONS, event_location_names, get_body_events
 from worlds.ksp1.parts import PART_REGISTRY
-
-
-# ---------------------------------------------------------------------------
-# Event → (mission_type, crewed) mapping
-# ---------------------------------------------------------------------------
-
-EVENT_TO_MISSION: dict[str, tuple[str, bool | None]] = {
-    "Flyby":          ("orbit", None),
-    "SOI Leave":      ("orbit", None),
-    "Orbit":          ("orbit", None),
-    "EVA in Orbit":   ("orbit", True),
-    "Landing":        ("land", None),
-    "Crewed Landing": ("land", True),
-    "Flag Plant":     ("land", True),
-    "Return":         ("return", None),
-    "Sample Return":  ("sample_return", True),
-}
 
 
 @dataclass

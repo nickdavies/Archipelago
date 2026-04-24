@@ -4,16 +4,20 @@ Integration tests for the capability evaluation pipeline.
 These tests call _pre_pass / _evaluate_profile / _assess_bodies directly,
 bypassing the CollectionState so we don't need a full world setup.
 """
+import dataclasses
 import unittest
 
 from worlds.ksp1.bodies import (
     MISSION_PROFILES, BODY_BY_NAME, DIFFICULTY_PROFILES, effective_dv,
 )
 from worlds.ksp1.capability import (
-    EquipmentFlags, _evaluate_profile, _assess_bodies, _assess_one_body,
+    BodyAccessProfile, EquipmentFlags,
+    EVENT_TO_FIELDS, EVENT_TO_MISSION, _BOOL_SPECS,
+    _evaluate_profile, _assess_bodies, _assess_one_body,
     _try_profiles, _required_chute_count, _inject_ladder, _compute_sounding_altitude,
     _group_edges,
 )
+from worlds.ksp1.locations import LANDABLE_EVENTS
 from worlds.ksp1.parts import PART_DB, Engine, FuelTank, SolidBooster, MultiMount
 from worlds.ksp1.rocket_math import find_optimal_stage, _adapter_max_engines
 
@@ -1327,6 +1331,51 @@ class TestAeroLandingPassiveStage(unittest.TestCase):
                 return
 
         self.fail("No feasible Duna return profile found")
+
+
+class TestMappingConsistency(unittest.TestCase):
+    """Verify the canonical event → mission mapping tables stay in sync."""
+
+    def test_all_events_have_field_mapping(self):
+        """Every event in LANDABLE_EVENTS must appear in EVENT_TO_FIELDS."""
+        for event in LANDABLE_EVENTS:
+            self.assertIn(event, EVENT_TO_FIELDS,
+                          f"Event {event!r} missing from EVENT_TO_FIELDS")
+
+    def test_all_events_have_mission_mapping(self):
+        """Every event in LANDABLE_EVENTS must appear in EVENT_TO_MISSION."""
+        for event in LANDABLE_EVENTS:
+            self.assertIn(event, EVENT_TO_MISSION,
+                          f"Event {event!r} missing from EVENT_TO_MISSION")
+
+    def test_fields_exist_on_body_access_profile(self):
+        """Every field referenced in EVENT_TO_FIELDS must exist on BodyAccessProfile."""
+        bap_fields = {f.name for f in dataclasses.fields(BodyAccessProfile)}
+        for event, fields in EVENT_TO_FIELDS.items():
+            for field in fields:
+                self.assertIn(field, bap_fields,
+                              f"EVENT_TO_FIELDS[{event!r}] references unknown field {field!r}")
+
+    def test_all_bool_specs_referenced(self):
+        """Every field in _BOOL_SPECS must be referenced by at least one event."""
+        all_referenced: set[str] = set()
+        for fields in EVENT_TO_FIELDS.values():
+            all_referenced.update(fields)
+        for field, *_ in _BOOL_SPECS:
+            self.assertIn(field, all_referenced,
+                          f"_BOOL_SPECS field {field!r} not referenced by any event")
+
+    def test_mission_types_consistent(self):
+        """EVENT_TO_MISSION mission_types must match _BOOL_SPECS entries for each event's fields."""
+        field_to_mission = {field: mt for field, mt, _, _ in _BOOL_SPECS}
+        for event, (mission_type, _) in EVENT_TO_MISSION.items():
+            fields = EVENT_TO_FIELDS.get(event, ())
+            for field in fields:
+                self.assertEqual(
+                    field_to_mission[field], mission_type,
+                    f"EVENT_TO_MISSION[{event!r}] has mission_type={mission_type!r} "
+                    f"but field {field!r} maps to {field_to_mission[field]!r} in _BOOL_SPECS"
+                )
 
 
 if __name__ == "__main__":

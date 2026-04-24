@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Callable
 from BaseClasses import CollectionState, ItemClassification
 
 from .bodies import ALL_BODIES, BODY_BY_NAME, science_budget
-from .capability import get_capability
+from .capability import get_capability, EVENT_TO_FIELDS
 from .items import ITEM_TABLE, PROGRESSIVE_RD_NAME, PROGRESSIVE_PART_ITEM_NAMES, SCIENCE_PACK_NAMES
 from .locations import (
     EVENT_SCALE,
@@ -261,73 +261,28 @@ def _mission_rule_for_event(
     All check-slots for one event share this single rule (they fire together).
     """
     # Eve surface ascent is beyond the capability model.
-    # Tylo/Laythe returns cascade too much payload mass to Kerbin ascent
-    # for the greedy backward pass to handle (~200t Tylo, ~1100t Laythe).
+    # Tylo/Laythe returns cascade too much payload mass for the optimizer.
     if body_name == "Eve" and event in ("Return", "Sample Return"):
         return _make_all_parts_rule(player)
     if body_name in ("Tylo", "Laythe") and event in ("Return", "Sample Return"):
         return _make_all_parts_rule(player)
 
-    if event == "Flyby":
+    fields = EVENT_TO_FIELDS.get(event)
+    if fields is None:
+        def rule(state: CollectionState) -> bool:
+            return False
+        return rule
+
+    if len(fields) == 1:
+        field = fields[0]
         def rule(state: CollectionState) -> bool:
             bp = get_capability(state, player).bodies.get(body_name)
-            return bp is not None and bp.can_escape
+            return bp is not None and getattr(bp, field)
         return rule
 
-    if event == "Orbit":
-        def rule(state: CollectionState) -> bool:
-            bp = get_capability(state, player).bodies.get(body_name)
-            return bp is not None and bp.can_orbit_low
-        return rule
-
-    if event == "EVA in Orbit":
-        def rule(state: CollectionState) -> bool:
-            cap = get_capability(state, player)
-            bp = cap.bodies.get(body_name)
-            return bp is not None and bp.can_orbit_low and cap.has_capsule
-        return rule
-
-    if event == "SOI Leave":
-        def rule(state: CollectionState) -> bool:
-            bp = get_capability(state, player).bodies.get(body_name)
-            return bp is not None and bp.can_escape
-        return rule
-
-    if event == "Landing":
-        def rule(state: CollectionState) -> bool:
-            bp = get_capability(state, player).bodies.get(body_name)
-            return bp is not None and (bp.can_land_unmanned or bp.can_land_crewed)
-        return rule
-
-    if event == "Crewed Landing":
-        def rule(state: CollectionState) -> bool:
-            bp = get_capability(state, player).bodies.get(body_name)
-            return bp is not None and bp.can_land_crewed
-        return rule
-
-    if event == "Flag Plant":
-        def rule(state: CollectionState) -> bool:
-            bp = get_capability(state, player).bodies.get(body_name)
-            return bp is not None and bp.can_flag_plant
-        return rule
-
-    if event == "Return":
-        def rule(state: CollectionState) -> bool:
-            cap = get_capability(state, player)
-            bp = cap.bodies.get(body_name)
-            return bp is not None and (bp.can_return_to_kerbin or bp.can_return_crewed)
-        return rule
-
-    if event == "Sample Return":
-        def rule(state: CollectionState) -> bool:
-            cap = get_capability(state, player)
-            bp = cap.bodies.get(body_name)
-            return bp is not None and bp.can_sample_return
-        return rule
-
-    # Fallback (should not be reached)
     def rule(state: CollectionState) -> bool:
-        return False
+        bp = get_capability(state, player).bodies.get(body_name)
+        return bp is not None and any(getattr(bp, f) for f in fields)
     return rule
 
 

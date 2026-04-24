@@ -75,6 +75,9 @@ _MIN_EVA_JETPACK_TWR: float = 1.05
 # Bodies that are purely orbital (cannot land regardless of equipment)
 _ORBITAL_ONLY_BODIES: frozenset[str] = frozenset({"Jool", "Kerbol"})
 
+# Mission types that require a landable body
+_LANDABLE_MISSION_TYPES: frozenset[str] = frozenset({"land", "flag_plant", "sample_return"})
+
 # Sounding rocket parameters
 _SOUNDING_MIN_TWR: float = 1.1   # minimum sea-level TWR to count as a viable rocket
 
@@ -174,7 +177,7 @@ class EquipmentFlags:
 @dataclass
 class BodyAccessProfile:
     can_orbit_low: bool = False
-    can_orbit_high: bool = False
+    can_orbit_crewed: bool = False
     can_escape: bool = False
     can_land_unmanned: bool = False
     can_land_crewed: bool = False
@@ -183,6 +186,53 @@ class BodyAccessProfile:
     can_return_crewed: bool = False
     can_sample_return: bool = False
     blocking_reason: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Canonical event → mission mapping tables (single source of truth)
+# ---------------------------------------------------------------------------
+
+# Each entry: (field_name, mission_type, crewed, prerequisite_field)
+# prerequisite_field: skip evaluation if this BodyAccessProfile field is False
+_BOOL_SPECS: tuple[tuple[str, str, bool | None, str | None], ...] = (
+    ("can_orbit_low",        "orbit",         None,  None),
+    ("can_orbit_crewed",     "orbit",         True,  "can_orbit_low"),
+    ("can_escape",           "escape",        None,  "can_orbit_low"),
+    ("can_land_unmanned",    "land",          False, "can_orbit_low"),
+    ("can_land_crewed",      "land",          True,  "can_orbit_low"),
+    ("can_flag_plant",       "flag_plant",    True,  None),
+    ("can_return_to_kerbin", "return",        False, None),
+    ("can_return_crewed",    "return",        True,  None),
+    ("can_sample_return",    "sample_return", True,  None),
+)
+
+# Maps each AP event name to the BodyAccessProfile field(s) the rule checks.
+# Tuple = OR logic (any field True → event is reachable).
+EVENT_TO_FIELDS: dict[str, tuple[str, ...]] = {
+    "Flyby":          ("can_escape",),
+    "SOI Leave":      ("can_escape",),
+    "Orbit":          ("can_orbit_low",),
+    "EVA in Orbit":   ("can_orbit_crewed",),
+    "Landing":        ("can_land_unmanned", "can_land_crewed"),
+    "Crewed Landing": ("can_land_crewed",),
+    "Flag Plant":     ("can_flag_plant",),
+    "Return":         ("can_return_to_kerbin", "can_return_crewed"),
+    "Sample Return":  ("can_sample_return",),
+}
+
+# Event → (mission_type, crewed) for CLI rocket display.
+# For OR events, uses the less restrictive variant (crewed=None means try both).
+EVENT_TO_MISSION: dict[str, tuple[str, bool | None]] = {
+    "Flyby":          ("escape", None),
+    "SOI Leave":      ("escape", None),
+    "Orbit":          ("orbit", None),
+    "EVA in Orbit":   ("orbit", True),
+    "Landing":        ("land", None),
+    "Crewed Landing": ("land", True),
+    "Flag Plant":     ("flag_plant", True),
+    "Return":         ("return", None),
+    "Sample Return":  ("sample_return", True),
+}
 
 
 @dataclass
@@ -1275,80 +1325,38 @@ def _assess_one_body(
     if not has_attitude:
         prof.blocking_reason = "no attitude control"
         return prof
-    # --- Orbit ---
-    orbit_profiles = MISSION_PROFILES.get((body.name, "orbit"), [])
-    orbit_ok = _try_profiles(orbit_profiles, flags, diff, "orbit", crewed=None)
-    prof.can_orbit_low = orbit_ok
-    prof.can_orbit_high = orbit_ok  # trivially extends from LKO
+    # --- Evaluate all capability booleans ---
+    for field, mission_type, crewed, prereq in _BOOL_SPECS:
+        if prereq and not getattr(prof, prereq):
+            continue
+        if crewed is True and not flags.has_capsule:
+            continue
+        if mission_type in _LANDABLE_MISSION_TYPES:
+            if not body.can_land or body.name in _ORBITAL_ONLY_BODIES:
+                continue
 
-    if not orbit_ok:
+        profiles = MISSION_PROFILES.get((body.name, mission_type), [])
+
+        if not profiles:
+            # Non-home escape: orbit implies you can leave the body's SOI
+            if mission_type == "escape" and body.name != "Kerbin":
+                setattr(prof, field, True)
+            # Flag plant without explicit profiles: fall back to crewed landing
+            elif mission_type == "flag_plant":
+                setattr(prof, field, prof.can_land_crewed)
+            continue
+
+        # High-gravity sample return requires ladder for EVA re-boarding
+        if mission_type == "sample_return" and body.eva_jetpack_twr < _MIN_EVA_JETPACK_TWR:
+            profiles = _inject_ladder(profiles)
+
+        ok, reasons = _try_profiles_reason(profiles, flags, diff, mission_type, crewed=crewed)
+        setattr(prof, field, ok)
+        if not ok and not prof.blocking_reason:
+            prof.blocking_reason = f"{mission_type}: {'; '.join(reasons)}"
+
+    if not prof.can_orbit_low and not prof.blocking_reason:
         prof.blocking_reason = "orbit not achievable"
-
-    # --- Escape (leave SOI) ---
-    if orbit_ok:
-        escape_profiles = MISSION_PROFILES.get((body.name, "escape"), [])
-        if escape_profiles:
-            prof.can_escape = _try_profiles(escape_profiles, flags, diff, "escape", crewed=None)
-        else:
-            # Non-home bodies: reaching orbit implies you've already escaped Kerbin
-            # and can leave this body's SOI on a return trajectory.
-            prof.can_escape = True
-
-    # --- Landing (unmanned) ---
-    if orbit_ok and body.can_land and body.name not in _ORBITAL_ONLY_BODIES:
-        land_profiles = MISSION_PROFILES.get((body.name, "land"), [])
-        ok, reasons = _try_profiles_reason(land_profiles, flags, diff, "land", crewed=False)
-        prof.can_land_unmanned = ok
-        if not ok and not prof.blocking_reason:
-            prof.blocking_reason = f"land: {'; '.join(reasons)}"
-
-        # Landing (crewed)
-        if flags.has_capsule:
-            ok, reasons = _try_profiles_reason(land_profiles, flags, diff, "land", crewed=True)
-            prof.can_land_crewed = ok
-            if not ok and not prof.blocking_reason:
-                prof.blocking_reason = f"crewed land: {'; '.join(reasons)}"
-
-    # --- Flag plant ---
-    fp_profiles = MISSION_PROFILES.get((body.name, "flag_plant"), [])
-    if fp_profiles:
-        # Explicit profile (e.g. Kerbin: empty profile = 0 dv, just walk out)
-        prof.can_flag_plant = flags.has_capsule and \
-            _try_profiles(fp_profiles, flags, diff, "flag_plant", crewed=True)
-    else:
-        # Other bodies: flag plant = crewed landing
-        prof.can_flag_plant = prof.can_land_crewed
-
-    # --- Return (unmanned) ---
-    return_profiles = MISSION_PROFILES.get((body.name, "return"), [])
-    if return_profiles:
-        ok, reasons = _try_profiles_reason(return_profiles, flags, diff, "return", crewed=False)
-        prof.can_return_to_kerbin = ok
-        if not ok and not prof.blocking_reason:
-            prof.blocking_reason = f"return: {'; '.join(reasons)}"
-
-        # Return (crewed)
-        if flags.has_capsule:
-            ok, reasons = _try_profiles_reason(return_profiles, flags, diff, "return", crewed=True)
-            prof.can_return_crewed = ok
-            if not ok and not prof.blocking_reason:
-                prof.blocking_reason = f"crewed return: {'; '.join(reasons)}"
-
-    # --- Sample return (crewed + ladder check) ---
-    sr_profiles = MISSION_PROFILES.get((body.name, "sample_return"), [])
-    if sr_profiles and flags.has_capsule:
-        if body.can_land and body.name not in _ORBITAL_ONLY_BODIES:
-            # Inject ladder requirement if EVA jetpack can't lift off
-            if body.eva_jetpack_twr < _MIN_EVA_JETPACK_TWR:
-                sr_profiles_with_ladder = _inject_ladder(sr_profiles)
-            else:
-                sr_profiles_with_ladder = sr_profiles
-            ok, reasons = _try_profiles_reason(
-                sr_profiles_with_ladder, flags, diff, "sample_return", crewed=True
-            )
-            prof.can_sample_return = ok
-            if not ok and not prof.blocking_reason:
-                prof.blocking_reason = f"sample return: {'; '.join(reasons)}"
 
     return prof
 
