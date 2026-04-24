@@ -56,37 +56,34 @@ class KSP1Location(Location):
 
 
 # ---------------------------------------------------------------------------
-# Event types
+# Event types — single source of truth for all event metadata
 # ---------------------------------------------------------------------------
 
-#: Events shared by all bodies that can be landed on.
-LANDABLE_EVENTS: tuple[str, ...] = (
-    "Flyby",
-    "SOI Leave",
-    "Orbit",
-    "EVA in Orbit",
-    "Landing",
-    "Crewed Landing",
-    "Flag Plant",
-    "Return",
-    "Sample Return",
+@dataclass(frozen=True)
+class EventDef:
+    """Metadata for a body mission event type.
+
+    One row per event. All consumers (locations, rules, capability, CLI)
+    derive their needs from this table.
+    """
+    name: str
+    scale: int                       # location slots per body for this event
+    profile_fields: tuple[str, ...]  # BodyAccessProfile field names (OR logic for rules)
+    requires_landing: bool           # only applies to landable bodies
+
+ALL_EVENTS: tuple[EventDef, ...] = (
+    EventDef("Flyby",          1, ("can_escape",),                              False),
+    EventDef("SOI Leave",      1, ("can_escape",),                              False),
+    EventDef("Orbit",          1, ("can_orbit_low",),                           False),
+    EventDef("EVA in Orbit",   1, ("can_orbit_crewed",),                        False),
+    EventDef("Landing",        2, ("can_land_unmanned", "can_land_crewed"),      True),
+    EventDef("Crewed Landing", 2, ("can_land_crewed",),                         True),
+    EventDef("Flag Plant",     2, ("can_flag_plant",),                          True),
+    EventDef("Return",         3, ("can_return_to_kerbin", "can_return_crewed"), True),
+    EventDef("Sample Return",  3, ("can_sample_return",),                       True),
 )
 
-#: Events for non-landable bodies (Jool, Kerbol).
-ORBITAL_ONLY_EVENTS: tuple[str, ...] = (
-    "Flyby",
-    "SOI Leave",
-    "Orbit",
-    "EVA in Orbit",
-)
-
-#: Location slots per event, scaled by achievement difficulty.
-#: Easy events (fly past) get 1 slot; hard events (sample return) get 3.
-EVENT_SCALE: dict[str, int] = {
-    "Flyby": 1, "SOI Leave": 1, "Orbit": 1, "EVA in Orbit": 1,
-    "Landing": 2, "Crewed Landing": 2, "Flag Plant": 2,
-    "Return": 3, "Sample Return": 3,
-}
+EVENT_BY_NAME: dict[str, EventDef] = {e.name: e for e in ALL_EVENTS}
 
 
 # ---------------------------------------------------------------------------
@@ -174,7 +171,9 @@ assert len(KERBIN_LOCATION_NAMES) == 12
 
 def get_body_events(body) -> tuple[str, ...]:
     """Return the AP event list for a body."""
-    return LANDABLE_EVENTS if body.can_land else ORBITAL_ONLY_EVENTS
+    if body.can_land:
+        return tuple(e.name for e in ALL_EVENTS)
+    return tuple(e.name for e in ALL_EVENTS if not e.requires_landing)
 
 
 def _build_mission_locations() -> list[str]:
@@ -185,7 +184,7 @@ def _build_mission_locations() -> list[str]:
     names: list[str] = []
     for body in ALL_BODIES:
         for event in get_body_events(body):
-            for slot in range(1, EVENT_SCALE[event] + 1):
+            for slot in range(1, EVENT_BY_NAME[event].scale + 1):
                 names.append(f"{body.name} {event} {slot}")
     return names
 
@@ -197,8 +196,10 @@ assert len(MISSION_LOCATION_NAMES) == 248, (
     f"Expected 248 per-body mission locations, got {len(MISSION_LOCATION_NAMES)}"
 )
 
-# Bodies in the Kerbin system (used to identify interplanetary locations).
-KERBIN_SYSTEM_BODY_NAMES: frozenset[str] = frozenset({"Kerbin", "Mun", "Minmus"})
+# Bodies in the Kerbin system — derived from ALL_BODIES, not hardcoded.
+KERBIN_SYSTEM_BODY_NAMES: frozenset[str] = frozenset(
+    b.name for b in ALL_BODIES if b.name == "Kerbin" or b.parent == "Kerbin"
+)
 
 # All mission locations outside the Kerbin system.
 # Used by generate_early() to exclude interplanetary progression for short goals.
@@ -207,7 +208,7 @@ INTERPLANETARY_LOCATION_NAMES: frozenset[str] = frozenset(
     for body in ALL_BODIES
     if body.name not in KERBIN_SYSTEM_BODY_NAMES
     for event in get_body_events(body)
-    for slot in range(1, EVENT_SCALE[event] + 1)
+    for slot in range(1, EVENT_BY_NAME[event].scale + 1)
 )
 
 # ---------------------------------------------------------------------------
@@ -257,7 +258,7 @@ LOCATION_NAME_TO_ID: dict[str, int] = {
 
 def event_location_names(body_name: str, event: str) -> list[str]:
     """Return the list of location names for one body/event combination."""
-    return [f"{body_name} {event} {i}" for i in range(1, EVENT_SCALE[event] + 1)]
+    return [f"{body_name} {event} {i}" for i in range(1, EVENT_BY_NAME[event].scale + 1)]
 
 
 # ---------------------------------------------------------------------------

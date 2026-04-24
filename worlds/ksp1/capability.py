@@ -32,6 +32,7 @@ from .parts import (
     MultiMount, MULTI_MOUNT_TABLE,
     PROGRESSIVE_PART_TIERS, PROGRESSIVE_PART_NAMES, PROGRESSIVE_PART_COUNTS,
 )
+from .locations import ALL_EVENTS, EVENT_BY_NAME, KERBIN_SYSTEM_BODY_NAMES
 from .rocket_math import (
     StageResult, find_optimal_stage, terminal_velocity,
     FILL_LEVELS, merge_edge_groups,
@@ -72,8 +73,6 @@ _ION_MAX_SOLAR_AU: float = 1.0  # only consider Dawn closer than Kerbin
 # Minimum jetpack TWR for ladder-free sample return
 _MIN_EVA_JETPACK_TWR: float = 1.05
 
-# Bodies that are purely orbital (cannot land regardless of equipment)
-_ORBITAL_ONLY_BODIES: frozenset[str] = frozenset({"Jool", "Kerbol"})
 
 # Mission types that require a landable body
 _LANDABLE_MISSION_TYPES: frozenset[str] = frozenset({"land", "flag_plant", "sample_return"})
@@ -81,12 +80,6 @@ _LANDABLE_MISSION_TYPES: frozenset[str] = frozenset({"land", "flag_plant", "samp
 # Sounding rocket parameters
 _SOUNDING_MIN_TWR: float = 1.1   # minimum sea-level TWR to count as a viable rocket
 
-# Interplanetary gate: any mission leaving Kerbin SOI requires launch clamps
-_INTERPLANETARY_BODIES: frozenset[str] = frozenset({
-    "Moho", "Eve", "Gilly", "Duna", "Ike", "Dres",
-    "Jool", "Laythe", "Vall", "Tylo", "Bop", "Pol",
-    "Eeloo", "Kerbol",
-})
 
 
 # ---------------------------------------------------------------------------
@@ -206,33 +199,40 @@ _BOOL_SPECS: tuple[tuple[str, str, bool | None, str | None], ...] = (
     ("can_sample_return",    "sample_return", True,  None),
 )
 
-# Maps each AP event name to the BodyAccessProfile field(s) the rule checks.
-# Tuple = OR logic (any field True → event is reachable).
-EVENT_TO_FIELDS: dict[str, tuple[str, ...]] = {
-    "Flyby":          ("can_escape",),
-    "SOI Leave":      ("can_escape",),
-    "Orbit":          ("can_orbit_low",),
-    "EVA in Orbit":   ("can_orbit_crewed",),
-    "Landing":        ("can_land_unmanned", "can_land_crewed"),
-    "Crewed Landing": ("can_land_crewed",),
-    "Flag Plant":     ("can_flag_plant",),
-    "Return":         ("can_return_to_kerbin", "can_return_crewed"),
-    "Sample Return":  ("can_sample_return",),
+# --- Module-level structural assertions ---
+# _BOOL_SPECS and BodyAccessProfile are coupled by field name strings.
+# Fail fast at import time if they drift apart.
+import dataclasses as _dc
+
+_bap_bool_fields = frozenset(
+    f.name for f in _dc.fields(BodyAccessProfile) if f.name != "blocking_reason"
+)
+_spec_fields = frozenset(field for field, _, _, _ in _BOOL_SPECS)
+assert _bap_bool_fields == _spec_fields, (
+    f"BodyAccessProfile fields != _BOOL_SPECS: "
+    f"extra in BAP: {_bap_bool_fields - _spec_fields}, "
+    f"extra in SPECS: {_spec_fields - _bap_bool_fields}"
+)
+_all_event_fields = frozenset(f for e in ALL_EVENTS for f in e.profile_fields)
+assert _all_event_fields <= _spec_fields, (
+    f"EventDef references unknown fields: {_all_event_fields - _spec_fields}"
+)
+del _bap_bool_fields, _spec_fields, _all_event_fields
+
+# --- Derived event → mission mapping (for CLI scripts) ---
+
+_FIELD_TO_MISSION: dict[str, tuple[str, bool | None]] = {
+    field: (mt, crewed) for field, mt, crewed, _ in _BOOL_SPECS
 }
 
-# Event → (mission_type, crewed) for CLI rocket display.
-# For OR events, uses the less restrictive variant (crewed=None means try both).
-EVENT_TO_MISSION: dict[str, tuple[str, bool | None]] = {
-    "Flyby":          ("escape", None),
-    "SOI Leave":      ("escape", None),
-    "Orbit":          ("orbit", None),
-    "EVA in Orbit":   ("orbit", True),
-    "Landing":        ("land", None),
-    "Crewed Landing": ("land", True),
-    "Flag Plant":     ("flag_plant", True),
-    "Return":         ("return", None),
-    "Sample Return":  ("sample_return", True),
-}
+
+def event_mission_info(event_name: str) -> tuple[str, bool | None]:
+    """Derive (mission_type, crewed) for an event from its profile_fields."""
+    event_def = EVENT_BY_NAME[event_name]
+    specs = [_FIELD_TO_MISSION[f] for f in event_def.profile_fields]
+    mt = specs[0][0]
+    crewed_vals = {s[1] for s in specs}
+    return (mt, crewed_vals.pop() if len(crewed_vals) == 1 else None)
 
 
 @dataclass
@@ -1309,7 +1309,7 @@ def _assess_one_body(
                 return prof
 
     # --- Launch clamp gate for interplanetary ---
-    if body.name in _INTERPLANETARY_BODIES and not flags.has_launch_clamp:
+    if body.name not in KERBIN_SYSTEM_BODY_NAMES and not flags.has_launch_clamp:
         prof.blocking_reason = "no launch clamp for interplanetary mission"
         return prof
 
@@ -1332,7 +1332,7 @@ def _assess_one_body(
         if crewed is True and not flags.has_capsule:
             continue
         if mission_type in _LANDABLE_MISSION_TYPES:
-            if not body.can_land or body.name in _ORBITAL_ONLY_BODIES:
+            if not body.can_land:
                 continue
 
         profiles = MISSION_PROFILES.get((body.name, mission_type), [])

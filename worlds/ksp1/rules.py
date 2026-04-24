@@ -23,10 +23,10 @@ from typing import TYPE_CHECKING, Callable
 from BaseClasses import CollectionState, ItemClassification
 
 from .bodies import ALL_BODIES, BODY_BY_NAME, science_budget
-from .capability import get_capability, EVENT_TO_FIELDS
+from .capability import get_capability
 from .items import ITEM_TABLE, PROGRESSIVE_RD_NAME, PROGRESSIVE_PART_ITEM_NAMES, SCIENCE_PACK_NAMES
 from .locations import (
-    EVENT_SCALE,
+    EVENT_BY_NAME,
     KERBIN_LOCATIONS,
     KERBIN_SYSTEM_BODY_NAMES,
     KSC_BIOME_NAMES,
@@ -267,12 +267,13 @@ def _mission_rule_for_event(
     if body_name in ("Tylo", "Laythe") and event in ("Return", "Sample Return"):
         return _make_all_parts_rule(player)
 
-    fields = EVENT_TO_FIELDS.get(event)
-    if fields is None:
+    event_def = EVENT_BY_NAME.get(event)
+    if event_def is None:
         def rule(state: CollectionState) -> bool:
             return False
         return rule
 
+    fields = event_def.profile_fields
     if len(fields) == 1:
         field = fields[0]
         def rule(state: CollectionState) -> bool:
@@ -370,7 +371,7 @@ def _set_item_pacing_rules(world: KSP1World, player: int, difficulty: int) -> No
         add_item_rule(world.get_location(name), power_rule)
     # Early Kerbin mission events (everything except Flyby/SOI Leave which need escape)
     for event in ("Orbit", "EVA in Orbit", "Landing", "Crewed Landing", "Flag Plant", "Return", "Sample Return"):
-        for slot in range(1, EVENT_SCALE[event] + 1):
+        for slot in range(1, EVENT_BY_NAME[event].scale + 1):
             add_item_rule(world.get_location(f"Kerbin {event} {slot}"), power_rule)
 
     # Band C: Early tech tree (tiers 1-3) — reject tier 2, strict mode only

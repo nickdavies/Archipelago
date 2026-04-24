@@ -16,8 +16,9 @@ from worlds.ksp1.bodies import (
     MISSION_PROFILES, MissionEdge,
 )
 from worlds.ksp1.capability import (
-    EVENT_TO_MISSION, EquipmentFlags, ProfileResult,
+    EquipmentFlags, ProfileResult,
     compute_capability_from_items, evaluate_mission_detailed,
+    event_mission_info,
 )
 from worlds.ksp1.locations import KERBIN_LOCATIONS, event_location_names, get_body_events
 from worlds.ksp1.parts import PART_REGISTRY
@@ -43,7 +44,7 @@ def _build_check_map() -> dict[str, CheckInfo]:
     # Per-body mission events
     for body in ALL_BODIES:
         for event in get_body_events(body):
-            mission_type, crewed = EVENT_TO_MISSION[event]
+            mission_type, crewed = event_mission_info(event)
             for loc_name in event_location_names(body.name, event):
                 result[loc_name] = CheckInfo(body.name, event, mission_type, crewed)
 
