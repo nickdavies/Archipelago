@@ -67,25 +67,21 @@ before submitting it for generation.
 - Purchase tech tree nodes with science points to send additional checks.
 - Receive parts, science packs, and equipment from other players as they complete their checks.
 
-## KSP1 Tracker
+## Tracking In-Logic Locations (Universal Tracker)
 
-The `.apworld` includes a built-in **KSP1 Tracker** client that shows which locations are currently
-in logic and lets you inspect rocket designs. Launch it from the Archipelago Launcher ("KSP1 Tracker")
-or run directly:
+KSP1 integrates with the [Universal Tracker (UT)](https://github.com/FarisTheAncient/Archipelago/releases)
+for out-of-game location tracking. No YAML file is needed — UT reconstructs the full logic state
+from slot data when you connect.
 
-```
-python -m worlds.ksp1.tracker_client --connect localhost:38281 --name YourSlotName
-```
-
-Key commands: `/rocket <location>` (show rocket design details), `/parts` (list received parts),
-`/bug_report` (dump state for bug reports). See the
-[game info page](../games/Kerbal%20Space%20Program%201/info/en) for more details.
+Install UT, connect to your AP server, and you'll see which unchecked locations are in logic, sorted by
+body order. Use `/explain <location>` to see a detailed rocket design breakdown for any mission, or
+`/explain parts` to list your received parts by type.
 
 ## Troubleshooting
 
 If you run into problems:
 
-1. Use the **KSP1 Tracker** (`/rocket` command) to check what logic thinks you need for a mission.
+1. Use UT's `/explain` command to check what logic thinks you need for a mission.
 2. Check the KSP log (`KSP.log` in your KSP install directory) for errors.
 3. Ensure you are running in **Science Mode**, not Career or Sandbox.
 4. Verify your `.apworld` version matches your client mod version.
@@ -94,4 +90,3 @@ If you run into problems:
    - The AP `.zip` output (from generation)
    - Your `.apsave` file
    - A screenshot of the issue if possible
-   - Or use `/bug_report` in the KSP1 Tracker to generate a JSON state dump

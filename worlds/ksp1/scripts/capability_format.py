@@ -1,8 +1,8 @@
 """
 Shared formatting and data helpers for KSP1 capability inspection.
 
-Used by both capability_cli.py (developer CLI) and tracker_client.py
-(Archipelago Launcher tracker client).
+Used by both capability_cli.py (developer CLI) and world.py
+(Universal Tracker explain_rule hook).
 """
 from __future__ import annotations
 

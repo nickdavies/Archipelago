@@ -6,6 +6,7 @@ from worlds.AutoWorld import LogicMixin, WebWorld, World
 from . import items, locations, regions, rules
 from .rules import GoalSpec, resolve_goal_spec, goal_spec_location_names
 from .capability import RocketCapability
+from .bodies import ALL_BODIES
 from .items import ITEM_NAME_TO_ID
 from .parts import PROGRESSIVE_PART_TIERS
 from .locations import LOCATION_NAME_TO_ID, MAX_TECH_SLOTS, TECH_SLOTS_BY_DIFFICULTY
@@ -46,6 +47,7 @@ class KSP1World(World):
 
     game = "Kerbal Space Program 1"
     web = KSP1WebWorld()
+    ut_can_gen_without_yaml = True
 
     # Tech tree entrance rules use can_reach_region() for parent dependencies.
     # The auto version retries blocked connections when new regions are reached;
@@ -71,6 +73,12 @@ class KSP1World(World):
     def generate_early(self) -> None:
         """Resolve goal spec and apply ExcludeLateTechTree."""
         self.capability_cache = {}
+
+        # UT regen: restore options from original generation's slot_data.
+        passthrough = getattr(self.multiworld, "re_gen_passthrough", {})
+        if isinstance(passthrough, dict) and self.game in passthrough:
+            self._apply_slot_data(passthrough[self.game])
+
         self.goal_spec = resolve_goal_spec(self.options)
         if self.options.exclude_late_tech_tree:
             late_tier_locs: set[str] = {
@@ -115,6 +123,112 @@ class KSP1World(World):
             for name, reps in self.progressive_representatives.items()
         }
         return d
+
+    # ------------------------------------------------------------------
+    # Universal Tracker hooks
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def interpret_slot_data(slot_data: dict[str, Any] | None) -> dict[str, Any] | None:
+        """UT hook: return slot_data to trigger regen with re_gen_passthrough."""
+        return slot_data
+
+    def _apply_slot_data(self, slot_data: dict[str, Any]) -> None:
+        """Restore options from slot_data during UT regen."""
+        self.options.goal.value = slot_data["goal"]
+        self.options.difficulty.value = slot_data["difficulty"]
+        self.options.start_with_launch_clamps.value = slot_data["start_with_launch_clamps"]
+
+        if slot_data["goal"] == 99:  # Goal.option_custom
+            flag_bodies: set[str] = set()
+            return_bodies: set[str] = set()
+            sample_return_bodies: set[str] = set()
+            for loc in slot_data.get("goal_locations", []):
+                if loc.endswith(" Flag Plant 1"):
+                    flag_bodies.add(loc.replace(" Flag Plant 1", ""))
+                elif loc.endswith(" Sample Return 1"):
+                    sample_return_bodies.add(loc.replace(" Sample Return 1", ""))
+                elif loc.endswith(" Return 1"):
+                    return_bodies.add(loc.replace(" Return 1", ""))
+            self.options.flag_bodies.value = flag_bodies
+            self.options.return_bodies.value = return_bodies
+            self.options.sample_return_bodies.value = sample_return_bodies
+
+        # Stash progressive reps so create_items() uses them instead of re-randomizing.
+        self._ut_progressive_representatives = {
+            name: {int(t): rep for t, rep in reps.items()}
+            for name, reps in slot_data.get("progressive_representatives", {}).items()
+        }
+
+    def explain_rule(self, target_name: str, state: CollectionState) -> list[dict] | None:
+        """UT hook: /explain <location> shows rocket design, /explain parts [filter] shows inventory."""
+        from .bodies import DIFFICULTY_PROFILES
+        from .capability import compute_capability_from_items, evaluate_mission_detailed
+        from .scripts.capability_format import (
+            CHECK_MAP, format_rocket_output, format_parts_list,
+        )
+
+        # Sub-command: /explain parts [filter]
+        if target_name.startswith("parts"):
+            filter_text = target_name[5:].strip()
+            item_counts: dict[str, int] = {}
+            for name in self.item_name_to_id:
+                count = state.count(name, self.player)
+                if count > 0:
+                    item_counts[name] = count
+            if filter_text:
+                filter_lower = filter_text.lower()
+                item_counts = {k: v for k, v in item_counts.items() if filter_lower in k.lower()}
+            lines = format_parts_list(item_counts)
+            return [{"type": "text", "text": "\n".join(lines)}]
+
+        # Default: look up location, compute capability, show rocket design.
+        loc_obj = None
+        for loc in self.multiworld.get_locations(self.player):
+            if loc.name == target_name:
+                loc_obj = loc
+                break
+        if loc_obj is None:
+            return None  # fall back to UT default
+
+        in_logic = loc_obj.can_reach(state)
+        info = CHECK_MAP.get(target_name)
+        difficulty_name = ["casual", "normal", "expert", "insane"][
+            self.options.difficulty.value
+        ]
+
+        cap, flags = compute_capability_from_items(
+            lambda name: state.count(name, self.player),
+            difficulty_name,
+            bool(self.options.start_with_launch_clamps.value),
+        )
+
+        result = None
+        if info is not None:
+            diff = DIFFICULTY_PROFILES[difficulty_name]
+            result = evaluate_mission_detailed(
+                flags, diff, info.body_name, info.mission_type, info.crewed,
+                threshold_km=info.threshold_km,
+            )
+
+        lines = format_rocket_output(
+            target_name, in_logic, False, info, result, flags,
+            difficulty_name,
+            sounding_altitude_km=cap.sounding_altitude_km,
+        )
+        return [{"type": "text", "text": "\n".join(lines)}]
+
+    def custom_ut_sort(self, region_label: str, location_label: str) -> str:
+        """UT hook: sort by body order (ALL_BODIES), then tech tree, then KSC."""
+        body_order = {b.name: f"A_{i:02d}" for i, b in enumerate(ALL_BODIES)}
+        for prefix, sort_key in body_order.items():
+            if location_label.startswith(prefix + " "):
+                return f"{sort_key}_{location_label}"
+        if region_label.startswith("Tech "):
+            return f"B_{location_label}"
+        if location_label.startswith("KSC ") or location_label.startswith("Starting "):
+            return f"Z_{location_label}"
+        return f"C_{location_label}"
 
     def collect(self, state: CollectionState, item: Item) -> bool:
         change = super().collect(state, item)

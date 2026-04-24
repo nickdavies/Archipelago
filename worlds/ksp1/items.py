@@ -261,12 +261,17 @@ def create_all_items(world: KSP1World) -> None:
         world.multiworld.push_precollected(create_item(world, name))
 
     # Select one representative per progressive tier (deterministic via world.random).
+    # During UT regen, use the pre-assigned reps from slot_data instead.
+    ut_reps = getattr(world, "_ut_progressive_representatives", None)
     representatives: dict[str, dict[int, str]] = {}
     all_representatives: set[str] = set()
     for prog_name, tiers in PROGRESSIVE_PART_TIERS.items():
         representatives[prog_name] = {}
         for tier_num, parts in sorted(tiers.items()):
-            rep = world.random.choice(parts)
+            if ut_reps and prog_name in ut_reps and tier_num in ut_reps[prog_name]:
+                rep = ut_reps[prog_name][tier_num]
+            else:
+                rep = world.random.choice(parts)
             representatives[prog_name][tier_num] = rep
             all_representatives.add(rep)
 
