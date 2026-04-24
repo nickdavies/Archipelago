@@ -1113,6 +1113,17 @@ _KERBOL_RETURN = _KERBOL_ORBIT + [
 _add("Kerbol", "orbit",  _KERBOL_ORBIT)
 _add("Kerbol", "return", _KERBOL_RETURN)
 
+# Auto-generate flyby/escape profiles: orbit profile minus orbit insertion.
+# A flyby only needs to reach the body's SOI — no orbit insertion burn.
+# Kerbin already has an explicit escape profile (ascent + escape burn) — skip it.
+for _body_name, _mission_type in list(MISSION_PROFILES):
+    if _mission_type == "orbit" and (_body_name, "escape") not in MISSION_PROFILES:
+        _flyby_profiles = [p[:-1] for p in MISSION_PROFILES[(_body_name, _mission_type)]
+                           if len(p) > 1]
+        if _flyby_profiles:
+            MISSION_PROFILES[(_body_name, "escape")] = _flyby_profiles
+del _body_name, _mission_type, _flyby_profiles
+
 
 # ---------------------------------------------------------------------------
 # Science budget estimator (used by tech-tree access rules)

@@ -188,9 +188,9 @@ class BodyAccessProfile:
 # Each entry: (field_name, mission_type, crewed, prerequisite_field)
 # prerequisite_field: skip evaluation if this BodyAccessProfile field is False
 _BOOL_SPECS: tuple[tuple[str, str, bool | None, str | None], ...] = (
+    ("can_escape",           "escape",        None,  None),
     ("can_orbit_low",        "orbit",         None,  None),
     ("can_orbit_crewed",     "orbit",         True,  "can_orbit_low"),
-    ("can_escape",           "escape",        None,  "can_orbit_low"),
     ("can_land_unmanned",    "land",          False, "can_orbit_low"),
     ("can_land_crewed",      "land",          True,  "can_orbit_low"),
     ("can_flag_plant",       "flag_plant",    True,  None),
@@ -1338,11 +1338,8 @@ def _assess_one_body(
         profiles = MISSION_PROFILES.get((body.name, mission_type), [])
 
         if not profiles:
-            # Non-home escape: orbit implies you can leave the body's SOI
-            if mission_type == "escape" and body.name != "Kerbin":
-                setattr(prof, field, True)
             # Flag plant without explicit profiles: fall back to crewed landing
-            elif mission_type == "flag_plant":
+            if mission_type == "flag_plant":
                 setattr(prof, field, prof.can_land_crewed)
             continue
 
