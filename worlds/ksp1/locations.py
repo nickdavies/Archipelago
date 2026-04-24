@@ -31,6 +31,7 @@ create the correct subset at runtime based on difficulty.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from BaseClasses import Location
@@ -65,9 +66,9 @@ class MissionLocation:
 
     Canonical format: "{body} {event} {slot}" — e.g. "Mun Orbit 1".
     """
-    body: str       # "Mun", "Duna", etc.
-    event: str      # "Orbit", "Flag Plant", "Sample Return", etc.
-    slot: int       # 1-based
+    body: str            # "Mun", "Duna", etc.
+    event: EventName     # EventName.ORBIT, EventName.FLAG_PLANT, etc.
+    slot: int            # 1-based
 
     def __str__(self) -> str:
         return f"{self.body} {self.event} {self.slot}"
@@ -88,7 +89,7 @@ class MissionLocation:
                     except ValueError:
                         return None
                     if event_name in EVENT_BY_NAME:
-                        return cls(body.name, event_name, slot)
+                        return cls(body.name, EventName(event_name), slot)
                 return None
         return None
 
@@ -110,6 +111,19 @@ class TechTreeLocation:
 # Event types — single source of truth for all event metadata
 # ---------------------------------------------------------------------------
 
+class EventName(StrEnum):
+    """Canonical event names — use these instead of string literals."""
+    FLYBY = "Flyby"
+    SOI_LEAVE = "SOI Leave"
+    ORBIT = "Orbit"
+    EVA_IN_ORBIT = "EVA in Orbit"
+    LANDING = "Landing"
+    CREWED_LANDING = "Crewed Landing"
+    FLAG_PLANT = "Flag Plant"
+    RETURN = "Return"
+    SAMPLE_RETURN = "Sample Return"
+
+
 @dataclass(frozen=True)
 class EventDef:
     """Metadata for a body mission event type.
@@ -121,23 +135,23 @@ class EventDef:
                   for the body. Prereqs must appear before dependents in
                   ALL_EVENTS.
     """
-    name: str
-    scale: int                       # location slots per body for this event
-    mission_type: str                # key into MISSION_PROFILES
-    crewed: bool | None              # None=try both, True=crewed only, False=unmanned only
-    requires_landing: bool           # only applies to landable bodies
-    prereq_event: str | None = None  # skip if this event is False for the body
+    name: EventName
+    scale: int                            # location slots per body for this event
+    mission_type: str                     # key into MISSION_PROFILES
+    crewed: bool | None                   # None=try both, True=crewed only, False=unmanned only
+    requires_landing: bool                # only applies to landable bodies
+    prereq_event: EventName | None = None # skip if this event is False for the body
 
 ALL_EVENTS: tuple[EventDef, ...] = (
-    EventDef("Orbit",          1, "orbit",         None,  False),
-    EventDef("EVA in Orbit",   1, "orbit",         True,  False, "Orbit"),
-    EventDef("Flyby",          1, "escape",        None,  False),
-    EventDef("SOI Leave",      1, "escape",        None,  False),
-    EventDef("Landing",        2, "land",          None,  True,  "Orbit"),
-    EventDef("Crewed Landing", 2, "land",          True,  True,  "Orbit"),
-    EventDef("Flag Plant",     2, "flag_plant",    True,  True,  "Crewed Landing"),
-    EventDef("Return",         3, "return",        None,  True,  "Landing"),
-    EventDef("Sample Return",  3, "sample_return", True,  True,  "Crewed Landing"),
+    EventDef(EventName.ORBIT,          1, "orbit",         None,  False),
+    EventDef(EventName.EVA_IN_ORBIT,   1, "orbit",         True,  False, EventName.ORBIT),
+    EventDef(EventName.FLYBY,          1, "escape",        None,  False),
+    EventDef(EventName.SOI_LEAVE,      1, "escape",        None,  False),
+    EventDef(EventName.LANDING,        2, "land",          None,  True,  EventName.ORBIT),
+    EventDef(EventName.CREWED_LANDING, 2, "land",          True,  True,  EventName.ORBIT),
+    EventDef(EventName.FLAG_PLANT,     2, "flag_plant",    True,  True,  EventName.CREWED_LANDING),
+    EventDef(EventName.RETURN,         3, "return",        None,  True,  EventName.LANDING),
+    EventDef(EventName.SAMPLE_RETURN,  3, "sample_return", True,  True,  EventName.CREWED_LANDING),
 )
 
 # Import-time assertion: prereqs must appear before dependents in ALL_EVENTS
@@ -237,7 +251,7 @@ assert len(KERBIN_LOCATION_NAMES) == 12
 # Per-body mission location names (217 total, generated from body data)
 # ---------------------------------------------------------------------------
 
-def get_body_events(body) -> tuple[str, ...]:
+def get_body_events(body) -> tuple[EventName, ...]:
     """Return the AP event list for a body."""
     if body.can_land:
         return tuple(e.name for e in ALL_EVENTS)
@@ -316,7 +330,7 @@ LOCATION_NAME_TO_ID: dict[str, int] = {
 # Helper: which locations belong to a given body + event?
 # ---------------------------------------------------------------------------
 
-def event_locations(body_name: str, event: str) -> list[MissionLocation]:
+def event_locations(body_name: str, event: EventName) -> list[MissionLocation]:
     """Return the list of MissionLocation objects for one body/event combination."""
     return [MissionLocation(body_name, event, i) for i in range(1, EVENT_BY_NAME[event].scale + 1)]
 

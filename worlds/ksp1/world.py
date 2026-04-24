@@ -9,7 +9,7 @@ from .capability import RocketCapability
 from .bodies import ALL_BODIES
 from .items import ITEM_NAME_TO_ID
 from .parts import PROGRESSIVE_PART_TIERS
-from .locations import LOCATION_NAME_TO_ID, MAX_TECH_SLOTS, MissionLocation, TECH_SLOTS_BY_DIFFICULTY, TechTreeLocation
+from .locations import EventName, LOCATION_NAME_TO_ID, MAX_TECH_SLOTS, MissionLocation, TECH_SLOTS_BY_DIFFICULTY, TechTreeLocation
 from .options import KSP1Options
 from .tech_tree import MAX_TIER, NODES_BY_TIER, TECH_NODES, TIER_TO_BAND
 
@@ -147,11 +147,11 @@ class KSP1World(World):
                 parsed = MissionLocation.parse(loc_str)
                 if parsed is None:
                     continue
-                if parsed.event == "Flag Plant":
+                if parsed.event == EventName.FLAG_PLANT:
                     flag_bodies.add(parsed.body)
-                elif parsed.event == "Sample Return":
+                elif parsed.event == EventName.SAMPLE_RETURN:
                     sample_return_bodies.add(parsed.body)
-                elif parsed.event == "Return":
+                elif parsed.event == EventName.RETURN:
                     return_bodies.add(parsed.body)
             self.options.flag_bodies.value = flag_bodies
             self.options.return_bodies.value = return_bodies

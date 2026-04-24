@@ -32,7 +32,7 @@ from .parts import (
     MultiMount, MULTI_MOUNT_TABLE,
     PROGRESSIVE_PART_TIERS, PROGRESSIVE_PART_NAMES, PROGRESSIVE_PART_COUNTS,
 )
-from .locations import ALL_EVENTS, EVENT_BY_NAME, KERBIN_SYSTEM_BODY_NAMES
+from .locations import ALL_EVENTS, EVENT_BY_NAME, EventName, KERBIN_SYSTEM_BODY_NAMES
 from .rocket_math import (
     StageResult, find_optimal_stage, terminal_velocity,
     FILL_LEVELS, merge_edge_groups,
@@ -1273,7 +1273,7 @@ def _assess_one_body(
         if not profiles:
             # Flag plant without explicit profiles: fall back to crewed landing
             if event.mission_type == "flag_plant":
-                prof.access[event.name] = prof.access.get("Crewed Landing", False)
+                prof.access[event.name] = prof.access.get(EventName.CREWED_LANDING, False)
             continue
 
         # High-gravity sample return requires ladder for EVA re-boarding
@@ -1285,7 +1285,7 @@ def _assess_one_body(
         if not ok and not prof.blocking_reason:
             prof.blocking_reason = f"{event.mission_type}: {'; '.join(reasons)}"
 
-    if not prof.access.get("Orbit", False) and not prof.blocking_reason:
+    if not prof.access.get(EventName.ORBIT, False) and not prof.blocking_reason:
         prof.blocking_reason = "orbit not achievable"
 
     return prof

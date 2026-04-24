@@ -16,7 +16,7 @@ from worlds.ksp1.items import (
 )
 from worlds.ksp1.rules import _accessible_science, _can_afford_tier
 from worlds.ksp1.tech_tree import TECH_NODES, TIER_TO_BAND, MAX_RD_BAND, cumulative_tier_cost
-from worlds.ksp1.locations import TechTreeLocation
+from worlds.ksp1.locations import EventName, TechTreeLocation
 from worlds.ksp1.options import Difficulty
 from worlds.ksp1.capability import get_capability, explain_body_unreachable
 
@@ -139,14 +139,14 @@ class TestCapabilityCache(KSP1TestBase):
         # Collect nothing — capability should be minimal (clamps pre-granted by option)
         cap_empty = get_capability(state, self.player)
         empty_reachable = sum(
-            1 for bp in cap_empty.bodies.values() if bp.access.get("Orbit", False)
+            1 for bp in cap_empty.bodies.values() if bp.access.get(EventName.ORBIT, False)
         )
 
         # Collect all items
         self.collect_all_but([])
         cap_full = get_capability(state, self.player)
         full_reachable = sum(
-            1 for bp in cap_full.bodies.values() if bp.access.get("Orbit", False)
+            1 for bp in cap_full.bodies.values() if bp.access.get(EventName.ORBIT, False)
         )
 
         self.assertGreater(
@@ -162,12 +162,12 @@ class TestCapabilityCache(KSP1TestBase):
         state = self.multiworld.state
 
         cap_before = get_capability(state, self.player)
-        reachable_before = sum(1 for bp in cap_before.bodies.values() if bp.access.get("Orbit", False))
+        reachable_before = sum(1 for bp in cap_before.bodies.values() if bp.access.get(EventName.ORBIT, False))
 
         # Add a Mainsail — one of the most powerful engines
         self.collect_by_name('RE-M3 "Mainsail" Liquid Fuel Engine')
         cap_after = get_capability(state, self.player)
-        reachable_after = sum(1 for bp in cap_after.bodies.values() if bp.access.get("Orbit", False))
+        reachable_after = sum(1 for bp in cap_after.bodies.values() if bp.access.get(EventName.ORBIT, False))
 
         # After adding a big engine, at least Kerbin must be newly orbitabile
         self.assertGreaterEqual(

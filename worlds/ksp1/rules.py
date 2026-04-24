@@ -27,6 +27,7 @@ from .capability import get_capability
 from .items import ITEM_TABLE, PROGRESSIVE_RD_NAME, PROGRESSIVE_PART_ITEM_NAMES, SCIENCE_PACK_NAMES
 from .locations import (
     EVENT_BY_NAME,
+    EventName,
     KERBIN_LOCATIONS,
     KERBIN_SYSTEM_BODY_NAMES,
     KSC_BIOME_NAMES,
@@ -90,11 +91,11 @@ def _accessible_science(state: CollectionState, player: int, difficulty: int) ->
     total = 0.0
     for body in ALL_BODIES:
         body_cap = cap.bodies.get(body.name)
-        if body_cap is None or not body_cap.access.get("Orbit", False):
+        if body_cap is None or not body_cap.access.get(EventName.ORBIT, False):
             continue
         total += science_budget(
             body, cap.has_thermometer, cap.has_barometer,
-            cap.has_capsule, body_cap.access.get("Crewed Landing", False),
+            cap.has_capsule, body_cap.access.get(EventName.CREWED_LANDING, False),
         )
 
     return total * _SCIENCE_SAFETY[difficulty]
@@ -119,11 +120,11 @@ def _make_science_threshold_rule(
         total = 0.0
         for body in ALL_BODIES:
             body_cap = cap.bodies.get(body.name)
-            if body_cap is None or not body_cap.access.get("Orbit", False):
+            if body_cap is None or not body_cap.access.get(EventName.ORBIT, False):
                 continue
             total += science_budget(
                 body, cap.has_thermometer, cap.has_barometer,
-                cap.has_capsule, body_cap.access.get("Crewed Landing", False),
+                cap.has_capsule, body_cap.access.get(EventName.CREWED_LANDING, False),
             )
         return total * safety >= threshold
     return rule
@@ -264,9 +265,9 @@ def _mission_rule_for_event(
     """
     # Eve surface ascent is beyond the capability model.
     # Tylo/Laythe returns cascade too much payload mass for the optimizer.
-    if body_name == "Eve" and event in ("Return", "Sample Return"):
+    if body_name == "Eve" and event in (EventName.RETURN, EventName.SAMPLE_RETURN):
         return _make_all_parts_rule(player)
-    if body_name in ("Tylo", "Laythe") and event in ("Return", "Sample Return"):
+    if body_name in ("Tylo", "Laythe") and event in (EventName.RETURN, EventName.SAMPLE_RETURN):
         return _make_all_parts_rule(player)
 
     event_def = EVENT_BY_NAME.get(event)
@@ -363,7 +364,7 @@ def _set_item_pacing_rules(world: KSP1World, player: int, difficulty: int) -> No
     for name in KERBIN_LOCATION_NAMES:
         add_item_rule(world.get_location(name), power_rule)
     # Early Kerbin mission events (everything except Flyby/SOI Leave which need escape)
-    for event in ("Orbit", "EVA in Orbit", "Landing", "Crewed Landing", "Flag Plant", "Return", "Sample Return"):
+    for event in (EventName.ORBIT, EventName.EVA_IN_ORBIT, EventName.LANDING, EventName.CREWED_LANDING, EventName.FLAG_PLANT, EventName.RETURN, EventName.SAMPLE_RETURN):
         for loc in event_locations("Kerbin", event):
             add_item_rule(world.get_location(str(loc)), power_rule)
 
@@ -426,6 +427,16 @@ _ALL_LANDABLE_BODIES: tuple[str, ...] = tuple(
 # Bodies whose return/sample-return rules use the all-parts proxy
 # (capability system can't model their ascent profiles).
 _ALL_PARTS_PROXY_BODIES: frozenset[str] = frozenset({"Eve", "Tylo", "Laythe"})
+
+# Import-time validation: hardcoded body names must exist in the body database.
+assert all(b in BODY_BY_NAME for b in _STANDARD_RETURN_BODIES), (
+    f"Unknown body in _STANDARD_RETURN_BODIES: "
+    f"{[b for b in _STANDARD_RETURN_BODIES if b not in BODY_BY_NAME]}"
+)
+assert all(b in BODY_BY_NAME for b in _ALL_PARTS_PROXY_BODIES), (
+    f"Unknown body in _ALL_PARTS_PROXY_BODIES: "
+    f"{[b for b in _ALL_PARTS_PROXY_BODIES if b not in BODY_BY_NAME]}"
+)
 
 
 @dataclass(frozen=True)
@@ -538,11 +549,11 @@ def goal_spec_location_names(spec: GoalSpec) -> list[str]:
     """Return sentinel location names whose checks indicate goal completion."""
     names: list[str] = []
     for b in spec.flag_bodies:
-        names.append(str(MissionLocation(b, "Flag Plant", 1)))
+        names.append(str(MissionLocation(b, EventName.FLAG_PLANT, 1)))
     for b in spec.return_bodies:
-        names.append(str(MissionLocation(b, "Return", 1)))
+        names.append(str(MissionLocation(b, EventName.RETURN, 1)))
     for b in spec.sample_return_bodies:
-        names.append(str(MissionLocation(b, "Sample Return", 1)))
+        names.append(str(MissionLocation(b, EventName.SAMPLE_RETURN, 1)))
     if spec.complete_tech_tree:
         for n in LEAF_TECH_NODES:
             names.append(str(TechTreeLocation(n.display_name, 1)))
@@ -588,7 +599,7 @@ def _make_goal_spec_rule(
             cap = get_capability(state, player)
             for b in flag_bodies:
                 bp = cap.bodies.get(b)
-                if bp is None or not bp.access.get("Flag Plant", False):
+                if bp is None or not bp.access.get(EventName.FLAG_PLANT, False):
                     return False
             return True
         sub_rules.append(flag_rule)
@@ -602,7 +613,7 @@ def _make_goal_spec_rule(
             cap = get_capability(state, player)
             for b in nr:
                 bp = cap.bodies.get(b)
-                if bp is None or not bp.access.get("Return", False):
+                if bp is None or not bp.access.get(EventName.RETURN, False):
                     return False
             return True
         sub_rules.append(return_rule)
@@ -618,7 +629,7 @@ def _make_goal_spec_rule(
             cap = get_capability(state, player)
             for b in ns:
                 bp = cap.bodies.get(b)
-                if bp is None or not bp.access.get("Sample Return", False):
+                if bp is None or not bp.access.get(EventName.SAMPLE_RETURN, False):
                     return False
             return True
         sub_rules.append(sample_rule)

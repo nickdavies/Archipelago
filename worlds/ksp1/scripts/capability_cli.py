@@ -30,7 +30,7 @@ from worlds.ksp1.capability import (
     compute_capability_from_items, evaluate_mission_detailed,
     get_capability,
 )
-from worlds.ksp1.locations import MissionLocation
+from worlds.ksp1.locations import EventName, MissionLocation
 from worlds.ksp1.world import KSP1World
 
 from worlds.ksp1.scripts.capability_format import (
@@ -157,11 +157,11 @@ def build_world_and_state(ap: APState) -> tuple[MultiWorld, int]:
             parsed = MissionLocation.parse(loc_str)
             if parsed is None:
                 continue
-            if parsed.event == "Flag Plant":
+            if parsed.event == EventName.FLAG_PLANT:
                 flag_bodies.add(parsed.body)
-            elif parsed.event == "Sample Return":
+            elif parsed.event == EventName.SAMPLE_RETURN:
                 sample_return_bodies.add(parsed.body)
-            elif parsed.event == "Return":
+            elif parsed.event == EventName.RETURN:
                 return_bodies.add(parsed.body)
         options["flag_bodies"] = flag_bodies
         options["return_bodies"] = return_bodies
