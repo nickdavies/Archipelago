@@ -32,9 +32,11 @@ from .locations import (
     KSC_BIOME_NAMES,
     KERBIN_LOCATION_NAMES,
     MISSION_LOCATION_NAMES,
+    MissionLocation,
     STARTING_INV_NAMES,
     TECH_SLOTS_BY_DIFFICULTY,
-    event_location_names,
+    TechTreeLocation,
+    event_locations,
 )
 from .options import Difficulty, Goal, ItemPacing
 from .tech_tree import MAX_TIER, MAX_RD_BAND, cumulative_tier_cost, TECH_NODES, LEAF_TECH_NODES
@@ -300,9 +302,8 @@ def _set_mission_rules(world: KSP1World, player: int) -> None:
     for body in ALL_BODIES:
         for event in get_body_events(body):
             rule = _mission_rule_for_event(player, body.name, event)
-            for loc_name in event_location_names(body.name, event):
-                loc = world.get_location(loc_name)
-                loc.access_rule = rule
+            for loc in event_locations(body.name, event):
+                world.get_location(str(loc)).access_rule = rule
 
 
 # ---------------------------------------------------------------------------
@@ -371,8 +372,8 @@ def _set_item_pacing_rules(world: KSP1World, player: int, difficulty: int) -> No
         add_item_rule(world.get_location(name), power_rule)
     # Early Kerbin mission events (everything except Flyby/SOI Leave which need escape)
     for event in ("Orbit", "EVA in Orbit", "Landing", "Crewed Landing", "Flag Plant", "Return", "Sample Return"):
-        for slot in range(1, EVENT_BY_NAME[event].scale + 1):
-            add_item_rule(world.get_location(f"Kerbin {event} {slot}"), power_rule)
+        for loc in event_locations("Kerbin", event):
+            add_item_rule(world.get_location(str(loc)), power_rule)
 
     # Band C: Early tech tree (tiers 1-3) — reject tier 2, strict mode only
     if pacing >= ItemPacing.option_strict:
@@ -380,8 +381,8 @@ def _set_item_pacing_rules(world: KSP1World, player: int, difficulty: int) -> No
             if node.tier > _EARLY_TECH_MAX_TIER:
                 continue
             for slot in range(1, num_slots + 1):
-                loc = world.get_location(f"{node.display_name} {slot}")
-                add_item_rule(loc, _make_power_rule(player, item_tiers, max_tier=1))
+                name = str(TechTreeLocation(node.display_name, slot))
+                add_item_rule(world.get_location(name), _make_power_rule(player, item_tiers, max_tier=1))
 
     # Science pack restriction on early tech tree (both gentle and strict)
     science_rule = _make_science_pack_rule()
@@ -389,7 +390,8 @@ def _set_item_pacing_rules(world: KSP1World, player: int, difficulty: int) -> No
         if node.tier > _EARLY_TECH_MAX_TIER:
             continue
         for slot in range(1, num_slots + 1):
-            add_item_rule(world.get_location(f"{node.display_name} {slot}"), science_rule)
+            name = str(TechTreeLocation(node.display_name, slot))
+            add_item_rule(world.get_location(name), science_rule)
 
 
 # ---------------------------------------------------------------------------
@@ -405,13 +407,14 @@ def _set_interplanetary_item_rules(world: KSP1World, player: int) -> None:
     can still fill these slots — avoids FillError at higher difficulties.
     """
     from worlds.generic.Rules import add_item_rule
-    from .locations import INTERPLANETARY_LOCATION_NAMES
+    from .locations import MISSION_LOCATIONS
 
     def no_advancement(item) -> bool:
         return item.player != player or not item.advancement
 
-    for name in INTERPLANETARY_LOCATION_NAMES:
-        add_item_rule(world.get_location(name), no_advancement)
+    for loc in MISSION_LOCATIONS:
+        if loc.body not in KERBIN_SYSTEM_BODY_NAMES:
+            add_item_rule(world.get_location(str(loc)), no_advancement)
 
 
 # ---------------------------------------------------------------------------
@@ -543,14 +546,14 @@ def goal_spec_location_names(spec: GoalSpec) -> list[str]:
     """Return sentinel location names whose checks indicate goal completion."""
     names: list[str] = []
     for b in spec.flag_bodies:
-        names.append(f"{b} Flag Plant 1")
+        names.append(str(MissionLocation(b, "Flag Plant", 1)))
     for b in spec.return_bodies:
-        names.append(f"{b} Return 1")
+        names.append(str(MissionLocation(b, "Return", 1)))
     for b in spec.sample_return_bodies:
-        names.append(f"{b} Sample Return 1")
+        names.append(str(MissionLocation(b, "Sample Return", 1)))
     if spec.complete_tech_tree:
         for n in LEAF_TECH_NODES:
-            names.append(f"{n.display_name} 1")
+            names.append(str(TechTreeLocation(n.display_name, 1)))
     return names
 
 

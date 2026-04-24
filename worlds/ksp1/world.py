@@ -9,7 +9,7 @@ from .capability import RocketCapability
 from .bodies import ALL_BODIES
 from .items import ITEM_NAME_TO_ID
 from .parts import PROGRESSIVE_PART_TIERS
-from .locations import LOCATION_NAME_TO_ID, MAX_TECH_SLOTS, TECH_SLOTS_BY_DIFFICULTY
+from .locations import LOCATION_NAME_TO_ID, MAX_TECH_SLOTS, MissionLocation, TECH_SLOTS_BY_DIFFICULTY, TechTreeLocation
 from .options import KSP1Options
 from .tech_tree import MAX_TIER, NODES_BY_TIER, TECH_NODES, TIER_TO_BAND
 
@@ -82,7 +82,7 @@ class KSP1World(World):
         self.goal_spec = resolve_goal_spec(self.options)
         if self.options.exclude_late_tech_tree:
             late_tier_locs: set[str] = {
-                f"{node.display_name} {slot}"
+                str(TechTreeLocation(node.display_name, slot))
                 for node in NODES_BY_TIER.get(MAX_TIER, [])
                 for slot in range(1, MAX_TECH_SLOTS + 1)
             }
@@ -143,13 +143,16 @@ class KSP1World(World):
             flag_bodies: set[str] = set()
             return_bodies: set[str] = set()
             sample_return_bodies: set[str] = set()
-            for loc in slot_data.get("goal_locations", []):
-                if loc.endswith(" Flag Plant 1"):
-                    flag_bodies.add(loc.replace(" Flag Plant 1", ""))
-                elif loc.endswith(" Sample Return 1"):
-                    sample_return_bodies.add(loc.replace(" Sample Return 1", ""))
-                elif loc.endswith(" Return 1"):
-                    return_bodies.add(loc.replace(" Return 1", ""))
+            for loc_str in slot_data.get("goal_locations", []):
+                parsed = MissionLocation.parse(loc_str)
+                if parsed is None:
+                    continue
+                if parsed.event == "Flag Plant":
+                    flag_bodies.add(parsed.body)
+                elif parsed.event == "Sample Return":
+                    sample_return_bodies.add(parsed.body)
+                elif parsed.event == "Return":
+                    return_bodies.add(parsed.body)
             self.options.flag_bodies.value = flag_bodies
             self.options.return_bodies.value = return_bodies
             self.options.sample_return_bodies.value = sample_return_bodies

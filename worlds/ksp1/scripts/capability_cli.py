@@ -30,6 +30,7 @@ from worlds.ksp1.capability import (
     compute_capability_from_items, evaluate_mission_detailed,
     get_capability,
 )
+from worlds.ksp1.locations import MissionLocation
 from worlds.ksp1.world import KSP1World
 
 from worlds.ksp1.scripts.capability_format import (
@@ -152,13 +153,16 @@ def build_world_and_state(ap: APState) -> tuple[MultiWorld, int]:
         flag_bodies = set()
         return_bodies = set()
         sample_return_bodies = set()
-        for loc in sd.get("goal_locations", []):
-            if loc.endswith(" Flag Plant 1"):
-                flag_bodies.add(loc.replace(" Flag Plant 1", ""))
-            elif loc.endswith(" Sample Return 1"):
-                sample_return_bodies.add(loc.replace(" Sample Return 1", ""))
-            elif loc.endswith(" Return 1"):
-                return_bodies.add(loc.replace(" Return 1", ""))
+        for loc_str in sd.get("goal_locations", []):
+            parsed = MissionLocation.parse(loc_str)
+            if parsed is None:
+                continue
+            if parsed.event == "Flag Plant":
+                flag_bodies.add(parsed.body)
+            elif parsed.event == "Sample Return":
+                sample_return_bodies.add(parsed.body)
+            elif parsed.event == "Return":
+                return_bodies.add(parsed.body)
         options["flag_bodies"] = flag_bodies
         options["return_bodies"] = return_bodies
         options["sample_return_bodies"] = sample_return_bodies

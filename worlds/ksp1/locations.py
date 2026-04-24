@@ -56,6 +56,57 @@ class KSP1Location(Location):
 
 
 # ---------------------------------------------------------------------------
+# Structured location types
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class MissionLocation:
+    """Structured representation of a per-body mission event location.
+
+    Canonical format: "{body} {event} {slot}" — e.g. "Mun Orbit 1".
+    """
+    body: str       # "Mun", "Duna", etc.
+    event: str      # "Orbit", "Flag Plant", "Sample Return", etc.
+    slot: int       # 1-based
+
+    def __str__(self) -> str:
+        return f"{self.body} {self.event} {self.slot}"
+
+    @classmethod
+    def parse(cls, s: str) -> MissionLocation | None:
+        """Parse 'Body Event N' → MissionLocation, or None if not parseable."""
+        for body in ALL_BODIES:
+            prefix = body.name + " "
+            if s.startswith(prefix):
+                rest = s[len(prefix):]
+                # Last token is the slot number, everything before is the event
+                parts = rest.rsplit(" ", 1)
+                if len(parts) == 2:
+                    event_name, slot_str = parts
+                    try:
+                        slot = int(slot_str)
+                    except ValueError:
+                        return None
+                    if event_name in EVENT_BY_NAME:
+                        return cls(body.name, event_name, slot)
+                return None
+        return None
+
+
+@dataclass(frozen=True)
+class TechTreeLocation:
+    """Structured representation of a tech tree slot location.
+
+    Canonical format: "{node_name} {slot}" — e.g. "Basic Rocketry 3".
+    """
+    node_name: str  # "Basic Rocketry", "General Rocketry", etc.
+    slot: int
+
+    def __str__(self) -> str:
+        return f"{self.node_name} {self.slot}"
+
+
+# ---------------------------------------------------------------------------
 # Event types — single source of truth for all event metadata
 # ---------------------------------------------------------------------------
 
@@ -101,12 +152,13 @@ STARTING_INV_NAMES: list[str] = [
     f"Starting Inventory {i + 1}" for i in range(MAX_STARTING_INV)
 ]
 
-# Location names for tech tree slots: "{display_name} {slot}" for slots 1..MAX_TECH_SLOTS.
-TECH_TREE_LOCATION_NAMES: list[str] = [
-    f"{node.display_name} {slot}"
+# Structured tech tree locations and their string names.
+TECH_TREE_LOCATIONS: list[TechTreeLocation] = [
+    TechTreeLocation(node.display_name, slot)
     for node in TECH_NODES
     for slot in range(1, MAX_TECH_SLOTS + 1)
 ]
+TECH_TREE_LOCATION_NAMES: list[str] = [str(t) for t in TECH_TREE_LOCATIONS]
 
 assert len(TECH_TREE_LOCATION_NAMES) == 248  # 62 nodes × 4 slots
 
@@ -176,20 +228,21 @@ def get_body_events(body) -> tuple[str, ...]:
     return tuple(e.name for e in ALL_EVENTS if not e.requires_landing)
 
 
-def _build_mission_locations() -> list[str]:
+def _build_mission_locations() -> list[MissionLocation]:
     """
-    Generate all per-body event-scaled mission location names.
+    Generate all per-body event-scaled mission locations.
     Order: body order in ALL_BODIES, then events, then slots.
     """
-    names: list[str] = []
+    locs: list[MissionLocation] = []
     for body in ALL_BODIES:
         for event in get_body_events(body):
             for slot in range(1, EVENT_BY_NAME[event].scale + 1):
-                names.append(f"{body.name} {event} {slot}")
-    return names
+                locs.append(MissionLocation(body.name, event, slot))
+    return locs
 
 
-MISSION_LOCATION_NAMES: list[str] = _build_mission_locations()
+MISSION_LOCATIONS: list[MissionLocation] = _build_mission_locations()
+MISSION_LOCATION_NAMES: list[str] = [str(m) for m in MISSION_LOCATIONS]
 
 # 15 landable × 16 + 2 non-landable × 4 = 248
 assert len(MISSION_LOCATION_NAMES) == 248, (
@@ -201,15 +254,6 @@ KERBIN_SYSTEM_BODY_NAMES: frozenset[str] = frozenset(
     b.name for b in ALL_BODIES if b.name == "Kerbin" or b.parent == "Kerbin"
 )
 
-# All mission locations outside the Kerbin system.
-# Used by generate_early() to exclude interplanetary progression for short goals.
-INTERPLANETARY_LOCATION_NAMES: frozenset[str] = frozenset(
-    f"{body.name} {event} {slot}"
-    for body in ALL_BODIES
-    if body.name not in KERBIN_SYSTEM_BODY_NAMES
-    for event in get_body_events(body)
-    for slot in range(1, EVENT_BY_NAME[event].scale + 1)
-)
 
 # ---------------------------------------------------------------------------
 # Build the full LOCATION_TABLE (name → id offset)
@@ -256,9 +300,9 @@ LOCATION_NAME_TO_ID: dict[str, int] = {
 # Helper: which locations belong to a given body + event?
 # ---------------------------------------------------------------------------
 
-def event_location_names(body_name: str, event: str) -> list[str]:
-    """Return the list of location names for one body/event combination."""
-    return [f"{body_name} {event} {i}" for i in range(1, EVENT_BY_NAME[event].scale + 1)]
+def event_locations(body_name: str, event: str) -> list[MissionLocation]:
+    """Return the list of MissionLocation objects for one body/event combination."""
+    return [MissionLocation(body_name, event, i) for i in range(1, EVENT_BY_NAME[event].scale + 1)]
 
 
 # ---------------------------------------------------------------------------
@@ -312,6 +356,6 @@ def create_all_locations(world: KSP1World) -> None:
         region = world.get_region(node.display_name)
         node_locs: dict[str, int] = {}
         for slot in range(1, num_tech_slots + 1):
-            name = f"{node.display_name} {slot}"
+            name = str(TechTreeLocation(node.display_name, slot))
             node_locs[name] = LOCATION_NAME_TO_ID[name]
         region.add_locations(node_locs, KSP1Location)
