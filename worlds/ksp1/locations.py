@@ -114,25 +114,41 @@ class TechTreeLocation:
 class EventDef:
     """Metadata for a body mission event type.
 
-    One row per event. All consumers (locations, rules, capability, CLI)
-    derive their needs from this table.
+    One row per event — single source of truth. All consumers (locations,
+    rules, capability, CLI) derive their needs from this table.
+
+    prereq_event: if set, evaluation is skipped when this event is False
+                  for the body. Prereqs must appear before dependents in
+                  ALL_EVENTS.
     """
     name: str
     scale: int                       # location slots per body for this event
-    profile_fields: tuple[str, ...]  # BodyAccessProfile field names (OR logic for rules)
+    mission_type: str                # key into MISSION_PROFILES
+    crewed: bool | None              # None=try both, True=crewed only, False=unmanned only
     requires_landing: bool           # only applies to landable bodies
+    prereq_event: str | None = None  # skip if this event is False for the body
 
 ALL_EVENTS: tuple[EventDef, ...] = (
-    EventDef("Flyby",          1, ("can_escape",),                              False),
-    EventDef("SOI Leave",      1, ("can_escape",),                              False),
-    EventDef("Orbit",          1, ("can_orbit_low",),                           False),
-    EventDef("EVA in Orbit",   1, ("can_orbit_crewed",),                        False),
-    EventDef("Landing",        2, ("can_land_unmanned", "can_land_crewed"),      True),
-    EventDef("Crewed Landing", 2, ("can_land_crewed",),                         True),
-    EventDef("Flag Plant",     2, ("can_flag_plant",),                          True),
-    EventDef("Return",         3, ("can_return_to_kerbin", "can_return_crewed"), True),
-    EventDef("Sample Return",  3, ("can_sample_return",),                       True),
+    EventDef("Orbit",          1, "orbit",         None,  False),
+    EventDef("EVA in Orbit",   1, "orbit",         True,  False, "Orbit"),
+    EventDef("Flyby",          1, "escape",        None,  False),
+    EventDef("SOI Leave",      1, "escape",        None,  False),
+    EventDef("Landing",        2, "land",          None,  True,  "Orbit"),
+    EventDef("Crewed Landing", 2, "land",          True,  True,  "Orbit"),
+    EventDef("Flag Plant",     2, "flag_plant",    True,  True,  "Crewed Landing"),
+    EventDef("Return",         3, "return",        None,  True,  "Landing"),
+    EventDef("Sample Return",  3, "sample_return", True,  True,  "Crewed Landing"),
 )
+
+# Import-time assertion: prereqs must appear before dependents in ALL_EVENTS
+_seen_events: set[str] = set()
+for _ev in ALL_EVENTS:
+    if _ev.prereq_event is not None:
+        assert _ev.prereq_event in _seen_events, (
+            f"EventDef {_ev.name!r} prereq {_ev.prereq_event!r} not defined earlier in ALL_EVENTS"
+        )
+    _seen_events.add(_ev.name)
+del _seen_events, _ev
 
 EVENT_BY_NAME: dict[str, EventDef] = {e.name: e for e in ALL_EVENTS}
 

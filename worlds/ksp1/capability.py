@@ -74,9 +74,6 @@ _ION_MAX_SOLAR_AU: float = 1.0  # only consider Dawn closer than Kerbin
 _MIN_EVA_JETPACK_TWR: float = 1.05
 
 
-# Mission types that require a landable body
-_LANDABLE_MISSION_TYPES: frozenset[str] = frozenset({"land", "flag_plant", "sample_return"})
-
 # Sounding rocket parameters
 _SOUNDING_MIN_TWR: float = 1.1   # minimum sea-level TWR to count as a viable rocket
 
@@ -169,70 +166,14 @@ class EquipmentFlags:
 
 @dataclass
 class BodyAccessProfile:
-    can_orbit_low: bool = False
-    can_orbit_crewed: bool = False
-    can_escape: bool = False
-    can_land_unmanned: bool = False
-    can_land_crewed: bool = False
-    can_flag_plant: bool = False
-    can_return_to_kerbin: bool = False
-    can_return_crewed: bool = False
-    can_sample_return: bool = False
+    access: dict[str, bool] = field(default_factory=dict)
     blocking_reason: Optional[str] = None
 
 
-# ---------------------------------------------------------------------------
-# Canonical event → mission mapping tables (single source of truth)
-# ---------------------------------------------------------------------------
-
-# Each entry: (field_name, mission_type, crewed, prerequisite_field)
-# prerequisite_field: skip evaluation if this BodyAccessProfile field is False
-_BOOL_SPECS: tuple[tuple[str, str, bool | None, str | None], ...] = (
-    ("can_escape",           "escape",        None,  None),
-    ("can_orbit_low",        "orbit",         None,  None),
-    ("can_orbit_crewed",     "orbit",         True,  "can_orbit_low"),
-    ("can_land_unmanned",    "land",          False, "can_orbit_low"),
-    ("can_land_crewed",      "land",          True,  "can_orbit_low"),
-    ("can_flag_plant",       "flag_plant",    True,  None),
-    ("can_return_to_kerbin", "return",        False, None),
-    ("can_return_crewed",    "return",        True,  None),
-    ("can_sample_return",    "sample_return", True,  None),
-)
-
-# --- Module-level structural assertions ---
-# _BOOL_SPECS and BodyAccessProfile are coupled by field name strings.
-# Fail fast at import time if they drift apart.
-import dataclasses as _dc
-
-_bap_bool_fields = frozenset(
-    f.name for f in _dc.fields(BodyAccessProfile) if f.name != "blocking_reason"
-)
-_spec_fields = frozenset(field for field, _, _, _ in _BOOL_SPECS)
-assert _bap_bool_fields == _spec_fields, (
-    f"BodyAccessProfile fields != _BOOL_SPECS: "
-    f"extra in BAP: {_bap_bool_fields - _spec_fields}, "
-    f"extra in SPECS: {_spec_fields - _bap_bool_fields}"
-)
-_all_event_fields = frozenset(f for e in ALL_EVENTS for f in e.profile_fields)
-assert _all_event_fields <= _spec_fields, (
-    f"EventDef references unknown fields: {_all_event_fields - _spec_fields}"
-)
-del _bap_bool_fields, _spec_fields, _all_event_fields
-
-# --- Derived event → mission mapping (for CLI scripts) ---
-
-_FIELD_TO_MISSION: dict[str, tuple[str, bool | None]] = {
-    field: (mt, crewed) for field, mt, crewed, _ in _BOOL_SPECS
-}
-
-
 def event_mission_info(event_name: str) -> tuple[str, bool | None]:
-    """Derive (mission_type, crewed) for an event from its profile_fields."""
-    event_def = EVENT_BY_NAME[event_name]
-    specs = [_FIELD_TO_MISSION[f] for f in event_def.profile_fields]
-    mt = specs[0][0]
-    crewed_vals = {s[1] for s in specs}
-    return (mt, crewed_vals.pop() if len(crewed_vals) == 1 else None)
+    """Return (mission_type, crewed) for an event. Used by CLI scripts."""
+    ev = EVENT_BY_NAME[event_name]
+    return (ev.mission_type, ev.crewed)
 
 
 @dataclass
@@ -333,16 +274,9 @@ def explain_body_unreachable(state: CollectionState, player: int, body_name: str
     if bp.blocking_reason:
         return f"{body_name}: {bp.blocking_reason}"
     lines = []
-    if not bp.can_orbit_low:
-        lines.append("cannot orbit (low)")
-    if not bp.can_land_unmanned:
-        lines.append("cannot land (unmanned)")
-    if not bp.can_land_crewed:
-        lines.append(f"cannot land (crewed) — has_capsule={cap.has_capsule}")
-    if not bp.can_return_to_kerbin:
-        lines.append("cannot return to Kerbin")
-    if not bp.can_sample_return:
-        lines.append("cannot sample return")
+    for ev in ALL_EVENTS:
+        if not bp.access.get(ev.name, False):
+            lines.append(f"cannot {ev.name}")
     return f"{body_name}: " + ("; ".join(lines) if lines else "fully accessible")
 
 
@@ -1302,9 +1236,9 @@ def _assess_one_body(
     if body.parent is not None:
         parent_prof = computed.get(body.parent)
         # For Kerbin moons: parent orbit must be reachable (Kerbin orbit always is)
-        # For other moons: parent planet must have can_orbit_low
+        # For other moons: parent planet must be orbitally reachable
         if body.parent != "Kerbin" and parent_prof is not None:
-            if not parent_prof.can_orbit_low:
+            if not parent_prof.access.get("Orbit", False):
                 prof.blocking_reason = f"parent {body.parent} orbit unreachable"
                 return prof
 
@@ -1325,34 +1259,33 @@ def _assess_one_body(
     if not has_attitude:
         prof.blocking_reason = "no attitude control"
         return prof
-    # --- Evaluate all capability booleans ---
-    for field, mission_type, crewed, prereq in _BOOL_SPECS:
-        if prereq and not getattr(prof, prereq):
+    # --- Evaluate all events from ALL_EVENTS ---
+    for event in ALL_EVENTS:
+        if event.prereq_event and not prof.access.get(event.prereq_event, False):
             continue
-        if crewed is True and not flags.has_capsule:
+        if event.crewed is True and not flags.has_capsule:
             continue
-        if mission_type in _LANDABLE_MISSION_TYPES:
-            if not body.can_land:
-                continue
+        if event.requires_landing and not body.can_land:
+            continue
 
-        profiles = MISSION_PROFILES.get((body.name, mission_type), [])
+        profiles = MISSION_PROFILES.get((body.name, event.mission_type), [])
 
         if not profiles:
             # Flag plant without explicit profiles: fall back to crewed landing
-            if mission_type == "flag_plant":
-                setattr(prof, field, prof.can_land_crewed)
+            if event.mission_type == "flag_plant":
+                prof.access[event.name] = prof.access.get("Crewed Landing", False)
             continue
 
         # High-gravity sample return requires ladder for EVA re-boarding
-        if mission_type == "sample_return" and body.eva_jetpack_twr < _MIN_EVA_JETPACK_TWR:
+        if event.mission_type == "sample_return" and body.eva_jetpack_twr < _MIN_EVA_JETPACK_TWR:
             profiles = _inject_ladder(profiles)
 
-        ok, reasons = _try_profiles_reason(profiles, flags, diff, mission_type, crewed=crewed)
-        setattr(prof, field, ok)
+        ok, reasons = _try_profiles_reason(profiles, flags, diff, event.mission_type, crewed=event.crewed)
+        prof.access[event.name] = ok
         if not ok and not prof.blocking_reason:
-            prof.blocking_reason = f"{mission_type}: {'; '.join(reasons)}"
+            prof.blocking_reason = f"{event.mission_type}: {'; '.join(reasons)}"
 
-    if not prof.can_orbit_low and not prof.blocking_reason:
+    if not prof.access.get("Orbit", False) and not prof.blocking_reason:
         prof.blocking_reason = "orbit not achievable"
 
     return prof

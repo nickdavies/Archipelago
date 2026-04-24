@@ -90,11 +90,11 @@ def _accessible_science(state: CollectionState, player: int, difficulty: int) ->
     total = 0.0
     for body in ALL_BODIES:
         body_cap = cap.bodies.get(body.name)
-        if body_cap is None or not body_cap.can_orbit_low:
+        if body_cap is None or not body_cap.access.get("Orbit", False):
             continue
         total += science_budget(
             body, cap.has_thermometer, cap.has_barometer,
-            cap.has_capsule, body_cap.can_land_crewed,
+            cap.has_capsule, body_cap.access.get("Crewed Landing", False),
         )
 
     return total * _SCIENCE_SAFETY[difficulty]
@@ -119,11 +119,11 @@ def _make_science_threshold_rule(
         total = 0.0
         for body in ALL_BODIES:
             body_cap = cap.bodies.get(body.name)
-            if body_cap is None or not body_cap.can_orbit_low:
+            if body_cap is None or not body_cap.access.get("Orbit", False):
                 continue
             total += science_budget(
                 body, cap.has_thermometer, cap.has_barometer,
-                cap.has_capsule, body_cap.can_land_crewed,
+                cap.has_capsule, body_cap.access.get("Crewed Landing", False),
             )
         return total * safety >= threshold
     return rule
@@ -275,17 +275,9 @@ def _mission_rule_for_event(
             return False
         return rule
 
-    fields = event_def.profile_fields
-    if len(fields) == 1:
-        field = fields[0]
-        def rule(state: CollectionState) -> bool:
-            bp = get_capability(state, player).bodies.get(body_name)
-            return bp is not None and getattr(bp, field)
-        return rule
-
     def rule(state: CollectionState) -> bool:
         bp = get_capability(state, player).bodies.get(body_name)
-        return bp is not None and any(getattr(bp, f) for f in fields)
+        return bp is not None and bp.access.get(event, False)
     return rule
 
 
@@ -596,7 +588,7 @@ def _make_goal_spec_rule(
             cap = get_capability(state, player)
             for b in flag_bodies:
                 bp = cap.bodies.get(b)
-                if bp is None or not bp.can_flag_plant:
+                if bp is None or not bp.access.get("Flag Plant", False):
                     return False
             return True
         sub_rules.append(flag_rule)
@@ -610,7 +602,7 @@ def _make_goal_spec_rule(
             cap = get_capability(state, player)
             for b in nr:
                 bp = cap.bodies.get(b)
-                if bp is None or not (bp.can_return_to_kerbin or bp.can_return_crewed):
+                if bp is None or not bp.access.get("Return", False):
                     return False
             return True
         sub_rules.append(return_rule)
@@ -626,7 +618,7 @@ def _make_goal_spec_rule(
             cap = get_capability(state, player)
             for b in ns:
                 bp = cap.bodies.get(b)
-                if bp is None or not bp.can_sample_return:
+                if bp is None or not bp.access.get("Sample Return", False):
                     return False
             return True
         sub_rules.append(sample_rule)

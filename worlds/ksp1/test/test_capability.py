@@ -307,7 +307,7 @@ class TestLaunchClampGate(unittest.TestCase):
         flags = self._interplanetary_flags_no_clamp()
         body = BODY_BY_NAME["Duna"]
         result = _assess_one_body(body, flags, _normal_diff(), computed={})
-        self.assertFalse(result.can_orbit_low,
+        self.assertFalse(result.access.get("Orbit", False),
                          "Duna orbit should be blocked without launch clamp")
         self.assertIn("launch clamp", (result.blocking_reason or "").lower())
 
@@ -321,7 +321,7 @@ class TestLaunchClampGate(unittest.TestCase):
         # Mun orbit should still be assessable (clamp not required)
         # It may fail for other reasons (no landing legs for land check),
         # but the orbit check itself should proceed
-        self.assertIsInstance(result.can_orbit_low, bool)
+        self.assertIsInstance(result.access.get("Orbit", False), bool)
         # No launch clamp blocking reason for Mun
         self.assertNotIn("launch clamp", (result.blocking_reason or "").lower())
 
@@ -459,11 +459,11 @@ class TestParentGating(unittest.TestCase):
         )
         # Eve orbit blocked (computed as False)
         computed = {
-            "Eve": type("BodyAccessProfile", (), {"can_orbit_low": False})()
+            "Eve": BodyAccessProfile(access={"Orbit": False})
         }
         gilly = BODY_BY_NAME["Gilly"]
         result = _assess_one_body(gilly, flags, _normal_diff(), computed)  # type: ignore[arg-type]
-        self.assertFalse(result.can_orbit_low)
+        self.assertFalse(result.access.get("Orbit", False))
         self.assertIn("parent", (result.blocking_reason or "").lower())
 
     def test_gilly_accessible_if_eve_orbit_ok(self) -> None:
@@ -475,7 +475,7 @@ class TestParentGating(unittest.TestCase):
             relay_tier=3, launch_clamp=True, decoupler_stack=True,
         )
         computed = {
-            "Eve": type("BodyAccessProfile", (), {"can_orbit_low": True})()
+            "Eve": BodyAccessProfile(access={"Orbit": True})
         }
         gilly = BODY_BY_NAME["Gilly"]
         result = _assess_one_body(gilly, flags, _normal_diff(), computed)  # type: ignore[arg-type]
@@ -614,7 +614,7 @@ class TestNoEngines(unittest.TestCase):
         flags = self._no_engine_flags()
         mun = BODY_BY_NAME["Mun"]
         result = _assess_one_body(mun, flags, _normal_diff(), computed={})
-        self.assertFalse(result.can_orbit_low,
+        self.assertFalse(result.access.get("Orbit", False),
                          "Mun orbit should be False without engines")
 
     def test_all_bodies_orbit_false_without_engines(self) -> None:
@@ -625,7 +625,7 @@ class TestNoEngines(unittest.TestCase):
             if body_name == "Kerbin":
                 continue  # Kerbin is the starting body, always True
             self.assertFalse(
-                prof.can_orbit_low,
+                prof.access.get("Orbit", False),
                 f"{body_name} should not be orbitally reachable without engines",
             )
 
@@ -798,7 +798,7 @@ class TestDunaReturn(unittest.TestCase):
         duna = BODY_BY_NAME["Duna"]
         result = _assess_one_body(duna, flags, _normal_diff(), computed={})
         self.assertTrue(
-            result.can_return_to_kerbin,
+            result.access.get("Return", False),
             f"Duna return should succeed with 3-stage rocket + heat shield + chutes. "
             f"Blocking reason: {result.blocking_reason}",
         )
@@ -851,7 +851,7 @@ class TestInterplanetaryBodies(unittest.TestCase):
         for body_name in ("Mun", "Minmus", "Moho", "Eve", "Duna", "Dres"):
             prof = results[body_name]
             self.assertTrue(
-                prof.can_orbit_low,
+                prof.access.get("Orbit", False),
                 f"{body_name} orbit should be reachable with full kit. "
                 f"Blocking reason: {prof.blocking_reason}",
             )
@@ -864,7 +864,7 @@ class TestInterplanetaryBodies(unittest.TestCase):
         for body_name in ("Jool", "Eeloo"):
             prof = results[body_name]
             self.assertFalse(
-                prof.can_orbit_low,
+                prof.access.get("Orbit", False),
                 f"{body_name} orbit should be blocked at relay_tier=3 (requires tier 4)",
             )
 

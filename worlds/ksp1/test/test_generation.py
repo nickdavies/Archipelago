@@ -100,10 +100,10 @@ class TestScienceBudget(KSP1TestBase):
         from worlds.ksp1.bodies import ALL_BODIES
         self.collect_all_but([])
         cap = get_capability(self.multiworld.state, self.player)
-        reachable = [b.name for b in ALL_BODIES if cap.bodies.get(b.name) and cap.bodies[b.name].can_orbit_low]
+        reachable = [b.name for b in ALL_BODIES if cap.bodies.get(b.name) and cap.bodies[b.name].access.get("Orbit", False)]
         self.assertGreater(
             len(reachable), 1,
-            f"With all items, only {reachable} have can_orbit_low — expected most/all bodies",
+            f"With all items, only {reachable} have Orbit access — expected most/all bodies",
         )
 
     def test_full_state_affords_all_tiers_normal(self):
@@ -139,14 +139,14 @@ class TestCapabilityCache(KSP1TestBase):
         # Collect nothing — capability should be minimal (clamps pre-granted by option)
         cap_empty = get_capability(state, self.player)
         empty_reachable = sum(
-            1 for bp in cap_empty.bodies.values() if bp.can_orbit_low
+            1 for bp in cap_empty.bodies.values() if bp.access.get("Orbit", False)
         )
 
         # Collect all items
         self.collect_all_but([])
         cap_full = get_capability(state, self.player)
         full_reachable = sum(
-            1 for bp in cap_full.bodies.values() if bp.can_orbit_low
+            1 for bp in cap_full.bodies.values() if bp.access.get("Orbit", False)
         )
 
         self.assertGreater(
@@ -162,12 +162,12 @@ class TestCapabilityCache(KSP1TestBase):
         state = self.multiworld.state
 
         cap_before = get_capability(state, self.player)
-        reachable_before = sum(1 for bp in cap_before.bodies.values() if bp.can_orbit_low)
+        reachable_before = sum(1 for bp in cap_before.bodies.values() if bp.access.get("Orbit", False))
 
         # Add a Mainsail — one of the most powerful engines
         self.collect_by_name('RE-M3 "Mainsail" Liquid Fuel Engine')
         cap_after = get_capability(state, self.player)
-        reachable_after = sum(1 for bp in cap_after.bodies.values() if bp.can_orbit_low)
+        reachable_after = sum(1 for bp in cap_after.bodies.values() if bp.access.get("Orbit", False))
 
         # After adding a big engine, at least Kerbin must be newly orbitabile
         self.assertGreaterEqual(
