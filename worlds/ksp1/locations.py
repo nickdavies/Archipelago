@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING
 
 from BaseClasses import Location
 
-from .bodies import ALL_BODIES, BodyName
+from .bodies import ALL_BODIES, BodyName, MissionType
 from .tech_tree import TECH_NODES
 
 if TYPE_CHECKING:
@@ -137,21 +137,21 @@ class EventDef:
     """
     name: EventName
     scale: int                            # location slots per body for this event
-    mission_type: str                     # key into MISSION_PROFILES
+    mission_type: MissionType             # key into MISSION_PROFILES
     crewed: bool | None                   # None=try both, True=crewed only, False=unmanned only
     requires_landing: bool                # only applies to landable bodies
     prereq_event: EventName | None = None # skip if this event is False for the body
 
 ALL_EVENTS: tuple[EventDef, ...] = (
-    EventDef(EventName.ORBIT,          1, "orbit",         None,  False),
-    EventDef(EventName.EVA_IN_ORBIT,   1, "orbit",         True,  False, EventName.ORBIT),
-    EventDef(EventName.FLYBY,          1, "escape",        None,  False),
-    EventDef(EventName.SOI_LEAVE,      1, "escape",        None,  False),
-    EventDef(EventName.LANDING,        2, "land",          None,  True,  EventName.ORBIT),
-    EventDef(EventName.CREWED_LANDING, 2, "land",          True,  True,  EventName.ORBIT),
-    EventDef(EventName.FLAG_PLANT,     2, "flag_plant",    True,  True,  EventName.CREWED_LANDING),
-    EventDef(EventName.RETURN,         3, "return",        None,  True,  EventName.LANDING),
-    EventDef(EventName.SAMPLE_RETURN,  3, "sample_return", True,  True,  EventName.CREWED_LANDING),
+    EventDef(EventName.ORBIT,          1, MissionType.ORBIT,         None,  False),
+    EventDef(EventName.EVA_IN_ORBIT,   1, MissionType.ORBIT,         True,  False, EventName.ORBIT),
+    EventDef(EventName.FLYBY,          1, MissionType.ESCAPE,        None,  False),
+    EventDef(EventName.SOI_LEAVE,      1, MissionType.ESCAPE,        None,  False),
+    EventDef(EventName.LANDING,        2, MissionType.LAND,          None,  True,  EventName.ORBIT),
+    EventDef(EventName.CREWED_LANDING, 2, MissionType.LAND,          True,  True,  EventName.ORBIT),
+    EventDef(EventName.FLAG_PLANT,     2, MissionType.FLAG_PLANT,    True,  True,  EventName.CREWED_LANDING),
+    EventDef(EventName.RETURN,         3, MissionType.RETURN,        None,  True,  EventName.LANDING),
+    EventDef(EventName.SAMPLE_RETURN,  3, MissionType.SAMPLE_RETURN, True,  True,  EventName.CREWED_LANDING),
 )
 
 # Import-time assertion: prereqs must appear before dependents in ALL_EVENTS
@@ -177,6 +177,9 @@ MAX_TECH_SLOTS = 4
 #: Tech tree slots per node, scaled by difficulty.
 #: Keys are Difficulty option values (casual=0, normal=1, expert=2, insane=3).
 TECH_SLOTS_BY_DIFFICULTY: dict[int, int] = {0: 4, 1: 4, 2: 3, 3: 2}
+
+#: Starting inventory slot counts by difficulty.
+STARTING_INV_COUNTS: dict[int, int] = {0: 20, 1: 15, 2: 10, 3: 5}
 
 STARTING_INV_NAMES: list[str] = [
     f"Starting Inventory {i + 1}" for i in range(MAX_STARTING_INV)
@@ -224,23 +227,23 @@ class KerbinLocationDef:
     capability_format.py (CLI/tracker display).
     """
     name: str
-    mission_type: str  # sounding, first_launch, first_landing, first_staging, splashdown
+    mission_type: MissionType
     threshold_km: float | None = None
 
 
 KERBIN_LOCATIONS: tuple[KerbinLocationDef, ...] = (
-    KerbinLocationDef("Kerbin First Launch", "first_launch"),
-    KerbinLocationDef("Kerbin First Landing", "first_landing"),
-    KerbinLocationDef("Kerbin First Crash", "sounding", 0.1),
-    KerbinLocationDef("Kerbin 5km Altitude", "sounding", 5.0),
-    KerbinLocationDef("Kerbin 15km Altitude", "sounding", 15.0),
-    KerbinLocationDef("Kerbin 25km Altitude", "sounding", 25.0),
-    KerbinLocationDef("Kerbin 35km Altitude", "sounding", 35.0),
-    KerbinLocationDef("Kerbin 45km Altitude", "sounding", 45.0),
-    KerbinLocationDef("Kerbin 55km Altitude", "sounding", 55.0),
-    KerbinLocationDef("Kerbin 70km Altitude", "sounding", 70.0),
-    KerbinLocationDef("Kerbin Splashdown", "splashdown", 1.0),
-    KerbinLocationDef("Kerbin First Staging", "first_staging"),
+    KerbinLocationDef("Kerbin First Launch", MissionType.FIRST_LAUNCH),
+    KerbinLocationDef("Kerbin First Landing", MissionType.FIRST_LANDING),
+    KerbinLocationDef("Kerbin First Crash", MissionType.SOUNDING, 0.1),
+    KerbinLocationDef("Kerbin 5km Altitude", MissionType.SOUNDING, 5.0),
+    KerbinLocationDef("Kerbin 15km Altitude", MissionType.SOUNDING, 15.0),
+    KerbinLocationDef("Kerbin 25km Altitude", MissionType.SOUNDING, 25.0),
+    KerbinLocationDef("Kerbin 35km Altitude", MissionType.SOUNDING, 35.0),
+    KerbinLocationDef("Kerbin 45km Altitude", MissionType.SOUNDING, 45.0),
+    KerbinLocationDef("Kerbin 55km Altitude", MissionType.SOUNDING, 55.0),
+    KerbinLocationDef("Kerbin 70km Altitude", MissionType.SOUNDING, 70.0),
+    KerbinLocationDef("Kerbin Splashdown", MissionType.SPLASHDOWN, 1.0),
+    KerbinLocationDef("Kerbin First Staging", MissionType.FIRST_STAGING),
 )
 
 KERBIN_LOCATION_NAMES: list[str] = [loc.name for loc in KERBIN_LOCATIONS]
@@ -348,16 +351,8 @@ def create_all_locations(world: KSP1World) -> None:
     Tech tree slots per node: 2–4 by difficulty.
     All mission locations are always created.
     """
-    from .options import Difficulty
-
     difficulty = world.options.difficulty.value
-    starting_inv_counts = {
-        Difficulty.option_casual: 20,
-        Difficulty.option_normal: 15,
-        Difficulty.option_expert: 10,
-        Difficulty.option_insane: 5,
-    }
-    num_starting = starting_inv_counts[difficulty]
+    num_starting = STARTING_INV_COUNTS[difficulty]
     num_tech_slots = TECH_SLOTS_BY_DIFFICULTY[difficulty]
 
     menu = world.get_region("Menu")

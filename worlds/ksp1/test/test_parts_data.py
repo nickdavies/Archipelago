@@ -8,7 +8,7 @@ import pkgutil
 import unittest
 
 from worlds.ksp1.parts import (
-    PART_DB, PART_REGISTRY, PartMapping, _DUAL_PURPOSE,
+    PART_DB, PART_REGISTRY, PartMapping, CapabilityFlag, _DUAL_PURPOSE,
     Engine, FuelTank, SolidBooster, HeatShield,
     Parachute, LandingLeg, Decoupler, MiscEquipment,
 )
@@ -186,18 +186,7 @@ class TestPartDbItemTableSync(unittest.TestCase):
 class TestProvidesFlags(unittest.TestCase):
     """All provides flags in PART_REGISTRY must be recognized by the system."""
 
-    # Every provides flag that the capability system handles.
-    _KNOWN_FLAGS: frozenset[str] = frozenset({
-        "probe_core", "capsule", "reaction_wheel", "rcs",
-        "solar_fixed", "solar_retractable", "solar_array_large",
-        "rtg", "battery_small", "battery_large",
-        "docking_port", "fuel_line", "ladder", "launch_clamp", "isru",
-        "relay_t1", "relay_t2", "relay_t3", "relay_t4",
-        "thermometer", "barometer", "wheel",
-        "science_instrument",  # classification only, not a capability flag
-        "multi_mount",         # adapter/coupler/engine plate
-        "aero_control",        # actuated aero control surface (fin/elevon/winglet)
-    })
+    _KNOWN_FLAGS: frozenset[str] = frozenset(CapabilityFlag)
 
     def test_all_provides_flags_known(self) -> None:
         for mapping in PART_REGISTRY:

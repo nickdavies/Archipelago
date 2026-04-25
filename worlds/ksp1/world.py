@@ -6,10 +6,14 @@ from worlds.AutoWorld import LogicMixin, WebWorld, World
 from . import items, locations, regions, rules
 from .rules import GoalSpec, resolve_goal_spec, goal_spec_location_names
 from .capability import RocketCapability
-from .bodies import ALL_BODIES
-from .items import ITEM_NAME_TO_ID
+from .bodies import ALL_BODIES, MissionType
+from .items import ITEM_NAME_TO_ID, _FILLER_ITEMS
 from .parts import PROGRESSIVE_PART_TIERS
-from .locations import EventName, LOCATION_NAME_TO_ID, MAX_TECH_SLOTS, MissionLocation, TECH_SLOTS_BY_DIFFICULTY, TechTreeLocation
+from .locations import (
+    ALL_EVENTS, EventName, KSC_BIOME_NAMES, KERBIN_LOCATIONS,
+    LOCATION_NAME_TO_ID, MAX_TECH_SLOTS, MissionLocation,
+    STARTING_INV_COUNTS, TECH_SLOTS_BY_DIFFICULTY, TechTreeLocation,
+)
 from .options import KSP1Options
 from .tech_tree import MAX_TIER, NODES_BY_TIER, TECH_NODES, TIER_TO_BAND
 
@@ -122,6 +126,21 @@ class KSP1World(World):
             name: {str(t): rep for t, rep in reps.items()}
             for name, reps in self.progressive_representatives.items()
         }
+        # Authoritative data for C# client — eliminates hardcoded dicts.
+        d["event_scales"] = {e.name: e.scale for e in ALL_EVENTS}
+        d["tech_display_names"] = {n.node_id: n.display_name for n in TECH_NODES}
+        d["ksc_biome_names"] = KSC_BIOME_NAMES
+        d["kerbin_altitude_thresholds"] = [
+            int(loc.threshold_km * 1000)
+            for loc in KERBIN_LOCATIONS
+            if loc.mission_type == MissionType.SOUNDING and loc.threshold_km is not None
+            and loc.threshold_km >= 1.0  # exclude "First Crash" (0.1 km)
+        ]
+        d["science_packs"] = {
+            name: int(name.split()[-1])
+            for name in _FILLER_ITEMS
+        }
+        d["starting_inv_count"] = STARTING_INV_COUNTS[self.options.difficulty.value]
         return d
 
     # ------------------------------------------------------------------

@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Callable
 
 from BaseClasses import CollectionState, ItemClassification
 
-from .bodies import ALL_BODIES, BODY_BY_NAME, BodyName, science_budget
+from .bodies import ALL_BODIES, BODY_BY_NAME, BodyName, MissionType, science_budget
 from .capability import get_capability
 from .items import ITEM_TABLE, PROGRESSIVE_RD_NAME, PROGRESSIVE_PART_ITEM_NAMES, SCIENCE_PACK_NAMES
 from .locations import (
@@ -34,6 +34,7 @@ from .locations import (
     KERBIN_LOCATION_NAMES,
     MISSION_LOCATION_NAMES,
     MissionLocation,
+    STARTING_INV_COUNTS,
     STARTING_INV_NAMES,
     TECH_SLOTS_BY_DIFFICULTY,
     TechTreeLocation,
@@ -230,11 +231,11 @@ def _make_splashdown_rule(player: int, threshold_km: float) -> Callable[[Collect
 
 
 _KERBIN_RULE_FACTORIES = {
-    "sounding": lambda player, loc: _make_altitude_rule(player, loc.threshold_km or 0.0),
-    "first_launch": lambda player, loc: _make_first_launch_rule(player),
-    "first_landing": lambda player, loc: _make_first_landing_rule(player),
-    "first_staging": lambda player, loc: _make_staging_rule(player),
-    "splashdown": lambda player, loc: _make_splashdown_rule(player, loc.threshold_km or 1.0),
+    MissionType.SOUNDING: lambda player, loc: _make_altitude_rule(player, loc.threshold_km or 0.0),
+    MissionType.FIRST_LAUNCH: lambda player, loc: _make_first_launch_rule(player),
+    MissionType.FIRST_LANDING: lambda player, loc: _make_first_landing_rule(player),
+    MissionType.FIRST_STAGING: lambda player, loc: _make_staging_rule(player),
+    MissionType.SPLASHDOWN: lambda player, loc: _make_splashdown_rule(player, loc.threshold_km or 1.0),
 }
 
 
@@ -303,14 +304,6 @@ def _set_mission_rules(world: KSP1World, player: int) -> None:
 # Item pacing rules (item_rules on early locations)
 # ---------------------------------------------------------------------------
 
-# Starting inventory slot counts by difficulty (mirrors locations.py)
-_STARTING_INV_COUNTS: dict[int, int] = {
-    Difficulty.option_casual: 20,
-    Difficulty.option_normal: 15,
-    Difficulty.option_expert: 10,
-    Difficulty.option_insane: 5,
-}
-
 # Early tech tree: tiers 1-3
 _EARLY_TECH_MAX_TIER = 3
 
@@ -353,7 +346,7 @@ def _set_item_pacing_rules(world: KSP1World, player: int, difficulty: int) -> No
     num_slots = TECH_SLOTS_BY_DIFFICULTY[difficulty]
 
     # Band A: Starting Inventory — reject tier 2
-    num_starting = _STARTING_INV_COUNTS[difficulty]
+    num_starting = STARTING_INV_COUNTS[difficulty]
     power_rule = _make_power_rule(player, item_tiers, max_tier=1)
     for name in STARTING_INV_NAMES[:num_starting]:
         add_item_rule(world.get_location(name), power_rule)
@@ -414,19 +407,22 @@ def _set_interplanetary_item_rules(world: KSP1World, player: int) -> None:
 # Victory conditions — GoalSpec system
 # ---------------------------------------------------------------------------
 
-_STANDARD_RETURN_BODIES: tuple[BodyName, ...] = (
-    BodyName.MUN, BodyName.MINMUS, BodyName.MOHO, BodyName.GILLY, BodyName.DUNA, BodyName.IKE,
-    BodyName.DRES, BodyName.VALL, BodyName.BOP, BodyName.POL, BodyName.EELOO,
-)
-
-# Derived from bodies.py — single source of truth.
+# All derived from bodies.py — single source of truth.
 _ALL_LANDABLE_BODIES: tuple[BodyName, ...] = tuple(
     b.name for b in ALL_BODIES if b.can_land
 )
 
 # Bodies whose return/sample-return rules use the all-parts proxy
 # (capability system can't model their ascent profiles).
-_ALL_PARTS_PROXY_BODIES: frozenset[BodyName] = frozenset({BodyName.EVE, BodyName.TYLO, BodyName.LAYTHE})
+_ALL_PARTS_PROXY_BODIES: frozenset[BodyName] = frozenset(
+    b.name for b in ALL_BODIES if b.all_parts_proxy
+)
+
+# Landable bodies with normal (non-proxy) return profiles, excluding Kerbin.
+_STANDARD_RETURN_BODIES: tuple[BodyName, ...] = tuple(
+    b.name for b in ALL_BODIES
+    if b.can_land and not b.all_parts_proxy and b.name != BodyName.KERBIN
+)
 
 @dataclass(frozen=True)
 class GoalSpec:

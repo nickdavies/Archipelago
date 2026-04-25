@@ -1,14 +1,11 @@
 """
 Validation tests for the tech tree data pipeline.
 
-Ensures tech_tree.json, TECH_NODES, and the C# TechDisplayNames stay in sync
-with the stock KSP TechTree.cfg.
+Ensures tech_tree.json and TECH_NODES stay in sync with the stock KSP TechTree.cfg.
 """
 import json
 import pkgutil
-import re
 import unittest
-from pathlib import Path
 
 from worlds.ksp1.tech_tree import (
     MAX_TIER,
@@ -152,66 +149,6 @@ class TestParentReferences(unittest.TestCase):
                 f"Node '{node.node_id}' has no parents",
             )
 
-
-class TestCSharpSync(unittest.TestCase):
-    """C# TechDisplayNames must match Python NODE_BY_ID exactly."""
-
-    def _parse_csharp_dict(self) -> dict[str, str] | None:
-        """Extract TechDisplayNames from MissionTracker.cs via regex."""
-        cs_path = (
-            Path(__file__).resolve().parent.parent.parent.parent.parent
-            / "KSP1-Archipelago-client" / "KSPArchipelago" / "MissionTracker.cs"
-        )
-        if not cs_path.is_file():
-            return None
-
-        text = cs_path.read_text(encoding="utf-8")
-        entries: dict[str, str] = {}
-        for match in re.finditer(
-            r'\{\s*"([^"]+)"\s*,\s*"([^"]+)"\s*\}', text
-        ):
-            key, val = match.group(1), match.group(2)
-            # Only match entries inside TechDisplayNames (skip EventScale, etc.)
-            # We rely on the fact that tech node IDs are camelCase identifiers
-            if key[0].islower() and not key[0].isdigit():
-                entries[key] = val
-        return entries
-
-    def test_csharp_ids_match_python(self) -> None:
-        cs_dict = self._parse_csharp_dict()
-        if cs_dict is None:
-            self.skipTest("MissionTracker.cs not found")
-
-        py_ids = {n.node_id for n in TECH_NODES}
-        cs_ids = set(cs_dict.keys())
-
-        # Filter out non-tech entries from the regex (EventScale keys, biome keys, etc.)
-        # Tech IDs all exist in py_ids OR cs_ids, so we compare the intersection
-        # with the full sets to find mismatches.
-        missing_in_cs = py_ids - cs_ids
-        extra_in_cs = cs_ids - py_ids
-
-        self.assertEqual(
-            missing_in_cs, set(),
-            f"Python has tech IDs not in C#: {missing_in_cs}",
-        )
-        self.assertEqual(
-            extra_in_cs, set(),
-            f"C# has tech IDs not in Python: {extra_in_cs}",
-        )
-
-    def test_csharp_names_match_python(self) -> None:
-        cs_dict = self._parse_csharp_dict()
-        if cs_dict is None:
-            self.skipTest("MissionTracker.cs not found")
-
-        for node_id, display_name in cs_dict.items():
-            if node_id not in NODE_BY_ID:
-                continue  # handled by test_csharp_ids_match_python
-            self.assertEqual(
-                NODE_BY_ID[node_id].display_name, display_name,
-                f"Name mismatch for '{node_id}': Python='{NODE_BY_ID[node_id].display_name}', C#='{display_name}'",
-            )
 
 
 class TestLocationNames(unittest.TestCase):

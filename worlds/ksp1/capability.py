@@ -23,11 +23,11 @@ from BaseClasses import CollectionState
 
 from .bodies import (
     BODY_BY_NAME, MISSION_PROFILES, ALL_BODIES,
-    BodyName, DifficultyProfile, DIFFICULTY_PROFILES,
+    BodyName, MissionType, DifficultyProfile, DIFFICULTY_PROFILES,
     Body, MissionEdge, EdgeType, effective_dv, parent_chain,
 )
 from .parts import (
-    PART_DB, Engine, FuelTank, SolidBooster, HeatShield,
+    PART_DB, CapabilityFlag, Engine, FuelTank, SolidBooster, HeatShield,
     Parachute, LandingLeg, Decoupler, MiscEquipment,
     MultiMount, MULTI_MOUNT_TABLE,
     PROGRESSIVE_PART_TIERS, PROGRESSIVE_PART_NAMES, PROGRESSIVE_PART_COUNTS,
@@ -424,9 +424,10 @@ def _add_part_to_flags(flags: EquipmentFlags, part, count: int) -> None:
         _apply_misc(flags, part, count)
 
 
-def _apply_misc_relay(flags: EquipmentFlags, flag: str, part: MiscEquipment) -> None:
+def _apply_misc_relay(flags: EquipmentFlags, flag: CapabilityFlag, part: MiscEquipment) -> None:
     """Set relay tier and track lightest relay per tier."""
-    tier = {"relay_t1": 1, "relay_t2": 2, "relay_t3": 3, "relay_t4": 4}.get(flag, 0)
+    CF = CapabilityFlag
+    tier = {CF.RELAY_T1: 1, CF.RELAY_T2: 2, CF.RELAY_T3: 3, CF.RELAY_T4: 4}.get(flag, 0)
     if tier == 0:
         return
     if tier > flags.relay_tier:
@@ -442,28 +443,29 @@ def _compute_relay_tier(flags: EquipmentFlags) -> int:
 
 
 def _apply_misc(flags: EquipmentFlags, part: MiscEquipment, count: int) -> None:
+    CF = CapabilityFlag
     for flag in part.provides:
-        if flag == "probe_core":
+        if flag == CF.PROBE_CORE:
             flags.has_probe_core = True
             if flags.lightest_probe is None or part.mass < flags.lightest_probe.mass:
                 flags.lightest_probe = part
-        elif flag == "capsule":
+        elif flag == CF.CAPSULE:
             flags.has_capsule = True
             if flags.heaviest_capsule is None or part.mass > flags.heaviest_capsule.mass:
                 flags.heaviest_capsule = part
-        elif flag == "reaction_wheel":
+        elif flag == CF.REACTION_WHEEL:
             flags.has_reaction_wheels = True
-        elif flag == "rcs":
+        elif flag == CF.RCS:
             flags.has_rcs = True
-        elif flag in ("solar_fixed", "solar_retractable"):
+        elif flag in (CF.SOLAR_FIXED, CF.SOLAR_RETRACTABLE):
             flags.has_solar = True
             if flags.lightest_solar is None or part.mass < flags.lightest_solar.mass:
                 flags.lightest_solar = part
-            if flag == "solar_retractable":
+            if flag == CF.SOLAR_RETRACTABLE:
                 flags.has_solar_retractable = True
                 if flags.lightest_solar_retractable is None or part.mass < flags.lightest_solar_retractable.mass:
                     flags.lightest_solar_retractable = part
-        elif flag == "solar_array_large":
+        elif flag == CF.SOLAR_ARRAY_LARGE:
             flags.has_solar_array_large = True
             flags.has_solar = True
             flags.has_solar_retractable = True
@@ -471,35 +473,35 @@ def _apply_misc(flags: EquipmentFlags, part: MiscEquipment, count: int) -> None:
                 flags.lightest_solar = part
             if flags.lightest_solar_retractable is None or part.mass < flags.lightest_solar_retractable.mass:
                 flags.lightest_solar_retractable = part
-        elif flag == "rtg":
+        elif flag == CF.RTG:
             flags.has_rtg = True
             if flags.lightest_rtg is None or part.mass < flags.lightest_rtg.mass:
                 flags.lightest_rtg = part
-        elif flag == "battery_large":
+        elif flag == CF.BATTERY_LARGE:
             flags.has_battery_large = True
-        elif flag == "docking_port":
+        elif flag == CF.DOCKING_PORT:
             flags.has_docking_port = True
-        elif flag == "fuel_line":
+        elif flag == CF.FUEL_LINE:
             flags.has_fuel_lines = True
-        elif flag == "ladder":
+        elif flag == CF.LADDER:
             flags.has_ladder = True
             if flags.lightest_ladder is None or part.mass < flags.lightest_ladder.mass:
                 flags.lightest_ladder = part
-        elif flag == "launch_clamp":
+        elif flag == CF.LAUNCH_CLAMP:
             flags.has_launch_clamp = True
-        elif flag == "isru":
+        elif flag == CF.ISRU:
             flags.has_isru = True
-        elif flag == "multi_mount":
+        elif flag == CF.MULTI_MOUNT:
             mount = MULTI_MOUNT_TABLE.get(part.name)
             if mount is not None:
                 flags.available_multi_mounts.append(mount)
-        elif flag == "thermometer":
+        elif flag == CF.THERMOMETER:
             flags.has_thermometer = True
-        elif flag == "barometer":
+        elif flag == CF.BAROMETER:
             flags.has_barometer = True
-        elif flag == "wheel":
+        elif flag == CF.WHEEL:
             flags.has_wheel = True
-        elif flag == "aero_control":
+        elif flag == CF.AERO_CONTROL:
             flags.has_aero_control_surface = True
             flags.available_aero_controls.append(part)
             if flags.lightest_aero_control is None or part.mass < flags.lightest_aero_control.mass:
@@ -576,7 +578,7 @@ def _evaluate_profile(
     profile: list[MissionEdge],
     flags: EquipmentFlags,
     diff: DifficultyProfile,
-    mission_type: str,              # "orbit" | "land" | "return" | "sample_return"
+    mission_type: MissionType,
     is_crewed: bool,
 ) -> ProfileResult:
     """
@@ -1272,12 +1274,12 @@ def _assess_one_body(
 
         if not profiles:
             # Flag plant without explicit profiles: fall back to crewed landing
-            if event.mission_type == "flag_plant":
+            if event.mission_type == MissionType.FLAG_PLANT:
                 prof.access[event.name] = prof.access.get(EventName.CREWED_LANDING, False)
             continue
 
         # High-gravity sample return requires ladder for EVA re-boarding
-        if event.mission_type == "sample_return" and body.eva_jetpack_twr < _MIN_EVA_JETPACK_TWR:
+        if event.mission_type == MissionType.SAMPLE_RETURN and body.eva_jetpack_twr < _MIN_EVA_JETPACK_TWR:
             profiles = _inject_ladder(profiles)
 
         ok, reasons = _try_profiles_reason(profiles, flags, diff, event.mission_type, crewed=event.crewed)
@@ -1326,7 +1328,7 @@ def _try_profiles(
     profiles: list[list[MissionEdge]],
     flags: EquipmentFlags,
     diff: DifficultyProfile,
-    mission_type: str,
+    mission_type: MissionType,
     crewed: bool | None,
 ) -> bool:
     """Return True if any profile alternative is feasible."""
@@ -1342,7 +1344,7 @@ def _try_profiles_reason(
     profiles: list[list[MissionEdge]],
     flags: EquipmentFlags,
     diff: DifficultyProfile,
-    mission_type: str,
+    mission_type: MissionType,
     crewed: bool | None,
 ) -> tuple[bool, list[str]]:
     """
@@ -1369,7 +1371,7 @@ def evaluate_mission_detailed(
     flags: EquipmentFlags,
     diff: DifficultyProfile,
     body_name: str,
-    mission_type: str,
+    mission_type: MissionType,
     crewed: bool | None,
     threshold_km: float | None = None,
 ) -> ProfileResult:
@@ -1386,11 +1388,11 @@ def evaluate_mission_detailed(
     capability flags.
     """
     # --- Sounding rocket (altitude milestones, first crash) ---
-    if mission_type == "sounding":
+    if mission_type == MissionType.SOUNDING:
         return _evaluate_sounding(flags, threshold_km or 0.0)
 
     # --- Other Kerbin-specific mission types ---
-    if mission_type == "first_launch":
+    if mission_type == MissionType.FIRST_LAUNCH:
         sounding = _compute_sounding_altitude(flags)
         ok = sounding > 0 or flags.has_capsule
         if ok:
@@ -1402,7 +1404,7 @@ def evaluate_mission_detailed(
             reasons.append("no sounding altitude (propulsion path)")
         return ProfileResult(False, failure_reasons=reasons)
 
-    if mission_type == "first_landing":
+    if mission_type == MissionType.FIRST_LANDING:
         sounding = _compute_sounding_altitude(flags)
         # Capsule-only path (kerbal EVA)
         if flags.has_capsule:
@@ -1419,12 +1421,12 @@ def evaluate_mission_detailed(
             reasons.append("no safe descent (need parachute or throttleable engine)")
         return ProfileResult(False, failure_reasons=reasons)
 
-    if mission_type == "first_staging":
+    if mission_type == MissionType.FIRST_STAGING:
         if flags.staging_tier >= 1:
             return ProfileResult(True)
         return ProfileResult(False, failure_reasons=["no stack decoupler (staging_tier < 1)"])
 
-    if mission_type == "splashdown":
+    if mission_type == MissionType.SPLASHDOWN:
         sounding = _compute_sounding_altitude(flags)
         reasons = []
         if sounding < (threshold_km or 1.0):
@@ -1441,7 +1443,7 @@ def evaluate_mission_detailed(
         return ProfileResult(False,
                              failure_reasons=[f"no profiles for ({body_name}, {mission_type})"])
 
-    if mission_type == "sample_return":
+    if mission_type == MissionType.SAMPLE_RETURN:
         body = BODY_BY_NAME[body_name]
         if body.eva_jetpack_twr < _MIN_EVA_JETPACK_TWR:
             profiles = _inject_ladder(profiles)
@@ -1623,3 +1625,43 @@ def _compute_capability(state: CollectionState, player: int) -> RocketCapability
         difficulty_name, start_with_clamps,
     )
     return cap
+
+
+# ---------------------------------------------------------------------------
+# Import-time assertions — pytest catches violations automatically
+# ---------------------------------------------------------------------------
+
+# (a) Every MiscEquipment with multi_mount flag must be in MULTI_MOUNT_TABLE
+for _item_name, _parts in PART_DB.items():
+    for _part in _parts:
+        if isinstance(_part, MiscEquipment) and CapabilityFlag.MULTI_MOUNT in _part.provides:
+            assert _part.name in MULTI_MOUNT_TABLE, (
+                f"{_part.name} has multi_mount flag but not in MULTI_MOUNT_TABLE"
+            )
+
+# (b) Mission profile coverage: every (body, mission_type) the capability engine
+#     evaluates must have a MISSION_PROFILES entry, except flag_plant (derived from
+#     crewed landing) and EVA in Orbit (shares orbit profile).
+for _body in ALL_BODIES:
+    for _event in ALL_EVENTS:
+        if _event.requires_landing and not _body.can_land:
+            continue
+        if _event.mission_type == MissionType.FLAG_PLANT:
+            continue  # derived from crewed_landing
+        _key = (_body.name, _event.mission_type)
+        assert _key in MISSION_PROFILES, (
+            f"No MISSION_PROFILES entry for {_key}"
+        )
+
+# (c) Every MiscEquipment flag in parts.py must be a recognized CapabilityFlag.
+_KNOWN_FLAGS: frozenset[str] = frozenset(CapabilityFlag)
+
+for _item_name, _parts in PART_DB.items():
+    for _part in _parts:
+        if isinstance(_part, MiscEquipment):
+            _unknown = _part.provides - _KNOWN_FLAGS
+            assert not _unknown, (
+                f"Part {_part.name} has unrecognized flags: {_unknown}"
+            )
+
+del _item_name, _parts, _part, _body, _event, _key, _unknown, _KNOWN_FLAGS

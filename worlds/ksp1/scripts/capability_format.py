@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from worlds.ksp1.bodies import (
-    ALL_BODIES, BODY_BY_NAME, BodyName, DIFFICULTY_PROFILES, EdgeType,
+    ALL_BODIES, BODY_BY_NAME, BodyName, MissionType, DIFFICULTY_PROFILES, EdgeType,
     MISSION_PROFILES, MissionEdge,
 )
 from worlds.ksp1.capability import (
@@ -28,7 +28,7 @@ from worlds.ksp1.parts import PART_REGISTRY
 class CheckInfo:
     body_name: BodyName
     event: str
-    mission_type: str
+    mission_type: MissionType
     crewed: bool | None  # True=crewed, False=unmanned, None=try both
     threshold_km: float | None = None  # sounding rocket target altitude
 
@@ -166,7 +166,7 @@ def _format_profile_summary(info: CheckInfo) -> list[str]:
     mt = info.mission_type
 
     # --- Kerbin-specific mission types ---
-    if mt == "sounding":
+    if mt == MissionType.SOUNDING:
         lines.append(f"  Profile: [sounding rocket]")
         lines.append(f"  Command: probe_core OR capsule (with parachute + decoupler)")
         if info.threshold_km is not None:
@@ -174,22 +174,22 @@ def _format_profile_summary(info: CheckInfo) -> list[str]:
         lines.append(f"  Propulsion: SRB or engine + fuel tank")
         return lines
 
-    if mt == "first_launch":
+    if mt == MissionType.FIRST_LAUNCH:
         lines.append(f"  Profile: [first launch]")
         lines.append(f"  Command: any propulsion OR capsule (kerbal EVA)")
         return lines
 
-    if mt == "first_landing":
+    if mt == MissionType.FIRST_LANDING:
         lines.append(f"  Profile: [first safe landing]")
         lines.append(f"  Command: capsule (EVA) OR propulsion + safe descent")
         return lines
 
-    if mt == "first_staging":
+    if mt == MissionType.FIRST_STAGING:
         lines.append(f"  Profile: [first staging]")
         lines.append(f"  Requires: stack decoupler (staging_tier >= 1)")
         return lines
 
-    if mt == "splashdown":
+    if mt == MissionType.SPLASHDOWN:
         lines.append(f"  Profile: [splashdown]")
         lines.append(f"  Target altitude: >= {info.threshold_km or 1.0:.0f} km")
         lines.append(f"  Requires: safe descent (parachute or throttleable engine)")
@@ -265,7 +265,7 @@ def format_rocket_output(
     lines.append(f"  Body: {body_name} | Difficulty: {difficulty_name}")
     lines.append(f"  In logic: {logic_str}")
     lines.extend(_format_profile_summary(info))
-    if info.mission_type == "sounding" and info.threshold_km is not None:
+    if info.mission_type == MissionType.SOUNDING and info.threshold_km is not None:
         lines.append(f"  Sounding altitude: {sounding_altitude_km:.1f} km "
                      f"(need {info.threshold_km:.0f} km)")
     lines.append(f"  Feasible: {'YES' if result.feasible else 'NO'}")
@@ -285,7 +285,7 @@ def format_rocket_output(
         return lines
 
     # Non-profile mission types (sounding, first_launch, etc.) have no stage breakdown
-    _NON_PROFILE_TYPES = {"sounding", "first_launch", "first_landing", "first_staging", "splashdown"}
+    _NON_PROFILE_TYPES = {MissionType.SOUNDING, MissionType.FIRST_LAUNCH, MissionType.FIRST_LANDING, MissionType.FIRST_STAGING, MissionType.SPLASHDOWN}
     if info.mission_type in _NON_PROFILE_TYPES:
         return lines
 

@@ -12,7 +12,40 @@ import json
 import math
 import pkgutil
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Union
+
+
+# ---------------------------------------------------------------------------
+# Capability flags — single source of truth for MiscEquipment.provides values
+# ---------------------------------------------------------------------------
+
+class CapabilityFlag(StrEnum):
+    PROBE_CORE = "probe_core"
+    CAPSULE = "capsule"
+    REACTION_WHEEL = "reaction_wheel"
+    RCS = "rcs"
+    SOLAR_FIXED = "solar_fixed"
+    SOLAR_RETRACTABLE = "solar_retractable"
+    SOLAR_ARRAY_LARGE = "solar_array_large"
+    RTG = "rtg"
+    BATTERY_SMALL = "battery_small"
+    BATTERY_LARGE = "battery_large"
+    DOCKING_PORT = "docking_port"
+    FUEL_LINE = "fuel_line"
+    LADDER = "ladder"
+    LAUNCH_CLAMP = "launch_clamp"
+    ISRU = "isru"
+    MULTI_MOUNT = "multi_mount"
+    THERMOMETER = "thermometer"
+    BAROMETER = "barometer"
+    WHEEL = "wheel"
+    AERO_CONTROL = "aero_control"
+    SCIENCE_INSTRUMENT = "science_instrument"
+    RELAY_T1 = "relay_t1"
+    RELAY_T2 = "relay_t2"
+    RELAY_T3 = "relay_t3"
+    RELAY_T4 = "relay_t4"
 
 
 # ---------------------------------------------------------------------------
@@ -94,29 +127,7 @@ class Decoupler:
 class MiscEquipment:
     name: str
     mass: float
-    provides: frozenset[str]    # capability flags — see below
-    # Known flag strings:
-    #   "probe_core"            unmanned command
-    #   "capsule"               crewed command
-    #   "reaction_wheel"        attitude control without gimbal/RCS
-    #   "rcs"                   RCS thrusters (attitude + fine dv)
-    #   "solar_fixed"           fixed panels, destroyed by aero
-    #   "solar_retractable"     retractable panels, survive aero
-    #   "solar_array_large"     large array, enables ION engine
-    #   "rtg"                   power regardless of distance/orientation
-    #   "relay_t1"              local-range antennas (Com 16, HG-5)
-    #   "relay_t2"              inner-planet antennas (RA-2, DTS-M1)
-    #   "relay_t3"              mid-system antennas (HG-55, RA-15)
-    #   "relay_t4"              outer-system antennas (88-88, RA-100)
-    #   "battery_small"         small EC storage
-    #   "battery_large"         large EC storage (sustains ION burns)
-    #   "docking_port"          enables docking-based staging (tier 3)
-    #   "fuel_line"             enables asparagus staging
-    #   "ladder"                crew ladder for EVA on low-gravity bodies
-    #   "launch_clamp"          hold-down + fuelling (interplanetary gate)
-    #   "isru"                  in-situ resource utilisation
-    #   "wheel"                 rover wheel or landing gear (enables KSC rover path)
-    #   "aero_control"          actuated aero control surface (elevon/fin/winglet)
+    provides: frozenset[CapabilityFlag]  # see CapabilityFlag enum for valid values
 
 
 # ---------------------------------------------------------------------------

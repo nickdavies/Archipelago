@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING
 from BaseClasses import Item, ItemClassification
 
 from .parts import (
-    PART_DB, PART_REGISTRY,
+    PART_DB, PART_REGISTRY, CapabilityFlag,
     Engine, FuelTank, SolidBooster, HeatShield, Parachute,
     LandingLeg, Decoupler, MiscEquipment,
     PROGRESSIVE_PART_NAMES, PROGRESSIVE_PART_COUNTS, PROGRESSIVE_PART_TIERS,
@@ -49,30 +49,30 @@ class KSP1Item(Item):
 # Progression-flag sets for MiscEquipment
 # ---------------------------------------------------------------------------
 
-_PROGRESSION_PROVIDES: frozenset[str] = frozenset({
-    "capsule",
-    "probe_core",
-    "solar_fixed",
-    "solar_retractable",
-    "solar_array_large",
-    "rtg",
-    "relay_t1",
-    "relay_t2",
-    "relay_t3",
-    "relay_t4",
-    "launch_clamp",
-    "docking_port",        # gates staging tier 3 (enables 4-stage missions)
-    "fuel_line",           # gates asparagus staging
-    "ladder",              # gates sample returns on high-gravity bodies
-    "science_instrument",  # gates science collection for tech tree
-    "multi_mount",         # gates efficient multi-engine stages (adapters/plates)
+_PROGRESSION_PROVIDES: frozenset[CapabilityFlag] = frozenset({
+    CapabilityFlag.CAPSULE,
+    CapabilityFlag.PROBE_CORE,
+    CapabilityFlag.SOLAR_FIXED,
+    CapabilityFlag.SOLAR_RETRACTABLE,
+    CapabilityFlag.SOLAR_ARRAY_LARGE,
+    CapabilityFlag.RTG,
+    CapabilityFlag.RELAY_T1,
+    CapabilityFlag.RELAY_T2,
+    CapabilityFlag.RELAY_T3,
+    CapabilityFlag.RELAY_T4,
+    CapabilityFlag.LAUNCH_CLAMP,
+    CapabilityFlag.DOCKING_PORT,
+    CapabilityFlag.FUEL_LINE,
+    CapabilityFlag.LADDER,
+    CapabilityFlag.SCIENCE_INSTRUMENT,
+    CapabilityFlag.MULTI_MOUNT,
 })
 
-_USEFUL_PROVIDES: frozenset[str] = frozenset({
-    "reaction_wheel",
-    "rcs",
-    "battery_large",
-    "isru",
+_USEFUL_PROVIDES: frozenset[CapabilityFlag] = frozenset({
+    CapabilityFlag.REACTION_WHEEL,
+    CapabilityFlag.RCS,
+    CapabilityFlag.BATTERY_LARGE,
+    CapabilityFlag.ISRU,
 })
 
 # Parts reclassified from progression → useful.

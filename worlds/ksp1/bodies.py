@@ -29,6 +29,22 @@ from typing import Optional
 # Body names — single source of truth, catches typos at import time
 # ---------------------------------------------------------------------------
 
+class MissionType(StrEnum):
+    """Mission profile types — keys into MISSION_PROFILES."""
+    ORBIT = "orbit"
+    LAND = "land"
+    RETURN = "return"
+    SAMPLE_RETURN = "sample_return"
+    FLAG_PLANT = "flag_plant"
+    ESCAPE = "escape"
+    # Kerbin-only mission types (not in MISSION_PROFILES)
+    SOUNDING = "sounding"
+    FIRST_LAUNCH = "first_launch"
+    FIRST_LANDING = "first_landing"
+    FIRST_STAGING = "first_staging"
+    SPLASHDOWN = "splashdown"
+
+
 class BodyName(StrEnum):
     KERBIN = "Kerbin"
     MUN = "Mun"
@@ -139,6 +155,7 @@ class Body:
     fly_high_mult: float = 0.0      # FlyingHigh multiplier (0 = no atmosphere)
     landed_mult: float = 0.0        # Landed multiplier (0 = can't land)
     splashed_mult: float = 0.0      # Splashed multiplier (0 = no ocean)
+    all_parts_proxy: bool = False    # True = return rules use all-parts proxy (can't model ascent)
 
 
 def _jetpack_twr(g: float) -> float:
@@ -275,6 +292,7 @@ EVE = Body(
     space_low_mult=8.0, space_high_mult=4.0,
     fly_low_mult=2.0, fly_high_mult=1.5,
     landed_mult=8.0, splashed_mult=8.0,
+    all_parts_proxy=True,
 )
 
 GILLY = Body(
@@ -385,6 +403,7 @@ LAYTHE = Body(
     space_low_mult=12.0, space_high_mult=6.0,
     fly_low_mult=4.0, fly_high_mult=3.0,
     landed_mult=14.0, splashed_mult=10.0,
+    all_parts_proxy=True,
 )
 
 VALL = Body(
@@ -421,6 +440,7 @@ TYLO = Body(
     num_biomes=6,
     space_low_mult=12.0, space_high_mult=6.0,
     landed_mult=12.0,
+    all_parts_proxy=True,
 )
 
 BOP = Body(
@@ -571,7 +591,7 @@ MissionProfiles = dict[tuple[BodyName, str], list[list[MissionEdge]]]
 MISSION_PROFILES: MissionProfiles = {}
 
 
-def _add(body: BodyName, mission: str, *profiles: list[MissionEdge]) -> None:
+def _add(body: BodyName, mission: MissionType, *profiles: list[MissionEdge]) -> None:
     MISSION_PROFILES[(body, mission)] = list(profiles)
 
 
@@ -582,14 +602,14 @@ def _add(body: BodyName, mission: str, *profiles: list[MissionEdge]) -> None:
 _KERBIN_DEORBIT = _E("kerbin_low_orbit", "kerbin_surface", ALA, 100, BodyName.KERBIN,
                      heat=True)
 
-_add(BodyName.KERBIN, "orbit",  [_KERBIN_ASCENT])
-_add(BodyName.KERBIN, "escape", [_KERBIN_ASCENT, _KERBIN_ESCAPE])
-_add(BodyName.KERBIN, "land",   [_KERBIN_ASCENT, _KERBIN_DEORBIT])
-_add(BodyName.KERBIN, "flag_plant",    [])  # 0 dv — walk out and plant
-_add(BodyName.KERBIN, "return",        [_KERBIN_ASCENT, _KERBIN_DEORBIT])
+_add(BodyName.KERBIN, MissionType.ORBIT,  [_KERBIN_ASCENT])
+_add(BodyName.KERBIN, MissionType.ESCAPE, [_KERBIN_ASCENT, _KERBIN_ESCAPE])
+_add(BodyName.KERBIN, MissionType.LAND,   [_KERBIN_ASCENT, _KERBIN_DEORBIT])
+_add(BodyName.KERBIN, MissionType.FLAG_PLANT,    [])  # 0 dv — walk out and plant
+_add(BodyName.KERBIN, MissionType.RETURN,        [_KERBIN_ASCENT, _KERBIN_DEORBIT])
 # WARNING: sample_return MUST stay empty — kerbal EVAs from the launchpad,
 # takes a surface sample, and recovers. No rocket needed. Do not add edges.
-_add(BodyName.KERBIN, "sample_return", [])
+_add(BodyName.KERBIN, MissionType.SAMPLE_RETURN, [])
 
 
 # ===========================================================================
@@ -616,10 +636,10 @@ _MUN_RETURN = _MUN_LAND + [
 
 _MUN_SAMPLE_RETURN = _MUN_RETURN  # ladder check applied dynamically in _assess_body
 
-_add(BodyName.MUN, "orbit",         _MUN_ORBIT)
-_add(BodyName.MUN, "land",          _MUN_LAND)
-_add(BodyName.MUN, "return",        _MUN_RETURN)
-_add(BodyName.MUN, "sample_return", _MUN_SAMPLE_RETURN)
+_add(BodyName.MUN, MissionType.ORBIT,         _MUN_ORBIT)
+_add(BodyName.MUN, MissionType.LAND,          _MUN_LAND)
+_add(BodyName.MUN, MissionType.RETURN,        _MUN_RETURN)
+_add(BodyName.MUN, MissionType.SAMPLE_RETURN, _MUN_SAMPLE_RETURN)
 
 
 # ===========================================================================
@@ -645,10 +665,10 @@ _MINMUS_RETURN = _MINMUS_LAND + [
     _KERBIN_REENTRY,
 ]
 
-_add(BodyName.MINMUS, "orbit",         _MINMUS_ORBIT)
-_add(BodyName.MINMUS, "land",          _MINMUS_LAND)
-_add(BodyName.MINMUS, "return",        _MINMUS_RETURN)
-_add(BodyName.MINMUS, "sample_return", _MINMUS_RETURN)
+_add(BodyName.MINMUS, MissionType.ORBIT,         _MINMUS_ORBIT)
+_add(BodyName.MINMUS, MissionType.LAND,          _MINMUS_LAND)
+_add(BodyName.MINMUS, MissionType.RETURN,        _MINMUS_RETURN)
+_add(BodyName.MINMUS, MissionType.SAMPLE_RETURN, _MINMUS_RETURN)
 
 
 # ===========================================================================
@@ -678,10 +698,10 @@ _MOHO_RETURN = _MOHO_LAND + [
     _KERBIN_REENTRY,
 ]
 
-_add(BodyName.MOHO, "orbit",         _MOHO_ORBIT)
-_add(BodyName.MOHO, "land",          _MOHO_LAND)
-_add(BodyName.MOHO, "return",        _MOHO_RETURN)
-_add(BodyName.MOHO, "sample_return", _MOHO_RETURN)
+_add(BodyName.MOHO, MissionType.ORBIT,         _MOHO_ORBIT)
+_add(BodyName.MOHO, MissionType.LAND,          _MOHO_LAND)
+_add(BodyName.MOHO, MissionType.RETURN,        _MOHO_RETURN)
+_add(BodyName.MOHO, MissionType.SAMPLE_RETURN, _MOHO_RETURN)
 
 
 # ===========================================================================
@@ -733,10 +753,10 @@ _EVE_RETURN_PROP = _EVE_LAND_PROP + [
     _KERBIN_REENTRY,
 ]
 
-_add(BodyName.EVE, "orbit",         _EVE_ORBIT_AERO, _EVE_ORBIT_PROP)
-_add(BodyName.EVE, "land",          _EVE_LAND_AERO,  _EVE_LAND_PROP)
-_add(BodyName.EVE, "return",        _EVE_RETURN_AERO, _EVE_RETURN_PROP)
-_add(BodyName.EVE, "sample_return", _EVE_RETURN_AERO, _EVE_RETURN_PROP)
+_add(BodyName.EVE, MissionType.ORBIT,         _EVE_ORBIT_AERO, _EVE_ORBIT_PROP)
+_add(BodyName.EVE, MissionType.LAND,          _EVE_LAND_AERO,  _EVE_LAND_PROP)
+_add(BodyName.EVE, MissionType.RETURN,        _EVE_RETURN_AERO, _EVE_RETURN_PROP)
+_add(BodyName.EVE, MissionType.SAMPLE_RETURN, _EVE_RETURN_AERO, _EVE_RETURN_PROP)
 
 
 # ===========================================================================
@@ -764,10 +784,10 @@ _GILLY_RETURN = _GILLY_LAND + [
     _KERBIN_REENTRY,
 ]
 
-_add(BodyName.GILLY, "orbit",         _GILLY_ORBIT)
-_add(BodyName.GILLY, "land",          _GILLY_LAND)
-_add(BodyName.GILLY, "return",        _GILLY_RETURN)
-_add(BodyName.GILLY, "sample_return", _GILLY_RETURN)
+_add(BodyName.GILLY, MissionType.ORBIT,         _GILLY_ORBIT)
+_add(BodyName.GILLY, MissionType.LAND,          _GILLY_LAND)
+_add(BodyName.GILLY, MissionType.RETURN,        _GILLY_RETURN)
+_add(BodyName.GILLY, MissionType.SAMPLE_RETURN, _GILLY_RETURN)
 
 
 # ===========================================================================
@@ -817,10 +837,10 @@ _DUNA_RETURN_AERO = _DUNA_LAND_AERO + [
     _KERBIN_REENTRY,
 ]
 
-_add(BodyName.DUNA, "orbit",         _DUNA_ORBIT_PROP, _DUNA_ORBIT_AERO)
-_add(BodyName.DUNA, "land",          _DUNA_LAND_PROP,  _DUNA_LAND_AERO)
-_add(BodyName.DUNA, "return",        _DUNA_RETURN_PROP, _DUNA_RETURN_AERO)
-_add(BodyName.DUNA, "sample_return", _DUNA_RETURN_PROP, _DUNA_RETURN_AERO)
+_add(BodyName.DUNA, MissionType.ORBIT,         _DUNA_ORBIT_PROP, _DUNA_ORBIT_AERO)
+_add(BodyName.DUNA, MissionType.LAND,          _DUNA_LAND_PROP,  _DUNA_LAND_AERO)
+_add(BodyName.DUNA, MissionType.RETURN,        _DUNA_RETURN_PROP, _DUNA_RETURN_AERO)
+_add(BodyName.DUNA, MissionType.SAMPLE_RETURN, _DUNA_RETURN_PROP, _DUNA_RETURN_AERO)
 
 
 # ===========================================================================
@@ -848,10 +868,10 @@ _IKE_RETURN = _IKE_LAND + [
     _KERBIN_REENTRY,
 ]
 
-_add(BodyName.IKE, "orbit",         _IKE_ORBIT)
-_add(BodyName.IKE, "land",          _IKE_LAND)
-_add(BodyName.IKE, "return",        _IKE_RETURN)
-_add(BodyName.IKE, "sample_return", _IKE_RETURN)
+_add(BodyName.IKE, MissionType.ORBIT,         _IKE_ORBIT)
+_add(BodyName.IKE, MissionType.LAND,          _IKE_LAND)
+_add(BodyName.IKE, MissionType.RETURN,        _IKE_RETURN)
+_add(BodyName.IKE, MissionType.SAMPLE_RETURN, _IKE_RETURN)
 
 
 # ===========================================================================
@@ -881,10 +901,10 @@ _DRES_RETURN = _DRES_LAND + [
     _KERBIN_REENTRY,
 ]
 
-_add(BodyName.DRES, "orbit",         _DRES_ORBIT)
-_add(BodyName.DRES, "land",          _DRES_LAND)
-_add(BodyName.DRES, "return",        _DRES_RETURN)
-_add(BodyName.DRES, "sample_return", _DRES_RETURN)
+_add(BodyName.DRES, MissionType.ORBIT,         _DRES_ORBIT)
+_add(BodyName.DRES, MissionType.LAND,          _DRES_LAND)
+_add(BodyName.DRES, MissionType.RETURN,        _DRES_RETURN)
+_add(BodyName.DRES, MissionType.SAMPLE_RETURN, _DRES_RETURN)
 
 
 # ===========================================================================
@@ -920,8 +940,8 @@ _JOOL_RETURN_PROP = _JOOL_ORBIT_PROP + [
     _KERBIN_REENTRY,
 ]
 
-_add(BodyName.JOOL, "orbit",  _JOOL_ORBIT_AERO, _JOOL_ORBIT_PROP)
-_add(BodyName.JOOL, "return", _JOOL_RETURN_AERO, _JOOL_RETURN_PROP)
+_add(BodyName.JOOL, MissionType.ORBIT,  _JOOL_ORBIT_AERO, _JOOL_ORBIT_PROP)
+_add(BodyName.JOOL, MissionType.RETURN, _JOOL_RETURN_AERO, _JOOL_RETURN_PROP)
 
 
 # ===========================================================================
@@ -961,10 +981,10 @@ _LAYTHE_RETURN_PROP = _LAYTHE_LAND_PROP + [
     _KERBIN_REENTRY,
 ]
 
-_add(BodyName.LAYTHE, "orbit",         _LAYTHE_COMMON)
-_add(BodyName.LAYTHE, "land",          _LAYTHE_LAND_AERO, _LAYTHE_LAND_PROP)
-_add(BodyName.LAYTHE, "return",        _LAYTHE_RETURN_AERO, _LAYTHE_RETURN_PROP)
-_add(BodyName.LAYTHE, "sample_return", _LAYTHE_RETURN_AERO, _LAYTHE_RETURN_PROP)
+_add(BodyName.LAYTHE, MissionType.ORBIT,         _LAYTHE_COMMON)
+_add(BodyName.LAYTHE, MissionType.LAND,          _LAYTHE_LAND_AERO, _LAYTHE_LAND_PROP)
+_add(BodyName.LAYTHE, MissionType.RETURN,        _LAYTHE_RETURN_AERO, _LAYTHE_RETURN_PROP)
+_add(BodyName.LAYTHE, MissionType.SAMPLE_RETURN, _LAYTHE_RETURN_AERO, _LAYTHE_RETURN_PROP)
 
 
 # ===========================================================================
@@ -990,10 +1010,10 @@ _VALL_RETURN = _VALL_LAND + [
     _KERBIN_REENTRY,
 ]
 
-_add(BodyName.VALL, "orbit",         _VALL_COMMON)
-_add(BodyName.VALL, "land",          _VALL_LAND)
-_add(BodyName.VALL, "return",        _VALL_RETURN)
-_add(BodyName.VALL, "sample_return", _VALL_RETURN)
+_add(BodyName.VALL, MissionType.ORBIT,         _VALL_COMMON)
+_add(BodyName.VALL, MissionType.LAND,          _VALL_LAND)
+_add(BodyName.VALL, MissionType.RETURN,        _VALL_RETURN)
+_add(BodyName.VALL, MissionType.SAMPLE_RETURN, _VALL_RETURN)
 
 
 # ===========================================================================
@@ -1019,10 +1039,10 @@ _TYLO_RETURN = _TYLO_LAND + [
     _KERBIN_REENTRY,
 ]
 
-_add(BodyName.TYLO, "orbit",         _TYLO_COMMON)
-_add(BodyName.TYLO, "land",          _TYLO_LAND)
-_add(BodyName.TYLO, "return",        _TYLO_RETURN)
-_add(BodyName.TYLO, "sample_return", _TYLO_RETURN)
+_add(BodyName.TYLO, MissionType.ORBIT,         _TYLO_COMMON)
+_add(BodyName.TYLO, MissionType.LAND,          _TYLO_LAND)
+_add(BodyName.TYLO, MissionType.RETURN,        _TYLO_RETURN)
+_add(BodyName.TYLO, MissionType.SAMPLE_RETURN, _TYLO_RETURN)
 
 
 # ===========================================================================
@@ -1050,10 +1070,10 @@ _BOP_RETURN = _BOP_LAND + [
     _KERBIN_REENTRY,
 ]
 
-_add(BodyName.BOP, "orbit",         _BOP_COMMON)
-_add(BodyName.BOP, "land",          _BOP_LAND)
-_add(BodyName.BOP, "return",        _BOP_RETURN)
-_add(BodyName.BOP, "sample_return", _BOP_RETURN)
+_add(BodyName.BOP, MissionType.ORBIT,         _BOP_COMMON)
+_add(BodyName.BOP, MissionType.LAND,          _BOP_LAND)
+_add(BodyName.BOP, MissionType.RETURN,        _BOP_RETURN)
+_add(BodyName.BOP, MissionType.SAMPLE_RETURN, _BOP_RETURN)
 
 
 # ===========================================================================
@@ -1081,10 +1101,10 @@ _POL_RETURN = _POL_LAND + [
     _KERBIN_REENTRY,
 ]
 
-_add(BodyName.POL, "orbit",         _POL_COMMON)
-_add(BodyName.POL, "land",          _POL_LAND)
-_add(BodyName.POL, "return",        _POL_RETURN)
-_add(BodyName.POL, "sample_return", _POL_RETURN)
+_add(BodyName.POL, MissionType.ORBIT,         _POL_COMMON)
+_add(BodyName.POL, MissionType.LAND,          _POL_LAND)
+_add(BodyName.POL, MissionType.RETURN,        _POL_RETURN)
+_add(BodyName.POL, MissionType.SAMPLE_RETURN, _POL_RETURN)
 
 
 # ===========================================================================
@@ -1112,10 +1132,10 @@ _EELOO_RETURN = _EELOO_LAND + [
     _KERBIN_REENTRY,
 ]
 
-_add(BodyName.EELOO, "orbit",         _EELOO_COMMON)
-_add(BodyName.EELOO, "land",          _EELOO_LAND)
-_add(BodyName.EELOO, "return",        _EELOO_RETURN)
-_add(BodyName.EELOO, "sample_return", _EELOO_RETURN)
+_add(BodyName.EELOO, MissionType.ORBIT,         _EELOO_COMMON)
+_add(BodyName.EELOO, MissionType.LAND,          _EELOO_LAND)
+_add(BodyName.EELOO, MissionType.RETURN,        _EELOO_RETURN)
+_add(BodyName.EELOO, MissionType.SAMPLE_RETURN, _EELOO_RETURN)
 
 
 # ===========================================================================
@@ -1134,18 +1154,18 @@ _KERBOL_RETURN = _KERBOL_ORBIT + [
     _KERBIN_REENTRY,
 ]
 
-_add(BodyName.KERBOL, "orbit",  _KERBOL_ORBIT)
-_add(BodyName.KERBOL, "return", _KERBOL_RETURN)
+_add(BodyName.KERBOL, MissionType.ORBIT,  _KERBOL_ORBIT)
+_add(BodyName.KERBOL, MissionType.RETURN, _KERBOL_RETURN)
 
 # Auto-generate flyby/escape profiles: orbit profile minus orbit insertion.
 # A flyby only needs to reach the body's SOI — no orbit insertion burn.
 # Kerbin already has an explicit escape profile (ascent + escape burn) — skip it.
 for _body_name, _mission_type in list(MISSION_PROFILES):
-    if _mission_type == "orbit" and (_body_name, "escape") not in MISSION_PROFILES:
+    if _mission_type == MissionType.ORBIT and (_body_name, MissionType.ESCAPE) not in MISSION_PROFILES:
         _flyby_profiles = [p[:-1] for p in MISSION_PROFILES[(_body_name, _mission_type)]
                            if len(p) > 1]
         if _flyby_profiles:
-            MISSION_PROFILES[(_body_name, "escape")] = _flyby_profiles
+            MISSION_PROFILES[(_body_name, MissionType.ESCAPE)] = _flyby_profiles
 del _body_name, _mission_type, _flyby_profiles
 
 
