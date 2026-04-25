@@ -3,6 +3,7 @@ import unittest
 
 from test.bases import WorldTestBase
 
+from worlds.ksp1.bodies import BodyName
 from worlds.ksp1.options import Goal
 from worlds.ksp1.rules import (
     GoalSpec,
@@ -47,7 +48,7 @@ class TestResolveGoalSpec(unittest.TestCase):
         opts = _FakeOptions(goal=Goal.option_duna_return)
         spec = resolve_goal_spec(opts)
         self.assertEqual(spec.display_name, "Duna Return")
-        self.assertEqual(spec.return_bodies, ("Duna",))
+        self.assertEqual(spec.return_bodies, (BodyName.DUNA,))
         self.assertFalse(spec.flag_bodies)
         self.assertFalse(spec.sample_return_bodies)
         self.assertFalse(spec.complete_tech_tree)
@@ -56,13 +57,13 @@ class TestResolveGoalSpec(unittest.TestCase):
         opts = _FakeOptions(goal=Goal.option_mun_flag)
         spec = resolve_goal_spec(opts)
         self.assertEqual(spec.display_name, "Mun Flag Plant")
-        self.assertEqual(spec.flag_bodies, ("Mun",))
+        self.assertEqual(spec.flag_bodies, (BodyName.MUN,))
 
     def test_preset_mun_sample_return(self):
         opts = _FakeOptions(goal=Goal.option_mun_sample_return)
         spec = resolve_goal_spec(opts)
         self.assertEqual(spec.display_name, "Mun Sample Return")
-        self.assertEqual(spec.sample_return_bodies, ("Mun",))
+        self.assertEqual(spec.sample_return_bodies, (BodyName.MUN,))
 
     def test_preset_complete_tech_tree(self):
         opts = _FakeOptions(goal=Goal.option_complete_tech_tree)
@@ -75,25 +76,25 @@ class TestResolveGoalSpec(unittest.TestCase):
         self.assertEqual(set(spec.flag_bodies), set(_ALL_LANDABLE_BODIES))
 
     def test_custom_flag_bodies(self):
-        opts = _FakeOptions(goal=Goal.option_custom, flag=["Mun", "Minmus"])
+        opts = _FakeOptions(goal=Goal.option_custom, flag=[BodyName.MUN, BodyName.MINMUS])
         spec = resolve_goal_spec(opts)
-        self.assertEqual(spec.flag_bodies, ("Minmus", "Mun"))
+        self.assertEqual(spec.flag_bodies, (BodyName.MINMUS, BodyName.MUN))
         self.assertIn("Custom:", spec.display_name)
 
     def test_custom_return_bodies(self):
-        opts = _FakeOptions(goal=Goal.option_custom, ret=["Duna", "Eve"])
+        opts = _FakeOptions(goal=Goal.option_custom, ret=[BodyName.DUNA, BodyName.EVE])
         spec = resolve_goal_spec(opts)
-        self.assertEqual(set(spec.return_bodies), {"Duna", "Eve"})
+        self.assertEqual(set(spec.return_bodies), {BodyName.DUNA, BodyName.EVE})
 
     def test_custom_mixed(self):
-        opts = _FakeOptions(goal=Goal.option_custom, flag=["Mun"], ret=["Duna"], sample=["Eeloo"])
+        opts = _FakeOptions(goal=Goal.option_custom, flag=[BodyName.MUN], ret=[BodyName.DUNA], sample=[BodyName.EELOO])
         spec = resolve_goal_spec(opts)
-        self.assertEqual(spec.flag_bodies, ("Mun",))
-        self.assertEqual(spec.return_bodies, ("Duna",))
-        self.assertEqual(spec.sample_return_bodies, ("Eeloo",))
+        self.assertEqual(spec.flag_bodies, (BodyName.MUN,))
+        self.assertEqual(spec.return_bodies, (BodyName.DUNA,))
+        self.assertEqual(spec.sample_return_bodies, (BodyName.EELOO,))
 
     def test_body_lists_with_non_custom_raises(self):
-        opts = _FakeOptions(goal=Goal.option_duna_return, flag=["Mun"])
+        opts = _FakeOptions(goal=Goal.option_duna_return, flag=[BodyName.MUN])
         with self.assertRaises(RuntimeError):
             resolve_goal_spec(opts)
 
@@ -117,17 +118,17 @@ class TestResolveGoalSpec(unittest.TestCase):
 class TestGoalSpecLocationNames(unittest.TestCase):
 
     def test_single_return(self):
-        spec = GoalSpec(display_name="test", return_bodies=("Duna",))
+        spec = GoalSpec(display_name="test", return_bodies=(BodyName.DUNA,))
         names = goal_spec_location_names(spec)
         self.assertEqual(names, ["Duna Return 1"])
 
     def test_single_flag(self):
-        spec = GoalSpec(display_name="test", flag_bodies=("Mun",))
+        spec = GoalSpec(display_name="test", flag_bodies=(BodyName.MUN,))
         names = goal_spec_location_names(spec)
         self.assertEqual(names, ["Mun Flag Plant 1"])
 
     def test_single_sample_return(self):
-        spec = GoalSpec(display_name="test", sample_return_bodies=("Mun",))
+        spec = GoalSpec(display_name="test", sample_return_bodies=(BodyName.MUN,))
         names = goal_spec_location_names(spec)
         self.assertEqual(names, ["Mun Sample Return 1"])
 
@@ -152,9 +153,9 @@ class TestGoalSpecLocationNames(unittest.TestCase):
     def test_mixed_custom(self):
         spec = GoalSpec(
             display_name="test",
-            flag_bodies=("Mun",),
-            return_bodies=("Duna",),
-            sample_return_bodies=("Eeloo",),
+            flag_bodies=(BodyName.MUN,),
+            return_bodies=(BodyName.DUNA,),
+            sample_return_bodies=(BodyName.EELOO,),
         )
         names = goal_spec_location_names(spec)
         self.assertEqual(len(names), 3)
@@ -259,7 +260,7 @@ class TestIsKerbinSystemOnly(unittest.TestCase):
         self.assertTrue(spec.is_kerbin_system_only)
 
     def test_custom_kerbin_system_bodies(self):
-        spec = GoalSpec(display_name="test", flag_bodies=("Mun", "Minmus"))
+        spec = GoalSpec(display_name="test", flag_bodies=(BodyName.MUN, BodyName.MINMUS))
         self.assertTrue(spec.is_kerbin_system_only)
 
     def test_duna_return_is_not_kerbin_system(self):
@@ -275,7 +276,7 @@ class TestIsKerbinSystemOnly(unittest.TestCase):
         self.assertFalse(spec.is_kerbin_system_only)
 
     def test_mixed_custom_with_interplanetary_is_not(self):
-        spec = GoalSpec(display_name="test", flag_bodies=("Mun",), return_bodies=("Duna",))
+        spec = GoalSpec(display_name="test", flag_bodies=(BodyName.MUN,), return_bodies=(BodyName.DUNA,))
         self.assertFalse(spec.is_kerbin_system_only)
 
     def test_empty_spec_is_not_kerbin_system(self):

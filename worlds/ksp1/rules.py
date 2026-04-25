@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Callable
 
 from BaseClasses import CollectionState, ItemClassification
 
-from .bodies import ALL_BODIES, BODY_BY_NAME, science_budget
+from .bodies import ALL_BODIES, BODY_BY_NAME, BodyName, science_budget
 from .capability import get_capability
 from .items import ITEM_TABLE, PROGRESSIVE_RD_NAME, PROGRESSIVE_PART_ITEM_NAMES, SCIENCE_PACK_NAMES
 from .locations import (
@@ -265,9 +265,9 @@ def _mission_rule_for_event(
     """
     # Eve surface ascent is beyond the capability model.
     # Tylo/Laythe returns cascade too much payload mass for the optimizer.
-    if body_name == "Eve" and event in (EventName.RETURN, EventName.SAMPLE_RETURN):
+    if body_name == BodyName.EVE and event in (EventName.RETURN, EventName.SAMPLE_RETURN):
         return _make_all_parts_rule(player)
-    if body_name in ("Tylo", "Laythe") and event in (EventName.RETURN, EventName.SAMPLE_RETURN):
+    if body_name in (BodyName.TYLO, BodyName.LAYTHE) and event in (EventName.RETURN, EventName.SAMPLE_RETURN):
         return _make_all_parts_rule(player)
 
     event_def = EVENT_BY_NAME.get(event)
@@ -365,7 +365,7 @@ def _set_item_pacing_rules(world: KSP1World, player: int, difficulty: int) -> No
         add_item_rule(world.get_location(name), power_rule)
     # Early Kerbin mission events (everything except Flyby/SOI Leave which need escape)
     for event in (EventName.ORBIT, EventName.EVA_IN_ORBIT, EventName.LANDING, EventName.CREWED_LANDING, EventName.FLAG_PLANT, EventName.RETURN, EventName.SAMPLE_RETURN):
-        for loc in event_locations("Kerbin", event):
+        for loc in event_locations(BodyName.KERBIN, event):
             add_item_rule(world.get_location(str(loc)), power_rule)
 
     # Band C: Early tech tree (tiers 1-3) — reject tier 2, strict mode only
@@ -414,38 +414,27 @@ def _set_interplanetary_item_rules(world: KSP1World, player: int) -> None:
 # Victory conditions — GoalSpec system
 # ---------------------------------------------------------------------------
 
-_STANDARD_RETURN_BODIES: tuple[str, ...] = (
-    "Mun", "Minmus", "Moho", "Gilly", "Duna", "Ike",
-    "Dres", "Vall", "Bop", "Pol", "Eeloo",
+_STANDARD_RETURN_BODIES: tuple[BodyName, ...] = (
+    BodyName.MUN, BodyName.MINMUS, BodyName.MOHO, BodyName.GILLY, BodyName.DUNA, BodyName.IKE,
+    BodyName.DRES, BodyName.VALL, BodyName.BOP, BodyName.POL, BodyName.EELOO,
 )
 
 # Derived from bodies.py — single source of truth.
-_ALL_LANDABLE_BODIES: tuple[str, ...] = tuple(
+_ALL_LANDABLE_BODIES: tuple[BodyName, ...] = tuple(
     b.name for b in ALL_BODIES if b.can_land
 )
 
 # Bodies whose return/sample-return rules use the all-parts proxy
 # (capability system can't model their ascent profiles).
-_ALL_PARTS_PROXY_BODIES: frozenset[str] = frozenset({"Eve", "Tylo", "Laythe"})
-
-# Import-time validation: hardcoded body names must exist in the body database.
-assert all(b in BODY_BY_NAME for b in _STANDARD_RETURN_BODIES), (
-    f"Unknown body in _STANDARD_RETURN_BODIES: "
-    f"{[b for b in _STANDARD_RETURN_BODIES if b not in BODY_BY_NAME]}"
-)
-assert all(b in BODY_BY_NAME for b in _ALL_PARTS_PROXY_BODIES), (
-    f"Unknown body in _ALL_PARTS_PROXY_BODIES: "
-    f"{[b for b in _ALL_PARTS_PROXY_BODIES if b not in BODY_BY_NAME]}"
-)
-
+_ALL_PARTS_PROXY_BODIES: frozenset[BodyName] = frozenset({BodyName.EVE, BodyName.TYLO, BodyName.LAYTHE})
 
 @dataclass(frozen=True)
 class GoalSpec:
     """Decomposed goal: every goal (preset or custom) becomes one of these."""
     display_name: str
-    flag_bodies: tuple[str, ...] = ()
-    return_bodies: tuple[str, ...] = ()
-    sample_return_bodies: tuple[str, ...] = ()
+    flag_bodies: tuple[BodyName, ...] = ()
+    return_bodies: tuple[BodyName, ...] = ()
+    sample_return_bodies: tuple[BodyName, ...] = ()
     complete_tech_tree: bool = False
 
     @property
@@ -460,15 +449,15 @@ class GoalSpec:
 _PRESET_GOALS: dict[int, GoalSpec] = {
     Goal.option_duna_return: GoalSpec(
         display_name="Duna Return",
-        return_bodies=("Duna",),
+        return_bodies=(BodyName.DUNA,),
     ),
     Goal.option_eeloo_return: GoalSpec(
         display_name="Eeloo Return",
-        return_bodies=("Eeloo",),
+        return_bodies=(BodyName.EELOO,),
     ),
     Goal.option_eve_return: GoalSpec(
         display_name="Eve Return",
-        return_bodies=("Eve",),
+        return_bodies=(BodyName.EVE,),
     ),
     Goal.option_flag_every_body: GoalSpec(
         display_name="Flag Every Body",
@@ -488,11 +477,11 @@ _PRESET_GOALS: dict[int, GoalSpec] = {
     ),
     Goal.option_mun_flag: GoalSpec(
         display_name="Mun Flag Plant",
-        flag_bodies=("Mun",),
+        flag_bodies=(BodyName.MUN,),
     ),
     Goal.option_mun_sample_return: GoalSpec(
         display_name="Mun Sample Return",
-        sample_return_bodies=("Mun",),
+        sample_return_bodies=(BodyName.MUN,),
     ),
 }
 

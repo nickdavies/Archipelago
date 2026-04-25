@@ -9,6 +9,7 @@ individual items" without requiring production code changes.
 import unittest
 from typing import Callable
 
+from worlds.ksp1.bodies import BodyName
 from worlds.ksp1.parts import (
     PART_DB, PROGRESSIVE_PART_TIERS, PROGRESSIVE_PART_NAMES,
     PROGRESSIVE_PART_COUNTS,
@@ -58,7 +59,7 @@ class TestTierZeroGating(unittest.TestCase):
         """Zero progressive items → cannot reach Kerbin orbit."""
         fn = _make_item_count_fn({}, include_all_individual=True)
         cap, flags = compute_capability_from_items(fn, "normal", start_with_clamps=True)
-        kerbin = cap.bodies.get("Kerbin")
+        kerbin = cap.bodies.get(BodyName.KERBIN)
         self.assertFalse(
             kerbin is not None and kerbin.access.get("Orbit", False),
             "Should NOT be able to orbit Kerbin with zero progressive items "
@@ -76,7 +77,7 @@ class TestTierOneCapability(unittest.TestCase):
     def test_kerbin_orbit_achievable(self):
         fn = _make_item_count_fn(self._tier1_all())
         cap, _ = compute_capability_from_items(fn, "normal", start_with_clamps=True)
-        kerbin = cap.bodies.get("Kerbin")
+        kerbin = cap.bodies.get(BodyName.KERBIN)
         self.assertIsNotNone(kerbin)
         self.assertTrue(
             kerbin.access.get("Orbit", False),
@@ -86,9 +87,9 @@ class TestTierOneCapability(unittest.TestCase):
     def test_mun_flyby_likely(self):
         fn = _make_item_count_fn(self._tier1_all())
         cap, _ = compute_capability_from_items(fn, "normal", start_with_clamps=True)
-        mun = cap.bodies.get("Mun")
+        mun = cap.bodies.get(BodyName.MUN)
         # Flyby = can_escape from Kerbin is enough to reach Mun SOI
-        kerbin = cap.bodies.get("Kerbin")
+        kerbin = cap.bodies.get(BodyName.KERBIN)
         self.assertTrue(
             kerbin is not None and kerbin.access.get("Flyby", False),
             f"Tier 1 should at least be able to escape Kerbin. "
@@ -99,7 +100,7 @@ class TestTierOneCapability(unittest.TestCase):
         """Tier 1 should NOT reach Duna orbit (too generous if so)."""
         fn = _make_item_count_fn(self._tier1_all())
         cap, _ = compute_capability_from_items(fn, "normal", start_with_clamps=True)
-        duna = cap.bodies.get("Duna")
+        duna = cap.bodies.get(BodyName.DUNA)
         if duna is not None:
             self.assertFalse(
                 duna.access.get("Orbit", False),
@@ -116,7 +117,7 @@ class TestTierTwoCapability(unittest.TestCase):
     def test_mun_return(self):
         fn = _make_item_count_fn(self._tier2_all())
         cap, _ = compute_capability_from_items(fn, "normal", start_with_clamps=True)
-        mun = cap.bodies.get("Mun")
+        mun = cap.bodies.get(BodyName.MUN)
         self.assertIsNotNone(mun)
         self.assertTrue(
             mun.access.get("Return", False),
@@ -126,7 +127,7 @@ class TestTierTwoCapability(unittest.TestCase):
     def test_minmus_return(self):
         fn = _make_item_count_fn(self._tier2_all())
         cap, _ = compute_capability_from_items(fn, "normal", start_with_clamps=True)
-        minmus = cap.bodies.get("Minmus")
+        minmus = cap.bodies.get(BodyName.MINMUS)
         self.assertIsNotNone(minmus)
         self.assertTrue(
             minmus.access.get("Return", False),
@@ -143,7 +144,7 @@ class TestTierThreeCapability(unittest.TestCase):
     def test_duna_return(self):
         fn = _make_item_count_fn(self._tier3_all())
         cap, _ = compute_capability_from_items(fn, "normal", start_with_clamps=True)
-        duna = cap.bodies.get("Duna")
+        duna = cap.bodies.get(BodyName.DUNA)
         self.assertIsNotNone(duna)
         self.assertTrue(
             duna.access.get("Return", False),
@@ -154,7 +155,7 @@ class TestTierThreeCapability(unittest.TestCase):
         """Tier 3 should enable Duna orbit (Jool may need T4 tanks)."""
         fn = _make_item_count_fn(self._tier3_all())
         cap, _ = compute_capability_from_items(fn, "normal", start_with_clamps=True)
-        duna = cap.bodies.get("Duna")
+        duna = cap.bodies.get(BodyName.DUNA)
         self.assertIsNotNone(duna)
         self.assertTrue(
             duna.access.get("Orbit", False),
@@ -205,7 +206,7 @@ class TestMixedTierCombos(unittest.TestCase):
         levels["Progressive Launch Engine"] = 2
         fn = _make_item_count_fn(levels)
         cap, _ = compute_capability_from_items(fn, "normal", start_with_clamps=True)
-        kerbin = cap.bodies.get("Kerbin")
+        kerbin = cap.bodies.get(BodyName.KERBIN)
         self.assertTrue(kerbin and kerbin.access.get("Orbit", False))
         # With bigger engines but small tanks, should at least reach Kerbin escape
         self.assertTrue(kerbin and kerbin.access.get("Flyby", False))
@@ -220,7 +221,7 @@ class TestMixedTierCombos(unittest.TestCase):
         }
         fn = _make_item_count_fn(levels, include_all_individual=False)
         cap, _ = compute_capability_from_items(fn, "normal", start_with_clamps=True)
-        kerbin = cap.bodies.get("Kerbin")
+        kerbin = cap.bodies.get(BodyName.KERBIN)
         self.assertFalse(
             kerbin is not None and kerbin.access.get("Orbit", False),
             "Should not orbit with engines but zero fuel tanks/SRBs",
@@ -254,7 +255,7 @@ class TestDifficultyInteraction(unittest.TestCase):
     def test_tier1_orbit_casual(self):
         fn = _make_item_count_fn(self._tier1_all())
         cap, _ = compute_capability_from_items(fn, "casual", start_with_clamps=True)
-        kerbin = cap.bodies.get("Kerbin")
+        kerbin = cap.bodies.get(BodyName.KERBIN)
         self.assertTrue(
             kerbin and kerbin.access.get("Orbit", False),
             "Tier 1 must reach Kerbin orbit even on casual difficulty",
@@ -263,7 +264,7 @@ class TestDifficultyInteraction(unittest.TestCase):
     def test_tier1_orbit_expert(self):
         fn = _make_item_count_fn(self._tier1_all())
         cap, _ = compute_capability_from_items(fn, "expert", start_with_clamps=True)
-        kerbin = cap.bodies.get("Kerbin")
+        kerbin = cap.bodies.get(BodyName.KERBIN)
         self.assertTrue(
             kerbin and kerbin.access.get("Orbit", False),
             f"Tier 1 must reach Kerbin orbit on expert. Blocking: "

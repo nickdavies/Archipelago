@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from worlds.ksp1.bodies import (
-    ALL_BODIES, BODY_BY_NAME, DIFFICULTY_PROFILES, EdgeType,
+    ALL_BODIES, BODY_BY_NAME, BodyName, DIFFICULTY_PROFILES, EdgeType,
     MISSION_PROFILES, MissionEdge,
 )
 from worlds.ksp1.capability import (
@@ -26,7 +26,7 @@ from worlds.ksp1.parts import PART_REGISTRY
 
 @dataclass
 class CheckInfo:
-    body_name: str
+    body_name: BodyName
     event: str
     mission_type: str
     crewed: bool | None  # True=crewed, False=unmanned, None=try both
@@ -51,7 +51,7 @@ def _build_check_map() -> dict[str, CheckInfo]:
     # Kerbin-specific locations (sounding, first_launch, etc.)
     for loc in KERBIN_LOCATIONS:
         result[loc.name] = CheckInfo(
-            "Kerbin", loc.name, loc.mission_type, None,
+            BodyName.KERBIN, loc.name, loc.mission_type, None,
             threshold_km=loc.threshold_km,
         )
 

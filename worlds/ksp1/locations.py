@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING
 
 from BaseClasses import Location
 
-from .bodies import ALL_BODIES
+from .bodies import ALL_BODIES, BodyName
 from .tech_tree import TECH_NODES
 
 if TYPE_CHECKING:
@@ -66,7 +66,7 @@ class MissionLocation:
 
     Canonical format: "{body} {event} {slot}" — e.g. "Mun Orbit 1".
     """
-    body: str            # "Mun", "Duna", etc.
+    body: BodyName       # BodyName.MUN, BodyName.DUNA, etc.
     event: EventName     # EventName.ORBIT, EventName.FLAG_PLANT, etc.
     slot: int            # 1-based
 
@@ -280,8 +280,8 @@ assert len(MISSION_LOCATION_NAMES) == 248, (
 )
 
 # Bodies in the Kerbin system — derived from ALL_BODIES, not hardcoded.
-KERBIN_SYSTEM_BODY_NAMES: frozenset[str] = frozenset(
-    b.name for b in ALL_BODIES if b.name == "Kerbin" or b.parent == "Kerbin"
+KERBIN_SYSTEM_BODY_NAMES: frozenset[BodyName] = frozenset(
+    b.name for b in ALL_BODIES if b.name == BodyName.KERBIN or b.parent == BodyName.KERBIN
 )
 
 
@@ -330,7 +330,7 @@ LOCATION_NAME_TO_ID: dict[str, int] = {
 # Helper: which locations belong to a given body + event?
 # ---------------------------------------------------------------------------
 
-def event_locations(body_name: str, event: EventName) -> list[MissionLocation]:
+def event_locations(body_name: BodyName, event: EventName) -> list[MissionLocation]:
     """Return the list of MissionLocation objects for one body/event combination."""
     return [MissionLocation(body_name, event, i) for i in range(1, EVENT_BY_NAME[event].scale + 1)]
 

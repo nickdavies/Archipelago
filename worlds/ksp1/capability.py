@@ -23,7 +23,7 @@ from BaseClasses import CollectionState
 
 from .bodies import (
     BODY_BY_NAME, MISSION_PROFILES, ALL_BODIES,
-    DifficultyProfile, DIFFICULTY_PROFILES,
+    BodyName, DifficultyProfile, DIFFICULTY_PROFILES,
     Body, MissionEdge, EdgeType, effective_dv, parent_chain,
 )
 from .parts import (
@@ -166,7 +166,7 @@ class EquipmentFlags:
 
 @dataclass
 class BodyAccessProfile:
-    access: dict[str, bool] = field(default_factory=dict)
+    access: dict[EventName, bool] = field(default_factory=dict)
     blocking_reason: Optional[str] = None
 
 
@@ -203,7 +203,7 @@ class RocketCapability:
     sounding_altitude_km: float = 0.0
 
     # Per-body assessments
-    bodies: dict[str, BodyAccessProfile] = field(default_factory=dict)
+    bodies: dict[BodyName, BodyAccessProfile] = field(default_factory=dict)
 
     # Stage detail list (last computed profile, for debugging)
     stage_results: list[StageResult] = field(default_factory=list)
@@ -1237,7 +1237,7 @@ def _assess_one_body(
         parent_prof = computed.get(body.parent)
         # For Kerbin moons: parent orbit must be reachable (Kerbin orbit always is)
         # For other moons: parent planet must be orbitally reachable
-        if body.parent != "Kerbin" and parent_prof is not None:
+        if body.parent != BodyName.KERBIN and parent_prof is not None:
             if not parent_prof.access.get("Orbit", False):
                 prof.blocking_reason = f"parent {body.parent} orbit unreachable"
                 return prof

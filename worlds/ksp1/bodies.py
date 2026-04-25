@@ -21,8 +21,32 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from enum import Enum, auto
+from enum import Enum, StrEnum, auto
 from typing import Optional
+
+
+# ---------------------------------------------------------------------------
+# Body names — single source of truth, catches typos at import time
+# ---------------------------------------------------------------------------
+
+class BodyName(StrEnum):
+    KERBIN = "Kerbin"
+    MUN = "Mun"
+    MINMUS = "Minmus"
+    MOHO = "Moho"
+    EVE = "Eve"
+    GILLY = "Gilly"
+    DUNA = "Duna"
+    IKE = "Ike"
+    DRES = "Dres"
+    JOOL = "Jool"
+    LAYTHE = "Laythe"
+    VALL = "Vall"
+    TYLO = "Tylo"
+    BOP = "Bop"
+    POL = "Pol"
+    EELOO = "Eeloo"
+    KERBOL = "Kerbol"
 
 
 # ---------------------------------------------------------------------------
@@ -90,8 +114,8 @@ class BodyDeltaV:
 
 @dataclass(frozen=True)
 class Body:
-    name: str
-    parent: Optional[str]           # None for planets, parent name for moons
+    name: BodyName
+    parent: Optional[BodyName]      # None for planets, parent name for moons
     surface_gravity: float          # m/s²
     has_atmosphere: bool
     atm_pressure_kpa: float         # sea-level, 0 for vacuum bodies
@@ -147,7 +171,7 @@ class MissionEdge:
     destination: str
     edge_type: EdgeType
     base_dv: float                      # m/s, nominal delta-v
-    body: str                           # body name for physics lookups
+    body: BodyName                      # body name for physics lookups
     plane_change_dv: float = 0.0        # worst-case plane change
     min_twr: float = 0.0                # 0.0 = no TWR requirement
     requires_throttleable: bool = False
@@ -162,7 +186,7 @@ class MissionEdge:
 # ---------------------------------------------------------------------------
 
 KERBIN = Body(
-    name="Kerbin", parent=None,
+    name=BodyName.KERBIN, parent=None,
     surface_gravity=9.81, has_atmosphere=True,
     atm_pressure_kpa=101.325, atm_density_kg_m3=1.225,
     can_land=True, low_orbit_alt_km=80,
@@ -181,7 +205,7 @@ KERBIN = Body(
 )
 
 MUN = Body(
-    name="Mun", parent="Kerbin",
+    name=BodyName.MUN, parent=BodyName.KERBIN,
     surface_gravity=1.63, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=14,
@@ -199,7 +223,7 @@ MUN = Body(
 )
 
 MINMUS = Body(
-    name="Minmus", parent="Kerbin",
+    name=BodyName.MINMUS, parent=BodyName.KERBIN,
     surface_gravity=0.491, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=10,
@@ -217,7 +241,7 @@ MINMUS = Body(
 )
 
 MOHO = Body(
-    name="Moho", parent=None,
+    name=BodyName.MOHO, parent=None,
     surface_gravity=2.70, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=20,
@@ -235,7 +259,7 @@ MOHO = Body(
 )
 
 EVE = Body(
-    name="Eve", parent=None,
+    name=BodyName.EVE, parent=None,
     surface_gravity=16.7, has_atmosphere=True,
     atm_pressure_kpa=506.625, atm_density_kg_m3=5.0,
     can_land=True, low_orbit_alt_km=90,
@@ -254,7 +278,7 @@ EVE = Body(
 )
 
 GILLY = Body(
-    name="Gilly", parent="Eve",
+    name=BodyName.GILLY, parent=BodyName.EVE,
     surface_gravity=0.049, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=6,
@@ -272,7 +296,7 @@ GILLY = Body(
 )
 
 DUNA = Body(
-    name="Duna", parent=None,
+    name=BodyName.DUNA, parent=None,
     surface_gravity=2.94, has_atmosphere=True,
     atm_pressure_kpa=6.755, atm_density_kg_m3=0.096,
     can_land=True, low_orbit_alt_km=50,
@@ -291,7 +315,7 @@ DUNA = Body(
 )
 
 IKE = Body(
-    name="Ike", parent="Duna",
+    name=BodyName.IKE, parent=BodyName.DUNA,
     surface_gravity=1.10, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=10,
@@ -309,7 +333,7 @@ IKE = Body(
 )
 
 DRES = Body(
-    name="Dres", parent=None,
+    name=BodyName.DRES, parent=None,
     surface_gravity=2.94, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=25,
@@ -327,7 +351,7 @@ DRES = Body(
 )
 
 JOOL = Body(
-    name="Jool", parent=None,
+    name=BodyName.JOOL, parent=None,
     surface_gravity=7.85, has_atmosphere=True,
     atm_pressure_kpa=1519.88, atm_density_kg_m3=10.0,
     can_land=False, low_orbit_alt_km=210,
@@ -345,7 +369,7 @@ JOOL = Body(
 )
 
 LAYTHE = Body(
-    name="Laythe", parent="Jool",
+    name=BodyName.LAYTHE, parent=BodyName.JOOL,
     surface_gravity=7.85, has_atmosphere=True,
     atm_pressure_kpa=60.795, atm_density_kg_m3=0.73,
     can_land=True, low_orbit_alt_km=60,
@@ -364,7 +388,7 @@ LAYTHE = Body(
 )
 
 VALL = Body(
-    name="Vall", parent="Jool",
+    name=BodyName.VALL, parent=BodyName.JOOL,
     surface_gravity=2.31, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=15,
@@ -382,7 +406,7 @@ VALL = Body(
 )
 
 TYLO = Body(
-    name="Tylo", parent="Jool",
+    name=BodyName.TYLO, parent=BodyName.JOOL,
     surface_gravity=7.85, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=30,
@@ -400,7 +424,7 @@ TYLO = Body(
 )
 
 BOP = Body(
-    name="Bop", parent="Jool",
+    name=BodyName.BOP, parent=BodyName.JOOL,
     surface_gravity=0.589, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=10,
@@ -418,7 +442,7 @@ BOP = Body(
 )
 
 POL = Body(
-    name="Pol", parent="Jool",
+    name=BodyName.POL, parent=BodyName.JOOL,
     surface_gravity=0.373, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=6,
@@ -436,7 +460,7 @@ POL = Body(
 )
 
 EELOO = Body(
-    name="Eeloo", parent=None,
+    name=BodyName.EELOO, parent=None,
     surface_gravity=1.72, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=10,
@@ -454,7 +478,7 @@ EELOO = Body(
 )
 
 KERBOL = Body(
-    name="Kerbol", parent=None,
+    name=BodyName.KERBOL, parent=None,
     surface_gravity=17.1, has_atmosphere=True,
     atm_pressure_kpa=16200.0, atm_density_kg_m3=350.0,
     can_land=False, low_orbit_alt_km=1000,
@@ -479,7 +503,7 @@ ALL_BODIES: list[Body] = [
     EELOO, KERBOL,
 ]
 
-BODY_BY_NAME: dict[str, Body] = {b.name: b for b in ALL_BODIES}
+BODY_BY_NAME: dict[BodyName, Body] = {b.name: b for b in ALL_BODIES}
 
 
 # ---------------------------------------------------------------------------
@@ -487,7 +511,7 @@ BODY_BY_NAME: dict[str, Body] = {b.name: b for b in ALL_BODIES}
 # ---------------------------------------------------------------------------
 
 def _E(  # shorthand for MissionEdge
-    src: str, dst: str, et: EdgeType, dv: float, body: str,
+    src: str, dst: str, et: EdgeType, dv: float, body: BodyName,
     pc: float = 0.0, min_twr: float = 0.0,
     throttle: bool = False, attitude: bool = False,
     heat: bool = False, legs: bool = False,
@@ -511,25 +535,25 @@ ALA = EdgeType.ATMO_LANDING_AERO
 AB = EdgeType.AEROBRAKE_CAPTURE
 
 # Kerbin ascent — always the first edge of every profile
-_KERBIN_ASCENT = _E("kerbin_surface", "kerbin_low_orbit", AT, 3400, "Kerbin",
+_KERBIN_ASCENT = _E("kerbin_surface", "kerbin_low_orbit", AT, 3400, BodyName.KERBIN,
                     min_twr=1.5, throttle=True, attitude=True)
 # Kerbin escape to SOI edge
-_KERBIN_ESCAPE = _E("kerbin_low_orbit", "kerbin_soi", PV, 950, "Kerbin",
+_KERBIN_ESCAPE = _E("kerbin_low_orbit", "kerbin_soi", PV, 950, BodyName.KERBIN,
                     attitude=True)
 # Kerbin aero reentry (return missions)
-_KERBIN_REENTRY = _E("kerbin_intercept", "kerbin_surface", ALA, 100, "Kerbin",
+_KERBIN_REENTRY = _E("kerbin_intercept", "kerbin_surface", ALA, 100, BodyName.KERBIN,
                      heat=True)
 
 
-def _planet_transfer(dv_k: float, dv_ei: float, pc: float, planet: str) -> list[MissionEdge]:
+def _planet_transfer(dv_k: float, dv_ei: float, pc: float, planet: BodyName) -> list[MissionEdge]:
     """Two edges for a Kerbin SOI → planet intercept → planet SOI transfer."""
     return [
-        _E("kerbin_soi", f"{planet}_intercept", PT, dv_k, "Kerbin", pc=pc, attitude=True),
+        _E("kerbin_soi", f"{planet}_intercept", PT, dv_k, BodyName.KERBIN, pc=pc, attitude=True),
         _E(f"{planet}_intercept", f"{planet}_soi", PV, dv_ei, planet, attitude=True),
     ]
 
 
-def _kerbin_return_transfer(dv_k: float, pc: float, planet: str) -> list[MissionEdge]:
+def _kerbin_return_transfer(dv_k: float, pc: float, planet: BodyName) -> list[MissionEdge]:
     """Two edges for planet SOI → Kerbin intercept transfer."""
     return [
         _E(f"{planet}_soi", "kerbin_intercept", PT, dv_k, planet, pc=pc, attitude=True),
@@ -542,12 +566,12 @@ def _kerbin_return_transfer(dv_k: float, pc: float, planet: str) -> list[Mission
 # Keys: (body_name_lowercase, mission_type)
 # Values: list of profile alternatives (each alternative is list[MissionEdge])
 
-MissionProfiles = dict[tuple[str, str], list[list[MissionEdge]]]
+MissionProfiles = dict[tuple[BodyName, str], list[list[MissionEdge]]]
 
 MISSION_PROFILES: MissionProfiles = {}
 
 
-def _add(body: str, mission: str, *profiles: list[MissionEdge]) -> None:
+def _add(body: BodyName, mission: str, *profiles: list[MissionEdge]) -> None:
     MISSION_PROFILES[(body, mission)] = list(profiles)
 
 
@@ -555,17 +579,17 @@ def _add(body: str, mission: str, *profiles: list[MissionEdge]) -> None:
 # Kerbin
 # ===========================================================================
 # Deorbit: reentry from low orbit (heat shield + parachutes)
-_KERBIN_DEORBIT = _E("kerbin_low_orbit", "kerbin_surface", ALA, 100, "Kerbin",
+_KERBIN_DEORBIT = _E("kerbin_low_orbit", "kerbin_surface", ALA, 100, BodyName.KERBIN,
                      heat=True)
 
-_add("Kerbin", "orbit",  [_KERBIN_ASCENT])
-_add("Kerbin", "escape", [_KERBIN_ASCENT, _KERBIN_ESCAPE])
-_add("Kerbin", "land",   [_KERBIN_ASCENT, _KERBIN_DEORBIT])
-_add("Kerbin", "flag_plant",    [])  # 0 dv — walk out and plant
-_add("Kerbin", "return",        [_KERBIN_ASCENT, _KERBIN_DEORBIT])
+_add(BodyName.KERBIN, "orbit",  [_KERBIN_ASCENT])
+_add(BodyName.KERBIN, "escape", [_KERBIN_ASCENT, _KERBIN_ESCAPE])
+_add(BodyName.KERBIN, "land",   [_KERBIN_ASCENT, _KERBIN_DEORBIT])
+_add(BodyName.KERBIN, "flag_plant",    [])  # 0 dv — walk out and plant
+_add(BodyName.KERBIN, "return",        [_KERBIN_ASCENT, _KERBIN_DEORBIT])
 # WARNING: sample_return MUST stay empty — kerbal EVAs from the launchpad,
 # takes a surface sample, and recovers. No rocket needed. Do not add edges.
-_add("Kerbin", "sample_return", [])
+_add(BodyName.KERBIN, "sample_return", [])
 
 
 # ===========================================================================
@@ -574,28 +598,28 @@ _add("Kerbin", "sample_return", [])
 
 _MUN_ORBIT = [
     _KERBIN_ASCENT,
-    _E("kerbin_low_orbit", "mun_intercept", PV, 860, "Kerbin", attitude=True),
-    _E("mun_intercept", "mun_low_orbit", PV, 310, "Mun", attitude=True),
+    _E("kerbin_low_orbit", "mun_intercept", PV, 860, BodyName.KERBIN, attitude=True),
+    _E("mun_intercept", "mun_low_orbit", PV, 310, BodyName.MUN, attitude=True),
 ]
 
 _MUN_LAND = _MUN_ORBIT + [
-    _E("mun_low_orbit", "mun_surface", VL, 580, "Mun",
+    _E("mun_low_orbit", "mun_surface", VL, 580, BodyName.MUN,
        min_twr=1.2, throttle=True, attitude=True, legs=True),
 ]
 
 _MUN_RETURN = _MUN_LAND + [
-    _E("mun_surface", "mun_low_orbit", VA, 580, "Mun",
+    _E("mun_surface", "mun_low_orbit", VA, 580, BodyName.MUN,
        min_twr=1.2, throttle=True, attitude=True),
-    _E("mun_low_orbit", "kerbin_intercept", PV, 1170, "Mun", attitude=True),
+    _E("mun_low_orbit", "kerbin_intercept", PV, 1170, BodyName.MUN, attitude=True),
     _KERBIN_REENTRY,
 ]
 
 _MUN_SAMPLE_RETURN = _MUN_RETURN  # ladder check applied dynamically in _assess_body
 
-_add("Mun", "orbit",         _MUN_ORBIT)
-_add("Mun", "land",          _MUN_LAND)
-_add("Mun", "return",        _MUN_RETURN)
-_add("Mun", "sample_return", _MUN_SAMPLE_RETURN)
+_add(BodyName.MUN, "orbit",         _MUN_ORBIT)
+_add(BodyName.MUN, "land",          _MUN_LAND)
+_add(BodyName.MUN, "return",        _MUN_RETURN)
+_add(BodyName.MUN, "sample_return", _MUN_SAMPLE_RETURN)
 
 
 # ===========================================================================
@@ -604,27 +628,27 @@ _add("Mun", "sample_return", _MUN_SAMPLE_RETURN)
 
 _MINMUS_ORBIT = [
     _KERBIN_ASCENT,
-    _E("kerbin_low_orbit", "minmus_intercept", PV, 930, "Kerbin",
+    _E("kerbin_low_orbit", "minmus_intercept", PV, 930, BodyName.KERBIN,
        pc=340, attitude=True),
-    _E("minmus_intercept", "minmus_low_orbit", PV, 160, "Minmus", attitude=True),
+    _E("minmus_intercept", "minmus_low_orbit", PV, 160, BodyName.MINMUS, attitude=True),
 ]
 
 _MINMUS_LAND = _MINMUS_ORBIT + [
-    _E("minmus_low_orbit", "minmus_surface", VL, 180, "Minmus",
+    _E("minmus_low_orbit", "minmus_surface", VL, 180, BodyName.MINMUS,
        min_twr=1.2, throttle=True, attitude=True, legs=True),
 ]
 
 _MINMUS_RETURN = _MINMUS_LAND + [
-    _E("minmus_surface", "minmus_low_orbit", VA, 180, "Minmus",
+    _E("minmus_surface", "minmus_low_orbit", VA, 180, BodyName.MINMUS,
        min_twr=1.2, throttle=True, attitude=True),
-    _E("minmus_low_orbit", "kerbin_intercept", PV, 1090, "Minmus", attitude=True),
+    _E("minmus_low_orbit", "kerbin_intercept", PV, 1090, BodyName.MINMUS, attitude=True),
     _KERBIN_REENTRY,
 ]
 
-_add("Minmus", "orbit",         _MINMUS_ORBIT)
-_add("Minmus", "land",          _MINMUS_LAND)
-_add("Minmus", "return",        _MINMUS_RETURN)
-_add("Minmus", "sample_return", _MINMUS_RETURN)
+_add(BodyName.MINMUS, "orbit",         _MINMUS_ORBIT)
+_add(BodyName.MINMUS, "land",          _MINMUS_LAND)
+_add(BodyName.MINMUS, "return",        _MINMUS_RETURN)
+_add(BodyName.MINMUS, "sample_return", _MINMUS_RETURN)
 
 
 # ===========================================================================
@@ -634,30 +658,30 @@ _add("Minmus", "sample_return", _MINMUS_RETURN)
 _MOHO_COMMON = [
     _KERBIN_ASCENT,
     _KERBIN_ESCAPE,
-    _E("kerbin_soi", "moho_intercept", PT, 760, "Kerbin",
+    _E("kerbin_soi", "moho_intercept", PT, 760, BodyName.KERBIN,
        pc=2520, attitude=True),
-    _E("moho_intercept", "moho_low_orbit", PV, 2410, "Moho", attitude=True),
+    _E("moho_intercept", "moho_low_orbit", PV, 2410, BodyName.MOHO, attitude=True),
 ]
 
 _MOHO_ORBIT = _MOHO_COMMON
 
 _MOHO_LAND = _MOHO_COMMON + [
-    _E("moho_low_orbit", "moho_surface", VL, 870, "Moho",
+    _E("moho_low_orbit", "moho_surface", VL, 870, BodyName.MOHO,
        min_twr=1.2, throttle=True, attitude=True, legs=True),
 ]
 
 _MOHO_RETURN = _MOHO_LAND + [
-    _E("moho_surface", "moho_low_orbit", VA, 870, "Moho",
+    _E("moho_surface", "moho_low_orbit", VA, 870, BodyName.MOHO,
        min_twr=1.2, throttle=True, attitude=True),
-    _E("moho_low_orbit", "kerbin_intercept", PV, 3170, "Moho",
+    _E("moho_low_orbit", "kerbin_intercept", PV, 3170, BodyName.MOHO,
        pc=2520, attitude=True),
     _KERBIN_REENTRY,
 ]
 
-_add("Moho", "orbit",         _MOHO_ORBIT)
-_add("Moho", "land",          _MOHO_LAND)
-_add("Moho", "return",        _MOHO_RETURN)
-_add("Moho", "sample_return", _MOHO_RETURN)
+_add(BodyName.MOHO, "orbit",         _MOHO_ORBIT)
+_add(BodyName.MOHO, "land",          _MOHO_LAND)
+_add(BodyName.MOHO, "return",        _MOHO_RETURN)
+_add(BodyName.MOHO, "sample_return", _MOHO_RETURN)
 
 
 # ===========================================================================
@@ -667,52 +691,52 @@ _add("Moho", "sample_return", _MOHO_RETURN)
 _EVE_COMMON = [
     _KERBIN_ASCENT,
     _KERBIN_ESCAPE,
-    _E("kerbin_soi", "eve_intercept", PT, 90, "Kerbin", pc=430, attitude=True),
-    _E("eve_intercept", "eve_soi", PV, 80, "Eve", attitude=True),
+    _E("kerbin_soi", "eve_intercept", PT, 90, BodyName.KERBIN, pc=430, attitude=True),
+    _E("eve_intercept", "eve_soi", PV, 80, BodyName.EVE, attitude=True),
 ]
 
 # Aero capture into Eve orbit
 _EVE_ORBIT_AERO = _EVE_COMMON + [
-    _E("eve_soi", "eve_low_orbit", AB, 100, "Eve", heat=True),
+    _E("eve_soi", "eve_low_orbit", AB, 100, BodyName.EVE, heat=True),
 ]
 
 # Propulsive capture into Eve orbit
 _EVE_ORBIT_PROP = _EVE_COMMON + [
-    _E("eve_soi", "eve_low_orbit", PV, 1330, "Eve", attitude=True),
+    _E("eve_soi", "eve_low_orbit", PV, 1330, BodyName.EVE, attitude=True),
 ]
 
 # Eve land — aero descent (only realistic option)
 _EVE_LAND_AERO = _EVE_ORBIT_AERO + [
-    _E("eve_low_orbit", "eve_surface", ALA, 100, "Eve", heat=True, legs=True),
+    _E("eve_low_orbit", "eve_surface", ALA, 100, BodyName.EVE, heat=True, legs=True),
 ]
 
 # Eve land — propulsive descent (brute force, very expensive)
 _EVE_LAND_PROP = _EVE_ORBIT_PROP + [
-    _E("eve_low_orbit", "eve_surface", ALP, 1330, "Eve",
+    _E("eve_low_orbit", "eve_surface", ALP, 1330, BodyName.EVE,
        min_twr=1.5, throttle=True, attitude=True, legs=True),
 ]
 
 # Eve return from surface (atmosphere is thick — 8000 m/s ascent!)
 _EVE_RETURN_AERO = _EVE_LAND_AERO + [
-    _E("eve_surface", "eve_low_orbit", AT, 8000, "Eve",
+    _E("eve_surface", "eve_low_orbit", AT, 8000, BodyName.EVE,
        min_twr=1.5, throttle=True, attitude=True),
-    _E("eve_low_orbit", "kerbin_intercept", PV, 1420, "Eve",
+    _E("eve_low_orbit", "kerbin_intercept", PV, 1420, BodyName.EVE,
        pc=430, attitude=True),
     _KERBIN_REENTRY,
 ]
 
 _EVE_RETURN_PROP = _EVE_LAND_PROP + [
-    _E("eve_surface", "eve_low_orbit", AT, 8000, "Eve",
+    _E("eve_surface", "eve_low_orbit", AT, 8000, BodyName.EVE,
        min_twr=1.5, throttle=True, attitude=True),
-    _E("eve_low_orbit", "kerbin_intercept", PV, 1420, "Eve",
+    _E("eve_low_orbit", "kerbin_intercept", PV, 1420, BodyName.EVE,
        pc=430, attitude=True),
     _KERBIN_REENTRY,
 ]
 
-_add("Eve", "orbit",         _EVE_ORBIT_AERO, _EVE_ORBIT_PROP)
-_add("Eve", "land",          _EVE_LAND_AERO,  _EVE_LAND_PROP)
-_add("Eve", "return",        _EVE_RETURN_AERO, _EVE_RETURN_PROP)
-_add("Eve", "sample_return", _EVE_RETURN_AERO, _EVE_RETURN_PROP)
+_add(BodyName.EVE, "orbit",         _EVE_ORBIT_AERO, _EVE_ORBIT_PROP)
+_add(BodyName.EVE, "land",          _EVE_LAND_AERO,  _EVE_LAND_PROP)
+_add(BodyName.EVE, "return",        _EVE_RETURN_AERO, _EVE_RETURN_PROP)
+_add(BodyName.EVE, "sample_return", _EVE_RETURN_AERO, _EVE_RETURN_PROP)
 
 
 # ===========================================================================
@@ -720,30 +744,30 @@ _add("Eve", "sample_return", _EVE_RETURN_AERO, _EVE_RETURN_PROP)
 # ===========================================================================
 
 _GILLY_COMMON = _EVE_ORBIT_AERO + [
-    _E("eve_low_orbit", "gilly_intercept", PV, 60, "Eve", attitude=True),
-    _E("gilly_intercept", "gilly_low_orbit", PV, 410, "Gilly", attitude=True),
+    _E("eve_low_orbit", "gilly_intercept", PV, 60, BodyName.EVE, attitude=True),
+    _E("gilly_intercept", "gilly_low_orbit", PV, 410, BodyName.GILLY, attitude=True),
 ]
 
 _GILLY_ORBIT = _GILLY_COMMON
 
 _GILLY_LAND = _GILLY_COMMON + [
-    _E("gilly_low_orbit", "gilly_surface", VL, 30, "Gilly",
+    _E("gilly_low_orbit", "gilly_surface", VL, 30, BodyName.GILLY,
        min_twr=1.2, throttle=True, attitude=True, legs=True),
 ]
 
 _GILLY_RETURN = _GILLY_LAND + [
-    _E("gilly_surface", "gilly_low_orbit", VA, 30, "Gilly",
+    _E("gilly_surface", "gilly_low_orbit", VA, 30, BodyName.GILLY,
        min_twr=1.2, throttle=True, attitude=True),
-    _E("gilly_low_orbit", "eve_low_orbit", PV, 470, "Gilly", attitude=True),
-    _E("eve_low_orbit", "kerbin_intercept", PV, 1420, "Eve",
+    _E("gilly_low_orbit", "eve_low_orbit", PV, 470, BodyName.GILLY, attitude=True),
+    _E("eve_low_orbit", "kerbin_intercept", PV, 1420, BodyName.EVE,
        pc=430, attitude=True),
     _KERBIN_REENTRY,
 ]
 
-_add("Gilly", "orbit",         _GILLY_ORBIT)
-_add("Gilly", "land",          _GILLY_LAND)
-_add("Gilly", "return",        _GILLY_RETURN)
-_add("Gilly", "sample_return", _GILLY_RETURN)
+_add(BodyName.GILLY, "orbit",         _GILLY_ORBIT)
+_add(BodyName.GILLY, "land",          _GILLY_LAND)
+_add(BodyName.GILLY, "return",        _GILLY_RETURN)
+_add(BodyName.GILLY, "sample_return", _GILLY_RETURN)
 
 
 # ===========================================================================
@@ -753,50 +777,50 @@ _add("Gilly", "sample_return", _GILLY_RETURN)
 _DUNA_COMMON = [
     _KERBIN_ASCENT,
     _KERBIN_ESCAPE,
-    _E("kerbin_soi", "duna_intercept", PT, 130, "Kerbin", pc=10, attitude=True),
-    _E("duna_intercept", "duna_soi", PV, 250, "Duna", attitude=True),
+    _E("kerbin_soi", "duna_intercept", PT, 130, BodyName.KERBIN, pc=10, attitude=True),
+    _E("duna_intercept", "duna_soi", PV, 250, BodyName.DUNA, attitude=True),
 ]
 
 # Propulsive capture + propulsive landing
 _DUNA_ORBIT_PROP = _DUNA_COMMON + [
-    _E("duna_soi", "duna_low_orbit", PV, 360, "Duna", attitude=True),
+    _E("duna_soi", "duna_low_orbit", PV, 360, BodyName.DUNA, attitude=True),
 ]
 
 # Aerobrake into orbit
 _DUNA_ORBIT_AERO = _DUNA_COMMON + [
-    _E("duna_soi", "duna_low_orbit", AB, 100, "Duna", heat=True),
+    _E("duna_soi", "duna_low_orbit", AB, 100, BodyName.DUNA, heat=True),
 ]
 
 _DUNA_LAND_PROP = _DUNA_ORBIT_PROP + [
-    _E("duna_low_orbit", "duna_surface", ALP, 1450, "Duna",
+    _E("duna_low_orbit", "duna_surface", ALP, 1450, BodyName.DUNA,
        min_twr=1.5, throttle=True, attitude=True, legs=True),
 ]
 
 _DUNA_LAND_AERO = _DUNA_ORBIT_AERO + [
-    _E("duna_low_orbit", "duna_surface", ALA, 200, "Duna",
+    _E("duna_low_orbit", "duna_surface", ALA, 200, BodyName.DUNA,
        heat=True, legs=True),
 ]
 
 _DUNA_RETURN_PROP = _DUNA_LAND_PROP + [
-    _E("duna_surface", "duna_low_orbit", AT, 1450, "Duna",
+    _E("duna_surface", "duna_low_orbit", AT, 1450, BodyName.DUNA,
        min_twr=1.5, throttle=True, attitude=True),
-    _E("duna_low_orbit", "kerbin_intercept", PV, 610, "Duna",
+    _E("duna_low_orbit", "kerbin_intercept", PV, 610, BodyName.DUNA,
        pc=10, attitude=True),
     _KERBIN_REENTRY,
 ]
 
 _DUNA_RETURN_AERO = _DUNA_LAND_AERO + [
-    _E("duna_surface", "duna_low_orbit", AT, 1450, "Duna",
+    _E("duna_surface", "duna_low_orbit", AT, 1450, BodyName.DUNA,
        min_twr=1.5, throttle=True, attitude=True),
-    _E("duna_low_orbit", "kerbin_intercept", PV, 610, "Duna",
+    _E("duna_low_orbit", "kerbin_intercept", PV, 610, BodyName.DUNA,
        pc=10, attitude=True),
     _KERBIN_REENTRY,
 ]
 
-_add("Duna", "orbit",         _DUNA_ORBIT_PROP, _DUNA_ORBIT_AERO)
-_add("Duna", "land",          _DUNA_LAND_PROP,  _DUNA_LAND_AERO)
-_add("Duna", "return",        _DUNA_RETURN_PROP, _DUNA_RETURN_AERO)
-_add("Duna", "sample_return", _DUNA_RETURN_PROP, _DUNA_RETURN_AERO)
+_add(BodyName.DUNA, "orbit",         _DUNA_ORBIT_PROP, _DUNA_ORBIT_AERO)
+_add(BodyName.DUNA, "land",          _DUNA_LAND_PROP,  _DUNA_LAND_AERO)
+_add(BodyName.DUNA, "return",        _DUNA_RETURN_PROP, _DUNA_RETURN_AERO)
+_add(BodyName.DUNA, "sample_return", _DUNA_RETURN_PROP, _DUNA_RETURN_AERO)
 
 
 # ===========================================================================
@@ -804,30 +828,30 @@ _add("Duna", "sample_return", _DUNA_RETURN_PROP, _DUNA_RETURN_AERO)
 # ===========================================================================
 
 _IKE_COMMON = _DUNA_ORBIT_PROP + [
-    _E("duna_low_orbit", "ike_intercept", PV, 30, "Duna", attitude=True),
-    _E("ike_intercept", "ike_low_orbit", PV, 180, "Ike", attitude=True),
+    _E("duna_low_orbit", "ike_intercept", PV, 30, BodyName.DUNA, attitude=True),
+    _E("ike_intercept", "ike_low_orbit", PV, 180, BodyName.IKE, attitude=True),
 ]
 
 _IKE_ORBIT = _IKE_COMMON
 
 _IKE_LAND = _IKE_COMMON + [
-    _E("ike_low_orbit", "ike_surface", VL, 390, "Ike",
+    _E("ike_low_orbit", "ike_surface", VL, 390, BodyName.IKE,
        min_twr=1.2, throttle=True, attitude=True, legs=True),
 ]
 
 _IKE_RETURN = _IKE_LAND + [
-    _E("ike_surface", "ike_low_orbit", VA, 390, "Ike",
+    _E("ike_surface", "ike_low_orbit", VA, 390, BodyName.IKE,
        min_twr=1.2, throttle=True, attitude=True),
-    _E("ike_low_orbit", "duna_low_orbit", PV, 210, "Ike", attitude=True),
-    _E("duna_low_orbit", "kerbin_intercept", PV, 610, "Duna",
+    _E("ike_low_orbit", "duna_low_orbit", PV, 210, BodyName.IKE, attitude=True),
+    _E("duna_low_orbit", "kerbin_intercept", PV, 610, BodyName.DUNA,
        pc=10, attitude=True),
     _KERBIN_REENTRY,
 ]
 
-_add("Ike", "orbit",         _IKE_ORBIT)
-_add("Ike", "land",          _IKE_LAND)
-_add("Ike", "return",        _IKE_RETURN)
-_add("Ike", "sample_return", _IKE_RETURN)
+_add(BodyName.IKE, "orbit",         _IKE_ORBIT)
+_add(BodyName.IKE, "land",          _IKE_LAND)
+_add(BodyName.IKE, "return",        _IKE_RETURN)
+_add(BodyName.IKE, "sample_return", _IKE_RETURN)
 
 
 # ===========================================================================
@@ -837,30 +861,30 @@ _add("Ike", "sample_return", _IKE_RETURN)
 _DRES_COMMON = [
     _KERBIN_ASCENT,
     _KERBIN_ESCAPE,
-    _E("kerbin_soi", "dres_intercept", PT, 610, "Kerbin",
+    _E("kerbin_soi", "dres_intercept", PT, 610, BodyName.KERBIN,
        pc=1010, attitude=True),
-    _E("dres_intercept", "dres_low_orbit", PV, 1290, "Dres", attitude=True),
+    _E("dres_intercept", "dres_low_orbit", PV, 1290, BodyName.DRES, attitude=True),
 ]
 
 _DRES_ORBIT = _DRES_COMMON
 
 _DRES_LAND = _DRES_COMMON + [
-    _E("dres_low_orbit", "dres_surface", VL, 430, "Dres",
+    _E("dres_low_orbit", "dres_surface", VL, 430, BodyName.DRES,
        min_twr=1.2, throttle=True, attitude=True, legs=True),
 ]
 
 _DRES_RETURN = _DRES_LAND + [
-    _E("dres_surface", "dres_low_orbit", VA, 430, "Dres",
+    _E("dres_surface", "dres_low_orbit", VA, 430, BodyName.DRES,
        min_twr=1.2, throttle=True, attitude=True),
-    _E("dres_low_orbit", "kerbin_intercept", PV, 1900, "Dres",
+    _E("dres_low_orbit", "kerbin_intercept", PV, 1900, BodyName.DRES,
        pc=1010, attitude=True),
     _KERBIN_REENTRY,
 ]
 
-_add("Dres", "orbit",         _DRES_ORBIT)
-_add("Dres", "land",          _DRES_LAND)
-_add("Dres", "return",        _DRES_RETURN)
-_add("Dres", "sample_return", _DRES_RETURN)
+_add(BodyName.DRES, "orbit",         _DRES_ORBIT)
+_add(BodyName.DRES, "land",          _DRES_LAND)
+_add(BodyName.DRES, "return",        _DRES_RETURN)
+_add(BodyName.DRES, "sample_return", _DRES_RETURN)
 
 
 # ===========================================================================
@@ -870,34 +894,34 @@ _add("Dres", "sample_return", _DRES_RETURN)
 _JOOL_COMMON = [
     _KERBIN_ASCENT,
     _KERBIN_ESCAPE,
-    _E("kerbin_soi", "jool_intercept", PT, 980, "Kerbin", pc=270, attitude=True),
-    _E("jool_intercept", "jool_soi", PV, 160, "Jool", attitude=True),
+    _E("kerbin_soi", "jool_intercept", PT, 980, BodyName.KERBIN, pc=270, attitude=True),
+    _E("jool_intercept", "jool_soi", PV, 160, BodyName.JOOL, attitude=True),
 ]
 
 # Aerobrake into Jool orbit
 _JOOL_ORBIT_AERO = _JOOL_COMMON + [
-    _E("jool_soi", "jool_low_orbit", AB, 100, "Jool", heat=True),
+    _E("jool_soi", "jool_low_orbit", AB, 100, BodyName.JOOL, heat=True),
 ]
 
 # Propulsive capture (expensive)
 _JOOL_ORBIT_PROP = _JOOL_COMMON + [
-    _E("jool_soi", "jool_low_orbit", PV, 2810, "Jool", attitude=True),
+    _E("jool_soi", "jool_low_orbit", PV, 2810, BodyName.JOOL, attitude=True),
 ]
 
 _JOOL_RETURN_AERO = _JOOL_ORBIT_AERO + [
-    _E("jool_low_orbit", "kerbin_intercept", PV, 3790, "Jool",
+    _E("jool_low_orbit", "kerbin_intercept", PV, 3790, BodyName.JOOL,
        pc=270, attitude=True),
     _KERBIN_REENTRY,
 ]
 
 _JOOL_RETURN_PROP = _JOOL_ORBIT_PROP + [
-    _E("jool_low_orbit", "kerbin_intercept", PV, 3790, "Jool",
+    _E("jool_low_orbit", "kerbin_intercept", PV, 3790, BodyName.JOOL,
        pc=270, attitude=True),
     _KERBIN_REENTRY,
 ]
 
-_add("Jool", "orbit",  _JOOL_ORBIT_AERO, _JOOL_ORBIT_PROP)
-_add("Jool", "return", _JOOL_RETURN_AERO, _JOOL_RETURN_PROP)
+_add(BodyName.JOOL, "orbit",  _JOOL_ORBIT_AERO, _JOOL_ORBIT_PROP)
+_add(BodyName.JOOL, "return", _JOOL_RETURN_AERO, _JOOL_RETURN_PROP)
 
 
 # ===========================================================================
@@ -905,42 +929,42 @@ _add("Jool", "return", _JOOL_RETURN_AERO, _JOOL_RETURN_PROP)
 # ===========================================================================
 
 _LAYTHE_COMMON = _JOOL_ORBIT_AERO + [
-    _E("jool_low_orbit", "laythe_intercept", PV, 930, "Jool", attitude=True),
-    _E("laythe_intercept", "laythe_low_orbit", PV, 1070, "Laythe", attitude=True),
+    _E("jool_low_orbit", "laythe_intercept", PV, 930, BodyName.JOOL, attitude=True),
+    _E("laythe_intercept", "laythe_low_orbit", PV, 1070, BodyName.LAYTHE, attitude=True),
 ]
 
 _LAYTHE_LAND_AERO = _LAYTHE_COMMON + [
-    _E("laythe_low_orbit", "laythe_surface", ALA, 200, "Laythe",
+    _E("laythe_low_orbit", "laythe_surface", ALA, 200, BodyName.LAYTHE,
        heat=True, legs=True),
 ]
 
 _LAYTHE_LAND_PROP = _LAYTHE_COMMON + [
-    _E("laythe_low_orbit", "laythe_surface", ALP, 2900, "Laythe",
+    _E("laythe_low_orbit", "laythe_surface", ALP, 2900, BodyName.LAYTHE,
        min_twr=1.5, throttle=True, attitude=True, legs=True),
 ]
 
 _LAYTHE_RETURN_AERO = _LAYTHE_LAND_AERO + [
-    _E("laythe_surface", "laythe_low_orbit", AT, 2900, "Laythe",
+    _E("laythe_surface", "laythe_low_orbit", AT, 2900, BodyName.LAYTHE,
        min_twr=1.5, throttle=True, attitude=True),
-    _E("laythe_low_orbit", "jool_low_orbit", PV, 2000, "Laythe", attitude=True),
-    _E("jool_low_orbit", "kerbin_intercept", PV, 3790, "Jool",
+    _E("laythe_low_orbit", "jool_low_orbit", PV, 2000, BodyName.LAYTHE, attitude=True),
+    _E("jool_low_orbit", "kerbin_intercept", PV, 3790, BodyName.JOOL,
        pc=270, attitude=True),
     _KERBIN_REENTRY,
 ]
 
 _LAYTHE_RETURN_PROP = _LAYTHE_LAND_PROP + [
-    _E("laythe_surface", "laythe_low_orbit", AT, 2900, "Laythe",
+    _E("laythe_surface", "laythe_low_orbit", AT, 2900, BodyName.LAYTHE,
        min_twr=1.5, throttle=True, attitude=True),
-    _E("laythe_low_orbit", "jool_low_orbit", PV, 2000, "Laythe", attitude=True),
-    _E("jool_low_orbit", "kerbin_intercept", PV, 3790, "Jool",
+    _E("laythe_low_orbit", "jool_low_orbit", PV, 2000, BodyName.LAYTHE, attitude=True),
+    _E("jool_low_orbit", "kerbin_intercept", PV, 3790, BodyName.JOOL,
        pc=270, attitude=True),
     _KERBIN_REENTRY,
 ]
 
-_add("Laythe", "orbit",         _LAYTHE_COMMON)
-_add("Laythe", "land",          _LAYTHE_LAND_AERO, _LAYTHE_LAND_PROP)
-_add("Laythe", "return",        _LAYTHE_RETURN_AERO, _LAYTHE_RETURN_PROP)
-_add("Laythe", "sample_return", _LAYTHE_RETURN_AERO, _LAYTHE_RETURN_PROP)
+_add(BodyName.LAYTHE, "orbit",         _LAYTHE_COMMON)
+_add(BodyName.LAYTHE, "land",          _LAYTHE_LAND_AERO, _LAYTHE_LAND_PROP)
+_add(BodyName.LAYTHE, "return",        _LAYTHE_RETURN_AERO, _LAYTHE_RETURN_PROP)
+_add(BodyName.LAYTHE, "sample_return", _LAYTHE_RETURN_AERO, _LAYTHE_RETURN_PROP)
 
 
 # ===========================================================================
@@ -948,28 +972,28 @@ _add("Laythe", "sample_return", _LAYTHE_RETURN_AERO, _LAYTHE_RETURN_PROP)
 # ===========================================================================
 
 _VALL_COMMON = _JOOL_ORBIT_AERO + [
-    _E("jool_low_orbit", "vall_intercept", PV, 620, "Jool", attitude=True),
-    _E("vall_intercept", "vall_low_orbit", PV, 910, "Vall", attitude=True),
+    _E("jool_low_orbit", "vall_intercept", PV, 620, BodyName.JOOL, attitude=True),
+    _E("vall_intercept", "vall_low_orbit", PV, 910, BodyName.VALL, attitude=True),
 ]
 
 _VALL_LAND = _VALL_COMMON + [
-    _E("vall_low_orbit", "vall_surface", VL, 860, "Vall",
+    _E("vall_low_orbit", "vall_surface", VL, 860, BodyName.VALL,
        min_twr=1.2, throttle=True, attitude=True, legs=True),
 ]
 
 _VALL_RETURN = _VALL_LAND + [
-    _E("vall_surface", "vall_low_orbit", VA, 860, "Vall",
+    _E("vall_surface", "vall_low_orbit", VA, 860, BodyName.VALL,
        min_twr=1.2, throttle=True, attitude=True),
-    _E("vall_low_orbit", "jool_low_orbit", PV, 1530, "Vall", attitude=True),
-    _E("jool_low_orbit", "kerbin_intercept", PV, 3790, "Jool",
+    _E("vall_low_orbit", "jool_low_orbit", PV, 1530, BodyName.VALL, attitude=True),
+    _E("jool_low_orbit", "kerbin_intercept", PV, 3790, BodyName.JOOL,
        pc=270, attitude=True),
     _KERBIN_REENTRY,
 ]
 
-_add("Vall", "orbit",         _VALL_COMMON)
-_add("Vall", "land",          _VALL_LAND)
-_add("Vall", "return",        _VALL_RETURN)
-_add("Vall", "sample_return", _VALL_RETURN)
+_add(BodyName.VALL, "orbit",         _VALL_COMMON)
+_add(BodyName.VALL, "land",          _VALL_LAND)
+_add(BodyName.VALL, "return",        _VALL_RETURN)
+_add(BodyName.VALL, "sample_return", _VALL_RETURN)
 
 
 # ===========================================================================
@@ -977,28 +1001,28 @@ _add("Vall", "sample_return", _VALL_RETURN)
 # ===========================================================================
 
 _TYLO_COMMON = _JOOL_ORBIT_AERO + [
-    _E("jool_low_orbit", "tylo_intercept", PV, 400, "Jool", attitude=True),
-    _E("tylo_intercept", "tylo_low_orbit", PV, 1100, "Tylo", attitude=True),
+    _E("jool_low_orbit", "tylo_intercept", PV, 400, BodyName.JOOL, attitude=True),
+    _E("tylo_intercept", "tylo_low_orbit", PV, 1100, BodyName.TYLO, attitude=True),
 ]
 
 _TYLO_LAND = _TYLO_COMMON + [
-    _E("tylo_low_orbit", "tylo_surface", VL, 2270, "Tylo",
+    _E("tylo_low_orbit", "tylo_surface", VL, 2270, BodyName.TYLO,
        min_twr=1.2, throttle=True, attitude=True, legs=True),
 ]
 
 _TYLO_RETURN = _TYLO_LAND + [
-    _E("tylo_surface", "tylo_low_orbit", VA, 2270, "Tylo",
+    _E("tylo_surface", "tylo_low_orbit", VA, 2270, BodyName.TYLO,
        min_twr=1.2, throttle=True, attitude=True),
-    _E("tylo_low_orbit", "jool_low_orbit", PV, 1500, "Tylo", attitude=True),
-    _E("jool_low_orbit", "kerbin_intercept", PV, 3790, "Jool",
+    _E("tylo_low_orbit", "jool_low_orbit", PV, 1500, BodyName.TYLO, attitude=True),
+    _E("jool_low_orbit", "kerbin_intercept", PV, 3790, BodyName.JOOL,
        pc=270, attitude=True),
     _KERBIN_REENTRY,
 ]
 
-_add("Tylo", "orbit",         _TYLO_COMMON)
-_add("Tylo", "land",          _TYLO_LAND)
-_add("Tylo", "return",        _TYLO_RETURN)
-_add("Tylo", "sample_return", _TYLO_RETURN)
+_add(BodyName.TYLO, "orbit",         _TYLO_COMMON)
+_add(BodyName.TYLO, "land",          _TYLO_LAND)
+_add(BodyName.TYLO, "return",        _TYLO_RETURN)
+_add(BodyName.TYLO, "sample_return", _TYLO_RETURN)
 
 
 # ===========================================================================
@@ -1006,30 +1030,30 @@ _add("Tylo", "sample_return", _TYLO_RETURN)
 # ===========================================================================
 
 _BOP_COMMON = _JOOL_ORBIT_AERO + [
-    _E("jool_low_orbit", "bop_intercept", PV, 220, "Jool",
+    _E("jool_low_orbit", "bop_intercept", PV, 220, BodyName.JOOL,
        pc=2440, attitude=True),
-    _E("bop_intercept", "bop_low_orbit", PV, 900, "Bop", attitude=True),
+    _E("bop_intercept", "bop_low_orbit", PV, 900, BodyName.BOP, attitude=True),
 ]
 
 _BOP_LAND = _BOP_COMMON + [
-    _E("bop_low_orbit", "bop_surface", VL, 230, "Bop",
+    _E("bop_low_orbit", "bop_surface", VL, 230, BodyName.BOP,
        min_twr=1.2, throttle=True, attitude=True, legs=True),
 ]
 
 _BOP_RETURN = _BOP_LAND + [
-    _E("bop_surface", "bop_low_orbit", VA, 230, "Bop",
+    _E("bop_surface", "bop_low_orbit", VA, 230, BodyName.BOP,
        min_twr=1.2, throttle=True, attitude=True),
-    _E("bop_low_orbit", "jool_low_orbit", PV, 1120, "Bop",
+    _E("bop_low_orbit", "jool_low_orbit", PV, 1120, BodyName.BOP,
        pc=2440, attitude=True),
-    _E("jool_low_orbit", "kerbin_intercept", PV, 3790, "Jool",
+    _E("jool_low_orbit", "kerbin_intercept", PV, 3790, BodyName.JOOL,
        pc=270, attitude=True),
     _KERBIN_REENTRY,
 ]
 
-_add("Bop", "orbit",         _BOP_COMMON)
-_add("Bop", "land",          _BOP_LAND)
-_add("Bop", "return",        _BOP_RETURN)
-_add("Bop", "sample_return", _BOP_RETURN)
+_add(BodyName.BOP, "orbit",         _BOP_COMMON)
+_add(BodyName.BOP, "land",          _BOP_LAND)
+_add(BodyName.BOP, "return",        _BOP_RETURN)
+_add(BodyName.BOP, "sample_return", _BOP_RETURN)
 
 
 # ===========================================================================
@@ -1037,30 +1061,30 @@ _add("Bop", "sample_return", _BOP_RETURN)
 # ===========================================================================
 
 _POL_COMMON = _JOOL_ORBIT_AERO + [
-    _E("jool_low_orbit", "pol_intercept", PV, 160, "Jool",
+    _E("jool_low_orbit", "pol_intercept", PV, 160, BodyName.JOOL,
        pc=700, attitude=True),
-    _E("pol_intercept", "pol_low_orbit", PV, 820, "Pol", attitude=True),
+    _E("pol_intercept", "pol_low_orbit", PV, 820, BodyName.POL, attitude=True),
 ]
 
 _POL_LAND = _POL_COMMON + [
-    _E("pol_low_orbit", "pol_surface", VL, 130, "Pol",
+    _E("pol_low_orbit", "pol_surface", VL, 130, BodyName.POL,
        min_twr=1.2, throttle=True, attitude=True, legs=True),
 ]
 
 _POL_RETURN = _POL_LAND + [
-    _E("pol_surface", "pol_low_orbit", VA, 130, "Pol",
+    _E("pol_surface", "pol_low_orbit", VA, 130, BodyName.POL,
        min_twr=1.2, throttle=True, attitude=True),
-    _E("pol_low_orbit", "jool_low_orbit", PV, 980, "Pol",
+    _E("pol_low_orbit", "jool_low_orbit", PV, 980, BodyName.POL,
        pc=700, attitude=True),
-    _E("jool_low_orbit", "kerbin_intercept", PV, 3790, "Jool",
+    _E("jool_low_orbit", "kerbin_intercept", PV, 3790, BodyName.JOOL,
        pc=270, attitude=True),
     _KERBIN_REENTRY,
 ]
 
-_add("Pol", "orbit",         _POL_COMMON)
-_add("Pol", "land",          _POL_LAND)
-_add("Pol", "return",        _POL_RETURN)
-_add("Pol", "sample_return", _POL_RETURN)
+_add(BodyName.POL, "orbit",         _POL_COMMON)
+_add(BodyName.POL, "land",          _POL_LAND)
+_add(BodyName.POL, "return",        _POL_RETURN)
+_add(BodyName.POL, "sample_return", _POL_RETURN)
 
 
 # ===========================================================================
@@ -1070,28 +1094,28 @@ _add("Pol", "sample_return", _POL_RETURN)
 _EELOO_COMMON = [
     _KERBIN_ASCENT,
     _KERBIN_ESCAPE,
-    _E("kerbin_soi", "eeloo_intercept", PT, 1140, "Kerbin",
+    _E("kerbin_soi", "eeloo_intercept", PT, 1140, BodyName.KERBIN,
        pc=1330, attitude=True),
-    _E("eeloo_intercept", "eeloo_low_orbit", PV, 1370, "Eeloo", attitude=True),
+    _E("eeloo_intercept", "eeloo_low_orbit", PV, 1370, BodyName.EELOO, attitude=True),
 ]
 
 _EELOO_LAND = _EELOO_COMMON + [
-    _E("eeloo_low_orbit", "eeloo_surface", VL, 620, "Eeloo",
+    _E("eeloo_low_orbit", "eeloo_surface", VL, 620, BodyName.EELOO,
        min_twr=1.2, throttle=True, attitude=True, legs=True),
 ]
 
 _EELOO_RETURN = _EELOO_LAND + [
-    _E("eeloo_surface", "eeloo_low_orbit", VA, 620, "Eeloo",
+    _E("eeloo_surface", "eeloo_low_orbit", VA, 620, BodyName.EELOO,
        min_twr=1.2, throttle=True, attitude=True),
-    _E("eeloo_low_orbit", "kerbin_intercept", PV, 2510, "Eeloo",
+    _E("eeloo_low_orbit", "kerbin_intercept", PV, 2510, BodyName.EELOO,
        pc=1330, attitude=True),
     _KERBIN_REENTRY,
 ]
 
-_add("Eeloo", "orbit",         _EELOO_COMMON)
-_add("Eeloo", "land",          _EELOO_LAND)
-_add("Eeloo", "return",        _EELOO_RETURN)
-_add("Eeloo", "sample_return", _EELOO_RETURN)
+_add(BodyName.EELOO, "orbit",         _EELOO_COMMON)
+_add(BodyName.EELOO, "land",          _EELOO_LAND)
+_add(BodyName.EELOO, "return",        _EELOO_RETURN)
+_add(BodyName.EELOO, "sample_return", _EELOO_RETURN)
 
 
 # ===========================================================================
@@ -1101,17 +1125,17 @@ _add("Eeloo", "sample_return", _EELOO_RETURN)
 _KERBOL_ORBIT = [
     _KERBIN_ASCENT,
     _KERBIN_ESCAPE,
-    _E("kerbin_soi", "kerbol_low_orbit", PT, 6000, "Kerbol",
+    _E("kerbin_soi", "kerbol_low_orbit", PT, 6000, BodyName.KERBOL,
        attitude=True),
 ]
 
 _KERBOL_RETURN = _KERBOL_ORBIT + [
-    _E("kerbol_low_orbit", "kerbin_intercept", PV, 6000, "Kerbol", attitude=True),
+    _E("kerbol_low_orbit", "kerbin_intercept", PV, 6000, BodyName.KERBOL, attitude=True),
     _KERBIN_REENTRY,
 ]
 
-_add("Kerbol", "orbit",  _KERBOL_ORBIT)
-_add("Kerbol", "return", _KERBOL_RETURN)
+_add(BodyName.KERBOL, "orbit",  _KERBOL_ORBIT)
+_add(BodyName.KERBOL, "return", _KERBOL_RETURN)
 
 # Auto-generate flyby/escape profiles: orbit profile minus orbit insertion.
 # A flyby only needs to reach the body's SOI — no orbit insertion burn.

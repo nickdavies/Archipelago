@@ -9,6 +9,7 @@ import unittest
 
 from test.general import setup_multiworld
 
+from worlds.ksp1.bodies import BodyName
 from worlds.ksp1.world import KSP1World
 
 
@@ -71,9 +72,9 @@ class TestUTRegen(unittest.TestCase):
         """Custom goal bodies survive the slot_data → regen cycle."""
         opts = {
             "goal": "custom",
-            "flag_bodies": {"Mun", "Duna"},
-            "return_bodies": {"Minmus"},
-            "sample_return_bodies": {"Ike"},
+            "flag_bodies": {BodyName.MUN, BodyName.DUNA},
+            "return_bodies": {BodyName.MINMUS},
+            "sample_return_bodies": {BodyName.IKE},
         }
         world1, world2, _ = self._regen_from_slot_data(seed=99, options=opts)
         self.assertEqual(
@@ -103,7 +104,7 @@ class TestExplainRule(unittest.TestCase):
         result = self.world.explain_rule("Mun Orbit 1", self.state)
         self.assertIsNotNone(result)
         self.assertIsInstance(result, list)
-        self.assertTrue(any("Mun" in part.get("text", "") for part in result))
+        self.assertTrue(any(BodyName.MUN in part.get("text", "") for part in result))
 
     def test_unknown_target_returns_none(self):
         result = self.world.explain_rule("Nonexistent Location XYZ", self.state)
@@ -128,7 +129,7 @@ class TestCustomUTSort(unittest.TestCase):
         self.world: KSP1World = self.mw.worlds[1]
 
     def test_body_locations_sort_before_tech_tree(self):
-        body_key = self.world.custom_ut_sort("Mun", "Mun Orbit 1")
+        body_key = self.world.custom_ut_sort(BodyName.MUN, "Mun Orbit 1")
         tech_key = self.world.custom_ut_sort("Tech Tier 1", "Basic Rocketry 1")
         self.assertLess(body_key, tech_key)
 
