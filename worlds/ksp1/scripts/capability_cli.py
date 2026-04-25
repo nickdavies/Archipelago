@@ -33,7 +33,7 @@ from worlds.ksp1.capability import (
 from worlds.ksp1.locations import EventName, MissionLocation
 from worlds.ksp1.world import KSP1World
 
-from worlds.ksp1.scripts.capability_format import (
+from worlds.ksp1.capability_format import (
     CHECK_MAP, CheckInfo,
     titled, edge_desc, location_group,
     format_rocket_output, format_parts_list,

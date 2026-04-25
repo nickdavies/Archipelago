@@ -186,7 +186,7 @@ class KSP1World(World):
         """UT hook: /explain <location> shows rocket design, /explain parts [filter] shows inventory."""
         from .bodies import DIFFICULTY_PROFILES
         from .capability import compute_capability_from_items, evaluate_mission_detailed
-        from .scripts.capability_format import (
+        from .capability_format import (
             CHECK_MAP, format_rocket_output, format_parts_list,
         )
 
