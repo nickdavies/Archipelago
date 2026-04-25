@@ -10,15 +10,17 @@ Four location sources (total ~524 max, filtered by difficulty):
      Earned by performing science experiments at KSC buildings/grounds.
      Requires EVA (capsule) or rover (probe + wheels + power + instrument).
 
-  3. Mission Event Locations  (260 total)
-     12 Kerbin-specific + 248 per-body event-scaled checks.
+  3. Mission Event Locations  (256 total)
+     12 Kerbin-specific + 244 per-body event-scaled checks.
+     Kerbol excluded (root body — can't escape/flyby, orbit infeasible).
      Eve Return/Sample Return exist but require all progression parts.
      Scale is by event difficulty, not body distance:
        Flyby/SOI Leave/Orbit/EVA in Orbit = 1 slot each,
        Landing/Crewed Landing/Flag Plant = 2 slots each,
        Return/Sample Return = 3 slots each.
      Per landable body: 4×1 + 3×2 + 2×3 = 16 locations.
-     Per non-landable body (Jool, Kerbol): 4×1 = 4 locations.
+     Per non-landable body (Jool): 4×1 = 4 locations.
+     Kerbol excluded entirely (root body).
 
   4. Tech Tree Locations  (124–248 by difficulty)
      2–4 locations per node × 62 nodes, scaled by difficulty.
@@ -241,6 +243,8 @@ assert len(KERBIN_LOCATION_NAMES) == 12
 
 def get_body_events(body) -> tuple[EventName, ...]:
     """Return the AP event list for a body."""
+    if body.name == BodyName.KERBOL:
+        return ()  # root body — can't flyby/escape, orbit is infeasible
     if body.can_land:
         return tuple(e.name for e in ALL_EVENTS)
     return tuple(e.name for e in ALL_EVENTS if not e.requires_landing)
@@ -262,9 +266,9 @@ def _build_mission_locations() -> list[MissionLocation]:
 MISSION_LOCATIONS: list[MissionLocation] = _build_mission_locations()
 MISSION_LOCATION_NAMES: list[str] = [str(m) for m in MISSION_LOCATIONS]
 
-# 15 landable × 16 + 2 non-landable × 4 = 248
-assert len(MISSION_LOCATION_NAMES) == 248, (
-    f"Expected 248 per-body mission locations, got {len(MISSION_LOCATION_NAMES)}"
+# 15 landable × 16 + 1 non-landable (Jool) × 4 = 244  (Kerbol excluded)
+assert len(MISSION_LOCATION_NAMES) == 244, (
+    f"Expected 244 per-body mission locations, got {len(MISSION_LOCATION_NAMES)}"
 )
 
 # Bodies in the Kerbin system — derived from ALL_BODIES, not hardcoded.
