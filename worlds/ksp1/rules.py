@@ -431,6 +431,8 @@ class GoalSpec:
     flag_bodies: tuple[BodyName, ...] = ()
     return_bodies: tuple[BodyName, ...] = ()
     sample_return_bodies: tuple[BodyName, ...] = ()
+    orbit_bodies: tuple[BodyName, ...] = ()
+    flyby_bodies: tuple[BodyName, ...] = ()
     complete_tech_tree: bool = False
 
     @property
@@ -438,7 +440,13 @@ class GoalSpec:
         """True when every goal body is in the Kerbin system (Kerbin/Mun/Minmus)."""
         if self.complete_tech_tree:
             return False
-        all_bodies = set(self.flag_bodies) | set(self.return_bodies) | set(self.sample_return_bodies)
+        all_bodies = (
+            set(self.flag_bodies)
+            | set(self.return_bodies)
+            | set(self.sample_return_bodies)
+            | set(self.orbit_bodies)
+            | set(self.flyby_bodies)
+        )
         return bool(all_bodies) and all_bodies <= KERBIN_SYSTEM_BODY_NAMES
 
 
@@ -492,12 +500,15 @@ def resolve_goal_spec(options) -> GoalSpec:
         options.flag_bodies.value
         or options.return_bodies.value
         or options.sample_return_bodies.value
+        or options.orbit_bodies.value
+        or options.flyby_bodies.value
     )
 
     if goal_value != Goal.option_custom and has_body_lists:
         raise RuntimeError(
-            f"Body-list options (flag_bodies, return_bodies, sample_return_bodies) "
-            f"are set but goal is '{options.goal.current_option_name}', not 'custom'. "
+            f"Body-list options (flag_bodies, return_bodies, sample_return_bodies, "
+            f"orbit_bodies, flyby_bodies) are set but goal is "
+            f"'{options.goal.current_option_name}', not 'custom'. "
             f"Set goal to 'custom' to use body-list options."
         )
 
@@ -505,7 +516,8 @@ def resolve_goal_spec(options) -> GoalSpec:
         if not has_body_lists:
             raise RuntimeError(
                 "Goal is 'custom' but all body-list options are empty. "
-                "Set at least one of flag_bodies, return_bodies, or sample_return_bodies."
+                "Set at least one of flag_bodies, return_bodies, sample_return_bodies, "
+                "orbit_bodies, or flyby_bodies."
             )
         # Build display name from the body lists.
         parts = []
@@ -515,6 +527,10 @@ def resolve_goal_spec(options) -> GoalSpec:
             parts.append("Return " + ", ".join(sorted(options.return_bodies.value)))
         if options.sample_return_bodies.value:
             parts.append("Sample Return " + ", ".join(sorted(options.sample_return_bodies.value)))
+        if options.orbit_bodies.value:
+            parts.append("Orbit " + ", ".join(sorted(options.orbit_bodies.value)))
+        if options.flyby_bodies.value:
+            parts.append("Flyby " + ", ".join(sorted(options.flyby_bodies.value)))
         display = "Custom: " + " + ".join(parts)
 
         return GoalSpec(
@@ -522,6 +538,8 @@ def resolve_goal_spec(options) -> GoalSpec:
             flag_bodies=tuple(sorted(options.flag_bodies.value)),
             return_bodies=tuple(sorted(options.return_bodies.value)),
             sample_return_bodies=tuple(sorted(options.sample_return_bodies.value)),
+            orbit_bodies=tuple(sorted(options.orbit_bodies.value)),
+            flyby_bodies=tuple(sorted(options.flyby_bodies.value)),
         )
 
     spec = _PRESET_GOALS.get(goal_value)
@@ -539,6 +557,10 @@ def goal_spec_location_names(spec: GoalSpec) -> list[str]:
         names.append(str(MissionLocation(b, EventName.RETURN, 1)))
     for b in spec.sample_return_bodies:
         names.append(str(MissionLocation(b, EventName.SAMPLE_RETURN, 1)))
+    for b in spec.orbit_bodies:
+        names.append(str(MissionLocation(b, EventName.ORBIT, 1)))
+    for b in spec.flyby_bodies:
+        names.append(str(MissionLocation(b, EventName.FLYBY, 1)))
     if spec.complete_tech_tree:
         for n in LEAF_TECH_NODES:
             names.append(str(TechTreeLocation(n.display_name, 1)))
@@ -620,6 +642,30 @@ def _make_goal_spec_rule(
         sub_rules.append(sample_rule)
     if proxy_sample:
         sub_rules.append(_make_all_parts_rule(player))
+
+    # Orbit bodies
+    if spec.orbit_bodies:
+        orbit_bodies = spec.orbit_bodies
+        def orbit_rule(state: CollectionState) -> bool:
+            cap = get_capability(state, player)
+            for b in orbit_bodies:
+                bp = cap.bodies.get(b)
+                if bp is None or not bp.access.get(EventName.ORBIT, False):
+                    return False
+            return True
+        sub_rules.append(orbit_rule)
+
+    # Flyby bodies
+    if spec.flyby_bodies:
+        flyby_bodies = spec.flyby_bodies
+        def flyby_rule(state: CollectionState) -> bool:
+            cap = get_capability(state, player)
+            for b in flyby_bodies:
+                bp = cap.bodies.get(b)
+                if bp is None or not bp.access.get(EventName.FLYBY, False):
+                    return False
+            return True
+        sub_rules.append(flyby_rule)
 
     # Complete tech tree
     if spec.complete_tech_tree:

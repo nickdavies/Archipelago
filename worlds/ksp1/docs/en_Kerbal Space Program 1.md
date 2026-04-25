@@ -105,8 +105,10 @@ The victory condition is configurable. Preset goals include:
 - **Complete Tech Tree** — Purchase all 62 tech tree nodes.
 - **Mun Flag** — Plant a flag on the Mun (short run).
 - **Mun Sample Return** — Crewed sample return from the Mun (short run).
-- **Custom** — Build your own goal from three body-list options: `flag_bodies`, `return_bodies`, and
-  `sample_return_bodies`. Set goal to `custom` and populate one or more of these lists with body names.
+- **Custom** — Build your own goal from five body-list options: `flag_bodies`, `return_bodies`,
+  `sample_return_bodies`, `orbit_bodies`, and `flyby_bodies`. Set goal to `custom` and populate one or
+  more of these lists with body names. `orbit_bodies` and `flyby_bodies` accept all 17 bodies including
+  Jool and Kerbol; the others only accept landable bodies.
 
 **Short run goals:** When all goal bodies are in the Kerbin system (Kerbin, Mun, Minmus), progression items are
 automatically restricted from appearing at interplanetary locations. You will never be forced to fly to Duna or

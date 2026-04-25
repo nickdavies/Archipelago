@@ -9,6 +9,8 @@ LANDABLE_BODY_NAMES: frozenset[str] = frozenset(
     b.name for b in ALL_BODIES if b.can_land
 )
 
+ALL_BODY_NAMES: frozenset[str] = frozenset(b.name for b in ALL_BODIES)
+
 
 class Goal(Choice):
     """
@@ -57,6 +59,18 @@ class SampleReturnBodies(OptionSet):
     """Bodies to sample-return from (custom goal). Leave empty for preset goals."""
     display_name = "Sample Return Bodies"
     valid_keys = LANDABLE_BODY_NAMES
+
+
+class OrbitBodies(OptionSet):
+    """Bodies to reach orbit around (custom goal). Leave empty for preset goals."""
+    display_name = "Orbit Bodies"
+    valid_keys = ALL_BODY_NAMES
+
+
+class FlybyBodies(OptionSet):
+    """Bodies to perform a flyby of (custom goal). Leave empty for preset goals."""
+    display_name = "Flyby Bodies"
+    valid_keys = ALL_BODY_NAMES
 
 
 class Difficulty(Choice):
@@ -153,3 +167,5 @@ class KSP1Options(PerGameCommonOptions):
     flag_bodies: FlagBodies
     return_bodies: ReturnBodies
     sample_return_bodies: SampleReturnBodies
+    orbit_bodies: OrbitBodies
+    flyby_bodies: FlybyBodies

@@ -35,11 +35,13 @@ class _FakeSetOption:
 
 class _FakeOptions:
     """Minimal stand-in for KSP1Options."""
-    def __init__(self, goal=0, flag=None, ret=None, sample=None):
+    def __init__(self, goal=0, flag=None, ret=None, sample=None, orbit=None, flyby=None):
         self.goal = _FakeOption(goal)
         self.flag_bodies = _FakeSetOption(flag)
         self.return_bodies = _FakeSetOption(ret)
         self.sample_return_bodies = _FakeSetOption(sample)
+        self.orbit_bodies = _FakeSetOption(orbit)
+        self.flyby_bodies = _FakeSetOption(flyby)
 
 
 class TestResolveGoalSpec(unittest.TestCase):
@@ -92,6 +94,26 @@ class TestResolveGoalSpec(unittest.TestCase):
         self.assertEqual(spec.flag_bodies, (BodyName.MUN,))
         self.assertEqual(spec.return_bodies, (BodyName.DUNA,))
         self.assertEqual(spec.sample_return_bodies, (BodyName.EELOO,))
+
+    def test_custom_orbit_bodies(self):
+        opts = _FakeOptions(goal=Goal.option_custom, orbit=[BodyName.DUNA, BodyName.MUN])
+        spec = resolve_goal_spec(opts)
+        self.assertEqual(set(spec.orbit_bodies), {BodyName.DUNA, BodyName.MUN})
+        self.assertFalse(spec.flyby_bodies)
+        self.assertIn("Custom:", spec.display_name)
+        self.assertIn("Orbit", spec.display_name)
+
+    def test_custom_flyby_bodies(self):
+        opts = _FakeOptions(goal=Goal.option_custom, flyby=[BodyName.JOOL])
+        spec = resolve_goal_spec(opts)
+        self.assertEqual(spec.flyby_bodies, (BodyName.JOOL,))
+        self.assertFalse(spec.orbit_bodies)
+        self.assertIn("Flyby", spec.display_name)
+
+    def test_custom_orbit_only_raises_without_goal_custom(self):
+        opts = _FakeOptions(goal=Goal.option_duna_return, orbit=[BodyName.MUN])
+        with self.assertRaises(RuntimeError):
+            resolve_goal_spec(opts)
 
     def test_body_lists_with_non_custom_raises(self):
         opts = _FakeOptions(goal=Goal.option_duna_return, flag=[BodyName.MUN])
