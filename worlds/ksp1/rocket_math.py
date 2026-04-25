@@ -32,6 +32,7 @@ KSP_SYMMETRY_MODES: tuple[int, ...] = (2, 3, 4, 6, 8)
 
 # Lookup: parallel_mode string → dry mass factor
 _PARALLEL_DRY_FACTORS: dict[str, float] = {
+    "none": 1.0,
     "asparagus": ASPARAGUS_DRY_MASS_FACTOR,
     "onion": ONION_DRY_MASS_FACTOR,
 }
@@ -85,7 +86,7 @@ def stage_delta_v(
     m_fuel = tank.fuel_mass * tank_count * fill_fraction
 
     # Parallel staging: side boosters are dropped mid-burn → reduced dry mass.
-    dry_factor = _PARALLEL_DRY_FACTORS.get(parallel_mode, 1.0)
+    dry_factor = _PARALLEL_DRY_FACTORS[parallel_mode]
     m_tank_dry *= dry_factor
 
     m_dry = payload_mass + m_engine + m_tank_dry
@@ -139,7 +140,7 @@ def required_tanks(
     R = math.exp(delta_v / (isp * G0))
     m_engine = engine.mass * engine_count
 
-    dry_mass_factor = _PARALLEL_DRY_FACTORS.get(parallel_mode, 1.0)
+    dry_mass_factor = _PARALLEL_DRY_FACTORS[parallel_mode]
     effective_dry = tank.dry_mass * dry_mass_factor
 
     numerator = (R - 1) * (payload_mass + m_engine)
@@ -257,7 +258,7 @@ def find_optimal_stage(
 
     # Parallel staging dry-mass factor (applied to tank dry mass)
     _parallel = parallel_mode != "none"
-    dry_factor = _PARALLEL_DRY_FACTORS.get(parallel_mode, 1.0)
+    dry_factor = _PARALLEL_DRY_FACTORS[parallel_mode]
 
     # Sub-modes: (dry_factor, use_symmetric_counts)
     # When parallel, try symmetric counts with dry benefit first (usually

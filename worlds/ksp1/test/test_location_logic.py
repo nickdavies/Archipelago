@@ -54,20 +54,25 @@ class KSP1TestBase(WorldTestBase):
 def _make_body_cap(events) -> MagicMock:
     """Return a mock BodyAccessProfile with the given events set to True.
 
-    Uses a real dict for access so .get() works correctly.
+    All EventName values are present; unlisted ones default to False.
     """
     bp = MagicMock()
-    bp.access = {e: True for e in events}
+    bp.access = {e: (e in events) for e in EventName}
     return bp
+
+
+def _all_false_bodies() -> dict:
+    """Return a bodies dict with every body present and all events False."""
+    return {body.name: _make_body_cap(set()) for body in ALL_BODIES}
 
 
 def _make_zero_cap() -> MagicMock:
     """Return a RocketCapability mock with nothing accessible.
 
-    All boolean flags False, sounding = 0, bodies = {}.
+    All boolean flags False, sounding = 0, every body present but all events False.
     """
     cap = MagicMock()
-    cap.bodies = {}
+    cap.bodies = _all_false_bodies()
     cap.has_capsule = False
     cap.has_parachutes = False
     cap.has_throttleable_engine = False
@@ -412,7 +417,7 @@ class TestKerbinReturnVsMunReturn(KSP1TestBase):
 
     def test_kerbin_return_accessible_when_only_kerbin_in_profile(self):
         cap = _make_zero_cap()
-        cap.bodies = {BodyName.KERBIN: _make_body_cap({EventName.RETURN})}
+        cap.bodies[BodyName.KERBIN] = _make_body_cap({EventName.RETURN})
         with patch("worlds.ksp1.rules.get_capability", return_value=cap):
             self.assertTrue(self.can_reach_location("Kerbin Return 1"))
             self.assertFalse(
@@ -423,7 +428,7 @@ class TestKerbinReturnVsMunReturn(KSP1TestBase):
 
     def test_mun_return_accessible_when_only_mun_in_profile(self):
         cap = _make_zero_cap()
-        cap.bodies = {BodyName.MUN: _make_body_cap({EventName.RETURN})}
+        cap.bodies[BodyName.MUN] = _make_body_cap({EventName.RETURN})
         with patch("worlds.ksp1.rules.get_capability", return_value=cap):
             self.assertTrue(self.can_reach_location("Mun Return 1"))
             self.assertFalse(
@@ -433,7 +438,6 @@ class TestKerbinReturnVsMunReturn(KSP1TestBase):
 
     def test_neither_reachable_when_no_body_profiles(self):
         cap = _make_zero_cap()
-        cap.bodies = {}
         with patch("worlds.ksp1.rules.get_capability", return_value=cap):
             self.assertFalse(self.can_reach_location("Kerbin Return 1"))
             self.assertFalse(self.can_reach_location("Mun Return 1"))
@@ -453,7 +457,7 @@ class TestFlybyPerBodyWiring(KSP1TestBase):
 
     def test_mun_flyby_uses_mun_profile(self):
         cap = _make_zero_cap()
-        cap.bodies = {BodyName.MUN: _make_body_cap({EventName.FLYBY})}
+        cap.bodies[BodyName.MUN] = _make_body_cap({EventName.FLYBY})
         with patch("worlds.ksp1.rules.get_capability", return_value=cap):
             self.assertTrue(self.can_reach_location("Mun Flyby 1"))
             self.assertFalse(
@@ -465,7 +469,7 @@ class TestFlybyPerBodyWiring(KSP1TestBase):
 
     def test_kerbin_flyby_uses_kerbin_profile(self):
         cap = _make_zero_cap()
-        cap.bodies = {BodyName.KERBIN: _make_body_cap({EventName.FLYBY})}
+        cap.bodies[BodyName.KERBIN] = _make_body_cap({EventName.FLYBY})
         with patch("worlds.ksp1.rules.get_capability", return_value=cap):
             self.assertTrue(self.can_reach_location("Kerbin Flyby 1"))
             self.assertFalse(self.can_reach_location("Mun Flyby 1"))
@@ -473,7 +477,7 @@ class TestFlybyPerBodyWiring(KSP1TestBase):
 
     def test_duna_flyby_uses_duna_profile(self):
         cap = _make_zero_cap()
-        cap.bodies = {BodyName.DUNA: _make_body_cap({EventName.FLYBY})}
+        cap.bodies[BodyName.DUNA] = _make_body_cap({EventName.FLYBY})
         with patch("worlds.ksp1.rules.get_capability", return_value=cap):
             self.assertTrue(self.can_reach_location("Duna Flyby 1"))
             self.assertFalse(self.can_reach_location("Kerbin Flyby 1"))
@@ -482,7 +486,7 @@ class TestFlybyPerBodyWiring(KSP1TestBase):
     def test_flyby_and_orbit_are_separate_events(self):
         """Orbit-only profile must not satisfy the Flyby rule (separate event keys)."""
         cap = _make_zero_cap()
-        cap.bodies = {BodyName.MUN: _make_body_cap({EventName.ORBIT})}
+        cap.bodies[BodyName.MUN] = _make_body_cap({EventName.ORBIT})
         with patch("worlds.ksp1.rules.get_capability", return_value=cap):
             self.assertTrue(self.can_reach_location("Mun Orbit 1"))
             self.assertFalse(
@@ -496,7 +500,7 @@ class TestFlybyPerBodyWiring(KSP1TestBase):
         Catches a flyby rule that always returns False for a specific body.
         """
         cap = _make_zero_cap()
-        cap.bodies = {body.name: _make_body_cap(set(EventName)) for body in ALL_BODIES}
+        cap.bodies = {body.name: _make_body_cap(EventName) for body in ALL_BODIES}
         with patch("worlds.ksp1.rules.get_capability", return_value=cap):
             for body in ALL_BODIES:
                 loc_name = f"{body.name} Flyby 1"
@@ -517,7 +521,7 @@ class TestCrewedEventsRequireBodyProfile(KSP1TestBase):
 
     def test_eva_in_orbit_reads_correct_body(self):
         cap = _make_zero_cap()
-        cap.bodies = {BodyName.MUN: _make_body_cap({EventName.EVA_IN_ORBIT})}
+        cap.bodies[BodyName.MUN] = _make_body_cap({EventName.EVA_IN_ORBIT})
         with patch("worlds.ksp1.rules.get_capability", return_value=cap):
             self.assertTrue(self.can_reach_location("Mun EVA in Orbit 1"))
             self.assertFalse(
@@ -527,7 +531,7 @@ class TestCrewedEventsRequireBodyProfile(KSP1TestBase):
 
     def test_flag_plant_reads_correct_body(self):
         cap = _make_zero_cap()
-        cap.bodies = {BodyName.MUN: _make_body_cap({EventName.FLAG_PLANT})}
+        cap.bodies[BodyName.MUN] = _make_body_cap({EventName.FLAG_PLANT})
         with patch("worlds.ksp1.rules.get_capability", return_value=cap):
             self.assertTrue(self.can_reach_location("Mun Flag Plant 1"))
             self.assertFalse(
@@ -536,9 +540,9 @@ class TestCrewedEventsRequireBodyProfile(KSP1TestBase):
             )
 
     def test_sample_return_reads_correct_body(self):
-        """Mun sample return uses the normal bodies.get() rule (not the all-parts proxy)."""
+        """Mun sample return uses the normal bracket-access rule (not the all-parts proxy)."""
         cap = _make_zero_cap()
-        cap.bodies = {BodyName.MUN: _make_body_cap({EventName.SAMPLE_RETURN})}
+        cap.bodies[BodyName.MUN] = _make_body_cap({EventName.SAMPLE_RETURN})
         with patch("worlds.ksp1.rules.get_capability", return_value=cap):
             self.assertTrue(self.can_reach_location("Mun Sample Return 1"))
             self.assertFalse(
@@ -547,14 +551,13 @@ class TestCrewedEventsRequireBodyProfile(KSP1TestBase):
             )
 
     def test_crewed_events_absent_when_body_missing(self):
-        """Empty bodies dict → standard crewed event locations not reachable.
+        """All-False bodies dict → standard crewed event locations not reachable.
 
-        Confirms that 'bp is not None' guards in the rule handle missing bodies.
+        Confirms that all-False access profiles block crewed locations.
         Eve/Tylo/Laythe sample return use the all-parts proxy (not get_capability)
         and are also not reachable here since no progression items are collected.
         """
         cap = _make_zero_cap()
-        cap.bodies = {}
         sample_locs = [
             "Mun EVA in Orbit 1",
             "Mun Flag Plant 1",
@@ -600,7 +603,7 @@ class TestTechTreeBandGating(KSP1TestBase):
         """
         self.collect_by_name(PROGRESSIVE_RD_NAME)  # collects all 3 copies
         cap = _make_zero_cap()
-        cap.bodies = {}  # no orbit access → _accessible_science returns 0
+        # all bodies present but all events False → _accessible_science returns 0
         with patch("worlds.ksp1.rules.get_capability", return_value=cap):
             for node in TECH_NODES:
                 loc_name = f"{node.display_name} 1"

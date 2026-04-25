@@ -91,12 +91,12 @@ def _accessible_science(state: CollectionState, player: int, difficulty: int) ->
 
     total = 0.0
     for body in ALL_BODIES:
-        body_cap = cap.bodies.get(body.name)
-        if body_cap is None or not body_cap.access.get(EventName.ORBIT, False):
+        body_cap = cap.bodies[body.name]
+        if not body_cap.access[EventName.ORBIT]:
             continue
         total += science_budget(
             body, cap.has_thermometer, cap.has_barometer,
-            cap.has_capsule, body_cap.access.get(EventName.CREWED_LANDING, False),
+            cap.has_capsule, body_cap.access[EventName.CREWED_LANDING],
         )
 
     return total * _SCIENCE_SAFETY[difficulty]
@@ -120,12 +120,12 @@ def _make_science_threshold_rule(
         cap = get_capability(state, player)
         total = 0.0
         for body in ALL_BODIES:
-            body_cap = cap.bodies.get(body.name)
-            if body_cap is None or not body_cap.access.get(EventName.ORBIT, False):
+            body_cap = cap.bodies[body.name]
+            if not body_cap.access[EventName.ORBIT]:
                 continue
             total += science_budget(
                 body, cap.has_thermometer, cap.has_barometer,
-                cap.has_capsule, body_cap.access.get(EventName.CREWED_LANDING, False),
+                cap.has_capsule, body_cap.access[EventName.CREWED_LANDING],
             )
         return total * safety >= threshold
     return rule
@@ -271,15 +271,10 @@ def _mission_rule_for_event(
     if body_name in (BodyName.TYLO, BodyName.LAYTHE) and event in (EventName.RETURN, EventName.SAMPLE_RETURN):
         return _make_all_parts_rule(player)
 
-    event_def = EVENT_BY_NAME.get(event)
-    if event_def is None:
-        def rule(state: CollectionState) -> bool:
-            return False
-        return rule
+    EVENT_BY_NAME[event]  # validate event exists; crash on typo
 
     def rule(state: CollectionState) -> bool:
-        bp = get_capability(state, player).bodies.get(body_name)
-        return bp is not None and bp.access.get(event, False)
+        return get_capability(state, player).bodies[body_name].access[event]
     return rule
 
 
@@ -605,8 +600,7 @@ def _make_goal_spec_rule(
         def flag_rule(state: CollectionState) -> bool:
             cap = get_capability(state, player)
             for b in flag_bodies:
-                bp = cap.bodies.get(b)
-                if bp is None or not bp.access.get(EventName.FLAG_PLANT, False):
+                if not cap.bodies[b].access[EventName.FLAG_PLANT]:
                     return False
             return True
         sub_rules.append(flag_rule)
@@ -619,8 +613,7 @@ def _make_goal_spec_rule(
         def return_rule(state: CollectionState) -> bool:
             cap = get_capability(state, player)
             for b in nr:
-                bp = cap.bodies.get(b)
-                if bp is None or not bp.access.get(EventName.RETURN, False):
+                if not cap.bodies[b].access[EventName.RETURN]:
                     return False
             return True
         sub_rules.append(return_rule)
@@ -635,8 +628,7 @@ def _make_goal_spec_rule(
         def sample_rule(state: CollectionState) -> bool:
             cap = get_capability(state, player)
             for b in ns:
-                bp = cap.bodies.get(b)
-                if bp is None or not bp.access.get(EventName.SAMPLE_RETURN, False):
+                if not cap.bodies[b].access[EventName.SAMPLE_RETURN]:
                     return False
             return True
         sub_rules.append(sample_rule)
@@ -649,8 +641,7 @@ def _make_goal_spec_rule(
         def orbit_rule(state: CollectionState) -> bool:
             cap = get_capability(state, player)
             for b in orbit_bodies:
-                bp = cap.bodies.get(b)
-                if bp is None or not bp.access.get(EventName.ORBIT, False):
+                if not cap.bodies[b].access[EventName.ORBIT]:
                     return False
             return True
         sub_rules.append(orbit_rule)
@@ -661,8 +652,7 @@ def _make_goal_spec_rule(
         def flyby_rule(state: CollectionState) -> bool:
             cap = get_capability(state, player)
             for b in flyby_bodies:
-                bp = cap.bodies.get(b)
-                if bp is None or not bp.access.get(EventName.FLYBY, False):
+                if not cap.bodies[b].access[EventName.FLYBY]:
                     return False
             return True
         sub_rules.append(flyby_rule)

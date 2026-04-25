@@ -177,7 +177,9 @@ class EquipmentFlags:
 
 @dataclass
 class BodyAccessProfile:
-    access: dict[EventName, bool] = field(default_factory=dict)
+    access: dict[EventName, bool] = field(
+        default_factory=lambda: {ev.name: False for ev in ALL_EVENTS}
+    )
     blocking_reason: Optional[str] = None
 
 
@@ -286,7 +288,7 @@ def explain_body_unreachable(state: CollectionState, player: int, body_name: str
         return f"{body_name}: {bp.blocking_reason}"
     lines = []
     for ev in ALL_EVENTS:
-        if not bp.access.get(ev.name, False):
+        if not bp.access[ev.name]:
             lines.append(f"cannot {ev.name}")
     return f"{body_name}: " + ("; ".join(lines) if lines else "fully accessible")
 
@@ -1244,12 +1246,10 @@ def _assess_one_body(
     prof = BodyAccessProfile()
 
     # --- Parent gating ---
-    if body.parent is not None:
-        parent_prof = computed.get(body.parent)
-        # For Kerbin moons: parent orbit must be reachable (Kerbin orbit always is)
-        # For other moons: parent planet must be orbitally reachable
-        if body.parent != BodyName.KERBIN and parent_prof is not None:
-            if not parent_prof.access.get("Orbit", False):
+    if body.parent is not None and body.parent != BodyName.KERBIN:
+        # Non-Kerbin moons: parent planet must be orbitally reachable
+        parent_prof = computed[body.parent]
+        if not parent_prof.access[EventName.ORBIT]:
                 prof.blocking_reason = f"parent {body.parent} orbit unreachable"
                 return prof
 
@@ -1261,8 +1261,10 @@ def _assess_one_body(
     # --- Evaluate all events from ALL_EVENTS ---
     for event in ALL_EVENTS:
         if event.crewed is True and not flags.has_capsule:
+            prof.access[event.name] = False
             continue
         if event.requires_landing and not body.can_land:
+            prof.access[event.name] = False
             continue
 
         profiles = MISSION_PROFILES[(body.name, event.mission_type)]
@@ -1281,7 +1283,7 @@ def _assess_one_body(
         if not ok and not prof.blocking_reason:
             prof.blocking_reason = f"{event.mission_type}: {'; '.join(reasons)}"
 
-    if not prof.access.get(EventName.ORBIT, False) and not prof.blocking_reason:
+    if not prof.access[EventName.ORBIT] and not prof.blocking_reason:
         prof.blocking_reason = "orbit not achievable"
 
     return prof
