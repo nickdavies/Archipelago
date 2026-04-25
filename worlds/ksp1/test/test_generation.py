@@ -23,6 +23,18 @@ from worlds.ksp1.capability import get_capability, explain_body_unreachable
 
 class KSP1TestBase(WorldTestBase):
     game = "Kerbal Space Program 1"
+    run_default_tests = False  # suppressed; fill runs only in TestFill and TestCompleteTechTreeGoalRD
+
+
+class TestFill(KSP1TestBase):
+    """Runs AP fill once with default options — the canonical generation smoke test."""
+    run_default_tests = True
+
+
+class TestFillStandardSampleReturns(KSP1TestBase):
+    """Fill smoke test for standard_sample_returns on expert difficulty: crewed sample return from 11 bodies."""
+    options = {"goal": "standard_sample_returns", "difficulty": "expert"}
+    run_default_tests = True
 
 
 class TestItemLocationBalance(KSP1TestBase):

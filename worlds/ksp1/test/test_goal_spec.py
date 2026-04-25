@@ -192,6 +192,7 @@ class TestGoalSpecLocationNames(unittest.TestCase):
 
 class KSP1TestBase(WorldTestBase):
     game = "Kerbal Space Program 1"
+    run_default_tests = False  # fill tested once in test_generation.py
 
 
 class TestMunReturnGoalReachability(KSP1TestBase):
