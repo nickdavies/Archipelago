@@ -5,7 +5,7 @@ from worlds.AutoWorld import LogicMixin, WebWorld, World
 
 from . import items, locations, regions, rules
 from .rules import GoalSpec, resolve_goal_spec, goal_spec_location_names
-from .capability import RocketCapability
+from .capability import CAPABILITY_ITEMS, RocketCapability
 from .bodies import ALL_BODIES, MissionType
 from .items import ITEM_NAME_TO_ID, _FILLER_ITEMS
 from .parts import PROGRESSIVE_PART_TIERS
@@ -251,6 +251,11 @@ class KSP1World(World):
         if location_label.startswith("KSC ") or location_label.startswith("Starting "):
             return f"Z_{location_label}"
         return f"C_{location_label}"
+
+    def collect_item(self, state: CollectionState, item: Item, remove: bool = False) -> str | None:
+        if item.advancement or item.name in CAPABILITY_ITEMS:
+            return item.name
+        return None
 
     def collect(self, state: CollectionState, item: Item) -> bool:
         change = super().collect(state, item)
