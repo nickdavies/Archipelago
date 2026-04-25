@@ -1168,6 +1168,15 @@ for _body_name, _mission_type in list(MISSION_PROFILES):
             MISSION_PROFILES[(_body_name, MissionType.ESCAPE)] = _flyby_profiles
 del _body_name, _mission_type, _flyby_profiles
 
+# Auto-generate flag-plant profiles from landing profiles.
+# Flag plant is the same mission as a crewed landing — if no explicit
+# FLAG_PLANT profile exists, copy the LAND profile.
+# Kerbin already has an explicit empty FLAG_PLANT entry — skip it.
+for _body_name, _mission_type in list(MISSION_PROFILES):
+    if _mission_type == MissionType.LAND and (_body_name, MissionType.FLAG_PLANT) not in MISSION_PROFILES:
+        MISSION_PROFILES[(_body_name, MissionType.FLAG_PLANT)] = MISSION_PROFILES[(_body_name, MissionType.LAND)]
+del _body_name, _mission_type
+
 
 # ---------------------------------------------------------------------------
 # Science budget estimator (used by tech-tree access rules)

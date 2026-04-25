@@ -41,6 +41,17 @@ from .rocket_math import (
 if TYPE_CHECKING:
     from .world import KSP1World
 
+# Import-time assertion: every body/event combo must have a MISSION_PROFILES entry.
+# Missing entries cause silent KeyError at runtime. This catches registration gaps
+# (e.g. a new body added without FLAG_PLANT profiles).
+for _body in ALL_BODIES:
+    for _event in ALL_EVENTS:
+        if _event.requires_landing and not _body.can_land:
+            continue
+        _key = (_body.name, _event.mission_type)
+        assert _key in MISSION_PROFILES, f"Missing MISSION_PROFILES entry: {_key}"
+del _body, _event, _key
+
 # Item names that affect capability computation. Built once at module load
 # from PART_DB: any item containing an Engine, FuelTank, SolidBooster,
 # HeatShield, Parachute, LandingLeg, Decoupler, or MiscEquipment with
@@ -1211,7 +1222,6 @@ def _assess_bodies(
     unreachable, all its moons are immediately marked False.
     """
     results: dict[str, BodyAccessProfile] = {}
-    has_attitude = _has_attitude_control(flags)
 
     # We need to evaluate planets before moons.
     # ALL_BODIES is ordered: Kerbin first, then moons, then outer bodies.
@@ -1220,7 +1230,7 @@ def _assess_bodies(
     moons = [b for b in ALL_BODIES if b.parent is not None]
 
     for body in planets + moons:
-        results[body.name] = _assess_one_body(body, flags, diff, results, has_attitude)
+        results[body.name] = _assess_one_body(body, flags, diff, results)
 
     return results
 
@@ -1230,7 +1240,6 @@ def _assess_one_body(
     flags: EquipmentFlags,
     diff: DifficultyProfile,
     computed: dict[str, BodyAccessProfile],
-    has_attitude: Optional[bool] = None,
 ) -> BodyAccessProfile:
     prof = BodyAccessProfile()
 
@@ -1249,33 +1258,18 @@ def _assess_one_body(
         prof.blocking_reason = "no launch clamp for interplanetary mission"
         return prof
 
-    # --- Equipment gates ---
-    # No command module at all → nothing is possible.
-    if not flags.has_probe_core and not flags.has_capsule:
-        prof.blocking_reason = "no command (probe or capsule)"
-        return prof
-    # Nearly all profiles require attitude control. Without it, only
-    # very exotic profiles could succeed, and we have none.
-    if has_attitude is None:
-        has_attitude = _has_attitude_control(flags)
-    if not has_attitude:
-        prof.blocking_reason = "no attitude control"
-        return prof
     # --- Evaluate all events from ALL_EVENTS ---
     for event in ALL_EVENTS:
-        if event.prereq_event and not prof.access.get(event.prereq_event, False):
-            continue
         if event.crewed is True and not flags.has_capsule:
             continue
         if event.requires_landing and not body.can_land:
             continue
 
-        profiles = MISSION_PROFILES.get((body.name, event.mission_type), [])
+        profiles = MISSION_PROFILES[(body.name, event.mission_type)]
 
+        # Empty profile = always achievable (e.g. Kerbin launchpad EVA)
         if not profiles:
-            # Flag plant without explicit profiles: fall back to crewed landing
-            if event.mission_type == MissionType.FLAG_PLANT:
-                prof.access[event.name] = prof.access.get(EventName.CREWED_LANDING, False)
+            prof.access[event.name] = True
             continue
 
         # High-gravity sample return requires ladder for EVA re-boarding

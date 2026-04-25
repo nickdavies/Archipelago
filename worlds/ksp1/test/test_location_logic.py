@@ -292,6 +292,78 @@ class TestKerbinEarlyLocations(KSP1TestBase):
             "Splashdown: sounding ≥ 1 km + parachutes must pass (tier-1 SRBs easily reach 1 km)",
         )
 
+    def test_capsule_enables_kerbin_eva_missions(self):
+        """Progressive Capsule alone → all capsule-only Kerbin locations reachable.
+
+        Kerbin Sample Return and Flag Plant have empty MISSION_PROFILES (no rocket
+        needed — launchpad EVA). These must not be blocked by body-level gates
+        that duplicate per-edge checks.
+        """
+        self.collect_by_name("Progressive Capsule")
+
+        # Per-body mission events with empty profiles (always achievable with capsule)
+        for loc in (
+            "Kerbin Sample Return 1", "Kerbin Sample Return 2", "Kerbin Sample Return 3",
+            "Kerbin Flag Plant 1", "Kerbin Flag Plant 2",
+        ):
+            self.assertTrue(
+                self.can_reach_location(loc),
+                f"'{loc}' must be reachable with just a capsule (empty profile = launchpad EVA)",
+            )
+
+        # Kerbin-specific locations that only need has_capsule
+        self.assertTrue(self.can_reach_location("Kerbin First Launch"))
+        self.assertTrue(self.can_reach_location("Kerbin First Landing"))
+
+        # All 12 KSC biomes (already tested separately but included for completeness)
+        for biome in KSC_BIOME_NAMES:
+            self.assertTrue(self.can_reach_location(biome))
+
+    def test_probe_core_does_not_enable_crewed_kerbin_missions(self):
+        """Probe core alone must NOT unlock crewed Kerbin missions.
+
+        Sample Return, Flag Plant, First Launch/Landing, and KSC biomes all
+        require a capsule (crewed EVA). A probe core is not a substitute.
+        """
+        self.collect_by_name("Progressive Probe Core")
+
+        for loc in (
+            "Kerbin Sample Return 1", "Kerbin Sample Return 2", "Kerbin Sample Return 3",
+            "Kerbin Flag Plant 1", "Kerbin Flag Plant 2",
+            "Kerbin First Launch", "Kerbin First Landing",
+        ):
+            self.assertFalse(
+                self.can_reach_location(loc),
+                f"'{loc}' must NOT be reachable with just a probe core (crewed-only)",
+            )
+        for biome in KSC_BIOME_NAMES:
+            self.assertFalse(
+                self.can_reach_location(biome),
+                f"KSC biome '{biome}' must NOT be reachable with just a probe core",
+            )
+
+    def test_fuel_tank_does_not_enable_crewed_kerbin_missions(self):
+        """A fuel tank alone (no command module) must NOT unlock anything.
+
+        Neither capsule nor probe core → no command authority at all.
+        """
+        self.collect_by_name("Progressive LFO Tank")
+
+        for loc in (
+            "Kerbin Sample Return 1", "Kerbin Sample Return 2", "Kerbin Sample Return 3",
+            "Kerbin Flag Plant 1", "Kerbin Flag Plant 2",
+            "Kerbin First Launch", "Kerbin First Landing",
+        ):
+            self.assertFalse(
+                self.can_reach_location(loc),
+                f"'{loc}' must NOT be reachable with just a fuel tank",
+            )
+        for biome in KSC_BIOME_NAMES:
+            self.assertFalse(
+                self.can_reach_location(biome),
+                f"KSC biome '{biome}' must NOT be reachable with just a fuel tank",
+            )
+
     def test_altitude_checks_gate_with_sounding(self):
         """Altitude check locations require strictly increasing sounding thresholds.
 

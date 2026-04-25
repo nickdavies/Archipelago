@@ -130,39 +130,24 @@ class EventDef:
 
     One row per event — single source of truth. All consumers (locations,
     rules, capability, CLI) derive their needs from this table.
-
-    prereq_event: if set, evaluation is skipped when this event is False
-                  for the body. Prereqs must appear before dependents in
-                  ALL_EVENTS.
     """
     name: EventName
     scale: int                            # location slots per body for this event
     mission_type: MissionType             # key into MISSION_PROFILES
     crewed: bool | None                   # None=try both, True=crewed only, False=unmanned only
     requires_landing: bool                # only applies to landable bodies
-    prereq_event: EventName | None = None # skip if this event is False for the body
 
 ALL_EVENTS: tuple[EventDef, ...] = (
     EventDef(EventName.ORBIT,          1, MissionType.ORBIT,         None,  False),
-    EventDef(EventName.EVA_IN_ORBIT,   1, MissionType.ORBIT,         True,  False, EventName.ORBIT),
+    EventDef(EventName.EVA_IN_ORBIT,   1, MissionType.ORBIT,         True,  False),
     EventDef(EventName.FLYBY,          1, MissionType.ESCAPE,        None,  False),
     EventDef(EventName.SOI_LEAVE,      1, MissionType.ESCAPE,        None,  False),
-    EventDef(EventName.LANDING,        2, MissionType.LAND,          None,  True,  EventName.ORBIT),
-    EventDef(EventName.CREWED_LANDING, 2, MissionType.LAND,          True,  True,  EventName.ORBIT),
-    EventDef(EventName.FLAG_PLANT,     2, MissionType.FLAG_PLANT,    True,  True,  EventName.CREWED_LANDING),
-    EventDef(EventName.RETURN,         3, MissionType.RETURN,        None,  True,  EventName.LANDING),
-    EventDef(EventName.SAMPLE_RETURN,  3, MissionType.SAMPLE_RETURN, True,  True,  EventName.CREWED_LANDING),
+    EventDef(EventName.LANDING,        2, MissionType.LAND,          None,  True),
+    EventDef(EventName.CREWED_LANDING, 2, MissionType.LAND,          True,  True),
+    EventDef(EventName.FLAG_PLANT,     2, MissionType.FLAG_PLANT,    True,  True),
+    EventDef(EventName.RETURN,         3, MissionType.RETURN,        None,  True),
+    EventDef(EventName.SAMPLE_RETURN,  3, MissionType.SAMPLE_RETURN, True,  True),
 )
-
-# Import-time assertion: prereqs must appear before dependents in ALL_EVENTS
-_seen_events: set[str] = set()
-for _ev in ALL_EVENTS:
-    if _ev.prereq_event is not None:
-        assert _ev.prereq_event in _seen_events, (
-            f"EventDef {_ev.name!r} prereq {_ev.prereq_event!r} not defined earlier in ALL_EVENTS"
-        )
-    _seen_events.add(_ev.name)
-del _seen_events, _ev
 
 EVENT_BY_NAME: dict[str, EventDef] = {e.name: e for e in ALL_EVENTS}
 
