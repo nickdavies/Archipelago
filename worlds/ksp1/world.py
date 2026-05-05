@@ -219,10 +219,16 @@ class KSP1World(World):
             self.options.difficulty.value
         ]
 
+        rep_names = frozenset(
+            rep
+            for tiers in self.progressive_representatives.values()
+            for rep in tiers.values()
+        )
         cap, flags = compute_capability_from_items(
             lambda name: state.count(name, self.player),
             difficulty_name,
             bool(self.options.start_with_launch_clamps.value),
+            rep_names,
         )
 
         result = None

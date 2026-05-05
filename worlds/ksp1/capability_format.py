@@ -440,10 +440,16 @@ def build_bug_report_dict(
     if user_description:
         report["user_description"] = user_description
 
+    rep_names = frozenset(
+        rep
+        for tiers in slot_data.get("progressive_representatives", {}).values()
+        for rep in tiers.values()
+    )
     _, flags = compute_capability_from_items(
         lambda name: items_by_name.get(name, 0),
         difficulty_name,
         bool(slot_data.get("start_with_launch_clamps", 1)),
+        rep_names,
     )
     report["equipment_flags"] = {
         "staging_tier": flags.staging_tier,

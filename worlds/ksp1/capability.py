@@ -298,7 +298,8 @@ def explain_body_unreachable(state: CollectionState, player: int, body_name: str
 # ---------------------------------------------------------------------------
 
 def _pre_pass(item_count_fn: Callable[[str], int],
-              start_with_clamps: bool) -> EquipmentFlags:
+              start_with_clamps: bool,
+              rep_names: frozenset[str] = frozenset()) -> EquipmentFlags:
     """
     Iterate every item the player has collected and build EquipmentFlags.
 
@@ -334,7 +335,13 @@ def _pre_pass(item_count_fn: Callable[[str], int],
             # Absorbed part: only available if unlocked by progressive tier
             if item_name not in progressive_unlocked:
                 continue
-            count = 1  # progressive unlocking grants 1 copy
+            if item_name in rep_names:
+                count = 1  # rep: auto-granted by the progressive tier unlock
+            else:
+                # Non-rep: only available if the individual item was received
+                count = item_count_fn(item_name)
+                if count == 0:
+                    continue
         else:
             count = item_count_fn(item_name)
             if count == 0:
@@ -1567,10 +1574,11 @@ def compute_capability_from_items(
     item_count_fn: Callable[[str], int],
     difficulty_name: str,
     start_with_clamps: bool,
+    rep_names: frozenset[str] = frozenset(),
 ) -> tuple[RocketCapability, EquipmentFlags]:
     """Compute capability without a CollectionState. For CLI/external tools."""
     diff = DIFFICULTY_PROFILES[difficulty_name]
-    flags = _pre_pass(item_count_fn, start_with_clamps)
+    flags = _pre_pass(item_count_fn, start_with_clamps, rep_names)
     body_profiles = _assess_bodies(flags, diff)
     sounding_km = _compute_sounding_altitude(flags)
 
@@ -1616,9 +1624,14 @@ def _compute_capability(state: CollectionState, player: int) -> RocketCapability
     options = world.options
     difficulty_name = ["casual", "normal", "expert", "insane"][options.difficulty.value]
     start_with_clamps = bool(options.start_with_launch_clamps.value)
+    rep_names = frozenset(
+        rep
+        for tiers in world.progressive_representatives.values()
+        for rep in tiers.values()
+    )
     cap, _ = compute_capability_from_items(
         lambda name: state.count(name, player),
-        difficulty_name, start_with_clamps,
+        difficulty_name, start_with_clamps, rep_names,
     )
     return cap
 

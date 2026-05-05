@@ -246,10 +246,16 @@ def cmd_rocket(ap: APState, check_name: str, verbose: bool = False) -> None:
         ap.slot_data.get("difficulty", 1)
     ]
 
+    rep_names = frozenset(
+        rep
+        for tiers in ap.slot_data.get("progressive_representatives", {}).values()
+        for rep in tiers.values()
+    )
     cap, flags = compute_capability_from_items(
         lambda name: state.count(name, player),
         difficulty_name,
         bool(ap.slot_data.get("start_with_launch_clamps", 1)),
+        rep_names,
     )
 
     result = None
