@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import pkgutil
 
-from .parts import PROGRESSIVE_PART_TIERS
+from .parts import PROGRESSIVE_PART_TIERS, PROGRESSIVE_PART_NAMES
 
 
 def _load_item_tiers() -> dict[str, int]:
@@ -60,3 +60,8 @@ ITEM_TIERS: dict[str, int] = {**_load_item_tiers(), **_NON_PART_TIERS}
 # Apply progressive tier floors (max of physics tier and progressive floor).
 for _name, _floor in _PROGRESSIVE_TIER_FLOORS.items():
     ITEM_TIERS[_name] = max(ITEM_TIERS.get(_name, 0), _floor)
+# Parts in progressive groups are gated by the progressive item itself
+# Per-part tiers on these are redundant with the progressive gate, and
+# they cause tail-cornering in remaining_fill
+for _name in PROGRESSIVE_PART_NAMES:
+    ITEM_TIERS.pop(_name, None)
