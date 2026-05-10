@@ -1262,8 +1262,10 @@ PROGRESSIVE_PART_TIERS: dict[str, dict[int, list[str]]] = {
         ],
     },
     # --- Stack Decouplers (serial staging) ---
+    # Docking ports are folded in at tier+1 of their natural size — guarantees
+    # the player always has a non-docking-port separator at their current tier.
     "Progressive Stack Decoupler": {
-        1: [  # Small/medium
+        1: [  # Small/medium decouplers — no docking ports here.
             "Decoupler.0",              # TD-06
             "Decoupler.1",              # TD-12
             "Decoupler.1p5",            # TD-18 (MH)
@@ -1272,21 +1274,49 @@ PROGRESSIVE_PART_TIERS: dict[str, dict[int, list[str]]] = {
             "Separator.1p5",            # TS-18 (MH)
             "Size1p5.Strut.Decoupler",  # Size 1.5 Decoupler (MH)
         ],
-        2: [  # Large
+        2: [  # Large decouplers + size 0/1 docking ports (natural tier 1, bumped here).
             "Decoupler.2",              # TD-25
             "Decoupler.3",              # TD-37
             "Decoupler.4",              # TD-50 (MH)
             "Separator.2",              # TS-25
             "Separator.3",              # TS-37
             "Separator.4",              # TS-50 (MH)
+            "dockingPort1",              # Clamp-O-Tron Shielded (size1)
+            "dockingPort2",              # Clamp-O-Tron (size1)
+            "dockingPort3",              # Clamp-O-Tron Jr. (size0)
+            "mk2DockingPort",            # Mk2 Clamp-O-Tron (size1+mk2)
+        ],
+        3: [  # Size 2+ docking ports (natural tier 2, bumped here).
+            "dockingPortLarge",          # Clamp-O-Tron Sr. (size2)
         ],
     },
     # --- Radial Decouplers (parallel/asparagus staging) ---
+    # Tier 3 = fuelLine: gates asparagus staging behind 3 progressive copies.
     "Progressive Radial Decoupler": {
         1: [
             "radialDecoupler",           # TT-38K
-            "radialDecoupler2",          # TT-70
             "radialDecoupler1-2",        # Hydraulic Detachment Manifold
+        ],
+        2: [
+            "radialDecoupler2",          # TT-70
+        ],
+        3: [
+            "fuelLine",                  # FTX-2 External Fuel Duct
+        ],
+    },
+    # --- Engine Plates (multi-mount adapters, by output stack size) ---
+    "Progressive Engine Plate": {
+        1: [  # Small (0.625m / 1.25m output stacks)
+            "EnginePlate5",              # EP-12
+            "EnginePlate1p5",            # EP-18
+            "EnginePlate2",              # EP-25
+        ],
+        2: [  # Medium (1.875m / 2.5m output stacks)
+            "EnginePlate3",              # EP-37
+            "EnginePlate4",              # EP-50
+        ],
+        3: [  # Large (3.75m output stack)
+            "Size4.EngineAdapter.01",    # Kerbodyne Engine Cluster Adapter
         ],
     },
     # --- Capsules (crewed command pods) ---

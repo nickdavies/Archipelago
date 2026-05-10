@@ -106,6 +106,8 @@ _RECLASSIFY_USEFUL: frozenset[str] = frozenset({
     "Size1p5.Size1.Adapter.02",
     # Sepratron and Launch Escape System (not real boosters)
     "sepMotor1", "LaunchEscapeSystem",
+    # Inline radial docking port (not a stack separator; convenience-only)
+    "dockingPortLateral",
 })
 
 
@@ -180,6 +182,7 @@ _PROGRESSIVE_ITEMS: dict[str, tuple[int, ItemClassification]] = {
     "Progressive Probe Core":       (59, ItemClassification.progression),
     "Progressive Solar Panel":      (60, ItemClassification.progression),
     "Progressive Relay":            (61, ItemClassification.progression),
+    "Progressive Engine Plate":     (62, ItemClassification.progression),
 }
 
 PROGRESSIVE_RD_NAME: str = "Progressive R&D"
