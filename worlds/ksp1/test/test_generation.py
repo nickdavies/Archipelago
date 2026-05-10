@@ -219,11 +219,22 @@ class TestItemClassification(KSP1TestBase):
             "RCS Thruster should be useful, not progression",
         )
 
-    def test_ladder_is_progression(self):
+    def test_progressive_ladder_is_progression(self):
+        # Telescopic ladders moved into Progressive Ladder group.
+        # The group item itself is progression; the tier-1/tier-2 parts are
+        # the sole reps of their tiers (always removed from pool by rep selection).
         self.assertEqual(
-            self._classification("ladder1"),  # Pegasus I
+            self._classification("Progressive Ladder"),
             ItemClassification.progression,
-            "Ladder should be progression (gates sample returns on high-g bodies)",
+            "Progressive Ladder should be progression",
+        )
+
+    def test_basic_ladder_is_useful(self):
+        # ladder1 was demoted to useful (Progressive Ladder uses telescopic variants).
+        self.assertEqual(
+            self._classification("ladder1"),
+            ItemClassification.useful,
+            "ladder1 should be useful (excluded from Progressive Ladder)",
         )
 
 

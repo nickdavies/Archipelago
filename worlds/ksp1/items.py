@@ -108,6 +108,10 @@ _RECLASSIFY_USEFUL: frozenset[str] = frozenset({
     "sepMotor1", "LaunchEscapeSystem",
     # Inline radial docking port (not a stack separator; convenience-only)
     "dockingPortLateral",
+    # Drogue chutes (slowing-only, not landing-capable)
+    "parachuteDrogue", "radialDrogue",
+    # Basic ladder (Progressive Ladder uses telescopic variants)
+    "ladder1",
 })
 
 
@@ -168,24 +172,49 @@ _VICTORY_ITEM: dict[str, tuple[int, ItemClassification]] = {
     "Victory": (0, ItemClassification.progression),
 }
 
+# Progressive item names (single source of truth — used in pool registration,
+# capability lookups, precollect logic, and tests).
+PROGRESSIVE_RD_NAME: str = "Progressive R&D"
+PROGRESSIVE_LAUNCH_ENGINE_NAME: str = "Progressive Launch Engine"
+PROGRESSIVE_VACUUM_ENGINE_NAME: str = "Progressive Vacuum Engine"
+PROGRESSIVE_SRB_NAME: str = "Progressive SRB"
+PROGRESSIVE_LFO_TANK_NAME: str = "Progressive LFO Tank"
+PROGRESSIVE_HEAT_SHIELD_NAME: str = "Progressive Heat Shield"
+PROGRESSIVE_STACK_DECOUPLER_NAME: str = "Progressive Stack Decoupler"
+PROGRESSIVE_RADIAL_DECOUPLER_NAME: str = "Progressive Radial Decoupler"
+PROGRESSIVE_CAPSULE_NAME: str = "Progressive Capsule"
+PROGRESSIVE_PROBE_CORE_NAME: str = "Progressive Probe Core"
+PROGRESSIVE_SOLAR_PANEL_NAME: str = "Progressive Solar Panel"
+PROGRESSIVE_RELAY_NAME: str = "Progressive Relay"
+PROGRESSIVE_ENGINE_PLATE_NAME: str = "Progressive Engine Plate"
+PROGRESSIVE_PARACHUTE_NAME: str = "Progressive Parachute"
+PROGRESSIVE_LADDER_NAME: str = "Progressive Ladder"
+PROGRESSIVE_LANDING_LEG_NAME: str = "Progressive Landing Leg"
+PROGRESSIVE_SCIENCE_INSTRUMENT_NAME: str = "Progressive Science Instrument"
+
 # Progressive items: offsets 50–99 (special range, not physical parts)
 _PROGRESSIVE_ITEMS: dict[str, tuple[int, ItemClassification]] = {
-    "Progressive R&D":              (50, ItemClassification.progression),
-    "Progressive Launch Engine":    (51, ItemClassification.progression),
-    "Progressive Vacuum Engine":    (52, ItemClassification.progression),
-    "Progressive SRB":              (53, ItemClassification.progression),
-    "Progressive LFO Tank":         (54, ItemClassification.progression),
-    "Progressive Heat Shield":      (55, ItemClassification.progression),
-    "Progressive Stack Decoupler":  (56, ItemClassification.progression),
-    "Progressive Radial Decoupler": (57, ItemClassification.progression),
-    "Progressive Capsule":          (58, ItemClassification.progression),
-    "Progressive Probe Core":       (59, ItemClassification.progression),
-    "Progressive Solar Panel":      (60, ItemClassification.progression),
-    "Progressive Relay":            (61, ItemClassification.progression),
-    "Progressive Engine Plate":     (62, ItemClassification.progression),
+    PROGRESSIVE_RD_NAME:                (50, ItemClassification.progression),
+    PROGRESSIVE_LAUNCH_ENGINE_NAME:     (51, ItemClassification.progression),
+    PROGRESSIVE_VACUUM_ENGINE_NAME:     (52, ItemClassification.progression),
+    PROGRESSIVE_SRB_NAME:               (53, ItemClassification.progression),
+    PROGRESSIVE_LFO_TANK_NAME:          (54, ItemClassification.progression),
+    PROGRESSIVE_HEAT_SHIELD_NAME:       (55, ItemClassification.progression),
+    PROGRESSIVE_STACK_DECOUPLER_NAME:   (56, ItemClassification.progression),
+    PROGRESSIVE_RADIAL_DECOUPLER_NAME:  (57, ItemClassification.progression),
+    PROGRESSIVE_CAPSULE_NAME:           (58, ItemClassification.progression),
+    PROGRESSIVE_PROBE_CORE_NAME:        (59, ItemClassification.progression),
+    PROGRESSIVE_SOLAR_PANEL_NAME:       (60, ItemClassification.progression),
+    PROGRESSIVE_RELAY_NAME:             (61, ItemClassification.progression),
+    PROGRESSIVE_ENGINE_PLATE_NAME:      (62, ItemClassification.progression),
+    PROGRESSIVE_PARACHUTE_NAME:         (63, ItemClassification.progression),
+    PROGRESSIVE_LADDER_NAME:            (64, ItemClassification.progression),
+    PROGRESSIVE_LANDING_LEG_NAME:       (65, ItemClassification.progression),
+    # Science instruments are useful, not progression: they affect science
+    # earnings but not capability gating (post bug-074 redesign).
+    PROGRESSIVE_SCIENCE_INSTRUMENT_NAME: (66, ItemClassification.useful),
 }
 
-PROGRESSIVE_RD_NAME: str = "Progressive R&D"
 PROGRESSIVE_RD_COUNT: int = 3
 
 # All progressive part item names (excluding Progressive R&D)

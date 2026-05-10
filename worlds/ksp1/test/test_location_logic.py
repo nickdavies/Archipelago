@@ -275,7 +275,9 @@ class TestKerbinEarlyLocations(KSP1TestBase):
         """SRB + probe + parachute: sounding > 0 AND has_parachutes → First Landing YES."""
         self.collect_by_name("Progressive SRB")
         self.collect_by_name("Progressive Probe Core")
-        self.collect_by_name("parachuteSingle")  # Mk16 Parachute; not in progressive chain
+        # Progressive Parachute tier 1 unlocks parachuteSingle/parachuteLarge
+        # (the rep is auto-granted; we don't need to also collect the part name).
+        self.collect_by_name("Progressive Parachute")
         self.assertTrue(
             self.can_reach_location("Kerbin First Landing"),
             "First Landing: sounding > 0 + parachutes must pass",
@@ -304,7 +306,7 @@ class TestKerbinEarlyLocations(KSP1TestBase):
         """SRB + probe + parachute: sounding ≥ 1 km AND has_parachutes → Splashdown YES."""
         self.collect_by_name("Progressive SRB")
         self.collect_by_name("Progressive Probe Core")
-        self.collect_by_name("parachuteSingle")
+        self.collect_by_name("Progressive Parachute")
         self.assertTrue(
             self.can_reach_location("Kerbin Splashdown"),
             "Splashdown: sounding ≥ 1 km + parachutes must pass (tier-1 SRBs easily reach 1 km)",

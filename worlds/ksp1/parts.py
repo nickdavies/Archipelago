@@ -1304,19 +1304,76 @@ PROGRESSIVE_PART_TIERS: dict[str, dict[int, list[str]]] = {
             "fuelLine",                  # FTX-2 External Fuel Duct
         ],
     },
-    # --- Engine Plates (multi-mount adapters, by output stack size) ---
+    # --- Multi-mount adapters: 2-way -> 3/4-way -> Engine Plates ---
+    # Tri/quad couplers are notably better than bi; engine plates are the best.
     "Progressive Engine Plate": {
-        1: [  # Small (0.625m / 1.25m output stacks)
+        1: [  # 2-way couplers/adapters (basic)
+            "stackBiCoupler.v2",         # TVR-200 Stack Bi-Coupler
+            "adapterLargeSmallBi",        # Rockomax Brand Adapter (bi)
+            "mk2.1m.Bicoupler",          # Mk2 Bicoupler
+        ],
+        2: [  # 3-way / 4-way couplers/adapters
+            "stackTriCoupler.v2",        # TVR-300 Stack Tri-Coupler
+            "stackQuadCoupler",           # TVR-400L Stack Quad-Coupler
+            "adapterLargeSmallTri",       # Rockomax Brand Adapter (tri)
+            "adapterLargeSmallQuad",      # Rockomax Brand Adapter (quad)
+        ],
+        3: [  # Small Engine Plates (0.625m / 1.25m output)
             "EnginePlate5",              # EP-12
             "EnginePlate1p5",            # EP-18
             "EnginePlate2",              # EP-25
         ],
-        2: [  # Medium (1.875m / 2.5m output stacks)
+        4: [  # Medium Engine Plates (1.875m / 2.5m output)
             "EnginePlate3",              # EP-37
             "EnginePlate4",              # EP-50
         ],
-        3: [  # Large (3.75m output stack)
+        5: [  # Large (3.75m output stack)
             "Size4.EngineAdapter.01",    # Kerbodyne Engine Cluster Adapter
+        ],
+    },
+    # --- Parachutes (basic stack chutes -> radial) ---
+    "Progressive Parachute": {
+        1: [  # Basic stack chutes
+            "parachuteSingle",           # Mk16 Parachute
+            "parachuteLarge",            # Mk25 Parachute
+        ],
+        2: [  # Radial chutes (for spaceplanes / spacecraft)
+            "parachuteRadial",           # Mk2-R Radial-Mount Parachute
+        ],
+    },
+    # --- Ladders (basic telescopic -> housed bay) ---
+    "Progressive Ladder": {
+        1: [
+            "telescopicLadder",          # Telescopic Ladder
+        ],
+        2: [
+            "telescopicLadderBay",       # Telescopic Ladder Bay
+        ],
+    },
+    # --- Landing Legs (heavy first, then variety in lighter options) ---
+    "Progressive Landing Leg": {
+        1: [
+            "landingLeg1-2",             # LT-2 Landing Strut (heavy)
+        ],
+        2: [
+            "landingLeg1",               # LT-1 Landing Struts
+            "miniLandingLeg",            # LT-05 Micro Landing Strut
+        ],
+    },
+    # --- Science Instruments (basic -> advanced) ---
+    # Note: sensorThermometer is precollected; not in this group.
+    "Progressive Science Instrument": {
+        1: [  # Basic atmospheric/biomes science
+            "GooExperiment",             # Mystery Goo Containment Unit
+            "sensorBarometer",           # PresMat Barometer
+        ],
+        2: [  # Mid-tier
+            "science.module",            # SC-9001 Science Jr.
+            "sensorAtmosphere",          # Atmospheric Fluid Spectro-Variometer
+        ],
+        3: [  # Advanced specialized sensors
+            "sensorAccelerometer",       # Double-C Seismic Accelerometer
+            "sensorGravimeter",          # GRAVMAX Negative Gravioli Detector
         ],
     },
     # --- Capsules (crewed command pods) ---

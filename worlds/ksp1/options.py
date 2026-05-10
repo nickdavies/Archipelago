@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from Options import Choice, ExcludeLocations, OptionSet, PerGameCommonOptions, Toggle
+from Options import Choice, ExcludeLocations, OptionSet, PerGameCommonOptions, Range, Toggle
 
 from .bodies import ALL_BODIES
 

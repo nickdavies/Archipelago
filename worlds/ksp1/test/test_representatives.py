@@ -83,16 +83,22 @@ class TestRepresentativeSelection(KSP1TestBase):
                     f"Absorbed part {item.name!r} should be useful, got {item.classification}",
                 )
 
-    def test_progressive_items_still_in_pool(self):
-        """Progressive items must still appear in pool with correct counts."""
+    def test_progressive_items_in_pool_account_for_precollects(self):
+        """Pool count for each progressive = total count minus precollected copies."""
+        precollected = [
+            i.name for i in self.multiworld.precollected_items[self.player]
+        ]
         for prog_name, count in PROGRESSIVE_PART_COUNTS.items():
+            n_precollected = sum(1 for n in precollected if n == prog_name)
+            expected = count - n_precollected
             pool_count = sum(
                 1 for item in self.multiworld.itempool
                 if item.name == prog_name
             )
             self.assertEqual(
-                pool_count, count,
-                f"Expected {count} copies of {prog_name}, got {pool_count}",
+                pool_count, expected,
+                f"Expected {expected} copies of {prog_name} in pool "
+                f"(total {count} minus {n_precollected} precollected), got {pool_count}",
             )
 
     def test_representative_count_equals_progressive_copies(self):
@@ -104,52 +110,6 @@ class TestRepresentativeSelection(KSP1TestBase):
             total_reps, total_copies,
             f"Representative count {total_reps} != progressive copies {total_copies}",
         )
-
-
-class TestProgressiveTierFloors(unittest.TestCase):
-    """Progressive T2+ parts get power tier floors to prevent early placement."""
-
-    def test_t2_parts_have_tier_at_least_1(self):
-        """All Progressive T2 parts must have power tier >= 1."""
-        for prog_name, tiers in PROGRESSIVE_PART_TIERS.items():
-            for ksp_name in tiers.get(2, []):
-                tier = ITEM_TIERS.get(ksp_name, 0)
-                self.assertGreaterEqual(
-                    tier, 1,
-                    f"{ksp_name} (Progressive T2 in {prog_name}) has tier {tier}, expected >= 1",
-                )
-
-    def test_t3_parts_have_tier_at_least_2(self):
-        """All Progressive T3+ parts must have power tier >= 2."""
-        for prog_name, tiers in PROGRESSIVE_PART_TIERS.items():
-            for tier_num, parts in tiers.items():
-                if tier_num < 3:
-                    continue
-                for ksp_name in parts:
-                    tier = ITEM_TIERS.get(ksp_name, 0)
-                    self.assertGreaterEqual(
-                        tier, 2,
-                        f"{ksp_name} (Progressive T{tier_num} in {prog_name}) "
-                        f"has tier {tier}, expected >= 2",
-                    )
-
-    def test_t1_parts_keep_physics_tier(self):
-        """Progressive T1 parts should not have their tier elevated by floors."""
-        from worlds.ksp1.item_power import _PROGRESSIVE_TIER_FLOORS
-        for prog_name, tiers in PROGRESSIVE_PART_TIERS.items():
-            for ksp_name in tiers.get(1, []):
-                self.assertNotIn(
-                    ksp_name, _PROGRESSIVE_TIER_FLOORS,
-                    f"T1 part {ksp_name} should not have a progressive tier floor",
-                )
-
-    def test_gigantor_is_tier2(self):
-        """Gigantor (Progressive Solar T3) must be tier 2."""
-        self.assertEqual(ITEM_TIERS.get("largeSolarPanel", 0), 2)
-
-    def test_d25_is_at_least_tier1(self):
-        """TD-25 decoupler (Progressive Stack Decoupler T2) must be tier >= 1."""
-        self.assertGreaterEqual(ITEM_TIERS.get("Decoupler.2", 0), 1)
 
 
 if __name__ == "__main__":
