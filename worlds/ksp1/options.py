@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from Options import Choice, ExcludeLocations, OptionSet, PerGameCommonOptions, Range, Toggle
+from Options import Choice, ExcludeLocations, ItemsAccessibility, OptionSet, PerGameCommonOptions, Range, Toggle
 
 from .bodies import ALL_BODIES
 
@@ -144,6 +144,22 @@ class ItemPacing(Choice):
     default = option_gentle
 
 
+class KSP1Accessibility(ItemsAccessibility):
+    """
+    Set rules for reachability of locations.
+
+    KSP1 defaults to **minimal**: only locations on the path to your goal need
+    to be reachable. Useful items (parts) may end up at locations the player
+    can't reach — they're not required to win, just collectibles. This avoids
+    `inaccessible_location_rules` filler-only marking that caused fill failures
+    when only ~91 of ~530 locations were initially reachable from sphere-0.
+
+    See bug 074 for the full rationale.
+    """
+    default = ItemsAccessibility.option_minimal
+    __doc__ = ItemsAccessibility.__doc__
+
+
 class ExcludeLateTechTree(Toggle):
     """
     Exclude tier-8 tech tree locations from containing progression items.
@@ -162,6 +178,7 @@ class KSP1Options(PerGameCommonOptions):
     difficulty: Difficulty
     start_with_launch_clamps: StartWithLaunchClamps
     item_pacing: ItemPacing
+    accessibility: KSP1Accessibility
     exclude_locations: KSP1ExcludeLocations
     exclude_late_tech_tree: ExcludeLateTechTree
     flag_bodies: FlagBodies

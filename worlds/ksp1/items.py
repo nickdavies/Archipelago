@@ -112,6 +112,30 @@ _RECLASSIFY_USEFUL: frozenset[str] = frozenset({
     "parachuteDrogue", "radialDrogue",
     # Basic ladder (Progressive Ladder uses telescopic variants)
     "ladder1",
+    # External Command Seat: open 1-crew seat, not a sealed capsule.
+    # Moved out of Progressive Capsule tier 1 (its capability is too
+    # different from real pods to share the rep slot).
+    "seatExternalCmd",
+})
+
+# Note: ionEngine + xenon tanks (xenonTank/Large/Radial) and the LF-only
+# fuselages (miniFuselage, MK1Fuselage) were displaced from Progressive
+# Vacuum Engine tier 3 to keep that tier engine-only. They are intentionally
+# left as PROGRESSION items (default class for FuelTank/Engine) so that fill
+# places them at reachable locations — ion engine + xenon must be findable
+# together, otherwise ion provides zero thrust.
+
+# Parts forced to FILLER classification regardless of progressive group
+# membership or capability flags.  These are non-bootstrap-critical items
+# whose presence in the useful pool inflates remaining_fill pressure
+# without adding meaningful capability.
+_RECLASSIFY_FILLER: frozenset[str] = frozenset({
+    # Launch Escape System: emergency-only solid booster, no real capability.
+    "LaunchEscapeSystem",
+    # MEMLander: 2-crew lander cabin in Progressive Capsule t2; alternates exist.
+    "MEMLander",
+    # MiniISRU: small ISRU; capability granted by full ISRU at higher tiers.
+    "MiniISRU",
 })
 
 
@@ -122,8 +146,11 @@ def _classify_part_item(item_name: str) -> ItemClassification:
     Parts in progressive chains are classified as useful — the progressive
     item is the progression gate, and the representative (removed from pool
     during generation) IS the progressive item.  Parts in _RECLASSIFY_USEFUL
-    are also downgraded from progression to useful.
+    are also downgraded from progression to useful. Parts in
+    _RECLASSIFY_FILLER are forced to filler regardless of any other rule.
     """
+    if item_name in _RECLASSIFY_FILLER:
+        return ItemClassification.filler
     if item_name in PROGRESSIVE_PART_NAMES or item_name in _RECLASSIFY_USEFUL:
         return ItemClassification.useful
 
@@ -191,6 +218,7 @@ PROGRESSIVE_PARACHUTE_NAME: str = "Progressive Parachute"
 PROGRESSIVE_LADDER_NAME: str = "Progressive Ladder"
 PROGRESSIVE_LANDING_LEG_NAME: str = "Progressive Landing Leg"
 PROGRESSIVE_SCIENCE_INSTRUMENT_NAME: str = "Progressive Science Instrument"
+PROGRESSIVE_RADIAL_ENGINE_NAME: str = "Progressive Radial Engine"
 
 # Progressive items: offsets 50–99 (special range, not physical parts)
 _PROGRESSIVE_ITEMS: dict[str, tuple[int, ItemClassification]] = {
@@ -213,6 +241,7 @@ _PROGRESSIVE_ITEMS: dict[str, tuple[int, ItemClassification]] = {
     # Science instruments are useful, not progression: they affect science
     # earnings but not capability gating (post bug-074 redesign).
     PROGRESSIVE_SCIENCE_INSTRUMENT_NAME: (66, ItemClassification.useful),
+    PROGRESSIVE_RADIAL_ENGINE_NAME:     (67, ItemClassification.progression),
 }
 
 PROGRESSIVE_RD_COUNT: int = 3

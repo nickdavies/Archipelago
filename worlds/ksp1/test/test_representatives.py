@@ -67,8 +67,13 @@ class TestRepresentativeSelection(KSP1TestBase):
                 f"Non-representative absorbed part {ksp_name!r} missing from pool",
             )
 
-    def test_non_representative_absorbed_parts_are_useful(self):
-        """Non-representative absorbed parts must be classified as useful."""
+    def test_non_representative_absorbed_parts_are_useful_or_filler(self):
+        """Non-rep absorbed parts must be useful (default) or filler (reclassified).
+
+        _RECLASSIFY_FILLER lets us force specific non-bootstrap-critical parts
+        to filler to reduce remaining_fill pressure (bug 074).
+        """
+        from worlds.ksp1.items import _RECLASSIFY_FILLER
         reps = self.world.progressive_representatives
         all_reps = {
             rep
@@ -77,10 +82,15 @@ class TestRepresentativeSelection(KSP1TestBase):
         }
         for item in self.multiworld.itempool:
             if item.name in PROGRESSIVE_PART_NAMES and item.name not in all_reps:
+                expected = (
+                    ItemClassification.filler
+                    if item.name in _RECLASSIFY_FILLER
+                    else ItemClassification.useful
+                )
                 self.assertEqual(
                     item.classification,
-                    ItemClassification.useful,
-                    f"Absorbed part {item.name!r} should be useful, got {item.classification}",
+                    expected,
+                    f"Absorbed part {item.name!r} should be {expected}, got {item.classification}",
                 )
 
     def test_progressive_items_in_pool_account_for_precollects(self):

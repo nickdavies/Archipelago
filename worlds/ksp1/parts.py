@@ -1151,15 +1151,15 @@ PROGRESSIVE_PART_TIERS: dict[str, dict[int, list[str]]] = {
             "liquidEngine.v2",           # LV-T30 Reliant (240kN)
             "liquidEngine2.v2",          # LV-T45 Swivel (215kN)
             "LiquidEngineRV-1",          # RV-1 Cub (32kN, MH)
+            "toroidalAerospike",         # T-1 Dart (180kN, 290s atm Isp; 0.625m stack)
         ],
         2: [
+            # Mainstream stack ascent engines only — radial engines split
+            # into Progressive Radial Engine to avoid weak rep selection.
             "engineLargeSkipper.v2",     # RE-I5 Skipper (650kN)
             "LiquidEngineLV-TX87",       # LV-TX87 Bobcat (400kN, MH)
             "LiquidEngineRK-7",          # RK-7 Kodiak (260kN, MH)
             "LiquidEngineRE-I2",         # RE-I2 Skiff (300kN, MH)
-            "toroidalAerospike",         # T-1 Dart (180kN)
-            "radialLiquidEngine1-2",     # Mk-55 Thud (120kN)
-            "smallRadialEngine.v2",      # 24-77 Twitch (16kN)
         ],
         3: [
             "liquidEngineMainsail.v2",   # RE-M3 Mainsail (1500kN)
@@ -1173,10 +1173,11 @@ PROGRESSIVE_PART_TIERS: dict[str, dict[int, list[str]]] = {
     # --- Vacuum Engines (high-ISP transfer + specialty fuel) ---
     "Progressive Vacuum Engine": {
         1: [
+            # Stack vacuum engines only — Spider (radial) split into
+            # Progressive Radial Engine for power-level homogeneity.
             "liquidEngine3.v2",          # LV-909 Terrier (60kN, 345s vac)
             "liquidEngineMini.v2",       # 48-7S Spark (20kN, 320s vac)
             "microEngine.v2",            # LV-1 Ant (2kN, 315s vac)
-            "radialEngineMini.v2",       # LV-1R Spider (2kN, 290s vac)
         ],
         2: [
             "liquidEngine2-2.v2",        # RE-L10 Poodle (250kN, 350s vac)
@@ -1184,16 +1185,25 @@ PROGRESSIVE_PART_TIERS: dict[str, dict[int, list[str]]] = {
             "LiquidEngineRE-J10",        # RE-J10 Wolfhound (375kN, 380s vac, MH)
         ],
         3: [
-            # Advanced propulsion engines
-            "nuclearEngine",             # LV-N Nerv (60kN, 800s vac)
-            "ionEngine",                 # IX-6315 Dawn (2kN, 4200s vac)
-            # LF-only tanks (useless without Nerv)
-            "miniFuselage",              # Mk0 LF Fuselage (0.25t fuel)
-            "MK1Fuselage",              # Mk1 LF Fuselage (2.0t fuel)
-            # Xenon tanks (useless without Dawn)
-            "xenonTank",                 # PB-X150 Xenon Container
-            "xenonTankLarge",            # PB-X750 Xenon Container
-            "xenonTankRadial",           # PB-X50R Xenon Container
+            # Advanced vacuum engines only — supporting tanks are reclassified
+            # to useful (rep system requires homogeneous tier types; mixing
+            # engines and tanks meant rep could land on a tank, granting zero
+            # thrust capability — bug 074 root cause for some seeds).
+            "nuclearEngine",             # LV-N Nerv (60kN, 800s vac, uses LF)
+            "ionEngine",                 # IX-6315 Dawn (2kN, 4200s vac, uses xenon)
+        ],
+    },
+    # --- Radial Engines (asparagus boosters / specialty radial-mount) ---
+    # Split out from Progressive Launch/Vacuum Engine to keep those tiers
+    # mainstream-engine-only. Radial engines have wildly different power
+    # levels from stack ascent engines and can land as weak reps otherwise.
+    "Progressive Radial Engine": {
+        1: [  # Small radials
+            "smallRadialEngine.v2",      # 24-77 Twitch (16kN)
+            "radialEngineMini.v2",       # LV-1R Spider (2kN vac)
+        ],
+        2: [  # Mid radial
+            "radialLiquidEngine1-2",     # Mk-55 Thud (120kN)
         ],
     },
     # --- Solid Rocket Boosters (by thrust/total impulse class) ---
@@ -1378,10 +1388,10 @@ PROGRESSIVE_PART_TIERS: dict[str, dict[int, list[str]]] = {
     },
     # --- Capsules (crewed command pods) ---
     "Progressive Capsule": {
-        1: [  # Basic: 1-crew pods
+        1: [  # Basic: 1-crew sealed pods (External Command Seat moved to
+              # useful — it's an open seat, not a real capsule).
             "mk1pod.v2",                # Mk1 Command Pod
             "kv1Pod",                    # KV-1 (MH)
-            "seatExternalCmd",           # External Command Seat
         ],
         2: [  # Landers, 2-crew, planes
             "landerCabinSmall",          # Mk1 Lander Can
