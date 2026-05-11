@@ -172,6 +172,44 @@ class ExcludeLateTechTree(Toggle):
     default = 1
 
 
+class ProgressiveLaunchPad(Toggle):
+    """
+    Gate buildable rocket launch mass through Progressive Launch Pad items.
+
+    Mirrors KSP career mode launch pad upgrades. The pool gets 3 copies and
+    collecting them raises the launch-mass cap through tiers
+    (100 → 200 → 500 → unlimited tonnes by default — see
+    PROGRESSIVE_LAUNCH_PAD_CAPS).
+
+    Creates a real progression gate on broad goals like Standard Sample
+    Returns — you can have all the parts but still need a bigger launch
+    pad before tackling Vall / Duna / heavy missions.
+
+    Disabling this option can result in more wide-open seeds where you can
+    sometimes reach all bodies at once after a small bootstrap kit. Leave
+    enabled if you want a sequential progression journey; disable if you
+    find the mass cap annoying.
+    """
+    display_name = "Progressive Launch Pad"
+    default = 1
+
+
+class BanDifferentiatorsEarly(Toggle):
+    """
+    Forbid the broad-goal differentiator items (Progressive Relay, rtg,
+    Progressive Vacuum Engine) from appearing in the early bucket
+    (starter / KSC biomes / Kerbin events).
+
+    These items gate access to specific harder bodies (outer-system, vacuum
+    ascent, deep-space comms). Forbidding them from early forces the player
+    to do mid-game missions before unlocking those bodies — adding sphere
+    depth to broad goals like Standard Sample Returns without affecting
+    bootstrap.
+    """
+    display_name = "Ban Differentiators Early"
+    default = 0
+
+
 @dataclass
 class KSP1Options(PerGameCommonOptions):
     goal: Goal
@@ -181,6 +219,8 @@ class KSP1Options(PerGameCommonOptions):
     accessibility: KSP1Accessibility
     exclude_locations: KSP1ExcludeLocations
     exclude_late_tech_tree: ExcludeLateTechTree
+    ban_differentiators_early: BanDifferentiatorsEarly
+    progressive_launch_pad: ProgressiveLaunchPad
     flag_bodies: FlagBodies
     return_bodies: ReturnBodies
     sample_return_bodies: SampleReturnBodies

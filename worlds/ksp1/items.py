@@ -242,6 +242,15 @@ PROGRESSIVE_LADDER_NAME: str = "Progressive Ladder"
 PROGRESSIVE_LANDING_LEG_NAME: str = "Progressive Landing Leg"
 PROGRESSIVE_SCIENCE_INSTRUMENT_NAME: str = "Progressive Science Instrument"
 PROGRESSIVE_RADIAL_ENGINE_NAME: str = "Progressive Radial Engine"
+PROGRESSIVE_LAUNCH_PAD_NAME: str = "Progressive Launch Pad"
+
+# Tonnage caps by collected count (index = number of copies received).
+# Index 0 = no copies = starting cap. Starting at 100t lets sphere-0 do
+# basic Kerbin / Mun / Minmus orbit + landing without any Launch Pad item,
+# which breaks the bootstrap deadlock when the item is banned from the
+# early bucket.
+PROGRESSIVE_LAUNCH_PAD_CAPS: tuple[float, ...] = (100.0, 200.0, 500.0, float("inf"))
+PROGRESSIVE_LAUNCH_PAD_COUNT: int = len(PROGRESSIVE_LAUNCH_PAD_CAPS) - 1  # 3 copies
 
 # Progressive items: offsets 50–99 (special range, not physical parts)
 _PROGRESSIVE_ITEMS: dict[str, tuple[int, ItemClassification]] = {
@@ -265,6 +274,7 @@ _PROGRESSIVE_ITEMS: dict[str, tuple[int, ItemClassification]] = {
     # earnings but not capability gating (post bug-074 redesign).
     PROGRESSIVE_SCIENCE_INSTRUMENT_NAME: (66, ItemClassification.useful),
     PROGRESSIVE_RADIAL_ENGINE_NAME:     (67, ItemClassification.progression),
+    PROGRESSIVE_LAUNCH_PAD_NAME:        (68, ItemClassification.progression),
 }
 
 PROGRESSIVE_RD_COUNT: int = 3
@@ -376,6 +386,11 @@ def create_all_items(world: KSP1World) -> None:
     # Progressive R&D items (gates higher tech tree bands).
     for _ in range(PROGRESSIVE_RD_COUNT):
         pool.append(create_item(world, PROGRESSIVE_RD_NAME))
+
+    # Progressive Launch Pad items (mass-cap progression — only when enabled).
+    if world.options.progressive_launch_pad:
+        for _ in range(PROGRESSIVE_LAUNCH_PAD_COUNT):
+            pool.append(create_item(world, PROGRESSIVE_LAUNCH_PAD_NAME))
 
     # Pad the pool with filler items so item count == location count.
     # create_regions() runs before create_items(), so all locations exist.

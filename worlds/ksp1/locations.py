@@ -168,6 +168,21 @@ TECH_SLOTS_BY_DIFFICULTY: dict[int, int] = {0: 4, 1: 4, 2: 3, 3: 2}
 #: Starting inventory slot counts by difficulty.
 STARTING_INV_COUNTS: dict[int, int] = {0: 20, 1: 15, 2: 10, 3: 5}
 
+#: Extra starting-inventory slots when progressive_launch_pad is enabled —
+#: gives the pool more zero-rule capacity to absorb items pushed out of
+#: deeper locations by the launch-pad chain (avoids pool-tension fill
+#: failures on narrow goals).
+PROGRESSIVE_LAUNCH_PAD_STARTER_BONUS: int = 3
+
+
+def effective_starting_inv_count(options, difficulty: int) -> int:
+    """Starter-inventory slot count for this world (incl. launch-pad bonus)."""
+    base = STARTING_INV_COUNTS[difficulty]
+    if (getattr(options, "progressive_launch_pad", None)
+            and options.progressive_launch_pad.value):
+        base = min(base + PROGRESSIVE_LAUNCH_PAD_STARTER_BONUS, MAX_STARTING_INV)
+    return base
+
 STARTING_INV_NAMES: list[str] = [
     f"Starting Inventory {i + 1}" for i in range(MAX_STARTING_INV)
 ]
@@ -356,7 +371,7 @@ def create_all_locations(world: KSP1World) -> None:
     All mission locations are always created.
     """
     difficulty = world.options.difficulty.value
-    num_starting = STARTING_INV_COUNTS[difficulty]
+    num_starting = effective_starting_inv_count(world.options, difficulty)
     num_tech_slots = TECH_SLOTS_BY_DIFFICULTY[difficulty]
 
     menu = world.get_region("Menu")

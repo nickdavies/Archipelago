@@ -164,6 +164,11 @@ class EquipmentFlags:
     # Solar distance for ION logic (set from the edge being evaluated)
     target_solar_au: float = 1.0
 
+    # Launch-pad mass cap (tonnes). Default is unlimited; set by progressive
+    # launch-pad tier when the option is enabled. Missions whose computed
+    # launch mass exceeds this are infeasible.
+    launch_pad_mass_cap: float = float("inf")
+
     # Available part lists (populated by pre-pass)
     available_engines: list[Engine] = field(default_factory=list)
     available_srbs: list[SolidBooster] = field(default_factory=list)
@@ -313,7 +318,8 @@ def explain_body_unreachable(state: CollectionState, player: int, body_name: str
 
 def _pre_pass(item_count_fn: Callable[[str], int],
               start_with_clamps: bool,
-              rep_names: frozenset[str] = frozenset()) -> EquipmentFlags:
+              rep_names: frozenset[str] = frozenset(),
+              progressive_launch_pad: bool = False) -> EquipmentFlags:
     """
     Iterate every item the player has collected and build EquipmentFlags.
 
@@ -342,6 +348,16 @@ def _pre_pass(item_count_fn: Callable[[str], int],
     flags.has_vacuum_engine = item_count_fn("Progressive Vacuum Engine") > 0
     flags.has_lfo_fuel = item_count_fn("Progressive LFO Tank") > 0
     flags.has_srb_fuel = item_count_fn("Progressive SRB") > 0
+
+    # Launch-pad mass cap: indexed by collected count of
+    # "Progressive Launch Pad". 0 copies → starting cap; each additional
+    # copy raises the cap. Only active when the option is enabled
+    # (otherwise the default inf applies).
+    if progressive_launch_pad:
+        from .items import PROGRESSIVE_LAUNCH_PAD_NAME, PROGRESSIVE_LAUNCH_PAD_CAPS
+        pad_count = item_count_fn(PROGRESSIVE_LAUNCH_PAD_NAME)
+        idx = min(pad_count, len(PROGRESSIVE_LAUNCH_PAD_CAPS) - 1)
+        flags.launch_pad_mass_cap = PROGRESSIVE_LAUNCH_PAD_CAPS[idx]
 
     # Process parts: both progressive-unlocked and individual non-absorbed items
     for item_name, parts in PART_DB.items():
@@ -1110,6 +1126,13 @@ def _evaluate_profile(
     support_mass, support_parts = _support_equipment_mass(flags, profile)
     terminal_parts.extend(support_parts)
 
+    if payload > flags.launch_pad_mass_cap:
+        return ProfileResult(
+            feasible=False,
+            launch_mass=payload,
+            failure_reasons=[f"launch mass {payload:.0f}t exceeds launch pad cap "
+                             f"{flags.launch_pad_mass_cap:.0f}t"],
+        )
     return ProfileResult(
         feasible=True,
         launch_mass=payload,
@@ -1749,10 +1772,11 @@ def compute_capability_from_items(
     difficulty_name: str,
     start_with_clamps: bool,
     rep_names: frozenset[str] = frozenset(),
+    progressive_launch_pad: bool = False,
 ) -> tuple[RocketCapability, EquipmentFlags]:
     """Compute capability without a CollectionState. For CLI/external tools."""
     diff = DIFFICULTY_PROFILES[difficulty_name]
-    flags = _pre_pass(item_count_fn, start_with_clamps, rep_names)
+    flags = _pre_pass(item_count_fn, start_with_clamps, rep_names, progressive_launch_pad)
     body_profiles = _assess_bodies(flags, diff)
     sounding_km = _compute_sounding_altitude(flags)
 
@@ -1806,6 +1830,7 @@ def _compute_capability(state: CollectionState, player: int) -> RocketCapability
     cap, _ = compute_capability_from_items(
         lambda name: state.count(name, player),
         difficulty_name, start_with_clamps, rep_names,
+        progressive_launch_pad=bool(options.progressive_launch_pad.value),
     )
     return cap
 
