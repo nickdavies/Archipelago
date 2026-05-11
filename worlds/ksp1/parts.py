@@ -1167,7 +1167,6 @@ PROGRESSIVE_PART_TIERS: dict[str, dict[int, list[str]]] = {
             "SSME",                      # S3 KS-25 Vector (1000kN)
             "LiquidEngineKE-1",          # KE-1 Mastodon (1350kN, MH)
             "Size3EngineCluster",        # S3 KS-25x4 Mammoth (4000kN)
-            "Size3AdvancedEngine",       # KR-2L+ Rhino (2000kN)
         ],
     },
     # --- Vacuum Engines (high-ISP transfer + specialty fuel) ---
@@ -1185,10 +1184,17 @@ PROGRESSIVE_PART_TIERS: dict[str, dict[int, list[str]]] = {
             "LiquidEngineRE-J10",        # RE-J10 Wolfhound (375kN, 380s vac, MH)
         ],
         3: [
-            # Advanced vacuum engines only — supporting tanks are reclassified
-            # to useful (rep system requires homogeneous tier types; mixing
-            # engines and tanks meant rep could land on a tank, granting zero
-            # thrust capability — bug 074 root cause for some seeds).
+            # Heavy LFO vacuum workhorse. Single candidate so the rep is
+            # deterministic. Rhino has poor atmospheric ISP (205s) which made
+            # it a 15% killer rep when it lived in Launch Engine tier 3; here
+            # it's used for its actual role (heavy upper-stage / interplanetary).
+            "Size3AdvancedEngine",       # KR-2L+ Rhino (2000kN, 340s vac, 9t)
+        ],
+        4: [
+            # Advanced specialty propulsion — both require specific fuel types
+            # (Nerv = LF-only tanks, Ion = xenon) and have niche thrust profiles.
+            # Bumped one tier above the LFO workhorse so they read as a deeper
+            # progression unlock.
             "nuclearEngine",             # LV-N Nerv (60kN, 800s vac, uses LF)
             "ionEngine",                 # IX-6315 Dawn (2kN, 4200s vac, uses xenon)
         ],
