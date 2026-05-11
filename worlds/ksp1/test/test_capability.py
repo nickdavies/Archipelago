@@ -7,8 +7,10 @@ bypassing the CollectionState so we don't need a full world setup.
 import unittest
 
 from worlds.ksp1.bodies import (
-    MISSION_PROFILES, BODY_BY_NAME, DIFFICULTY_PROFILES, BodyName, MissionType, effective_dv,
+    ALL_BODIES, MISSION_PROFILES, BODY_BY_NAME, DIFFICULTY_PROFILES,
+    BodyName, MissionType, effective_dv,
 )
+from worlds.ksp1.locations import EventName
 from worlds.ksp1.capability import (
     BodyAccessProfile, EquipmentFlags,
     _evaluate_profile, _assess_bodies, _assess_one_body,
@@ -1328,6 +1330,82 @@ class TestAeroLandingPassiveStage(unittest.TestCase):
                 return
 
         self.fail("No feasible Duna return profile found")
+
+
+class TestEscapeRelayGate(unittest.TestCase):
+    """Bug 075 regression: ESCAPE / flyby profiles must enforce each body's
+    relay tier — the SOI-entry edge carries body=destination so the check
+    fires even though the orbit-insertion edge is absent."""
+
+    def _full_kit_without_relay(self, relay_tier: int = 0) -> EquipmentFlags:
+        """A capable rocket kit with a tunable relay tier."""
+        return _make_flags(
+            engines=[_MAMMOTH, _MAINSAIL, _SWIVEL, _TERRIER, _NERV],
+            tanks=[_S3_3600, _JUMBO_64, _X200_32, _FL_T800, _FL_T400],
+            probe_core=True, reaction_wheels=True,
+            solar=True, solar_retractable=True, rtg=True,
+            relay_tier=relay_tier,
+            heat_shields=[_SHIELD_25],
+            parachutes=[_MK16, _MK16, _MK16],
+            legs=[_LT2],
+            launch_clamp=True, decoupler_radial=True,
+        )
+
+    def _escape_feasible(self, body: BodyName, relay_tier: int) -> bool:
+        flags = self._full_kit_without_relay(relay_tier=relay_tier)
+        profiles = MISSION_PROFILES.get((body, MissionType.ESCAPE), [])
+        self.assertTrue(profiles, f"{body} should have an ESCAPE profile defined")
+        for profile in profiles:
+            r = _evaluate_profile(profile, flags, _normal_diff(),
+                                  MissionType.ESCAPE, is_crewed=False)
+            if r.feasible:
+                return True
+        return False
+
+    def test_dres_escape_requires_relay_tier_3(self) -> None:
+        # Dres has min_relay_tier=3 — flyby must enforce it.
+        self.assertFalse(self._escape_feasible(BodyName.DRES, relay_tier=2))
+        self.assertTrue(self._escape_feasible(BodyName.DRES, relay_tier=3))
+
+    def test_moho_escape_requires_relay_tier_2(self) -> None:
+        self.assertFalse(self._escape_feasible(BodyName.MOHO, relay_tier=1))
+        self.assertTrue(self._escape_feasible(BodyName.MOHO, relay_tier=2))
+
+    def test_eeloo_escape_requires_relay_tier_4(self) -> None:
+        self.assertFalse(self._escape_feasible(BodyName.EELOO, relay_tier=3))
+        self.assertTrue(self._escape_feasible(BodyName.EELOO, relay_tier=4))
+
+    def test_mun_escape_no_relay_required(self) -> None:
+        # Mun is in Kerbin's CommNet — flyby works with tier 0.
+        self.assertTrue(self._escape_feasible(BodyName.MUN, relay_tier=0))
+
+    def test_every_advertised_escape_check_has_a_profile(self) -> None:
+        """For every body that exposes a Flyby / SOI Leave check (per
+        locations.get_body_events), MISSION_PROFILES must carry an ESCAPE
+        profile. No auto-strip fallback."""
+        from worlds.ksp1.locations import get_body_events
+        for body in ALL_BODIES:
+            events = set(get_body_events(body))
+            if EventName.FLYBY not in events and EventName.SOI_LEAVE not in events:
+                continue
+            self.assertIn(
+                (body.name, MissionType.ESCAPE), MISSION_PROFILES,
+                f"{body.name} exposes flyby/SOI-leave checks but has no "
+                f"ESCAPE profile defined",
+            )
+
+    def test_escape_profile_ends_at_destination_body(self) -> None:
+        """Every ESCAPE profile's last edge must have body=destination so the
+        relay/power checks at the destination actually fire."""
+        for (body, mt), profiles in list(MISSION_PROFILES.items()):
+            if mt != MissionType.ESCAPE:
+                continue
+            for i, prof in enumerate(profiles):
+                self.assertEqual(
+                    prof[-1].body, body,
+                    f"{body} ESCAPE alt {i}: last edge body={prof[-1].body} "
+                    f"(must be destination for relay/power checks to fire)",
+                )
 
 
 if __name__ == "__main__":

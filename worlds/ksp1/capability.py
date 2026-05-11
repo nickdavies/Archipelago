@@ -32,7 +32,10 @@ from .parts import (
     MultiMount, MULTI_MOUNT_TABLE,
     PROGRESSIVE_PART_TIERS, PROGRESSIVE_PART_NAMES, PROGRESSIVE_PART_COUNTS,
 )
-from .locations import ALL_EVENTS, EVENT_BY_NAME, EventName, KERBIN_SYSTEM_BODY_NAMES
+from .locations import (
+    ALL_EVENTS, EVENT_BY_NAME, EventName, KERBIN_SYSTEM_BODY_NAMES,
+    get_body_events,
+)
 from .rocket_math import (
     StageResult, find_optimal_stage, terminal_velocity,
     FILL_LEVELS, merge_edge_groups,
@@ -41,16 +44,17 @@ from .rocket_math import (
 if TYPE_CHECKING:
     from .world import KSP1World
 
-# Import-time assertion: every body/event combo must have a MISSION_PROFILES entry.
-# Missing entries cause silent KeyError at runtime. This catches registration gaps
-# (e.g. a new body added without FLAG_PLANT profiles).
+# Import-time assertion: every body/event combo that locations.py exposes as
+# an actual check must have a MISSION_PROFILES entry. Missing entries cause
+# silent KeyError at runtime. This catches registration gaps (e.g. a new body
+# added without RETURN profiles). `get_body_events` is the single source of
+# truth for which events apply to which body — special-case bodies (Kerbol)
+# naturally drop out by returning an empty event set.
 for _body in ALL_BODIES:
-    for _event in ALL_EVENTS:
-        if _event.requires_landing and not _body.can_land:
-            continue
-        _key = (_body.name, _event.mission_type)
+    for _event_name in get_body_events(_body):
+        _key = (_body.name, EVENT_BY_NAME[_event_name].mission_type)
         assert _key in MISSION_PROFILES, f"Missing MISSION_PROFILES entry: {_key}"
-del _body, _event, _key
+del _body, _event_name, _key
 
 # Item names that affect capability computation. Built once at module load
 # from PART_DB: any item containing an Engine, FuelTank, SolidBooster,
@@ -1265,18 +1269,21 @@ def _assess_one_body(
         prof.blocking_reason = "no launch clamp for interplanetary mission"
         return prof
 
-    # --- Evaluate all events from ALL_EVENTS ---
+    # --- Evaluate the events that locations.py exposes for this body ---
+    # Iterating get_body_events instead of ALL_EVENTS means "events that don't
+    # exist for this body" naturally stay at their default False access value.
+    # No special-case branches per body needed.
+    body_events = set(get_body_events(body))
     for event in ALL_EVENTS:
+        if event.name not in body_events:
+            continue
         if event.crewed is True and not flags.has_capsule:
             prof.access[event.name] = False
             continue
-        if event.requires_landing and not body.can_land:
-            prof.access[event.name] = False
-            continue
 
-        profiles = MISSION_PROFILES[(body.name, event.mission_type)]
+        profiles = MISSION_PROFILES.get((body.name, event.mission_type))
 
-        # Empty profile = always achievable (e.g. Kerbin launchpad EVA)
+        # Empty profile = always achievable (e.g. Kerbin launchpad EVA).
         if not profiles:
             prof.access[event.name] = True
             continue
@@ -1648,13 +1655,13 @@ for _item_name, _parts in PART_DB.items():
                 f"{_part.name} has multi_mount flag but not in MULTI_MOUNT_TABLE"
             )
 
-# (b) Mission profile coverage: every (body, mission_type) the capability engine
-#     evaluates must have a MISSION_PROFILES entry, except flag_plant (derived from
-#     crewed landing) and EVA in Orbit (shares orbit profile).
+# (b) Mission profile coverage: every (body, event) that locations.py exposes
+#     as a real check must have a MISSION_PROFILES entry, except flag_plant
+#     (derived from crewed landing during _add) and EVA in Orbit (shares
+#     orbit profile via its mission_type).
 for _body in ALL_BODIES:
-    for _event in ALL_EVENTS:
-        if _event.requires_landing and not _body.can_land:
-            continue
+    for _event_name in get_body_events(_body):
+        _event = EVENT_BY_NAME[_event_name]
         if _event.mission_type == MissionType.FLAG_PLANT:
             continue  # derived from crewed_landing
         _key = (_body.name, _event.mission_type)
