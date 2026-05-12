@@ -25,7 +25,9 @@ from websockets.sync.client import connect as ws_connect
 from BaseClasses import MultiWorld
 from test.general import setup_multiworld
 
-from worlds.ksp1.bodies import ALL_BODIES, DIFFICULTY_PROFILES
+from worlds.ksp1.bodies import (
+    ALL_BODIES, DIFFICULTY_PROFILES, MISSION_PROFILES, effective_dv,
+)
 from worlds.ksp1.capability import (
     compute_capability_from_items, evaluate_mission_detailed,
     get_capability,
@@ -303,6 +305,52 @@ def _print_parts_list(ap: APState) -> None:
 
 
 # ---------------------------------------------------------------------------
+# missions — static dump of MISSION_PROFILES sorted by delta-v
+# ---------------------------------------------------------------------------
+
+def cmd_missions(difficulty_name: str) -> None:
+    """Dump every mission in MISSION_PROFILES sorted by delta-v ascending.
+
+    No server connection required — pure static walk of the mission graph.
+    For each (body, mission_type) we pick the cheapest profile alternative
+    by raw base_dv sum, and also report the difficulty-adjusted budget.
+    """
+    diff = DIFFICULTY_PROFILES[difficulty_name]
+
+    rows: list[tuple[float, float, str, str, int, int]] = []
+    for (body_name, mission_type), profiles in MISSION_PROFILES.items():
+        if not profiles:
+            # Zero-dv missions (Kerbin flag_plant, Kerbin sample_return)
+            rows.append((0.0, 0.0, str(body_name), str(mission_type), 0, 0))
+            continue
+
+        # Pick the cheapest alternative by raw base_dv sum
+        best_base = None
+        best_adj = None
+        best_edges = 0
+        for edges in profiles:
+            base = sum(e.base_dv for e in edges)
+            pc = sum(e.plane_change_dv for e in edges)
+            adj = effective_dv(base, diff, plane_change_dv=pc)
+            if best_base is None or base < best_base:
+                best_base = base
+                best_adj = adj
+                best_edges = len(edges)
+        rows.append((
+            best_base, best_adj, str(body_name), str(mission_type),
+            best_edges, len(profiles),
+        ))
+
+    rows.sort(key=lambda r: (r[0], r[2], r[3]))
+
+    print(f"Mission profiles sorted by base delta-v (difficulty: {difficulty_name})")
+    print(f"{'base_dv':>10}  {'adj_dv':>10}  {'edges':>5}  {'alts':>4}  body / mission")
+    print("-" * 72)
+    for base, adj, body, mission, n_edges, n_alts in rows:
+        print(f"{base:>10.0f}  {adj:>10.0f}  {n_edges:>5}  {n_alts:>4}  {body} {mission}")
+
+
+# ---------------------------------------------------------------------------
 # Bug report
 # ---------------------------------------------------------------------------
 
@@ -351,25 +399,36 @@ def main() -> None:
         description="KSP1 Archipelago capability inspector",
         prog="python -m worlds.ksp1.scripts.capability_cli",
     )
-    parser.add_argument("command", choices=["in-logic", "rocket", "bug-report"],
+    parser.add_argument("command",
+                        choices=["in-logic", "rocket", "bug-report", "missions"],
                         help="Command to run")
     parser.add_argument("check_name", nargs="?", default=None,
                         help="Check name for 'rocket' / 'bug-report' command")
-    parser.add_argument("--host", required=True,
-                        help="AP server host:port (e.g. localhost:38281)")
-    parser.add_argument("--slot", required=True,
-                        help="Player slot name")
+    parser.add_argument("--host", default=None,
+                        help="AP server host:port (required for server commands)")
+    parser.add_argument("--slot", default=None,
+                        help="Player slot name (required for server commands)")
     parser.add_argument("--password", default="",
                         help="Server password (optional)")
     parser.add_argument("--verbose", "-v", action="store_true",
                         help="Show received items list")
     parser.add_argument("--parts-list", action="store_true",
                         help="Show received parts with human-readable names")
+    parser.add_argument("--difficulty", default="normal",
+                        choices=list(DIFFICULTY_PROFILES.keys()),
+                        help="Difficulty for 'missions' adj_dv column (default: normal)")
 
     args = parser.parse_args()
 
     if args.command == "rocket" and not args.check_name:
         parser.error("'rocket' command requires a check_name argument")
+
+    if args.command == "missions":
+        cmd_missions(args.difficulty)
+        return
+
+    if not args.host or not args.slot:
+        parser.error(f"'{args.command}' requires --host and --slot")
 
     print(f"Connecting to {args.host} as {args.slot}...", file=sys.stderr)
     ap = fetch_ap_state(args.host, args.slot, args.password)
