@@ -32,6 +32,7 @@ from .parts import (
     MultiMount, MULTI_MOUNT_TABLE,
     PROGRESSIVE_PART_TIERS, PROGRESSIVE_PART_NAMES, PROGRESSIVE_PART_COUNTS,
 )
+from .capability_reasons import BlockingInfo, BlockingReason
 from .locations import (
     ALL_EVENTS, EVENT_BY_NAME, EventName, KERBIN_SYSTEM_BODY_NAMES,
     get_body_events,
@@ -199,7 +200,20 @@ class BodyAccessProfile:
     access: dict[EventName, bool] = field(
         default_factory=lambda: {ev.name: False for ev in ALL_EVENTS}
     )
-    blocking_reason: Optional[str] = None
+    # Structured blocking info; the first entry's __str__ is what
+    # `blocking_reason` reports. Mutation goes through ``set_blocking``
+    # (or direct ``blocking.append``); the legacy string attribute is
+    # derived.
+    blocking: list[BlockingInfo] = field(default_factory=list)
+
+    @property
+    def blocking_reason(self) -> Optional[str]:
+        """Back-compat string view of the first blocking entry."""
+        return str(self.blocking[0]) if self.blocking else None
+
+    def set_blocking(self, info: BlockingInfo) -> None:
+        """Replace any prior reasons with a single structured one."""
+        self.blocking = [info]
 
 
 def event_mission_info(event_name: str) -> tuple[str, bool | None]:
@@ -594,9 +608,17 @@ class ProfileResult:
     launch_mass: float = 0.0          # total wet mass at kerbin_surface
     stage_results: list[StageResult] = field(default_factory=list)
     edge_groups: list[list[MissionEdge]] = field(default_factory=list)
-    failure_reasons: list[str] = field(default_factory=list)
+    # Structured blocking info; ``failure_reasons`` is the legacy string
+    # view derived from ``blocking``. Producers populate ``blocking``;
+    # downstream consumers can read either.
+    blocking: list[BlockingInfo] = field(default_factory=list)
     # Command module + support equipment for the terminal stage: [(count, part_id), ...]
     terminal_parts: list[tuple[int, str]] = field(default_factory=list)
+
+    @property
+    def failure_reasons(self) -> list[str]:
+        """Back-compat string view of ``blocking``."""
+        return [str(b) for b in self.blocking]
 
 
 def _has_attitude_control(flags: EquipmentFlags) -> bool:
@@ -778,20 +800,20 @@ def _evaluate_profile(
     needs_ladder = any(e.needs_ladder for e in profile)
 
     # Collect all pre-check failures before attempting stage optimization.
-    reasons: list[str] = []
+    blocking: list[BlockingInfo] = []
 
     # Command check
     if is_crewed:
         if not flags.has_capsule:
-            reasons.append("no capsule for crewed mission")
+            blocking.append(BlockingInfo(reason=BlockingReason.NO_CAPSULE))
     else:
         if not flags.has_probe_core:
-            reasons.append("no probe core for unmanned mission")
+            blocking.append(BlockingInfo(reason=BlockingReason.NO_PROBE_CORE))
 
     # Attitude control (required by almost every edge via requires_attitude_control)
     if any(e.requires_attitude_control for e in profile):
         if not _has_attitude_control(flags):
-            reasons.append("no attitude control")
+            blocking.append(BlockingInfo(reason=BlockingReason.NO_ATTITUDE_CONTROL))
 
     # Landing legs
     if needs_legs:
@@ -800,20 +822,23 @@ def _evaluate_profile(
         ]
         required_tier = max((b.landing_leg_tier for b in leg_bodies), default=0)
         if flags.landing_leg_tier < required_tier:
-            reasons.append(
-                f"need leg tier {required_tier}, have {flags.landing_leg_tier}")
+            blocking.append(BlockingInfo(
+                reason=BlockingReason.LANDING_LEGS_MISSING,
+                leg_tier_needed=required_tier,
+                leg_tier_available=flags.landing_leg_tier,
+            ))
 
     # Ladder
     if needs_ladder and not flags.has_ladder:
-        reasons.append("need ladder for sample return")
+        blocking.append(BlockingInfo(reason=BlockingReason.NO_LADDER))
 
     # Heat shield
     if has_aero_edge and not flags.has_heat_shield:
-        reasons.append("no heat shield for aero edge")
+        blocking.append(BlockingInfo(reason=BlockingReason.NO_HEAT_SHIELD))
 
     # Parachutes (broad check: any parachutes at all for aero landing)
     if has_atmo_land_aero and not flags.has_parachutes:
-        reasons.append("no parachutes for aero landing")
+        blocking.append(BlockingInfo(reason=BlockingReason.NO_PARACHUTE))
 
     # Power: check each unique body in the profile
     # Detect if aero edges destroy fixed solar panels
@@ -832,15 +857,31 @@ def _evaluate_profile(
     for body_name, after_aero in body_aero_destroyed.items():
         body = BODY_BY_NAME[body_name]
         if not _check_power_for_body(flags, body, after_aero=after_aero):
-            reasons.append(f"insufficient power at {body_name} "
-                           f"(after_aero={after_aero})")
+            # "solar_helps" iff body.power_requirement is solar-based
+            # AND we're not in a post-aero state where only retractable/rtg
+            # would work.  This drives sphere-ladder bump priority (solar
+            # vs rtg).
+            solar_helps = body.power_requirement in ("solar", "solar_marginal") \
+                          and not after_aero
+            blocking.append(BlockingInfo(
+                reason=(BlockingReason.INSUFFICIENT_POWER_SOLAR_OK
+                        if solar_helps
+                        else BlockingReason.INSUFFICIENT_POWER_NEEDS_RTG),
+                body=body_name,
+                after_aero=after_aero,
+                solar_helps=solar_helps,
+            ))
 
     # Relay tier
     for edge in profile:
         body = BODY_BY_NAME[edge.body]
         if flags.relay_tier < body.min_relay_tier:
-            reasons.append(f"relay tier too low for {body.name}: "
-                           f"need {body.min_relay_tier}, have {flags.relay_tier}")
+            blocking.append(BlockingInfo(
+                reason=BlockingReason.RELAY_TIER_TOO_LOW,
+                body=body.name,
+                relay_needed=body.min_relay_tier,
+                relay_available=flags.relay_tier,
+            ))
             break  # one relay failure is sufficient
 
     # Propulsion gate: bail if the player has no engines or fuel at all.
@@ -854,21 +895,32 @@ def _evaluate_profile(
                     or bool(flags.available_tanks) or bool(flags.available_srbs))
 
     from .bodies import EdgeType as _ET
-    propulsion_reasons: set[str] = set()
+    # Dedup propulsion failures by (reason, edge_type) so two ascent
+    # edges don't double-report.
+    propulsion_seen: set[tuple[BlockingReason, str]] = set()
+    propulsion: list[BlockingInfo] = []
+    def _add_prop(r: BlockingReason, et_name: str) -> None:
+        key = (r, et_name)
+        if key in propulsion_seen:
+            return
+        propulsion_seen.add(key)
+        propulsion.append(BlockingInfo(reason=r, edge_type=et_name))
     for edge in profile:
         et = edge.edge_type
         if et == _ET.ATMOSPHERIC_ASCENT or et == _ET.ATMO_LANDING_PROPULSIVE:
             if not has_launch_engine:
-                propulsion_reasons.add(f"no launch engine for {et.name}")
+                _add_prop(BlockingReason.NO_LAUNCH_ENGINE, et.name)
             if not has_any_fuel:
-                propulsion_reasons.add(f"no fuel for {et.name}")
+                _add_prop(BlockingReason.NO_FUEL, et.name)
         elif et in (_ET.VACUUM_ASCENT, _ET.PURE_VACUUM,
                     _ET.PLANET_TRANSFER, _ET.VACUUM_LANDING):
             if not has_any_engine:
-                propulsion_reasons.add(f"no engine for {et.name}")
+                _add_prop(BlockingReason.NO_ENGINE, et.name)
             if not has_any_fuel:
-                propulsion_reasons.add(f"no fuel for {et.name}")
-    reasons.extend(sorted(propulsion_reasons))
+                _add_prop(BlockingReason.NO_FUEL, et.name)
+    # Sort for deterministic output matching the legacy `sorted(set)` path.
+    propulsion.sort(key=lambda b: str(b))
+    blocking.extend(propulsion)
 
     # ------------------------------------------------------------------
     # Stage grouping
@@ -883,13 +935,15 @@ def _evaluate_profile(
     # player's decouplers allow, the profile is physically impossible.
     max_stages = 1 if flags.staging_tier == 0 else len(groups)
     if len(groups) > max_stages:
-        reasons.append(
-            f"need {len(groups)} stages but staging_tier={flags.staging_tier} "
-            f"only allows {max_stages}")
+        blocking.append(BlockingInfo(
+            reason=BlockingReason.STAGING_TIER_INSUFFICIENT,
+            stages_needed=len(groups),
+            stages_available=flags.staging_tier,
+        ))
 
     # Return all collected pre-check failures before attempting optimization.
-    if reasons:
-        return ProfileResult(False, failure_reasons=reasons)
+    if blocking:
+        return ProfileResult(False, blocking=blocking)
 
     # ------------------------------------------------------------------
     # Backward pass — compute masses from destination back to Kerbin
@@ -1015,8 +1069,10 @@ def _evaluate_profile(
                 _aero_body = BODY_BY_NAME[_aero_e.body]
                 needed = _required_chute_count(payload, _aero_body, flags, diff)
                 if needed < 0:
-                    return ProfileResult(False,
-                        failure_reasons=[f"parachute terminal velocity check failed at {_aero_body.name}"])
+                    return ProfileResult(False, blocking=[BlockingInfo(
+                        reason=BlockingReason.PARACHUTE_TERMINAL_VELOCITY,
+                        body=_aero_body.name,
+                    )])
 
         # Aero-landing groups are passive — heat shield + parachutes do all
         # the work.  Skip the engine optimizer entirely.
@@ -1079,8 +1135,11 @@ def _evaluate_profile(
         result = find_optimal_stage(parallel_mode=parallel_mode, **stage_kwargs)
 
         if result is None:
-            return ProfileResult(False,
-                failure_reasons=[f"no viable stage for group dv={req_dv:.0f} m/s at {body.name}"])
+            return ProfileResult(False, blocking=[BlockingInfo(
+                reason=BlockingReason.NO_VIABLE_STAGE,
+                body=body.name,
+                dv_needed=req_dv,
+            )])
 
         # Bundle reconciliation: if the optimizer picked a non-gimballed
         # engine/SRB AND we offered an attitude bundle, the bundle's mass was
@@ -1130,8 +1189,11 @@ def _evaluate_profile(
         return ProfileResult(
             feasible=False,
             launch_mass=payload,
-            failure_reasons=[f"launch mass {payload:.0f}t exceeds launch pad cap "
-                             f"{flags.launch_pad_mass_cap:.0f}t"],
+            blocking=[BlockingInfo(
+                reason=BlockingReason.LAUNCH_MASS_EXCEEDED,
+                mass_actual=payload,
+                mass_cap=flags.launch_pad_mass_cap,
+            )],
         )
     return ProfileResult(
         feasible=True,
@@ -1451,12 +1513,19 @@ def _assess_one_body(
         # Non-Kerbin moons: parent planet must be orbitally reachable
         parent_prof = computed[body.parent]
         if not parent_prof.access[EventName.ORBIT]:
-                prof.blocking_reason = f"parent {body.parent} orbit unreachable"
+                prof.set_blocking(BlockingInfo(
+                    reason=BlockingReason.PARENT_BODY_UNREACHABLE,
+                    body=body.name,
+                    parent_body=body.parent,
+                ))
                 return prof
 
     # --- Launch clamp gate for interplanetary ---
     if body.name not in KERBIN_SYSTEM_BODY_NAMES and not flags.has_launch_clamp:
-        prof.blocking_reason = "no launch clamp for interplanetary mission"
+        prof.set_blocking(BlockingInfo(
+            reason=BlockingReason.NO_LAUNCH_CLAMP,
+            body=body.name,
+        ))
         return prof
 
     # --- Evaluate the events that locations.py exposes for this body ---
@@ -1482,13 +1551,21 @@ def _assess_one_body(
         if event.mission_type == MissionType.SAMPLE_RETURN and body.eva_jetpack_twr < _MIN_EVA_JETPACK_TWR:
             profiles = _inject_ladder(profiles)
 
-        ok, reasons = _try_profiles_reason(profiles, flags, diff, event.mission_type, crewed=event.crewed)
+        ok, sub_blocking = _try_profiles_reason(profiles, flags, diff, event.mission_type, crewed=event.crewed)
         prof.access[event.name] = ok
-        if not ok and not prof.blocking_reason:
-            prof.blocking_reason = f"{event.mission_type}: {'; '.join(reasons)}"
+        if not ok and not prof.blocking:
+            prof.set_blocking(BlockingInfo(
+                reason=BlockingReason.EVENT_COMPOUND,
+                body=body.name,
+                mission_type=str(event.mission_type),
+                detail="; ".join(str(b) for b in sub_blocking),
+            ))
 
-    if not prof.access[EventName.ORBIT] and not prof.blocking_reason:
-        prof.blocking_reason = "orbit not achievable"
+    if not prof.access[EventName.ORBIT] and not prof.blocking:
+        prof.set_blocking(BlockingInfo(
+            reason=BlockingReason.ORBIT_NOT_ACHIEVABLE,
+            body=body.name,
+        ))
 
     return prof
 
@@ -1546,25 +1623,27 @@ def _try_profiles_reason(
     diff: DifficultyProfile,
     mission_type: MissionType,
     crewed: bool | None,
-) -> tuple[bool, list[str]]:
+) -> tuple[bool, list[BlockingInfo]]:
     """
-    Like _try_profiles but also returns deduplicated failure reasons
+    Like _try_profiles but also returns deduplicated blocking entries
     collected across all profile attempts on failure.
     """
-    all_reasons: list[str] = []
+    all_blocking: list[BlockingInfo] = []
     seen: set[str] = set()
     if not profiles:
-        return False, ["no profiles defined"]
+        return False, [BlockingInfo(reason=BlockingReason.NO_PROFILES,
+                                     mission_type=str(mission_type))]
     for is_crewed in _crewed_options(crewed, flags):
         for profile in profiles:
             result = _evaluate_profile(profile, flags, diff, mission_type, is_crewed=is_crewed)
             if result.feasible:
                 return True, []
-            for r in result.failure_reasons:
-                if r not in seen:
-                    seen.add(r)
-                    all_reasons.append(r)
-    return False, all_reasons
+            for b in result.blocking:
+                key = str(b)
+                if key not in seen:
+                    seen.add(key)
+                    all_blocking.append(b)
+    return False, all_blocking
 
 
 def evaluate_mission_detailed(
@@ -1597,12 +1676,14 @@ def evaluate_mission_detailed(
         ok = sounding > 0 or flags.has_capsule
         if ok:
             return ProfileResult(True)
-        reasons = []
+        blocking_list: list[BlockingInfo] = []
         if not flags.has_capsule:
-            reasons.append("no capsule (kerbal EVA path)")
+            blocking_list.append(BlockingInfo(
+                reason=BlockingReason.NO_CAPSULE, detail="kerbal EVA path"))
         if sounding <= 0:
-            reasons.append("no sounding altitude (propulsion path)")
-        return ProfileResult(False, failure_reasons=reasons)
+            blocking_list.append(BlockingInfo(
+                reason=BlockingReason.NO_PROPULSION, detail="propulsion path"))
+        return ProfileResult(False, blocking=blocking_list)
 
     if mission_type == MissionType.FIRST_LANDING:
         sounding = _compute_sounding_altitude(flags)
@@ -1612,55 +1693,72 @@ def evaluate_mission_detailed(
         # Engine path: sounding + safe descent
         if sounding > 0 and (flags.has_parachutes or flags.has_throttleable_engine):
             return ProfileResult(True)
-        reasons = []
+        blocking_list = []
         if not flags.has_capsule:
-            reasons.append("no capsule (EVA path)")
+            blocking_list.append(BlockingInfo(
+                reason=BlockingReason.NO_CAPSULE, detail="EVA path"))
         if sounding <= 0:
-            reasons.append("no sounding altitude")
+            blocking_list.append(BlockingInfo(
+                reason=BlockingReason.NO_SOUNDING_ALTITUDE))
         elif not flags.has_parachutes and not flags.has_throttleable_engine:
-            reasons.append("no safe descent (need parachute or throttleable engine)")
-        return ProfileResult(False, failure_reasons=reasons)
+            blocking_list.append(BlockingInfo(
+                reason=BlockingReason.NO_SAFE_DESCENT))
+        return ProfileResult(False, blocking=blocking_list)
 
     if mission_type == MissionType.FIRST_STAGING:
         if flags.staging_tier >= 1:
             return ProfileResult(True)
-        return ProfileResult(False, failure_reasons=["no stack decoupler (staging_tier < 1)"])
+        return ProfileResult(False, blocking=[BlockingInfo(
+            reason=BlockingReason.STAGING_TIER_INSUFFICIENT,
+            stages_needed=0,
+            stages_available=0,
+        )])
 
     if mission_type == MissionType.SPLASHDOWN:
         sounding = _compute_sounding_altitude(flags)
-        reasons = []
-        if sounding < (threshold_km or 1.0):
-            reasons.append(f"sounding altitude {sounding:.1f} km < {threshold_km or 1.0:.0f} km")
+        blocking_list = []
+        threshold = threshold_km or 1.0
+        if sounding < threshold:
+            blocking_list.append(BlockingInfo(
+                reason=BlockingReason.SOUNDING_ALTITUDE_TOO_LOW,
+                altitude_km=sounding,
+                threshold_km=threshold,
+            ))
         if not flags.has_parachutes and not flags.has_throttleable_engine:
-            reasons.append("no safe descent (need parachute or throttleable engine)")
-        if reasons:
-            return ProfileResult(False, failure_reasons=reasons)
+            blocking_list.append(BlockingInfo(
+                reason=BlockingReason.NO_SAFE_DESCENT))
+        if blocking_list:
+            return ProfileResult(False, blocking=blocking_list)
         return ProfileResult(True)
 
     # --- Standard body mission profiles ---
     profiles = MISSION_PROFILES.get((body_name, mission_type), [])
     if not profiles:
-        return ProfileResult(False,
-                             failure_reasons=[f"no profiles for ({body_name}, {mission_type})"])
+        return ProfileResult(False, blocking=[BlockingInfo(
+            reason=BlockingReason.NO_PROFILES,
+            body=body_name,
+            mission_type=str(mission_type),
+        )])
 
     if mission_type == MissionType.SAMPLE_RETURN:
         body = BODY_BY_NAME[body_name]
         if body.eva_jetpack_twr < _MIN_EVA_JETPACK_TWR:
             profiles = _inject_ladder(profiles)
 
-    all_reasons: list[str] = []
+    all_blocking: list[BlockingInfo] = []
     seen: set[str] = set()
     for is_crewed in _crewed_options(crewed, flags):
         for profile in profiles:
             result = _evaluate_profile(profile, flags, diff, mission_type, is_crewed=is_crewed)
             if result.feasible:
                 return result
-            for r in result.failure_reasons:
-                if r not in seen:
-                    seen.add(r)
-                    all_reasons.append(r)
+            for b in result.blocking:
+                key = str(b)
+                if key not in seen:
+                    seen.add(key)
+                    all_blocking.append(b)
 
-    return ProfileResult(False, failure_reasons=all_reasons)
+    return ProfileResult(False, blocking=all_blocking)
 
 
 def _evaluate_sounding(flags: EquipmentFlags, threshold_km: float) -> ProfileResult:
@@ -1669,12 +1767,18 @@ def _evaluate_sounding(flags: EquipmentFlags, threshold_km: float) -> ProfileRes
     if sounding_km >= threshold_km:
         return ProfileResult(True, launch_mass=0.0)
 
-    reasons: list[str] = []
+    blocking_list: list[BlockingInfo] = []
     if sounding_km > 0:
-        reasons.append(f"sounding altitude {sounding_km:.1f} km < {threshold_km:.0f} km (need bigger SRB/engine)")
+        blocking_list.append(BlockingInfo(
+            reason=BlockingReason.SOUNDING_ALTITUDE_TOO_LOW,
+            altitude_km=sounding_km,
+            threshold_km=threshold_km,
+            detail="need bigger SRB/engine",
+        ))
     else:
         if not flags.has_probe_core and not flags.has_capsule:
-            reasons.append("no command module (need probe core or capsule)")
+            blocking_list.append(BlockingInfo(
+                reason=BlockingReason.NO_COMMAND_MODULE))
         elif not flags.has_probe_core and flags.has_capsule:
             missing = []
             if not flags.has_parachutes:
@@ -1682,12 +1786,16 @@ def _evaluate_sounding(flags: EquipmentFlags, threshold_km: float) -> ProfileRes
             if flags.staging_tier < 1:
                 missing.append("decoupler")
             if missing:
-                reasons.append(f"capsule-only sounding needs: {', '.join(missing)}")
+                blocking_list.append(BlockingInfo(
+                    reason=BlockingReason.CAPSULE_SOUNDING_INCOMPLETE,
+                    detail=", ".join(missing),
+                ))
         if not flags.available_srbs and not flags.available_engines:
-            reasons.append("no propulsion (need SRB or engine + fuel)")
+            blocking_list.append(BlockingInfo(
+                reason=BlockingReason.NO_PROPULSION))
         elif flags.available_engines and not flags.available_tanks:
-            reasons.append("engines but no fuel tanks")
-    return ProfileResult(False, failure_reasons=reasons)
+            blocking_list.append(BlockingInfo(reason=BlockingReason.NO_FUEL))
+    return ProfileResult(False, blocking=blocking_list)
 
 
 # ---------------------------------------------------------------------------
