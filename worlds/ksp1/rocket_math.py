@@ -230,6 +230,7 @@ def find_optimal_stage(
     tanks_by_fuel_type: Optional[dict[str, list[FuelTank]]] = None,
     available_multi_mounts: Optional[list[MultiMount]] = None,
     require_gimbal: bool = False,
+    attitude_module_mass: float = 0.0,  # added to payload only if chosen prop lacks gimbal
 ) -> Optional[StageResult]:
     """
     Find the minimum-mass engine+tank configuration that meets *required_dv*
@@ -301,12 +302,23 @@ def find_optimal_stage(
         if requires_throttleable and not engine.throttleable:
             continue
 
+        # Per-candidate attitude module charge. When the caller passes a
+        # non-zero `attitude_module_mass`, this stage needs an on-stage
+        # attitude-control source. Gimballed engines provide it for free;
+        # ungimballed engines must carry the lightest reaction-wheel / RCS
+        # bundle the caller selected. Adding it only to ungimballed
+        # candidates lets the optimizer trade "ungimballed + module" against
+        # "gimballed alone" inside the same search loop.
+        eng_payload = full_payload + (
+            attitude_module_mass if not engine.has_gimbal else 0.0
+        )
+
         e_mass = engine.mass
         e_size = engine.size_class
         thrust_per_eng = engine.atm_thrust if in_atmosphere else engine.vac_thrust
 
         # Engine lower bound: even with 1 engine + 1 smallest tank, can't beat best?
-        if full_payload + e_mass >= best_wet:
+        if eng_payload + e_mass >= best_wet:
             continue
 
         # Compute mass ratio R once per engine (the key optimisation: avoids
@@ -334,7 +346,7 @@ def find_optimal_stage(
             t_size = tank.size_class
 
             # Lower bound: 1 engine + 1 tank at lowest fill can't beat best?
-            lb = full_payload + e_mass + t_dry + t_fuel * 0.25
+            lb = eng_payload + e_mass + t_dry + t_fuel * 0.25
             if lb >= best_wet:
                 continue
 
@@ -378,7 +390,7 @@ def find_optimal_stage(
                     if twr_eng_denom <= 0:
                         continue  # engine too heavy for this TWR at any count
                     m_tank_1 = t_dry + t_fuel * fill
-                    numer = twr_g * (full_payload + m_tank_1)
+                    numer = twr_g * (eng_payload + m_tank_1)
                     min_engines = max(min_engines, _ceil(numer / twr_eng_denom))
 
                 for sm_df, sm_symmetric in _sub_modes:
@@ -400,7 +412,7 @@ def find_optimal_stage(
 
                     for n_eng in eng_counts:
                         m_engine = e_mass * n_eng
-                        n_tanks = _ceil(R_minus_1 * (full_payload + m_engine) / denom)
+                        n_tanks = _ceil(R_minus_1 * (eng_payload + m_engine) / denom)
                         if n_tanks <= 0:
                             continue
                         if tank.max_count > 0 and n_tanks > tank.max_count:
@@ -414,7 +426,7 @@ def find_optimal_stage(
 
                         m_tank_dry = t_dry * n_tanks
                         m_fuel = t_fuel * n_tanks * fill
-                        m_dry = full_payload + m_engine + m_tank_dry
+                        m_dry = eng_payload + m_engine + m_tank_dry
                         m_wet = m_dry + m_fuel
 
                         # Skip if can't beat current best
@@ -429,7 +441,7 @@ def find_optimal_stage(
                         # Verify delta-v (required_tanks rounds up, so check actual)
                         # Inline stage_delta_v to avoid function call overhead.
                         verify_dry = m_tank_dry * sm_df if sm_df != 1.0 else m_tank_dry
-                        v_dry = full_payload + m_engine + verify_dry
+                        v_dry = eng_payload + m_engine + verify_dry
                         v_wet = v_dry + m_fuel
                         if v_dry <= 0 or v_wet <= v_dry:
                             continue
@@ -489,11 +501,16 @@ def find_optimal_stage(
             continue
         srb_thrust = (srb.atm_thrust if in_atmosphere else srb.vac_thrust)
 
+        # Per-candidate attitude module charge (see engine loop above).
+        srb_payload = full_payload + (
+            attitude_module_mass if not srb.has_gimbal else 0.0
+        )
+
         srb_counts = range(1, max_srb + 1)
 
         for n_srb in srb_counts:
             # Inline srb_delta_v
-            m_dry = full_payload + srb.dry_mass * n_srb
+            m_dry = srb_payload + srb.dry_mass * n_srb
             m_wet = m_dry + srb.fuel_mass * n_srb
             if m_dry <= 0 or m_wet <= m_dry:
                 continue

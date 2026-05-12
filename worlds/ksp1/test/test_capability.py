@@ -1408,5 +1408,78 @@ class TestEscapeRelayGate(unittest.TestCase):
                 )
 
 
+class TestAttitudeBundleManifestReconciles(unittest.TestCase):
+    """When the optimizer picks ungimballed propulsion on an attitude-required
+    stage, the attitude bundle parts must appear in stage.equipment AND their
+    real masses must sum to exactly the mass the optimizer charged.
+
+    Decouplers are an explicit exception (in manifest, not in mass budget) —
+    they're filtered out before summing. Everything else must reconcile.
+    """
+
+    def test_attitude_module_mass_reflects_real_part_masses(self) -> None:
+        from worlds.ksp1.parts import PART_DB
+        from worlds.ksp1.capability import _attitude_bundle_for_stage
+        # Setup: Stayputnik (no built-in wheels) + sasModule unlocked.
+        flags = _make_flags(
+            engines=[_RELIANT], tanks=[_FL_T400, _FL_T800],
+            probe_core=False, reaction_wheels=False,
+            launch_clamp=True, decoupler_stack=True,
+        )
+        stayputnik = PART_DB["probeCoreSphere.v2"][0]
+        flags.has_probe_core = True
+        flags.lightest_probe = stayputnik
+        sas = PART_DB["sasModule"][0]
+        flags.has_reaction_wheels = True
+        flags.lightest_reaction_wheel = sas
+
+        bundle = _attitude_bundle_for_stage(flags, is_crewed=False)
+        self.assertIsNotNone(bundle)
+        self.assertEqual(bundle.parts, ((1, "sasModule"),))
+        self.assertAlmostEqual(bundle.mass, sas.mass, places=6)
+
+    def test_rcs_bundle_includes_tank_when_terminal_lacks_monoprop(self) -> None:
+        from worlds.ksp1.parts import PART_DB
+        from worlds.ksp1.capability import _attitude_bundle_for_stage
+        flags = _make_flags(
+            engines=[_RELIANT], tanks=[_FL_T400, _FL_T800],
+            launch_clamp=True, decoupler_stack=True,
+        )
+        stayputnik = PART_DB["probeCoreSphere.v2"][0]
+        flags.has_probe_core = True
+        flags.lightest_probe = stayputnik
+        rcs = PART_DB["RCSLinearSmall"][0]
+        flags.has_rcs = True
+        flags.lightest_rcs_thruster = rcs
+        tank = PART_DB["monopropMiniSphere"][0]
+        flags.lightest_monoprop_tank = tank
+        flags.available_tanks.append(tank)
+
+        bundle = _attitude_bundle_for_stage(flags, is_crewed=False)
+        self.assertIsNotNone(bundle)
+        self.assertEqual(set(bundle.parts), {(4, "RCSLinearSmall"), (1, "monopropMiniSphere")})
+        expected = 4 * rcs.mass + tank.dry_mass + tank.fuel_mass
+        self.assertAlmostEqual(bundle.mass, expected, places=6)
+
+    def test_rcs_bundle_skips_tank_for_pod_with_internal_monoprop(self) -> None:
+        from worlds.ksp1.parts import PART_DB
+        from worlds.ksp1.capability import _attitude_bundle_for_stage
+        flags = _make_flags(
+            engines=[_RELIANT], tanks=[_FL_T400, _FL_T800],
+            launch_clamp=True, decoupler_stack=True,
+        )
+        pod = PART_DB["mk1-3pod"][0]
+        flags.has_capsule = True
+        flags.heaviest_capsule = pod
+        rcs = PART_DB["RCSLinearSmall"][0]
+        flags.has_rcs = True
+        flags.lightest_rcs_thruster = rcs
+
+        bundle = _attitude_bundle_for_stage(flags, is_crewed=True)
+        self.assertIsNotNone(bundle)
+        self.assertEqual(bundle.parts, ((4, "RCSLinearSmall"),))
+        self.assertAlmostEqual(bundle.mass, 4 * rcs.mass, places=6)
+
+
 if __name__ == "__main__":
     unittest.main()

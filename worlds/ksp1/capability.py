@@ -150,6 +150,16 @@ class EquipmentFlags:
     lightest_rtg: Optional[MiscEquipment] = None
     lightest_aero_control: Optional[MiscEquipment] = None
     lightest_ladder: Optional[MiscEquipment] = None
+    # Per-stage attitude control parts. Used when a stage needs attitude
+    # control (`requires_attitude_control` edge) AND the terminal payload
+    # has no built-in reaction wheels AND the chosen propulsion lacks gimbal.
+    # `lightest_reaction_wheel` and `lightest_rcs_thruster` are standalone
+    # parts (their `provides` excludes probe_core/capsule). `lightest_monoprop_tank`
+    # is the lightest unlocked FuelTank with fuel_type="monoprop" (skipped when
+    # the terminal command part already supplies monopropellant).
+    lightest_reaction_wheel: Optional[MiscEquipment] = None
+    lightest_rcs_thruster: Optional[MiscEquipment] = None
+    lightest_monoprop_tank: Optional[FuelTank] = None
 
     # Solar distance for ION logic (set from the edge being evaluated)
     target_solar_au: float = 1.0
@@ -398,6 +408,18 @@ def _pre_pass(item_count_fn: Callable[[str], int],
         )
     flags.tanks_by_fuel_type = tank_index
 
+    # Select the lightest monoprop tank (loaded mass = dry + fuel). Used as the
+    # second half of an RCS attitude bundle when the terminal command part
+    # doesn't supply its own monopropellant.
+    for tank in flags.available_tanks:
+        if tank.fuel_type != "monoprop":
+            continue
+        loaded = tank.dry_mass + tank.fuel_mass
+        if (flags.lightest_monoprop_tank is None
+                or (flags.lightest_monoprop_tank.dry_mass
+                    + flags.lightest_monoprop_tank.fuel_mass) > loaded):
+            flags.lightest_monoprop_tank = tank
+
     return flags
 
 
@@ -479,8 +501,20 @@ def _apply_misc(flags: EquipmentFlags, part: MiscEquipment, count: int) -> None:
                 flags.heaviest_capsule = part
         elif flag == CF.REACTION_WHEEL:
             flags.has_reaction_wheels = True
+            # Standalone wheel module = provides reaction_wheel without also
+            # providing probe_core or capsule. (Probes/capsules that include
+            # a wheel are handled by `_terminal_has_built_in_wheels`; they
+            # cover every stage automatically.)
+            if (CF.PROBE_CORE not in part.provides
+                    and CF.CAPSULE not in part.provides):
+                if (flags.lightest_reaction_wheel is None
+                        or part.mass < flags.lightest_reaction_wheel.mass):
+                    flags.lightest_reaction_wheel = part
         elif flag == CF.RCS:
             flags.has_rcs = True
+            if (flags.lightest_rcs_thruster is None
+                    or part.mass < flags.lightest_rcs_thruster.mass):
+                flags.lightest_rcs_thruster = part
         elif flag in (CF.SOLAR_FIXED, CF.SOLAR_RETRACTABLE):
             flags.has_solar = True
             if flags.lightest_solar is None or part.mass < flags.lightest_solar.mass:
@@ -554,6 +588,109 @@ def _has_attitude_control(flags: EquipmentFlags) -> bool:
     return (flags.has_reaction_wheels or flags.has_rcs
             or any(e.has_gimbal for e in flags.available_engines)
             or any(s.has_gimbal for s in flags.available_srbs))
+
+
+# Command pods / probes that ship MonoPropellant in their own tankage (stock
+# KSP). When the terminal payload is one of these, an RCS attitude bundle
+# doesn't need a separate monoprop tank — the pod supplies the fuel itself.
+# Derived from data/parts.json (resources containing MonoPropellant on parts
+# that aren't pure tanks). Keep in sync if KSP adds new monoprop-carrying pods.
+_TERMINAL_PARTS_WITH_INTERNAL_MONOPROP: frozenset[str] = frozenset({
+    "MEMLander",
+    "Mark1Cockpit",
+    "Mark2Cockpit",
+    "cupola",
+    "landerCabinSmall",
+    "mk1-3pod",
+    "mk1pod.v2",
+    "mk2Cockpit.Inline",
+    "mk2Cockpit.Standard",
+    "mk2LanderCabin.v2",
+    "mk3Cockpit.Shuttle",
+})
+
+
+def _terminal_part(flags: EquipmentFlags, is_crewed: bool) -> Optional[MiscEquipment]:
+    return flags.heaviest_capsule if is_crewed else flags.lightest_probe
+
+
+def _terminal_has_built_in_wheels(flags: EquipmentFlags, is_crewed: bool) -> bool:
+    part = _terminal_part(flags, is_crewed)
+    if part is None:
+        return False
+    return CapabilityFlag.REACTION_WHEEL in part.provides
+
+
+def _terminal_has_built_in_monoprop(flags: EquipmentFlags, is_crewed: bool) -> bool:
+    part = _terminal_part(flags, is_crewed)
+    if part is None:
+        return False
+    return part.name in _TERMINAL_PARTS_WITH_INTERNAL_MONOPROP
+
+
+@dataclass(frozen=True)
+class AttitudeBundle:
+    """Concrete on-stage attitude-control parts (and their summed mass).
+
+    Whatever mass we charge to the optimizer here MUST equal the sum of the
+    real part masses listed in `parts`. Both fields are consumed together —
+    `mass` goes to `find_optimal_stage(attitude_module_mass=...)` and `parts`
+    is appended to the stage's equipment manifest when a non-gimballed
+    propulsion choice triggers the charge.
+    """
+    mass: float
+    parts: tuple[tuple[int, str], ...]   # ((count, internal_name), ...)
+
+
+# Module-level kill switch for the per-stage attitude bundle. Used by the
+# regression harness to A/B against pre-fix behaviour without editing code.
+# Production code must leave this True.
+_PER_STAGE_ATTITUDE_ENABLED: bool = True
+
+
+def _attitude_bundle_for_stage(
+    flags: EquipmentFlags, is_crewed: bool,
+) -> Optional[AttitudeBundle]:
+    """Pick the lightest concrete on-stage attitude bundle from real PART_DB
+    parts. Returns None if no on-stage source is available.
+
+    Two candidate bundles, real masses only:
+      - **Wheel**: 1 × lightest standalone reaction-wheel module.
+      - **RCS**:   4 × lightest standalone RCS thruster
+                   + (1 × lightest monoprop tank, unless the terminal payload
+                      already supplies MonoPropellant internally).
+
+    The lighter of the two wins. The chosen parts (with counts) appear
+    verbatim in the stage manifest so manifest mass == charged mass.
+    """
+    candidates: list[AttitudeBundle] = []
+    if flags.lightest_reaction_wheel is not None:
+        w = flags.lightest_reaction_wheel
+        candidates.append(AttitudeBundle(
+            mass=w.mass,
+            parts=((1, w.name),),
+        ))
+    if flags.lightest_rcs_thruster is not None:
+        t = flags.lightest_rcs_thruster
+        rcs_parts: list[tuple[int, str]] = [(4, t.name)]
+        rcs_mass = 4 * t.mass
+        rcs_skip = False
+        if not _terminal_has_built_in_monoprop(flags, is_crewed):
+            tank = flags.lightest_monoprop_tank
+            if tank is None:
+                # Can't fly an RCS bundle without monopropellant — skip.
+                rcs_skip = True
+            else:
+                rcs_parts.append((1, tank.name))
+                rcs_mass += tank.dry_mass + tank.fuel_mass
+        if not rcs_skip:
+            candidates.append(AttitudeBundle(
+                mass=rcs_mass,
+                parts=tuple(rcs_parts),
+            ))
+    if not candidates:
+        return None
+    return min(candidates, key=lambda b: b.mass)
 
 
 def _check_power_for_body(flags: EquipmentFlags, body: Body,
@@ -829,6 +966,28 @@ def _evaluate_profile(
             stage_payload += 4.0 * flags.lightest_aero_control.mass
             stage_equipment.append((4, flags.lightest_aero_control.name))
 
+        # Per-stage attitude control: a stage with `requires_attitude_control`
+        # edges needs an on-stage source — gimballed engine/SRB, a reaction
+        # wheel travelling on the terminal payload, or a concrete attitude
+        # bundle attached to this stage. The optimizer takes the bundle mass
+        # and only charges it for candidate propulsion that lacks gimbal
+        # (lets "ungimballed + bundle" trade against "gimballed alone"
+        # automatically). Bundle parts are appended to the manifest below
+        # iff the optimizer's chosen propulsion in fact lacks gimbal — so
+        # manifest mass and charged mass always reconcile exactly.
+        group_needs_attitude = any(e.requires_attitude_control for e in group)
+        attitude_bundle: Optional[AttitudeBundle] = None
+        if (_PER_STAGE_ATTITUDE_ENABLED
+                and group_needs_attitude
+                and not _terminal_has_built_in_wheels(flags, is_crewed)
+                and not needs_gimbal_engine):
+            attitude_bundle = _attitude_bundle_for_stage(flags, is_crewed)
+            if attitude_bundle is None:
+                # No bundle available — fall back to forcing a gimballed prop.
+                # If no gimballed engine/SRB exists either, find_optimal_stage
+                # will return None below and the profile is infeasible.
+                needs_gimbal_engine = True
+
         # Parachute consumption check for aero landing edges in this group.
         # Use the landing edge's actual body (not the group's first body) since
         # groups may be merged across bodies.  The heat shield is jettisoned
@@ -898,6 +1057,7 @@ def _evaluate_profile(
             tanks_by_fuel_type=flags.tanks_by_fuel_type,
             available_multi_mounts=flags.available_multi_mounts,
             require_gimbal=needs_gimbal_engine,
+            attitude_module_mass=attitude_bundle.mass if attitude_bundle else 0.0,
         )
 
         result = find_optimal_stage(parallel_mode=parallel_mode, **stage_kwargs)
@@ -905,6 +1065,13 @@ def _evaluate_profile(
         if result is None:
             return ProfileResult(False,
                 failure_reasons=[f"no viable stage for group dv={req_dv:.0f} m/s at {body.name}"])
+
+        # Bundle reconciliation: if the optimizer picked a non-gimballed
+        # engine/SRB AND we offered an attitude bundle, the bundle's mass was
+        # rolled into this stage's payload. Append the concrete parts to the
+        # manifest so summing manifest masses reproduces the charged mass.
+        if attitude_bundle is not None and not result.engine_has_gimbal:
+            stage_equipment.extend(attitude_bundle.parts)
 
         # Chutes for aero-landing edges in mixed groups
         if aero_land_edges:
