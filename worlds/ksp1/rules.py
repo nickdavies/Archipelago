@@ -299,19 +299,32 @@ def _set_mission_rules(world: KSP1World, player: int) -> None:
 # Item pacing rules (item_rules on early locations)
 # ---------------------------------------------------------------------------
 
-# Early tech tree: tiers 1-3
+# Early tech tree band: tiers 1-3
 _EARLY_TECH_MAX_TIER = 3
 
+# Items banned from early bands.  Kept explicit (no tier scorer) because the
+# ratio-based tier system was overengineered for this small allowlist and
+# kept creating phantom tier-2 items (bug: miniFuselage / MK1Fuselage).
+#
+# Why each is banned:
+#   Progressive R&D    — gates tech tree bands; "least fun" check, keep late
+#   Science Pack 100   — large science windfall doesn't belong in starter
+#   Science Pack 250   — same
+_EARLY_BANNED_ITEMS: frozenset[str] = frozenset({
+    "Progressive R&D",
+    "Science Pack 100",
+    "Science Pack 250",
+})
 
-def _make_power_rule(player: int, item_tiers: dict[str, int], max_tier: int):
-    """
-    Item rule: reject KSP items above max_tier.
 
-    Non-KSP items (other worlds in multiworld) always pass.
-    Items not in item_tiers are tier 0 and always pass.
+def _make_early_ban_rule(player: int):
+    """Item rule: reject pacing-sensitive items for our player.
+
+    Other-world items always pass.
     """
+    banned = _EARLY_BANNED_ITEMS
     def rule(item) -> bool:
-        return item.player != player or item_tiers.get(item.name, 0) <= max_tier
+        return item.player != player or item.name not in banned
     return rule
 
 
@@ -325,45 +338,47 @@ def _make_science_pack_rule():
 
 def _set_item_pacing_rules(world: KSP1World, player: int, difficulty: int) -> None:
     """
-    Apply item_rules that prevent high-power items from appearing in
-    early locations, creating a gradual power curve.
+    Apply item_rules to early locations.
 
-    Also restricts science packs from flooding early tech tree slots.
+    Bans `_EARLY_BANNED_ITEMS` from Band A (starting inventory) and Band B
+    (KSC biomes + Kerbin specials + early Kerbin events). Under strict
+    pacing, also bans them from Band C (tier 1-3 tech tree).  Additionally
+    blocks all science pack filler from early tech tree under any pacing.
     """
     from worlds.generic.Rules import add_item_rule
-    from .item_power import ITEM_TIERS
 
     pacing = world.options.item_pacing.value
     if pacing == ItemPacing.option_off:
         return
 
-    item_tiers = ITEM_TIERS
     num_slots = TECH_SLOTS_BY_DIFFICULTY[difficulty]
-
-    # Band A: Starting Inventory — reject tier 2
     num_starting = STARTING_INV_COUNTS[difficulty]
-    power_rule = _make_power_rule(player, item_tiers, max_tier=1)
+    early_ban_rule = _make_early_ban_rule(player)
+
+    # Band A: Starting Inventory
     for name in STARTING_INV_NAMES[:num_starting]:
-        add_item_rule(world.get_location(name), power_rule)
+        add_item_rule(world.get_location(name), early_ban_rule)
 
-    # Band B: KSC biomes + early Kerbin — reject tier 2
+    # Band B: KSC biomes + Kerbin specials + early Kerbin events
     for name in KSC_BIOME_NAMES:
-        add_item_rule(world.get_location(name), power_rule)
+        add_item_rule(world.get_location(name), early_ban_rule)
     for name in KERBIN_LOCATION_NAMES:
-        add_item_rule(world.get_location(name), power_rule)
+        add_item_rule(world.get_location(name), early_ban_rule)
     # Early Kerbin mission events (everything except Flyby/SOI Leave which need escape)
-    for event in (EventName.ORBIT, EventName.EVA_IN_ORBIT, EventName.LANDING, EventName.CREWED_LANDING, EventName.FLAG_PLANT, EventName.RETURN, EventName.SAMPLE_RETURN):
+    for event in (EventName.ORBIT, EventName.EVA_IN_ORBIT, EventName.LANDING,
+                  EventName.CREWED_LANDING, EventName.FLAG_PLANT,
+                  EventName.RETURN, EventName.SAMPLE_RETURN):
         for loc in event_locations(BodyName.KERBIN, event):
-            add_item_rule(world.get_location(str(loc)), power_rule)
+            add_item_rule(world.get_location(str(loc)), early_ban_rule)
 
-    # Band C: Early tech tree (tiers 1-3) — reject tier 2, strict mode only
+    # Band C: Early tech tree (tiers 1-3) — strict mode only
     if pacing >= ItemPacing.option_strict:
         for node in TECH_NODES:
             if node.tier > _EARLY_TECH_MAX_TIER:
                 continue
             for slot in range(1, num_slots + 1):
                 name = str(TechTreeLocation(node.display_name, slot))
-                add_item_rule(world.get_location(name), _make_power_rule(player, item_tiers, max_tier=1))
+                add_item_rule(world.get_location(name), early_ban_rule)
 
     # Science pack restriction on early tech tree (both gentle and strict)
     science_rule = _make_science_pack_rule()
