@@ -361,12 +361,18 @@ def create_all_locations(world: KSP1World) -> None:
 
     menu = world.get_region("Menu")
 
-    # Starting inventory (zero-requirement bootstrapping locations)
-    starting_locs = {
-        name: LOCATION_NAME_TO_ID[name]
-        for name in STARTING_INV_NAMES[:num_starting]
-    }
+    # Starting inventory (zero-requirement bootstrapping locations).
+    # Constrain to local items only: these auto-check on connect, so a remote
+    # player's item landing here would ship out without bootstrapping the
+    # local player and risk a multiworld deadlock if reciprocity stalls.
+    starting_names = STARTING_INV_NAMES[:num_starting]
+    starting_locs = {name: LOCATION_NAME_TO_ID[name] for name in starting_names}
     menu.add_locations(starting_locs, KSP1Location)
+    player = world.player
+    local_only = lambda item, p=player: item.player == p
+    for loc in menu.locations:
+        if loc.name in starting_locs:
+            loc.item_rule = local_only
 
     # KSC biome locations (earned by doing science at KSC buildings)
     biome_locs = {name: LOCATION_NAME_TO_ID[name] for name in KSC_BIOME_NAMES}
