@@ -68,7 +68,8 @@ instead you complete missions:
 - **Starting Inventory** (5–20 slots depending on difficulty) — Zero-requirement locations that bootstrap your
   run. The AP fill algorithm places the items you need to get started here.
 - **KSC Biome Checks** (12) — Earned by performing science experiments at KSC buildings (Launch Pad, VAB, R&D,
-  Tracking Station, etc.). This only includes a single one per building not each sub-building biome
+  Tracking Station, etc.). Each is named *Science from KSC <building>* to make the requirement obvious.
+  Only one per building, not each sub-building biome.
 - **Kerbin Milestones** (13) — First Launch, First Landing, First Crash, altitude records (5km through 70km),
   Splashdown, First Staging, EVA in Orbit.
 - **Body Mission Events** (~231) — Per-body checks across all 17 bodies: Flyby, Orbit, Landing, Crewed Landing,

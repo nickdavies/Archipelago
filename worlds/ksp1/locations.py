@@ -186,20 +186,35 @@ assert len(TECH_TREE_LOCATION_NAMES) == 248  # 62 nodes × 4 slots
 # KSC biome locations (always all 12, no difficulty scaling)
 # ---------------------------------------------------------------------------
 
-KSC_BIOME_NAMES: list[str] = [
-    "KSC LaunchPad",
-    "KSC Runway",
-    "KSC VAB",
-    "KSC SPH",
-    "KSC Tracking Station",
-    "KSC Astronaut Complex",
-    "KSC Administration",
-    "KSC Mission Control",
-    "KSC R&D",
-    "KSC Crawlerway",
-    "KSC Flag Pole (Astronaut Complex)",
-    "KSC Grounds",
+#: Prefix on every KSC-biome AP location name, so the check name makes it
+#: obvious the player has to collect science there.  Authoritative on the
+#: server; the client receives the full ``biome_key -> location_name`` map
+#: via slot_data and stays prefix-agnostic.
+KSC_LOCATION_PREFIX: str = "Science from "
+
+#: Single source of truth for KSC biomes:
+#: (KSP game-internal biome key, building display name).
+#:
+#: Order matters for the client's sub-biome fallback: it iterates this map
+#: and falls back to ``startswith`` on the key when no exact match is found
+#: (e.g. ``VABMainBuilding`` → ``VAB``).  The bare ``KSC`` entry is a
+#: catch-all prefix and MUST stay last so more-specific keys win.
+KSC_BIOMES: list[tuple[str, str]] = [
+    ("LaunchPad",        "KSC LaunchPad"),
+    ("Runway",           "KSC Runway"),
+    ("Administration",   "KSC Administration"),
+    ("AstronautComplex", "KSC Astronaut Complex"),
+    ("FlagPole",         "KSC Flag Pole (Astronaut Complex)"),
+    ("SPH",              "KSC SPH"),
+    ("VAB",              "KSC VAB"),
+    ("TrackingStation",  "KSC Tracking Station"),
+    ("MissionControl",   "KSC Mission Control"),
+    ("Crawlerway",       "KSC Crawlerway"),
+    ("R&D",              "KSC R&D"),
+    ("KSC",              "KSC Grounds"),
 ]
+
+KSC_BIOME_NAMES: list[str] = [KSC_LOCATION_PREFIX + name for _, name in KSC_BIOMES]
 
 # ---------------------------------------------------------------------------
 # Kerbin-specific mission locations (12 total, fixed)

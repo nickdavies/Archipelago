@@ -30,7 +30,7 @@ from worlds.ksp1.capability import (
     compute_capability_from_items, evaluate_mission_detailed,
     get_capability,
 )
-from worlds.ksp1.locations import EventName, MissionLocation
+from worlds.ksp1.locations import EventName, KSC_LOCATION_PREFIX, MissionLocation
 from worlds.ksp1.world import KSP1World
 
 from worlds.ksp1.capability_format import (
@@ -205,7 +205,7 @@ def cmd_in_logic(ap: APState, parts_list: bool = False) -> None:
         if not loc.can_reach(state):
             continue
 
-        if loc.name.startswith("KSC "):
+        if loc.name.startswith(KSC_LOCATION_PREFIX):
             actionable["KSC"].append(loc.name)
         elif " " in loc.name:
             group = location_group(loc.name)

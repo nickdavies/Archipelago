@@ -135,7 +135,7 @@ class TestCustomUTSort(unittest.TestCase):
 
     def test_tech_tree_sorts_before_ksc(self):
         tech_key = self.world.custom_ut_sort("Tech Tier 1", "Basic Rocketry 1")
-        ksc_key = self.world.custom_ut_sort("KSC", "KSC Administration 1")
+        ksc_key = self.world.custom_ut_sort("KSC", "Science from KSC Administration")
         self.assertLess(tech_key, ksc_key)
 
     def test_body_order_matches_all_bodies(self):

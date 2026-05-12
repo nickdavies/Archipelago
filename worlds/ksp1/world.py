@@ -10,8 +10,8 @@ from .bodies import ALL_BODIES, MissionType
 from .items import ITEM_NAME_TO_ID, _FILLER_ITEMS
 from .parts import PROGRESSIVE_PART_TIERS
 from .locations import (
-    ALL_EVENTS, EventName, KSC_BIOME_NAMES, KERBIN_LOCATIONS,
-    LOCATION_NAME_TO_ID, MAX_TECH_SLOTS, MissionLocation,
+    ALL_EVENTS, EventName, KSC_BIOMES, KSC_LOCATION_PREFIX,
+    KERBIN_LOCATIONS, LOCATION_NAME_TO_ID, MAX_TECH_SLOTS, MissionLocation,
     STARTING_INV_COUNTS, TECH_SLOTS_BY_DIFFICULTY, TechTreeLocation,
 )
 from .options import KSP1Options
@@ -129,7 +129,11 @@ class KSP1World(World):
         # Authoritative data for C# client — eliminates hardcoded dicts.
         d["event_scales"] = {e.name: e.scale for e in ALL_EVENTS}
         d["tech_display_names"] = {n.node_id: n.display_name for n in TECH_NODES}
-        d["ksc_biome_names"] = KSC_BIOME_NAMES
+        # Full biome_key -> AP location name map.  The client populates its
+        # detection table directly from this; it has no hardcoded copy.
+        d["ksc_biome_locations"] = {
+            key: KSC_LOCATION_PREFIX + name for key, name in KSC_BIOMES
+        }
         d["kerbin_altitude_thresholds"] = [
             int(loc.threshold_km * 1000)
             for loc in KERBIN_LOCATIONS
@@ -254,7 +258,7 @@ class KSP1World(World):
                 return f"{sort_key}_{location_label}"
         if region_label.startswith("Tech "):
             return f"B_{location_label}"
-        if location_label.startswith("KSC ") or location_label.startswith("Starting "):
+        if location_label.startswith(KSC_LOCATION_PREFIX) or location_label.startswith("Starting "):
             return f"Z_{location_label}"
         return f"C_{location_label}"
 
