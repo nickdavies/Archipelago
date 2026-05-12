@@ -138,6 +138,27 @@ _RECLASSIFY_FILLER: frozenset[str] = frozenset({
     "MiniISRU",
 })
 
+# Progressive chains whose non-rep parts are filler-classified instead of
+# useful.  Rep-impact analysis (worlds/ksp1/test/_rep_analysis.py) showed
+# these chains have <3% reachability spread across rep choices, i.e. the
+# alternative parts at each tier don't materially improve solvability —
+# the rep alone is sufficient.  Marking the non-reps as filler reduces
+# useful-pool pressure without hurting capability variance.
+_FILLER_CLASS_CHAINS: frozenset[str] = frozenset({
+    "Progressive Solar Panel",
+    "Progressive Stack Decoupler",
+    "Progressive Radial Decoupler",
+    "Progressive Capsule",
+    "Progressive Probe Core",
+})
+
+_FILLER_CLASS_CHAIN_PARTS: frozenset[str] = frozenset(
+    part_name
+    for chain in _FILLER_CLASS_CHAINS
+    for tier_parts in PROGRESSIVE_PART_TIERS[chain].values()
+    for part_name in tier_parts
+)
+
 
 def _classify_part_item(item_name: str) -> ItemClassification:
     """
@@ -150,6 +171,8 @@ def _classify_part_item(item_name: str) -> ItemClassification:
     _RECLASSIFY_FILLER are forced to filler regardless of any other rule.
     """
     if item_name in _RECLASSIFY_FILLER:
+        return ItemClassification.filler
+    if item_name in _FILLER_CLASS_CHAIN_PARTS:
         return ItemClassification.filler
     if item_name in PROGRESSIVE_PART_NAMES or item_name in _RECLASSIFY_USEFUL:
         return ItemClassification.useful

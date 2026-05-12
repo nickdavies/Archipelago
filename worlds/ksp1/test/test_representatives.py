@@ -5,7 +5,6 @@ from test.bases import WorldTestBase
 from BaseClasses import ItemClassification
 
 from worlds.ksp1.items import PROGRESSIVE_PART_ITEM_NAMES
-from worlds.ksp1.item_power import ITEM_TIERS
 from worlds.ksp1.parts import (
     PROGRESSIVE_PART_TIERS, PROGRESSIVE_PART_NAMES, PROGRESSIVE_PART_COUNTS,
 )
@@ -70,10 +69,11 @@ class TestRepresentativeSelection(KSP1TestBase):
     def test_non_representative_absorbed_parts_are_useful_or_filler(self):
         """Non-rep absorbed parts must be useful (default) or filler (reclassified).
 
-        _RECLASSIFY_FILLER lets us force specific non-bootstrap-critical parts
-        to filler to reduce remaining_fill pressure (bug 074).
+        _RECLASSIFY_FILLER forces specific non-bootstrap-critical parts to
+        filler (bug 074).  _FILLER_CLASS_CHAIN_PARTS demotes whole chains
+        whose rep-impact analysis showed negligible reachability spread.
         """
-        from worlds.ksp1.items import _RECLASSIFY_FILLER
+        from worlds.ksp1.items import _RECLASSIFY_FILLER, _FILLER_CLASS_CHAIN_PARTS
         reps = self.world.progressive_representatives
         all_reps = {
             rep
@@ -82,11 +82,11 @@ class TestRepresentativeSelection(KSP1TestBase):
         }
         for item in self.multiworld.itempool:
             if item.name in PROGRESSIVE_PART_NAMES and item.name not in all_reps:
-                expected = (
-                    ItemClassification.filler
-                    if item.name in _RECLASSIFY_FILLER
-                    else ItemClassification.useful
-                )
+                if (item.name in _RECLASSIFY_FILLER
+                        or item.name in _FILLER_CLASS_CHAIN_PARTS):
+                    expected = ItemClassification.filler
+                else:
+                    expected = ItemClassification.useful
                 self.assertEqual(
                     item.classification,
                     expected,
