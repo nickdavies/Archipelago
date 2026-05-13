@@ -625,8 +625,30 @@ def _pick_bump(
                 continue
             seen.add(cand)
             wants.append(cand)
+
+    has_mass_related_blocker = any(
+        b.reason == BlockingReason.NO_VIABLE_STAGE
+        and b.stage_diag is not None
+        and b.stage_diag.failure in (
+            StageFailure.DV_SHORT,
+            StageFailure.TWR_SHORT,
+            StageFailure.DRY_MASS_KILLS_RATIO,
+            StageFailure.MASS_CAP_EXCEEDED,
+        )
+        for b in blocking
+    )
+
+    # When `wants` is empty (every primary candidate for the current
+    # blocker set is at PROGRESSIVE_CAPS already), don't give up — if
+    # we're stuck on a mass-related stage failure, the payload audit
+    # may still find an indirect lever (e.g. higher Vacuum Engine tier
+    # shrinks upper-stage mass, restoring atmospheric-ascent TWR).
     if not wants:
-        return None
+        if has_mass_related_blocker and flags is not None:
+            audit = _payload_mass_audit_candidates(flags, kit)
+            wants = sorted(audit)
+        if not wants:
+            return None
 
     def _score(cands: list[str]) -> list[tuple[int, float, int, int, float, str]]:
         out: list[tuple[int, float, int, int, float, str]] = []
@@ -649,24 +671,14 @@ def _pick_bump(
     if best_feasible:
         return scored[0][-1]
 
-    # Payload audit: when no single bump unlocks AND no single bump
-    # reduces blocker count AND the dominant blocker is a stage-level
-    # mass/thrust issue, the binding constraint is likely downstream
-    # equipment mass that we can shrink via higher-tier reps. The
-    # mass-related-blocker gate prevents the audit from poisoning
-    # tiebreaks for unrelated blockers (e.g. Relay tier).
+    # Payload audit (additive expansion): when no single bump unlocks
+    # AND no single bump reduces blocker count AND the dominant blocker
+    # is a stage-level mass/thrust issue, the binding constraint is
+    # likely downstream equipment mass that we can shrink via
+    # higher-tier reps. The mass-related-blocker gate prevents the
+    # audit from poisoning tiebreaks for unrelated blockers (e.g. Relay
+    # tier).
     current_blocker_count = len(blocking)
-    has_mass_related_blocker = any(
-        b.reason == BlockingReason.NO_VIABLE_STAGE
-        and b.stage_diag is not None
-        and b.stage_diag.failure in (
-            StageFailure.DV_SHORT,
-            StageFailure.TWR_SHORT,
-            StageFailure.DRY_MASS_KILLS_RATIO,
-            StageFailure.MASS_CAP_EXCEEDED,
-        )
-        for b in blocking
-    )
     if (enable_payload_audit
             and not best_feasible
             and has_mass_related_blocker
