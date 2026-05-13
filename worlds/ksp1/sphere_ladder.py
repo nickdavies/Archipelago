@@ -145,6 +145,10 @@ _BUMP_TABLE: dict[BlockingReason, frozenset[str]] = {
         # the tier-N rep can't fly the mission alone.
         "Progressive Engine Plate",
         "Progressive Radial Decoupler",
+        # Radial engines provide extra thrust mounted off the main stack;
+        # critical for some seeds' Kerbin ascent rocket dv when stack
+        # engines alone aren't enough.
+        "Progressive Radial Engine",
         # Mass-cap failures sometimes surface as "no viable stage" when
         # the optimizer rejects every candidate over the cap.
         "Progressive Launch Pad",
@@ -206,6 +210,35 @@ _BUMP_TABLE: dict[BlockingReason, frozenset[str]] = {
         "Progressive Capsule",
     }),
 }
+
+
+# Progressive items intentionally NOT covered by `_BUMP_TABLE`.  These
+# don't affect rocket capability so they don't help the greedy walk:
+#   - Progressive R&D gates tech-tree access (handled by tech-tier
+#     signatures + min-kit ban in `_install_tier_ban_rule`).
+#   - Progressive Science Instrument affects science earnings, not
+#     capability dv/mass.
+_BUMP_TABLE_EXEMPT: frozenset[str] = frozenset({
+    PROGRESSIVE_RD_NAME,
+    "Progressive Science Instrument",
+})
+
+
+# Coverage assertion: every progressive item must either be a bump
+# candidate for some blocking reason, or be listed as exempt.  This
+# catches the class of bug where a new Progressive chain is added
+# (e.g., Progressive SAS, Progressive Radial Engine) but the greedy
+# walk never tries it because no `_BUMP_TABLE` entry references it.
+_BUMP_TABLE_COVERED: frozenset[str] = frozenset().union(*_BUMP_TABLE.values())
+_BUMP_TABLE_MISSING = (
+    set(PROGRESSIVE_CAPS) - _BUMP_TABLE_COVERED - _BUMP_TABLE_EXEMPT
+)
+assert not _BUMP_TABLE_MISSING, (
+    f"Sphere ladder: these progressive items appear in PROGRESSIVE_CAPS "
+    f"but are not in any _BUMP_TABLE entry and not in _BUMP_TABLE_EXEMPT: "
+    f"{sorted(_BUMP_TABLE_MISSING)}. Either add them to a relevant "
+    f"BlockingReason's candidate set or declare them exempt."
+)
 
 
 # ---------------------------------------------------------------------------
@@ -784,9 +817,15 @@ def _install_tier_ban_rule(
     (1) Items in ``min_kit_for(L)`` — direct chicken-and-egg avoidance.
         Catches incomparable-but-overlapping cases the sphere chain
         misses.
-    (2) Items in any sphere ``S.delta`` where S is strictly less than
-        L in the partial order — ensures the sphere chain's earlier
-        items don't backfill onto harder locations.
+    (2) Items in any sphere ``S.delta`` where ``min_kit(L)`` is NOT a
+        subset of the PRIOR sphere's cumulative kit — i.e., reaching L
+        would require items the player doesn't yet have when S's delta
+        becomes available.  This is the chain-ordering invariant: an
+        item bumped at sphere S must be at a location reachable with
+        sphere S-1's cumulative kit, otherwise the player can't
+        collect it in time.  Replaces the older partial-order strict-
+        less check, which missed cases where L's signature is
+        incomparable with S's (e.g. tech-tree locs with R&D reqs).
     (3) Progressive R&D copies that the player wouldn't yet have enough
         science to safely spend.  R&D=B is a soft-lock guard: it must
         only be collectible once ``science ≥ cumulative_tier_cost(2*B)``,
@@ -799,6 +838,13 @@ def _install_tier_ban_rule(
     only tiers 1 and 2 are banned; tier 3+ copies remain free.
     """
     player = world.player
+
+    # Pre-compute prior-sphere cumulative for each sphere index, used
+    # by Rule B (2).  prior_cum[i] = kit the player has BEFORE
+    # sphere i's delta bumps it.  prior_cum[0] = {} (empty).
+    prior_cum: list[dict[str, int]] = [{}]
+    for sphere in ladder.spheres:
+        prior_cum.append(dict(sphere.rocket.cumulative))
 
     for loc in world.multiworld.get_locations(player):
         if loc.name in bootstrap_locations:
@@ -816,15 +862,25 @@ def _install_tier_ban_rule(
             for tier in range(1, count + 1):
                 banned_keys.add((name, tier))
 
-        # (2) Sphere chain back-fill prevention.
-        for sphere in ladder.spheres:
-            sphere_sig = sphere.signature
-            if sphere_sig is None:
+        # (2) Chain-ordering ban: an item bumped at sphere S must be
+        # at a location reachable with S-1's cum kit.  If
+        # min_kit(L) ⊈ sphere(S-1).cum, ban S's delta items at L.
+        for i, sphere in enumerate(ladder.spheres):
+            prior = prior_cum[i]  # sphere(i-1)'s cumulative, or {} for i=0
+            reachable_with_prior = all(
+                prior.get(name, 0) >= count
+                for name, count in loc_min_kit.items()
+            )
+            if reachable_with_prior:
                 continue
-            if not _strict_less(sphere_sig, loc_sig):
-                continue
+            # L isn't reachable with sphere(i-1)'s kit, so sphere(i)'s
+            # delta items can't be collected here (player wouldn't have
+            # them yet OR placing them here is a chicken-and-egg).
             for name, count in sphere.rocket.delta.items():
-                for tier in range(1, count + 1):
+                # Only ban the SPECIFIC tiers this sphere introduces,
+                # which are (prior_count+1)..(prior_count+count).
+                prior_count = prior.get(name, 0)
+                for tier in range(prior_count + 1, prior_count + count + 1):
                     banned_keys.add((name, tier))
 
         # (3) Progressive R&D soft-lock guard.
