@@ -31,6 +31,7 @@ from .parts import (
     Parachute, LandingLeg, Decoupler, MiscEquipment,
     MultiMount, MULTI_MOUNT_TABLE,
     PROGRESSIVE_PART_TIERS, PROGRESSIVE_PART_NAMES, PROGRESSIVE_PART_COUNTS,
+    usable_fuel_mass,
 )
 from .capability_reasons import BlockingInfo, BlockingReason
 from .locations import (
@@ -427,20 +428,49 @@ def _pre_pass(item_count_fn: Callable[[str], int],
     # Throttleable engine flag (for powered landing)
     flags.has_throttleable_engine = any(e.throttleable for e in flags.available_engines)
 
-    # Build fuel-type index for tanks, sorted for best-first search.
-    # Deduplicate by optimizer-relevant fields (dry_mass, fuel_mass, size_class)
-    # since many structural variants (adapters, mk2/mk3 fuselages) share stats.
-    # Sort by ratio (fuel/dry) desc then fuel_mass asc — the optimizer
-    # uses best_wet upper-bound pruning, so trying high-ratio small tanks
-    # first finds good solutions quickly and skips worse options.
+    # Build fuel-type index for tanks, keyed by engine fuel_type (consumer).
+    # Each tank appears under every engine fuel_type it can fuel. For tanks
+    # carrying propellants the engine doesn't need (e.g. LFO tank fueling a
+    # NERV that only consumes LiquidFuel), we synthesize a view tank with
+    # reduced fuel_mass — same dry mass, oxidizer drained. MonoPropellant
+    # cannot be drained, so monoprop-bearing tanks only fuel monoprop engines.
+    #
+    # Deduplicate by (engine_fuel_type, dry_mass, effective_fuel_mass, size_class).
+    # Sort each bucket by ratio (fuel/dry) desc then fuel_mass asc — the
+    # optimizer's best_wet upper-bound pruning finds good solutions fastest
+    # when high-ratio small tanks are tried first.
+    engine_propellants_by_ft: dict[str, frozenset[str]] = {}
+    for engine in flags.available_engines:
+        engine_propellants_by_ft.setdefault(
+            engine.fuel_type, frozenset(engine.propellants)
+        )
     tank_index: dict[str, list[FuelTank]] = {}
     seen_tank_stats: set[tuple[str, float, float, float]] = set()
-    for tank in flags.available_tanks:
-        key = (tank.fuel_type, tank.dry_mass, tank.fuel_mass, tank.size_class)
-        if key in seen_tank_stats:
-            continue
-        seen_tank_stats.add(key)
-        tank_index.setdefault(tank.fuel_type, []).append(tank)
+    for engine_ft, engine_props in engine_propellants_by_ft.items():
+        bucket: list[FuelTank] = []
+        for tank in flags.available_tanks:
+            eff_mass = usable_fuel_mass(tank, engine_props)
+            if eff_mass <= 0:
+                continue
+            key = (engine_ft, tank.dry_mass, eff_mass, tank.size_class)
+            if key in seen_tank_stats:
+                continue
+            seen_tank_stats.add(key)
+            if eff_mass == tank.fuel_mass:
+                bucket.append(tank)
+            else:
+                # Synthetic view: same physical tank, reduced fuel mass.
+                bucket.append(FuelTank(
+                    name=tank.name,
+                    dry_mass=tank.dry_mass,
+                    fuel_mass=eff_mass,
+                    fuel_type=engine_ft,
+                    size_class=tank.size_class,
+                    max_count=tank.max_count,
+                    fuel_masses=tank.fuel_masses,
+                ))
+        if bucket:
+            tank_index[engine_ft] = bucket
     for fuel_type in tank_index:
         tank_index[fuel_type].sort(
             key=lambda t: (

@@ -63,18 +63,26 @@ class Engine:
     throttleable: bool
     has_gimbal: bool
     size_class: float       # metres: 0.625, 1.25, 2.5, 3.75, 5.0
-    fuel_type: str          # "lfo" | "lf" | "xenon"
+    fuel_type: str          # "lfo" | "lf" | "xenon" (derived tag)
     radial_mountable: bool = False  # True if engine has "srf" in bulkhead_profiles
+    # Stock-resource names the engine consumes (excluding ElectricCharge),
+    # sorted. Used for generic tank/engine compatibility.
+    propellants: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
 class FuelTank:
     name: str
     dry_mass: float         # tonnes
-    fuel_mass: float        # tonnes at 100% fill
-    fuel_type: str          # "lfo" | "lf" | "xenon" | "monoprop"
+    fuel_mass: float        # tonnes at 100% fill (sum of all carried propellants)
+    fuel_type: str          # "lfo" | "lf" | "xenon" | "monoprop" (derived tag)
     size_class: float       # metres
     max_count: int = 0      # 0 = unlimited; >0 caps optimizer tank count (adapters)
+    # Per-propellant mass at 100% fill (tonnes), e.g. {"LiquidFuel": 0.5,
+    # "Oxidizer": 0.5} for an LFO tank. Lets an engine that needs only a
+    # subset of the carried propellants drain the rest — except MonoPropellant,
+    # which cannot be drained (dedicated resource).
+    fuel_masses: tuple[tuple[str, float], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -947,6 +955,31 @@ PART_REGISTRY: list[PartMapping] = [
 # Builder helpers
 # ---------------------------------------------------------------------------
 
+# Propellants a tank cannot drain to become compatible with an engine that
+# doesn't consume them. MonoPropellant is RCS fuel — distinct supply chain,
+# not interchangeable with main propellant feed.
+UNDRAINABLE_PROPELLANTS: frozenset[str] = frozenset({"MonoPropellant"})
+
+
+def usable_fuel_mass(
+    tank: "FuelTank", engine_propellants: frozenset[str]
+) -> float:
+    """Return tonnes of usable propellant for an engine that consumes the
+    given propellant set, or 0.0 if the tank cannot fuel the engine.
+
+    All propellants the engine needs must be present in the tank with
+    positive mass. Propellants the tank carries that the engine does not
+    need are drained (0% fill), except those in UNDRAINABLE_PROPELLANTS.
+    """
+    tank_resources = dict(tank.fuel_masses)
+    have = frozenset(tank_resources)
+    if not engine_propellants <= have:
+        return 0.0
+    if (have - engine_propellants) & UNDRAINABLE_PROPELLANTS:
+        return 0.0
+    return sum(tank_resources[p] for p in engine_propellants)
+
+
 def _fuel_type_from_propellants(propellants: dict[str, float]) -> str:
     """Derive fuel_type from an engine's propellant dict."""
     keys = set(propellants.keys()) - {"ElectricCharge"}
@@ -1016,6 +1049,9 @@ def _build_part(part_type: type, cfg: dict, overrides: dict, name: str) -> AnyPa
         isp_atm = eng["isp_atm"]
         vac_thrust = eng["max_thrust"]
         atm_thrust = vac_thrust * (isp_atm / isp_vac) if isp_vac > 0 else 0.0
+        propellants = tuple(sorted(
+            p for p in eng["propellants"].keys() if p != "ElectricCharge"
+        ))
         return Engine(
             name=cfg_name,
             vac_isp=isp_vac,
@@ -1028,10 +1064,16 @@ def _build_part(part_type: type, cfg: dict, overrides: dict, name: str) -> AnyPa
             size_class=size,
             fuel_type=_fuel_type_from_propellants(eng["propellants"]),
             radial_mountable=is_radial,
+            propellants=propellants,
         )
 
     if part_type is FuelTank:
         resources = cfg.get("resources", {})
+        fuel_masses = tuple(sorted(
+            (name, amount * _RESOURCE_DENSITY[name])
+            for name, amount in resources.items()
+            if name != "ElectricCharge" and name in _RESOURCE_DENSITY
+        ))
         return FuelTank(
             name=cfg_name,
             dry_mass=mass,
@@ -1039,6 +1081,7 @@ def _build_part(part_type: type, cfg: dict, overrides: dict, name: str) -> AnyPa
             fuel_type=_fuel_type_from_resources(resources),
             size_class=size,
             max_count=overrides.get("max_count", 0),
+            fuel_masses=fuel_masses,
         )
 
     if part_type is SolidBooster:
