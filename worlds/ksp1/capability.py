@@ -1010,9 +1010,35 @@ def _evaluate_profile(
     terminal_equip = _terminal_equipment_mass(profile, flags)
     payload = terminal_mass + terminal_equip
 
+    # Global attitude strategy. One reaction wheel or RCS bundle covers
+    # every stage that flies under it: place it on the *last* (highest
+    # flight-order index) stage whose edges require attitude control. That
+    # stage's wet mass propagates downward as payload, so earlier stages
+    # automatically carry the wheel. Stages *above* that point (e.g. a
+    # passive aero-capture reentry) don't pay for it.
+    attitude_group_indices = [
+        i for i, g in enumerate(groups)
+        if any(e.requires_attitude_control for e in g)
+    ]
+    global_attitude_bundle: Optional[AttitudeBundle] = None
+    global_attitude_stage_idx: int = -1   # flight-order index of placement
+    global_attitude_force_gimbal: bool = False
+    if _PER_STAGE_ATTITUDE_ENABLED and attitude_group_indices:
+        if not _terminal_has_built_in_wheels(flags, is_crewed):
+            global_attitude_bundle = _attitude_bundle_for_stage(flags, is_crewed)
+            if global_attitude_bundle is not None:
+                global_attitude_stage_idx = attitude_group_indices[-1]
+            else:
+                # No wheel/RCS source anywhere — every attitude-requiring stage
+                # must pick a gimballed engine/SRB to self-provide control.
+                global_attitude_force_gimbal = True
+
     stage_results_list: list[StageResult] = []
 
-    for group in reversed(groups):
+    # ``reversed(groups)`` iterates terminal → ascent; track the matching
+    # flight-order index so we can hook stage-specific behaviour.
+    for rev_idx, group in enumerate(reversed(groups)):
+        flight_idx = len(groups) - 1 - rev_idx
         body = BODY_BY_NAME[group[0].body]
         solar_au = body.solar_distance_au
 
@@ -1083,28 +1109,25 @@ def _evaluate_profile(
         if has_atmo_ascent_in_group and flags.lightest_aero_control:
             stage_payload += 4.0 * flags.lightest_aero_control.mass
             stage_equipment.append((4, flags.lightest_aero_control.name))
+        # Place the attitude bundle on the highest-flight-index stage that
+        # needs attitude. Its wet mass cascades down to earlier stages, so
+        # every prior stage carries it for free.
+        if (global_attitude_bundle is not None
+                and flight_idx == global_attitude_stage_idx):
+            stage_payload += global_attitude_bundle.mass
+            stage_equipment.extend(global_attitude_bundle.parts)
 
-        # Per-stage attitude control: a stage with `requires_attitude_control`
-        # edges needs an on-stage source — gimballed engine/SRB, a reaction
-        # wheel travelling on the terminal payload, or a concrete attitude
-        # bundle attached to this stage. The optimizer takes the bundle mass
-        # and only charges it for candidate propulsion that lacks gimbal
-        # (lets "ungimballed + bundle" trade against "gimballed alone"
-        # automatically). Bundle parts are appended to the manifest below
-        # iff the optimizer's chosen propulsion in fact lacks gimbal — so
-        # manifest mass and charged mass always reconcile exactly.
+        # Attitude control. The terminal-stage bundle (if any) is already
+        # priced into the payload, so this stage already carries it. If no
+        # bundle is available anywhere on the rocket and the group needs
+        # attitude control, the stage must self-provide via a gimballed
+        # engine/SRB. Atmospheric ascent stages have their own gimbal-or-aero
+        # gate above (separate concern from attitude bundling).
         group_needs_attitude = any(e.requires_attitude_control for e in group)
-        attitude_bundle: Optional[AttitudeBundle] = None
-        if (_PER_STAGE_ATTITUDE_ENABLED
+        if (global_attitude_force_gimbal
                 and group_needs_attitude
-                and not _terminal_has_built_in_wheels(flags, is_crewed)
                 and not needs_gimbal_engine):
-            attitude_bundle = _attitude_bundle_for_stage(flags, is_crewed)
-            if attitude_bundle is None:
-                # No bundle available — fall back to forcing a gimballed prop.
-                # If no gimballed engine/SRB exists either, find_optimal_stage
-                # will return None below and the profile is infeasible.
-                needs_gimbal_engine = True
+            needs_gimbal_engine = True
 
         # Parachute consumption check for aero landing edges in this group.
         # Use the landing edge's actual body (not the group's first body) since
@@ -1177,7 +1200,6 @@ def _evaluate_profile(
             tanks_by_fuel_type=flags.tanks_by_fuel_type,
             available_multi_mounts=flags.available_multi_mounts,
             require_gimbal=needs_gimbal_engine,
-            attitude_module_mass=attitude_bundle.mass if attitude_bundle else 0.0,
         )
 
         result = find_optimal_stage(parallel_mode=parallel_mode, **stage_kwargs)
@@ -1188,13 +1210,6 @@ def _evaluate_profile(
                 body=body.name,
                 dv_needed=req_dv,
             )])
-
-        # Bundle reconciliation: if the optimizer picked a non-gimballed
-        # engine/SRB AND we offered an attitude bundle, the bundle's mass was
-        # rolled into this stage's payload. Append the concrete parts to the
-        # manifest so summing manifest masses reproduces the charged mass.
-        if attitude_bundle is not None and not result.engine_has_gimbal:
-            stage_equipment.extend(attitude_bundle.parts)
 
         # Chutes for aero-landing edges in mixed groups
         if aero_land_edges:
