@@ -1288,16 +1288,20 @@ PROGRESSIVE_PART_TIERS: dict[str, dict[int, list[str]]] = {
             "Rockomax8BW",              # X200-8 (4.0t)
             "Size1p5.Tank.03",           # FL-TX900 (4.5t, MH)
         ],
-        3: [  # Medium (5.0 - 18.0t fuel)
+        3: [  # Medium (5.0 - 32.0t fuel)
             "Size1p5.Tank.05",           # FL-C1000 (6.03t, MH)
             "Size1p5.Size2.Adapter.01",  # FL-A215 (6.0t, MH)
             "Rockomax16.BW",            # X200-16 (8.0t)
             "Size1p5.Tank.04",           # FL-TX1800 (9.0t, MH)
             "Rockomax32.BW",            # X200-32 (16.0t)
             "Size3SmallTank",            # S3-3600 (18.0t)
-        ],
-        4: [  # Large (> 18.0t fuel)
+            # Rockomax64.BW (Jumbo-64, 32t) sits at the top of T3 by
+            # size_class (2.5m).  Demoted from T4 because rep-analysis
+            # showed it as the universal underperformer there (78-89%
+            # Jool-moon feasibility vs 100% for all size-3+ T4 tanks).
             "Rockomax64.BW",            # Jumbo-64 (32.0t)
+        ],
+        4: [  # Large (>= 32.0t fuel, size_class 3+)
             "Size3MediumTank",           # S3-7200 (36.0t)
             "Size3LargeTank",            # S3-14400 (72.0t)
             "Size3.Size4.Adapter.01",    # S3-S4 Adapter (32.0t, MH)
