@@ -1483,6 +1483,22 @@ PROGRESSIVE_PART_TIERS: dict[str, dict[int, list[str]]] = {
             "RelayAntenna100",           # RA-100
         ],
     },
+    # --- SAS / Reaction Wheels (attitude control) ---
+    # Standalone reaction-wheel modules.  Each tier provides reaction wheels
+    # at increasing torque/mass.  Bumping this chain is the cheap fix for
+    # ``no_attitude_control`` blockers when probe-core/capsule reaction
+    # wheels are absent or insufficient.
+    "Progressive SAS": {
+        1: [
+            "sasModule",                 # Stock SAS Module (0.05t)
+        ],
+        2: [
+            "advSasModule",              # Advanced Inline Stabilizer (0.1t)
+        ],
+        3: [
+            "asasmodule1-2",             # Large Reaction Wheel Module (0.2t)
+        ],
+    },
 }
 
 # Max tier count per progressive item (number of copies in the AP pool)

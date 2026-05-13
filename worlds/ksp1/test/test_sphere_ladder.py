@@ -66,12 +66,18 @@ class TestDeltaPassesCheck(KSP1TestBase):
         ]
         diff = DIFFICULTY_PROFILES[difficulty_name]
 
+        precollected_names = frozenset(
+            it.name for it in self.multiworld.precollected_items[self.player]
+        )
+
         def _count_fn_factory(kit):
-            def fn(name, _k=kit):
+            def fn(name, _k=kit, _pre=precollected_names):
                 from worlds.ksp1.sphere_ladder import PROGRESSIVE_CAPS
                 if name in PROGRESSIVE_CAPS:
                     return _k.get(name, 0)
-                return 1
+                if name in _pre:
+                    return 1
+                return 0
             return fn
 
         for sphere in ladder.spheres:
