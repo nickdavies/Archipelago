@@ -110,7 +110,7 @@ def _make_flags(
         flags.lightest_probe = _PROBE_CORE
     if capsule:
         flags.has_capsule = True
-        flags.heaviest_capsule = _COMMAND_POD
+        flags.lightest_capsule = _COMMAND_POD
 
     if reaction_wheels:
         flags.has_reaction_wheels = True
@@ -1470,7 +1470,7 @@ class TestAttitudeBundleManifestReconciles(unittest.TestCase):
         )
         pod = PART_DB["mk1-3pod"][0]
         flags.has_capsule = True
-        flags.heaviest_capsule = pod
+        flags.lightest_capsule = pod
         rcs = PART_DB["RCSLinearSmall"][0]
         flags.has_rcs = True
         flags.lightest_rcs_thruster = rcs

@@ -96,6 +96,18 @@ _SOUNDING_MIN_TWR: float = 1.1   # minimum sea-level TWR to count as a viable ro
 
 
 # ---------------------------------------------------------------------------
+# Parts that nominally provide the ``capsule`` flag but cannot serve as
+# the terminal payload for real missions (no thermal protection, no
+# pressurized cabin, can't survive interplanetary or atmospheric reentry).
+# Excluded from ``lightest_capsule`` selection in _pre_pass.
+# ---------------------------------------------------------------------------
+
+_CAPSULE_EXCLUSIONS: frozenset[str] = frozenset({
+    "seatExternalCmd",   # external chair
+})
+
+
+# ---------------------------------------------------------------------------
 # EquipmentFlags — output of pre-pass
 # ---------------------------------------------------------------------------
 
@@ -141,7 +153,7 @@ class EquipmentFlags:
     best_heat_shield: Optional[HeatShield] = None
     total_chute_drag_area: float = 0.0             # sum of non-drogue drag areas
     parachute_count: int = 0
-    heaviest_capsule: Optional[MiscEquipment] = None
+    lightest_capsule: Optional[MiscEquipment] = None
     lightest_probe: Optional[MiscEquipment] = None
 
     # Support equipment — part references per category
@@ -526,9 +538,15 @@ def _apply_misc(flags: EquipmentFlags, part: MiscEquipment, count: int) -> None:
             if flags.lightest_probe is None or part.mass < flags.lightest_probe.mass:
                 flags.lightest_probe = part
         elif flag == CF.CAPSULE:
+            # The external command seat (an exposed kerbal chair) provides
+            # the ``capsule`` flag but cannot survive interplanetary travel
+            # or atmospheric reentry — exclude it from terminal-payload
+            # consideration.
+            if part.name in _CAPSULE_EXCLUSIONS:
+                continue
             flags.has_capsule = True
-            if flags.heaviest_capsule is None or part.mass > flags.heaviest_capsule.mass:
-                flags.heaviest_capsule = part
+            if flags.lightest_capsule is None or part.mass < flags.lightest_capsule.mass:
+                flags.lightest_capsule = part
         elif flag == CF.REACTION_WHEEL:
             flags.has_reaction_wheels = True
             # Standalone wheel module = provides reaction_wheel without also
@@ -649,7 +667,7 @@ _TERMINAL_PARTS_WITH_INTERNAL_MONOPROP: frozenset[str] = frozenset({
 
 
 def _terminal_part(flags: EquipmentFlags, is_crewed: bool) -> Optional[MiscEquipment]:
-    return flags.heaviest_capsule if is_crewed else flags.lightest_probe
+    return flags.lightest_capsule if is_crewed else flags.lightest_probe
 
 
 def _terminal_has_built_in_wheels(flags: EquipmentFlags, is_crewed: bool) -> bool:
@@ -951,7 +969,7 @@ def _evaluate_profile(
 
     # Terminal payload mass
     if is_crewed:
-        capsule_mass = flags.heaviest_capsule.mass if flags.heaviest_capsule else 0.0
+        capsule_mass = flags.lightest_capsule.mass if flags.lightest_capsule else 0.0
         terminal_mass = max(capsule_mass, 0.08)  # min capsule
     else:
         probe_mass = flags.lightest_probe.mass if flags.lightest_probe else 0.0
@@ -1178,8 +1196,8 @@ def _evaluate_profile(
 
     # Build terminal parts list (command module + support equipment)
     terminal_parts: list[tuple[int, str]] = []
-    if is_crewed and flags.heaviest_capsule:
-        terminal_parts.append((1, flags.heaviest_capsule.name))
+    if is_crewed and flags.lightest_capsule:
+        terminal_parts.append((1, flags.lightest_capsule.name))
     elif not is_crewed and flags.lightest_probe:
         terminal_parts.append((1, flags.lightest_probe.name))
     support_mass, support_parts = _support_equipment_mass(flags, profile)
@@ -1681,8 +1699,11 @@ def evaluate_mission_detailed(
             blocking_list.append(BlockingInfo(
                 reason=BlockingReason.NO_CAPSULE, detail="kerbal EVA path"))
         if sounding <= 0:
-            blocking_list.append(BlockingInfo(
-                reason=BlockingReason.NO_PROPULSION, detail="propulsion path"))
+            # Delegate to the sounding-rocket evaluator (with threshold=0.1
+            # to force a "needs altitude" failure) so the structured
+            # reasons name the specific missing parts (payload, propulsion).
+            sub = _evaluate_sounding(flags, 0.1)
+            blocking_list.extend(sub.blocking)
         return ProfileResult(False, blocking=blocking_list)
 
     if mission_type == MissionType.FIRST_LANDING:
@@ -1822,10 +1843,10 @@ def _compute_sounding_altitude(flags: EquipmentFlags) -> float:
     payloads: list[float] = []
     if flags.lightest_probe:
         payloads.append(flags.lightest_probe.mass)
-    if flags.heaviest_capsule and flags.heaviest_capsule.mass > 0:
+    if flags.lightest_capsule and flags.lightest_capsule.mass > 0:
         # Crewed: survivable iff (decoupler + at least one parachute)
         if flags.has_parachutes and flags.staging_tier >= 1:
-            payloads.append(flags.heaviest_capsule.mass)
+            payloads.append(flags.lightest_capsule.mass)
 
     if not payloads:
         return 0.0

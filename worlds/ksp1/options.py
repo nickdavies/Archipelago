@@ -194,22 +194,6 @@ class ProgressiveLaunchPad(Toggle):
     default = 1
 
 
-class BanDifferentiatorsEarly(Toggle):
-    """
-    Forbid the broad-goal differentiator items (Progressive Relay, rtg,
-    Progressive Vacuum Engine) from appearing in the early bucket
-    (starter / KSC biomes / Kerbin events).
-
-    These items gate access to specific harder bodies (outer-system, vacuum
-    ascent, deep-space comms). Forbidding them from early forces the player
-    to do mid-game missions before unlocking those bodies — adding sphere
-    depth to broad goals like Standard Sample Returns without affecting
-    bootstrap.
-    """
-    display_name = "Ban Differentiators Early"
-    default = 0
-
-
 @dataclass
 class KSP1Options(PerGameCommonOptions):
     goal: Goal
@@ -219,7 +203,6 @@ class KSP1Options(PerGameCommonOptions):
     accessibility: KSP1Accessibility
     exclude_locations: KSP1ExcludeLocations
     exclude_late_tech_tree: ExcludeLateTechTree
-    ban_differentiators_early: BanDifferentiatorsEarly
     progressive_launch_pad: ProgressiveLaunchPad
     flag_bodies: FlagBodies
     return_bodies: ReturnBodies

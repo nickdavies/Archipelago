@@ -379,18 +379,28 @@ def create_all_items(world: KSP1World) -> None:
     ]
 
     # Progressive part items (progression gates for part tiers).
+    # Tag each copy with `_sphere_tier` (1-based copy index) so the
+    # sphere-ladder Rule B can ban individual copies from harder
+    # locations while leaving later copies free.  See
+    # ``worlds/ksp1/sphere_ladder.py``.
     for prog_name, count in PROGRESSIVE_PART_COUNTS.items():
-        for _ in range(count):
-            pool.append(create_item(world, prog_name))
+        for tier in range(1, count + 1):
+            item = create_item(world, prog_name)
+            item._sphere_tier = tier
+            pool.append(item)
 
     # Progressive R&D items (gates higher tech tree bands).
-    for _ in range(PROGRESSIVE_RD_COUNT):
-        pool.append(create_item(world, PROGRESSIVE_RD_NAME))
+    for tier in range(1, PROGRESSIVE_RD_COUNT + 1):
+        item = create_item(world, PROGRESSIVE_RD_NAME)
+        item._sphere_tier = tier
+        pool.append(item)
 
     # Progressive Launch Pad items (mass-cap progression — only when enabled).
     if world.options.progressive_launch_pad:
-        for _ in range(PROGRESSIVE_LAUNCH_PAD_COUNT):
-            pool.append(create_item(world, PROGRESSIVE_LAUNCH_PAD_NAME))
+        for tier in range(1, PROGRESSIVE_LAUNCH_PAD_COUNT + 1):
+            item = create_item(world, PROGRESSIVE_LAUNCH_PAD_NAME)
+            item._sphere_tier = tier
+            pool.append(item)
 
     # Pad the pool with filler items so item count == location count.
     # create_regions() runs before create_items(), so all locations exist.

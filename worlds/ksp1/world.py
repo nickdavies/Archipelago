@@ -105,6 +105,10 @@ class KSP1World(World):
         rules.set_all_rules(self)
         rules.set_completion_condition(self, self.goal_spec)
 
+    def pre_fill(self) -> None:
+        from .sphere_ladder import apply_sphere_ladder
+        apply_sphere_ladder(self)
+
     def create_item(self, name: str) -> items.KSP1Item:
         return items.create_item(self, name)
 

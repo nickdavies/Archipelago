@@ -396,56 +396,29 @@ def _set_item_pacing_rules(world: KSP1World, player: int, difficulty: int) -> No
 # Early-bucket targeted item bans
 # ---------------------------------------------------------------------------
 
-# Items that the mission-diff analysis identifies as differentiators for
-# broad sample-return goals (each gates specific harder bodies). Banning
-# them from the early bucket forces real progression to unlock those bodies.
-_DIFFERENTIATOR_NAMES: frozenset[str] = frozenset({
-    "Progressive Relay",         # gates 9/11 SR bodies (non-Kerbin-system)
-    "rtg",                       # gates 4/11 outer-system bodies
-    "Progressive Vacuum Engine", # gates 3/11 (Bop / Moho / Vall)
-})
-
-
 def _set_early_bucket_item_bans(world: KSP1World, player: int, difficulty: int) -> None:
-    """Reject specific named items from the early bucket.
+    """Ban Progressive Launch Pad from starter inventory only.
 
-    Different bans use different scopes:
-    - ban_differentiators_early: Standard Sample Returns differentiators
-      (Relay, RTG, Vacuum Engine) → banned from starter + KSC + Kerbin
-      (full early bucket)
-    - progressive_launch_pad: Progressive Launch Pad itself
-      → banned from starter inventory only (lighter; narrow goals like Duna
-        have too few alternative placements when KSC/Kerbin are also banned)
+    The Pad item is a blow-open item: collecting it raises the launch-mass
+    cap by a big jump and opens many bodies at once.  Keeping it out of
+    the starter bucket spreads its discovery across the game.
+    Sphere-ladder Rule B handles other early-bucket restrictions
+    (e.g. the differentiators previously banned by the now-removed
+    ``ban_differentiators_early`` option).
     """
+    if not world.options.progressive_launch_pad:
+        return
+
     from worlds.generic.Rules import add_item_rule
     from .items import PROGRESSIVE_LAUNCH_PAD_NAME
 
     num_starter = effective_starting_inv_count(world.options, difficulty)
     starter_bucket = list(STARTING_INV_NAMES[:num_starter])
-    full_bucket = (
-        starter_bucket
-        + list(KSC_BIOME_NAMES)
-        + list(KERBIN_LOCATION_NAMES)
-    )
 
-    starter_only_bans: set[str] = set()
-    full_bucket_bans: set[str] = set()
-    if world.options.ban_differentiators_early:
-        full_bucket_bans.update(_DIFFERENTIATOR_NAMES)
-    if world.options.progressive_launch_pad:
-        starter_only_bans.add(PROGRESSIVE_LAUNCH_PAD_NAME)
-
-    if full_bucket_bans:
-        def full_rule(item) -> bool:
-            return item.player != player or item.name not in full_bucket_bans
-        for name in full_bucket:
-            add_item_rule(world.get_location(name), full_rule)
-
-    if starter_only_bans:
-        def starter_rule(item) -> bool:
-            return item.player != player or item.name not in starter_only_bans
-        for name in starter_bucket:
-            add_item_rule(world.get_location(name), starter_rule)
+    def starter_rule(item) -> bool:
+        return item.player != player or item.name != PROGRESSIVE_LAUNCH_PAD_NAME
+    for name in starter_bucket:
+        add_item_rule(world.get_location(name), starter_rule)
 
 
 # ---------------------------------------------------------------------------
