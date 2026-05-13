@@ -30,7 +30,9 @@ from .capability import (
     EquipmentFlags, ProfileResult,
     _evaluate_sounding, _pre_pass, evaluate_mission_detailed,
 )
-from .capability_reasons import BlockingInfo, BlockingReason
+from .capability_reasons import (
+    BlockingInfo, BlockingReason, StageDiagnostic, StageFailure,
+)
 from .bodies import BodyName as _BN
 from .locations import (
     EVENT_BY_NAME, EventName, KERBIN_LOCATIONS, MissionLocation,
@@ -246,6 +248,129 @@ assert not _BUMP_TABLE_MISSING, (
 )
 
 
+# Engine fuel_type → progressive fuel chain. Used by the diagnostic-driven
+# candidate function to bump the *right* fuel type when an engine has no
+# compatible tank.
+_FUEL_CHAIN_BY_ENGINE_TYPE: dict[str, str] = {
+    "lfo": "Progressive LFO Tank",
+    "lf": "Progressive LFO Tank",   # LFO covers LF via fuel-drop
+    "xenon": "Progressive Xenon Tank",
+    # Monoprop tanks are not progressive (specialized) — no chain to bump.
+}
+
+
+# Chains whose higher-tier reps tend to shrink an *upstream* stage's
+# binding-constraint mass — either by reducing terminal equipment mass
+# (lighter capsule/probe, fewer-but-stronger chutes/legs) or by improving
+# upper-stage propulsion efficiency (Rhino at VE-t3 → less fuel for transit
+# → less mass for the ascent stage to lift). Used by the payload audit
+# when an upstream stage is TWR/dv-short but in-stage thrust+fuel are
+# already maxed.
+_PAYLOAD_MASS_REDUCING_CHAINS: tuple[str, ...] = (
+    # Upper-stage propulsion efficiency (largest single lever).
+    "Progressive Vacuum Engine",    # higher tier = more efficient/heavy-lift
+    "Progressive Launch Engine",    # higher tier = better atm Isp
+    # Terminal equipment mass.
+    "Progressive Solar Panel",      # higher tier = lighter panels at distance
+    "Progressive SAS",              # higher tier = lighter reaction wheel
+    "Progressive Capsule",          # higher tier = built-in wheels + monoprop
+    "Progressive Probe Core",       # higher tier = built-in wheels, lighter
+    "Progressive Heat Shield",      # higher tier = larger shield, fewer needed
+    "Progressive Parachute",        # higher tier = better drag, fewer needed
+    "Progressive Landing Leg",      # higher tier = stronger, fewer needed
+)
+
+
+def _bump_candidates_for_stage_diag(
+    diag: StageDiagnostic,
+) -> frozenset[str]:
+    """Map a stage-failure diagnostic to the set of progressive items
+    that could plausibly resolve it.
+
+    This *replaces* the generic ``_BUMP_TABLE[NO_VIABLE_STAGE]`` guess —
+    each diagnostic narrows the candidate set to the items that physically
+    address that failure mode.
+    """
+    f = diag.failure
+    # Filter failures: only the relevant blocker.
+    if f == StageFailure.HEAT_SHIELD_TOO_SMALL:
+        return frozenset({"Progressive Heat Shield"})
+    if f in (StageFailure.REQUIRE_GIMBAL_NONE, StageFailure.REQUIRE_THROTTLE_NONE):
+        # The optimizer already exhausted available engines; need MORE engines.
+        # In atmosphere, that's launch-engine tier; in vacuum it's vacuum.
+        if diag.in_atmosphere:
+            return frozenset({
+                "Progressive Launch Engine",
+                "Progressive SRB",
+                "Progressive Radial Engine",
+            })
+        return frozenset({
+            "Progressive Vacuum Engine",
+            "Progressive Radial Engine",
+        })
+    if f == StageFailure.NO_ENGINES_AFTER_FILTER:
+        if diag.in_atmosphere:
+            return frozenset({
+                "Progressive Launch Engine",
+                "Progressive SRB",
+                "Progressive Radial Engine",
+            })
+        return frozenset({
+            "Progressive Vacuum Engine",
+            "Progressive Radial Engine",
+        })
+    if f == StageFailure.NO_TANK_FOR_FUEL_TYPE:
+        cands: set[str] = set()
+        for ft in diag.engine_fuel_types_attempted:
+            chain = _FUEL_CHAIN_BY_ENGINE_TYPE.get(ft)
+            if chain:
+                cands.add(chain)
+        return frozenset(cands)
+    if f == StageFailure.ENGINE_TOO_BIG_FOR_TANK:
+        # Bigger tanks (higher LFO Tank tier) ship larger sizes.
+        return frozenset({"Progressive LFO Tank"})
+    if f == StageFailure.MASS_CAP_EXCEEDED:
+        return frozenset({"Progressive Launch Pad"})
+    # Performance failures — DV_SHORT / TWR_SHORT / DRY_MASS_KILLS_RATIO.
+    # These all benefit from more thrust + more fuel. Pick by atmo vs vac.
+    base: set[str] = {
+        "Progressive LFO Tank",
+        "Progressive Xenon Tank",
+        "Progressive Stack Decoupler",
+        "Progressive Radial Decoupler",
+        "Progressive Engine Plate",
+        "Progressive Radial Engine",
+    }
+    if diag.in_atmosphere:
+        base |= {"Progressive Launch Engine", "Progressive SRB"}
+    else:
+        base |= {"Progressive Vacuum Engine"}
+    if f == StageFailure.MASS_CAP_EXCEEDED:
+        base.add("Progressive Launch Pad")
+    return frozenset(base)
+
+
+def _payload_mass_audit_candidates(
+    flags: EquipmentFlags,
+    kit: dict[str, int],
+) -> frozenset[str]:
+    """When the bumper is stuck on a stage that can't lift its payload, the
+    binding constraint may be downstream equipment mass rather than ascent
+    thrust. Return chains whose next tier *might* reduce payload mass
+    (lighter reps, built-in wheels, more efficient power).
+
+    We can't easily compute the mass delta cheaply, so this is a heuristic:
+    return chains not yet maxed where bumping has a known mass-reduction
+    pathway. ``_pick_bump``'s evaluator filters out useless bumps anyway.
+    """
+    cands: set[str] = set()
+    for chain in _PAYLOAD_MASS_REDUCING_CHAINS:
+        cap = PROGRESSIVE_CAPS.get(chain, 1)
+        if kit.get(chain, 0) < cap:
+            cands.add(chain)
+    return frozenset(cands)
+
+
 # ---------------------------------------------------------------------------
 # Data classes
 # ---------------------------------------------------------------------------
@@ -436,11 +561,38 @@ def _group_index(cand: str) -> int:
     return len(BUMP_PRIORITY_GROUPS)
 
 
+def _wants_for_blocker(
+    b: BlockingInfo,
+    kit: dict[str, int],
+    flags: Optional[EquipmentFlags] = None,
+) -> frozenset[str]:
+    """Return uncapped candidate items for a single blocker.
+
+    For ``NO_VIABLE_STAGE`` blockers, this consults ``b.stage_diag`` for
+    a structured near-miss reason and asks the optimizer-aware mapper.
+    For all other blocker types, falls back to the hand-curated
+    ``_BUMP_TABLE``.
+    """
+    if b.reason == BlockingReason.NO_VIABLE_STAGE and b.stage_diag is not None:
+        cands = _bump_candidates_for_stage_diag(b.stage_diag)
+    else:
+        cands = _BUMP_TABLE.get(b.reason, frozenset())
+    return frozenset(
+        c for c in cands
+        if kit.get(c, 0) < PROGRESSIVE_CAPS.get(c, 1)
+    )
+
+
 def _pick_bump(
     blocking: list[BlockingInfo],
     kit: dict[str, int],
     rng: Random,
     evaluate_with_bump: Callable[[str], "tuple[bool, float, int]"],
+    *,
+    flags: Optional[EquipmentFlags] = None,
+    enable_payload_audit: bool = False,
+    enable_pair_lookahead: bool = False,
+    evaluate_kit: Optional[Callable[[dict], "tuple[bool, float, int]"]] = None,
 ) -> Optional[str]:
     """Choose the next progressive to bump.
 
@@ -454,43 +606,110 @@ def _pick_bump(
     a kit that has ``cand`` bumped by one, returning
     ``(feasible, launch_mass, blocking_count)``.
 
-    1. Collect candidates from each blocking entry via ``_BUMP_TABLE``.
-    2. Filter to items not yet at their per-item cap.
-    3. Score each candidate by hypothetical evaluation.
-    4. Pick the lowest-mass feasible candidate; if none feasible, the
-       one that reduces blocker count the most.
+    When ``enable_payload_audit`` is True and no single bump improves the
+    blocker count, expand the candidate set with payload-reducing chains
+    (``_PAYLOAD_MASS_REDUCING_CHAINS``).  Useful when an upstream stage's
+    binding constraint is downstream equipment mass.
+
+    When ``enable_pair_lookahead`` is True and the augmented single-bump
+    pool still has no feasible candidate, take the top-K
+    blocker-reducing candidates and try all K² pair-bumps.  Returns the
+    first item of a feasible pair (the second is found on the *next*
+    bumper iteration).
     """
-    # Iterate _BUMP_TABLE candidates in sorted order so the chain is
-    # deterministic across Python processes (frozenset iteration depends
-    # on PYTHONHASHSEED).
     wants: list[str] = []
     seen: set[str] = set()
     for b in blocking:
-        for cand in sorted(_BUMP_TABLE.get(b.reason, ())):
+        for cand in sorted(_wants_for_blocker(b, kit, flags=flags)):
             if cand in seen:
                 continue
-            cap = PROGRESSIVE_CAPS.get(cand, 1)
-            if kit.get(cand, 0) < cap:
-                seen.add(cand)
-                wants.append(cand)
+            seen.add(cand)
+            wants.append(cand)
     if not wants:
         return None
 
-    # Score each candidate.  Sorted tuple ordering: feasible first
-    # (False < True after flipping), then by mass, then by blocker count,
-    # then by priority-group index, then by deterministic random tiebreak.
-    scored: list[tuple[int, float, int, int, float, str]] = []
-    for cand in wants:
-        feasible, mass, n_blocking = evaluate_with_bump(cand)
-        # Primary: infeasible candidates rank lower (sort by 0 vs 1).
-        feasibility_rank = 0 if feasible else 1
-        # Secondary (feasible): mass.  Secondary (infeasible): blocker count.
-        mass_score = mass if feasible else float("inf")
-        scored.append((
-            feasibility_rank, mass_score, n_blocking,
-            _group_index(cand), rng.random(), cand,
-        ))
+    def _score(cands: list[str]) -> list[tuple[int, float, int, int, float, str]]:
+        out: list[tuple[int, float, int, int, float, str]] = []
+        for cand in cands:
+            feasible, mass, n_blocking = evaluate_with_bump(cand)
+            feasibility_rank = 0 if feasible else 1
+            mass_score = mass if feasible else float("inf")
+            out.append((
+                feasibility_rank, mass_score, n_blocking,
+                _group_index(cand), rng.random(), cand,
+            ))
+        return out
+
+    scored = _score(wants)
     scored.sort()
+    best_feasible = scored[0][0] == 0
+    best_blocker_count = scored[0][2]
+
+    # If a single bump unlocks feasibility, return it.
+    if best_feasible:
+        return scored[0][-1]
+
+    # Payload audit: when no single bump unlocks AND no single bump
+    # reduces blocker count AND the dominant blocker is a stage-level
+    # mass/thrust issue, the binding constraint is likely downstream
+    # equipment mass that we can shrink via higher-tier reps. The
+    # mass-related-blocker gate prevents the audit from poisoning
+    # tiebreaks for unrelated blockers (e.g. Relay tier).
+    current_blocker_count = len(blocking)
+    has_mass_related_blocker = any(
+        b.reason == BlockingReason.NO_VIABLE_STAGE
+        and b.stage_diag is not None
+        and b.stage_diag.failure in (
+            StageFailure.DV_SHORT,
+            StageFailure.TWR_SHORT,
+            StageFailure.DRY_MASS_KILLS_RATIO,
+            StageFailure.MASS_CAP_EXCEEDED,
+        )
+        for b in blocking
+    )
+    if (enable_payload_audit
+            and not best_feasible
+            and has_mass_related_blocker
+            and best_blocker_count >= current_blocker_count):
+        audit = _payload_mass_audit_candidates(flags, kit) if flags else frozenset()
+        extra = sorted(audit - set(wants))
+        if extra:
+            extra_scored = _score(extra)
+            scored = scored + extra_scored
+            scored.sort()
+            if scored[0][0] == 0:
+                return scored[0][-1]
+            wants = wants + extra
+            best_blocker_count = scored[0][2]
+
+    # 2-step pair lookahead: try the top K candidates in all unordered
+    # pairs. Catches the "needs 2 simultaneous bumps" tight cases that
+    # single-bump greedy can't escape (e.g. Solar=3 + SAS=3 unlocks Vall
+    # but neither alone does).
+    if (enable_pair_lookahead
+            and not best_feasible
+            and evaluate_kit is not None):
+        K = 6
+        # Rank by blocker-count reduction then group index so we explore
+        # the most promising items in pair combinations.
+        top = [t[-1] for t in scored[:K]]
+        best_pair: Optional[tuple[float, str, str]] = None
+        for i, a in enumerate(top):
+            for b_cand in top[i + 1:]:
+                test_kit = dict(kit)
+                test_kit[a] = test_kit.get(a, 0) + 1
+                test_kit[b_cand] = test_kit.get(b_cand, 0) + 1
+                f_pair, m_pair, _ = evaluate_kit(test_kit)
+                if f_pair and (best_pair is None or m_pair < best_pair[0]):
+                    best_pair = (m_pair, a, b_cand)
+        if best_pair is not None:
+            _, a, b_cand = best_pair
+            # Return whichever of (a, b) is in an earlier priority group
+            # (gives the bumper a deterministic, principled order).
+            if _group_index(a) <= _group_index(b_cand):
+                return a
+            return b_cand
+
     return scored[0][-1]
 
 
@@ -568,10 +787,35 @@ def minimal_rocket_for(
             len(trial_result.blocking),
         )
 
+    def _evaluate_kit(trial_kit: dict[str, int]) -> tuple[bool, float, int]:
+        """Score an arbitrary kit (not just a single bump from current).
+        Used by pair-lookahead in ``_pick_bump``.
+        """
+        def _trial_count_fn(name: str, _tk: dict[str, int] = trial_kit) -> int:
+            if name in PROGRESSIVE_CAPS:
+                return _tk.get(name, 0)
+            if name in precollected_names:
+                return 1
+            return 0
+        trial_flags = _pre_pass(
+            _trial_count_fn,
+            start_with_clamps=start_with_clamps,
+            rep_names=rep_names,
+            progressive_launch_pad=progressive_launch_pad,
+        )
+        trial_result = _evaluate(trial_flags, info, diff)
+        return (
+            trial_result.feasible,
+            trial_result.launch_mass if trial_result.feasible else float("inf"),
+            len(trial_result.blocking),
+        )
+
     # Safety bound: with 17 progressive groups and per-group caps ≤ 5,
     # the total possible bumps is ~50.  We allow 200 to absorb wasted
     # bumps when randomness picks an item that doesn't close any current
     # blocking.
+    stuck_iters = 0   # consecutive iters where blocker count didn't drop
+    prev_blocker_count = -1
     for _ in range(200):
         flags = _pre_pass(
             _count_fn,
@@ -593,7 +837,21 @@ def minimal_rocket_for(
                 profile_dv=result.launch_mass,
                 requirements=_extract_requirements(flags),
             )
-        item = _pick_bump(result.blocking, kit, rng, _evaluate_with_bump)
+        # Track stuck-ness — enables payload audit + pair lookahead once
+        # the simple greedy single-bump phase stops making progress.
+        cur_blockers = len(result.blocking)
+        if cur_blockers >= prev_blocker_count >= 0:
+            stuck_iters += 1
+        else:
+            stuck_iters = 0
+        prev_blocker_count = cur_blockers
+        item = _pick_bump(
+            result.blocking, kit, rng, _evaluate_with_bump,
+            flags=flags,
+            enable_payload_audit=stuck_iters >= 2,
+            enable_pair_lookahead=stuck_iters >= 4,
+            evaluate_kit=_evaluate_kit,
+        )
         if item is None:
             return None
         kit[item] = kit.get(item, 0) + 1

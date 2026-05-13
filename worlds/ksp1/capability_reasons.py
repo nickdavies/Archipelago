@@ -11,8 +11,9 @@ Downstream consumers (sphere ladder pre-fill in particular) match on
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
+from typing import Optional
 
 
 class BlockingReason(str, Enum):
@@ -65,6 +66,55 @@ class BlockingReason(str, Enum):
     EVENT_COMPOUND = "event_compound"
 
 
+class StageFailure(str, Enum):
+    """Specific reasons ``find_optimal_stage`` couldn't return a stage.
+
+    Bubbles up via ``BlockingInfo.stage_diag`` so the bumper can match a
+    structured reason instead of guessing from a generic catchall.
+    """
+    # Filter-stage failures: no engine survives the basic filters.
+    NO_ENGINES_AFTER_FILTER = "no_engines_after_filter"
+    HEAT_SHIELD_TOO_SMALL = "heat_shield_too_small"      # all engines > shield size
+    REQUIRE_GIMBAL_NONE = "require_gimbal_none"          # gimbal required, none avail
+    REQUIRE_THROTTLE_NONE = "require_throttle_none"      # throttle required, none avail
+    # Tank-side failures: engines pass, but the optimizer can't pair tanks.
+    NO_TANK_FOR_FUEL_TYPE = "no_tank_for_fuel_type"      # engine's fuel_type unfunded
+    DRY_MASS_KILLS_RATIO = "dry_mass_kills_ratio"        # tank dry mass > fuel*(R-1)
+    ENGINE_TOO_BIG_FOR_TANK = "engine_too_big_for_tank"  # e_size > t_size for all pairs
+    # Geometry / count failures: tank+engine pair valid but build can't satisfy.
+    TWR_SHORT = "twr_short"                              # min engines exceeds mounting max
+    DV_SHORT = "dv_short"                                # required dv unreachable
+    MASS_CAP_EXCEEDED = "mass_cap_exceeded"              # wet > launch pad cap
+
+
+@dataclass(frozen=True)
+class StageDiagnostic:
+    """Near-miss diagnosis from ``find_optimal_stage``.
+
+    Populated when the optimizer returns ``None``. ``failure`` names the
+    dominant near-miss class; the typed fields below carry quantitative
+    context for the bumper to act on.
+    """
+    failure: StageFailure
+    body: str = ""
+    in_atmosphere: bool = False
+    # Group-level context (does any edge need heat shield / aero handling?).
+    group_needs_heat_shield: bool = False
+    # Engine-level info for filter failures.
+    engine_fuel_types_attempted: tuple[str, ...] = ()
+    smallest_filtered_engine_size: float = 0.0   # for HEAT_SHIELD_TOO_SMALL
+    current_max_shield_size: float = 0.0
+    # Performance shortfalls.
+    required_dv: float = 0.0
+    best_dv_achieved: float = 0.0
+    twr_floor: float = 0.0
+    best_twr_achieved: float = 0.0
+    # Mass context.
+    payload_mass: float = 0.0
+    wet_mass: float = 0.0
+    mass_cap: float = 0.0
+
+
 @dataclass(frozen=True)
 class BlockingInfo:
     """Structured detail of a single profile-evaluation failure.
@@ -99,6 +149,10 @@ class BlockingInfo:
     # exact human-readable output without forcing every variant into the
     # enum.  Free-form; consumers should prefer typed fields.
     detail: str = ""
+    # Structured per-stage diagnostic for ``NO_VIABLE_STAGE`` blockers.
+    # Lets the bumper target the actual near-miss instead of guessing
+    # from a catchall candidate list.
+    stage_diag: Optional["StageDiagnostic"] = None
 
     def __str__(self) -> str:
         r = self.reason
@@ -187,4 +241,4 @@ class BlockingInfo:
         return r.value  # fallback
 
 
-__all__ = ["BlockingReason", "BlockingInfo"]
+__all__ = ["BlockingReason", "BlockingInfo", "StageFailure", "StageDiagnostic"]

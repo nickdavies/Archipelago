@@ -75,7 +75,14 @@ CAPABILITY_ITEMS: frozenset[str] = frozenset(
         )
         for p in parts
     )
-) | frozenset(PROGRESSIVE_PART_COUNTS.keys())
+) | frozenset(PROGRESSIVE_PART_COUNTS.keys()) | {
+    # Non-part progressives that still affect capability. Without these
+    # the L2 fingerprint collapses different counts onto the same cache
+    # key — e.g. Pad=0 vs Pad=3 both fingerprint identically, so the
+    # first computed mass cap (100t base) is returned for everyone.
+    "Progressive Launch Pad",
+    "Progressive R&D",
+}
 
 # Terminal velocity threshold for parachute adequacy (m/s)
 _MAX_SAFE_LANDING_SPEED: float = 6.0
@@ -278,12 +285,22 @@ def _capability_fingerprint(state: CollectionState, player: int) -> frozenset[tu
     For progressive items, the count matters (unlocks different tiers).
     For individual items, count is capped at 1 (presence/absence).
     """
+    from .items import (
+        PROGRESSIVE_LAUNCH_PAD_NAME, PROGRESSIVE_LAUNCH_PAD_COUNT,
+        PROGRESSIVE_RD_NAME, PROGRESSIVE_RD_COUNT,
+    )
+    _NON_PART_PROGRESSIVE_COUNTS = {
+        PROGRESSIVE_LAUNCH_PAD_NAME: PROGRESSIVE_LAUNCH_PAD_COUNT,
+        PROGRESSIVE_RD_NAME: PROGRESSIVE_RD_COUNT,
+    }
     result: list[tuple[str, int]] = []
     for name in CAPABILITY_ITEMS:
         c = state.count(name, player)
         if c > 0:
             if name in PROGRESSIVE_PART_COUNTS:
                 result.append((name, min(c, PROGRESSIVE_PART_COUNTS[name])))
+            elif name in _NON_PART_PROGRESSIVE_COUNTS:
+                result.append((name, min(c, _NON_PART_PROGRESSIVE_COUNTS[name])))
             else:
                 result.append((name, 1))
     return frozenset(result)
@@ -1182,6 +1199,7 @@ def _evaluate_profile(
         else:
             parallel_mode = "none"
 
+        diagnostic_out: list = []
         stage_kwargs = dict(
             available_engines=eligible_engines,
             available_srbs=flags.available_srbs,
@@ -1200,15 +1218,20 @@ def _evaluate_profile(
             tanks_by_fuel_type=flags.tanks_by_fuel_type,
             available_multi_mounts=flags.available_multi_mounts,
             require_gimbal=needs_gimbal_engine,
+            diagnostic_out=diagnostic_out,
+            body_name=body.name,
+            launch_pad_mass_cap=flags.launch_pad_mass_cap,
         )
 
         result = find_optimal_stage(parallel_mode=parallel_mode, **stage_kwargs)
 
         if result is None:
+            stage_diag = diagnostic_out[0] if diagnostic_out else None
             return ProfileResult(False, blocking=[BlockingInfo(
                 reason=BlockingReason.NO_VIABLE_STAGE,
                 body=body.name,
                 dv_needed=req_dv,
+                stage_diag=stage_diag,
             )])
 
         # Chutes for aero-landing edges in mixed groups
