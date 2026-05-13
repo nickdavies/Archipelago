@@ -244,6 +244,7 @@ PROGRESSIVE_SCIENCE_INSTRUMENT_NAME: str = "Progressive Science Instrument"
 PROGRESSIVE_RADIAL_ENGINE_NAME: str = "Progressive Radial Engine"
 PROGRESSIVE_LAUNCH_PAD_NAME: str = "Progressive Launch Pad"
 PROGRESSIVE_SAS_NAME: str = "Progressive SAS"
+PROGRESSIVE_XENON_TANK_NAME: str = "Progressive Xenon Tank"
 
 # Tonnage caps by collected count (index = number of copies received).
 # Index 0 = no copies = starting cap. Starting at 100t lets sphere-0 do
@@ -277,6 +278,7 @@ _PROGRESSIVE_ITEMS: dict[str, tuple[int, ItemClassification]] = {
     PROGRESSIVE_RADIAL_ENGINE_NAME:     (67, ItemClassification.progression),
     PROGRESSIVE_LAUNCH_PAD_NAME:        (68, ItemClassification.progression),
     PROGRESSIVE_SAS_NAME:               (69, ItemClassification.progression),
+    PROGRESSIVE_XENON_TANK_NAME:        (70, ItemClassification.progression),
 }
 
 PROGRESSIVE_RD_COUNT: int = 3

@@ -1542,6 +1542,17 @@ PROGRESSIVE_PART_TIERS: dict[str, dict[int, list[str]]] = {
             "asasmodule1-2",             # Large Reaction Wheel Module (0.2t)
         ],
     },
+    # --- Xenon Tanks ---
+    # Three stock xenon containers — all tiny. Single tier; any copy unlocks
+    # the rep, granting xenon fuel storage so an ion-engine vacuum-engine
+    # rep is actually usable.
+    "Progressive Xenon Tank": {
+        1: [
+            "xenonTankRadial",           # PB-X50R (0.04t fuel, 0.625m radial)
+            "xenonTank",                 # PB-X150 (0.07t fuel, 0.625m)
+            "xenonTankLarge",            # PB-X750 (0.57t fuel, 1.25m)
+        ],
+    },
 }
 
 # Max tier count per progressive item (number of copies in the AP pool)

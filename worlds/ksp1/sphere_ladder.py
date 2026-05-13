@@ -97,6 +97,7 @@ BUMP_PRIORITY_GROUPS: tuple[frozenset[str], ...] = (
         "Progressive Launch Engine",
         "Progressive Vacuum Engine",
         "Progressive LFO Tank",
+        "Progressive Xenon Tank",
         "Progressive SRB",
         "Progressive Stack Decoupler",
         "Progressive Radial Decoupler",
@@ -135,6 +136,7 @@ BUMP_PRIORITY_GROUPS: tuple[frozenset[str], ...] = (
 _BUMP_TABLE: dict[BlockingReason, frozenset[str]] = {
     BlockingReason.NO_VIABLE_STAGE: frozenset({
         "Progressive LFO Tank",
+        "Progressive Xenon Tank",
         "Progressive Launch Engine",
         "Progressive Vacuum Engine",
         "Progressive Stack Decoupler",
@@ -158,7 +160,10 @@ _BUMP_TABLE: dict[BlockingReason, frozenset[str]] = {
         "Progressive Launch Engine",
     }),
     BlockingReason.NO_LAUNCH_ENGINE: frozenset({"Progressive Launch Engine"}),
-    BlockingReason.NO_FUEL: frozenset({"Progressive LFO Tank"}),
+    BlockingReason.NO_FUEL: frozenset({
+        "Progressive LFO Tank",
+        "Progressive Xenon Tank",
+    }),
     BlockingReason.NO_PROPULSION: frozenset({
         "Progressive Launch Engine",
         "Progressive LFO Tank",
