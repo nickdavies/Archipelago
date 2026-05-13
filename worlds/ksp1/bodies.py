@@ -556,7 +556,7 @@ AB = EdgeType.AEROBRAKE_CAPTURE
 
 # Kerbin ascent — always the first edge of every profile
 _KERBIN_ASCENT = _E("kerbin_surface", "kerbin_low_orbit", AT, 3400, BodyName.KERBIN,
-                    min_twr=1.5, throttle=True, attitude=True)
+                    min_twr=1.3, throttle=True, attitude=True)
 # Kerbin escape to SOI edge
 _KERBIN_ESCAPE = _E("kerbin_low_orbit", "kerbin_soi", PV, 950, BodyName.KERBIN,
                     attitude=True)
@@ -746,13 +746,13 @@ _EVE_LAND_AERO = _EVE_ORBIT_AERO + [
 # Eve land — propulsive descent (brute force, very expensive)
 _EVE_LAND_PROP = _EVE_ORBIT_PROP + [
     _E("eve_low_orbit", "eve_surface", ALP, 1330, BodyName.EVE,
-       min_twr=1.5, throttle=True, attitude=True, legs=True),
+       min_twr=1.3, throttle=True, attitude=True, legs=True),
 ]
 
 # Eve return from surface (atmosphere is thick — 8000 m/s ascent!)
 _EVE_RETURN_AERO = _EVE_LAND_AERO + [
     _E("eve_surface", "eve_low_orbit", AT, 8000, BodyName.EVE,
-       min_twr=1.5, throttle=True, attitude=True),
+       min_twr=1.3, throttle=True, attitude=True),
     _E("eve_low_orbit", "kerbin_intercept", PV, 1420, BodyName.EVE,
        pc=430, attitude=True),
     _KERBIN_REENTRY,
@@ -760,7 +760,7 @@ _EVE_RETURN_AERO = _EVE_LAND_AERO + [
 
 _EVE_RETURN_PROP = _EVE_LAND_PROP + [
     _E("eve_surface", "eve_low_orbit", AT, 8000, BodyName.EVE,
-       min_twr=1.5, throttle=True, attitude=True),
+       min_twr=1.3, throttle=True, attitude=True),
     _E("eve_low_orbit", "kerbin_intercept", PV, 1420, BodyName.EVE,
        pc=430, attitude=True),
     _KERBIN_REENTRY,
@@ -830,7 +830,7 @@ _DUNA_ORBIT_AERO = _DUNA_TRANSFER + [
 
 _DUNA_LAND_PROP = _DUNA_ORBIT_PROP + [
     _E("duna_low_orbit", "duna_surface", ALP, 1450, BodyName.DUNA,
-       min_twr=1.5, throttle=True, attitude=True, legs=True),
+       min_twr=1.3, throttle=True, attitude=True, legs=True),
 ]
 
 _DUNA_LAND_AERO = _DUNA_ORBIT_AERO + [
@@ -840,7 +840,7 @@ _DUNA_LAND_AERO = _DUNA_ORBIT_AERO + [
 
 _DUNA_RETURN_PROP = _DUNA_LAND_PROP + [
     _E("duna_surface", "duna_low_orbit", AT, 1450, BodyName.DUNA,
-       min_twr=1.5, throttle=True, attitude=True),
+       min_twr=1.3, throttle=True, attitude=True),
     _E("duna_low_orbit", "kerbin_intercept", PV, 610, BodyName.DUNA,
        pc=10, attitude=True),
     _KERBIN_REENTRY,
@@ -848,7 +848,7 @@ _DUNA_RETURN_PROP = _DUNA_LAND_PROP + [
 
 _DUNA_RETURN_AERO = _DUNA_LAND_AERO + [
     _E("duna_surface", "duna_low_orbit", AT, 1450, BodyName.DUNA,
-       min_twr=1.5, throttle=True, attitude=True),
+       min_twr=1.3, throttle=True, attitude=True),
     _E("duna_low_orbit", "kerbin_intercept", PV, 610, BodyName.DUNA,
        pc=10, attitude=True),
     _KERBIN_REENTRY,
@@ -989,12 +989,12 @@ _LAYTHE_LAND_AERO = _LAYTHE_ORBIT + [
 
 _LAYTHE_LAND_PROP = _LAYTHE_ORBIT + [
     _E("laythe_low_orbit", "laythe_surface", ALP, 2900, BodyName.LAYTHE,
-       min_twr=1.5, throttle=True, attitude=True, legs=True),
+       min_twr=1.3, throttle=True, attitude=True, legs=True),
 ]
 
 _LAYTHE_RETURN_AERO = _LAYTHE_LAND_AERO + [
     _E("laythe_surface", "laythe_low_orbit", AT, 2900, BodyName.LAYTHE,
-       min_twr=1.5, throttle=True, attitude=True),
+       min_twr=1.3, throttle=True, attitude=True),
     _E("laythe_low_orbit", "jool_low_orbit", PV, 2000, BodyName.LAYTHE, attitude=True),
     _E("jool_low_orbit", "kerbin_intercept", PV, 3790, BodyName.JOOL,
        pc=270, attitude=True),
@@ -1003,7 +1003,7 @@ _LAYTHE_RETURN_AERO = _LAYTHE_LAND_AERO + [
 
 _LAYTHE_RETURN_PROP = _LAYTHE_LAND_PROP + [
     _E("laythe_surface", "laythe_low_orbit", AT, 2900, BodyName.LAYTHE,
-       min_twr=1.5, throttle=True, attitude=True),
+       min_twr=1.3, throttle=True, attitude=True),
     _E("laythe_low_orbit", "jool_low_orbit", PV, 2000, BodyName.LAYTHE, attitude=True),
     _E("jool_low_orbit", "kerbin_intercept", PV, 3790, BodyName.JOOL,
        pc=270, attitude=True),
