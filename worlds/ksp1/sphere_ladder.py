@@ -561,10 +561,25 @@ def _group_index(cand: str) -> int:
     return len(BUMP_PRIORITY_GROUPS)
 
 
+# Chains whose usefulness is conditional on the seed's rep set: there's
+# no point suggesting them when their consumer part isn't unlockable.
+# Key: chain name → predicate(rep_names) returning True iff candidate is
+# potentially useful for this seed.
+_CONDITIONAL_CHAINS: dict[str, Callable[[frozenset[str]], bool]] = {
+    # Xenon Tank only fuels ion engines.  ``ionEngine`` is the only stock
+    # part with fuel_type=xenon and lives at Vacuum Engine tier 4 alongside
+    # ``nuclearEngine`` (one of the two is the rep).  If the seed picked
+    # nuclear, xenon tanks never serve a purpose — including them in the
+    # bump candidate set wastes iterations to no effect.
+    "Progressive Xenon Tank": lambda reps: "ionEngine" in reps,
+}
+
+
 def _wants_for_blocker(
     b: BlockingInfo,
     kit: dict[str, int],
     flags: Optional[EquipmentFlags] = None,
+    rep_names: frozenset[str] = frozenset(),
 ) -> frozenset[str]:
     """Return uncapped candidate items for a single blocker.
 
@@ -572,6 +587,9 @@ def _wants_for_blocker(
     a structured near-miss reason and asks the optimizer-aware mapper.
     For all other blocker types, falls back to the hand-curated
     ``_BUMP_TABLE``.
+
+    Chains in ``_CONDITIONAL_CHAINS`` are dropped when their predicate
+    against ``rep_names`` says they're not useful for this seed.
     """
     if b.reason == BlockingReason.NO_VIABLE_STAGE and b.stage_diag is not None:
         cands = _bump_candidates_for_stage_diag(b.stage_diag)
@@ -580,6 +598,7 @@ def _wants_for_blocker(
     return frozenset(
         c for c in cands
         if kit.get(c, 0) < PROGRESSIVE_CAPS.get(c, 1)
+        and _CONDITIONAL_CHAINS.get(c, lambda _r: True)(rep_names)
     )
 
 
@@ -593,6 +612,7 @@ def _pick_bump(
     enable_payload_audit: bool = False,
     enable_pair_lookahead: bool = False,
     evaluate_kit: Optional[Callable[[dict], "tuple[bool, float, int]"]] = None,
+    rep_names: frozenset[str] = frozenset(),
 ) -> Optional[str]:
     """Choose the next progressive to bump.
 
@@ -620,7 +640,7 @@ def _pick_bump(
     wants: list[str] = []
     seen: set[str] = set()
     for b in blocking:
-        for cand in sorted(_wants_for_blocker(b, kit, flags=flags)):
+        for cand in sorted(_wants_for_blocker(b, kit, flags=flags, rep_names=rep_names)):
             if cand in seen:
                 continue
             seen.add(cand)
@@ -863,6 +883,7 @@ def minimal_rocket_for(
             enable_payload_audit=stuck_iters >= 2,
             enable_pair_lookahead=stuck_iters >= 4,
             evaluate_kit=_evaluate_kit,
+            rep_names=rep_names,
         )
         if item is None:
             return None
@@ -936,6 +957,53 @@ def _goal_dv(name: str) -> float:
     return min(sum(e.base_dv for e in profile) for profile in profiles)
 
 
+def _goal_relevant_bodies(world: "KSP1World") -> frozenset[str]:
+    """Return body names that should be eligible as intermediate spheres
+    for the player's goal.  A body is "relevant" iff:
+
+    - it's in Kerbin's SOI (always: Kerbin/Mun/Minmus are warmup territory)
+    - it's a goal body itself
+    - it's a parent SOI of a goal body (containing-SOI chain)
+    - it's a sibling of a goal body (shares the same parent SOI)
+    - it's a child of a goal body (orbits the goal body)
+
+    For a Minmus-only goal: {Kerbin, Mun, Minmus} — no interplanetary
+    intermediates.  For a Duna goal: adds Sun-SOI planets + Duna's moons.
+    Prevents the bumper from being forced to over-spend on Relay / Heat
+    Shield to clear off-path intermediates.
+    """
+    from .bodies import ALL_BODIES, BODY_BY_NAME, BodyName
+    from .rules import goal_spec_location_names
+
+    relevant: set[str] = {str(BodyName.KERBIN), str(BodyName.MUN), str(BodyName.MINMUS)}
+
+    goal_bodies: set[str] = set()
+    for loc_name in goal_spec_location_names(world.goal_spec):
+        parsed = MissionLocation.parse(loc_name)
+        if parsed is not None:
+            goal_bodies.add(parsed.body)
+
+    for g in goal_bodies:
+        relevant.add(g)
+        g_body = BODY_BY_NAME.get(g)
+        if g_body is None:
+            continue
+        # Parent SOI chain
+        cur = g_body.parent
+        while cur is not None:
+            relevant.add(cur)
+            cur_body = BODY_BY_NAME.get(cur)
+            cur = cur_body.parent if cur_body else None
+        # Siblings + children
+        for b in ALL_BODIES:
+            if b.parent == g_body.parent and b.name != g_body.name:
+                relevant.add(b.name)
+            if b.parent == g_body.name:
+                relevant.add(b.name)
+
+    return frozenset(relevant)
+
+
 def _select_intermediates(
     world: "KSP1World",
     launch_dv: float,
@@ -949,18 +1017,25 @@ def _select_intermediates(
       - launch → orbit: randint(1, 3) intermediates
       - orbit → goal:   randint(2, 7) intermediates
 
-    Each intermediate's signature must be strictly between the band's
-    endpoints in dv (filtering by dv only; full partial-order check
-    happens during chain walking).
+    Filters:
+      1. dv strictly between the band's endpoints
+      2. body is "goal-relevant" (see ``_goal_relevant_bodies``) — keeps
+         off-path bodies out (e.g. Gilly for a Minmus goal).
     """
     if goal_dv <= 0.0:
         # No goal sphere (e.g. complete_tech_tree) — no orbit→goal band.
         goal_dv = float("inf")
 
+    relevant_bodies = _goal_relevant_bodies(world)
+
     pool_low: list[str] = []
     pool_mid: list[str] = []
     for name, sig in signatures.items():
         if name in ("Kerbin First Launch", "Kerbin Orbit 1"):
+            continue
+        parsed = MissionLocation.parse(name)
+        if parsed is None or parsed.body not in relevant_bodies:
+            # Tech-tree / KSC / off-path body — not a valid intermediate.
             continue
         if launch_dv < sig.dv < orbit_dv:
             pool_low.append(name)
@@ -1121,6 +1196,13 @@ def _install_tier_ban_rule(
     for sphere in ladder.spheres:
         prior_cum.append(dict(sphere.rocket.cumulative))
 
+    # chain_required[name] = max count of ``name`` the ladder actually
+    # consumes anywhere in the chain.  Used to clamp Rule B (1) so it
+    # only bans tiers the player must collect *for goal*; spare copies
+    # (e.g. Capsule tiers 2/3 when the chain needs Capsule=1) are free
+    # to land at unreachable-at-goal locations.
+    chain_required: dict[str, int] = dict(ladder.cumulative_kit)
+
     for loc in world.multiworld.get_locations(player):
         if loc.name in bootstrap_locations:
             continue
@@ -1131,10 +1213,16 @@ def _install_tier_ban_rule(
         banned_keys: set[tuple[str, int]] = set()
 
         # (1) Per-location self-ban: items in L's own min_kit cannot
-        # land at L without a direct chicken-and-egg.
+        # land at L without a direct chicken-and-egg.  Clamp to
+        # chain_required: a location's min_kit may demand more of a
+        # chain than the ladder ever uses (e.g. Eve Crewed Landing
+        # wants Capsule=3 but a Minmus-only goal's chain needs
+        # Capsule=1).  Banning the extra tiers strands spare copies
+        # at out-of-goal locations the player can't reach anyway.
         loc_min_kit = location_min_kits.get(loc.name, {})
         for name, count in loc_min_kit.items():
-            for tier in range(1, count + 1):
+            effective = min(count, chain_required.get(name, 0))
+            for tier in range(1, effective + 1):
                 banned_keys.add((name, tier))
 
         # (2) Chain-ordering ban: an item bumped at sphere S must be
@@ -1376,6 +1464,48 @@ def _compute_tech_tier_signatures(
     return sigs, min_kits, band_funding
 
 
+def _reclassify_spare_progressives(
+    world: "KSP1World",
+    ladder: SphereLadder,
+    band_funding: dict[int, "SphereBoundary"],
+) -> int:
+    """Demote progressive item copies the ladder doesn't actually need
+    for the goal to ``ItemClassification.useful``.
+
+    AP's main fill constrains advancement items to *reachable* locations;
+    useful items can land anywhere.  When `chain_required[X] < total[X]`,
+    the spare copies of X don't gate progression for this goal — they
+    only unlock cosmetic-or-quality-of-life upper tiers (e.g. Mk1-3 pod
+    vs Mk1 pod).  Demoting them lets the fill scatter them past goal,
+    relieving bootstrap dump pressure on the chains that *do* gate.
+
+    chain_required is sourced from ``ladder.cumulative_kit`` for capability
+    chains; R&D is added separately from ``band_funding`` because it's
+    band-gated, not capability-gated, and isn't in ``cumulative_kit``.
+
+    Rule B's per-tier bans still apply — only the AP reachability
+    constraint changes.  Returns the number of copies demoted.
+    """
+    from BaseClasses import ItemClassification
+
+    chain_required: dict[str, int] = dict(ladder.cumulative_kit)
+    if band_funding:
+        chain_required[PROGRESSIVE_RD_NAME] = max(band_funding.keys())
+
+    player = world.player
+    demoted = 0
+    for item in world.multiworld.itempool:
+        if item.player != player:
+            continue
+        tier = getattr(item, "_sphere_tier", None)
+        if tier is None:
+            continue
+        if tier > chain_required.get(item.name, 0):
+            item.classification = ItemClassification.useful
+            demoted += 1
+    return demoted
+
+
 def _install_bootstrap_local_rule(world: "KSP1World") -> None:
     """Extend the local-only item rule (Rule A) to KSC biomes and the
     ``Kerbin First Launch`` location.  Starting-inventory locations
@@ -1574,6 +1704,12 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
 
     # Rule B: per-copy progressive bans on capability-gated locations.
     _install_tier_ban_rule(world, ladder, bootstrap_locations, location_min_kits, band_funding)
+
+    # Demote progressive copies the ladder doesn't need to ``useful`` so
+    # they can scatter past goal.  Must run after the ladder is built
+    # (we need ``cumulative_kit`` and ``band_funding``) and before the
+    # main fill examines item classifications.
+    _reclassify_spare_progressives(world, ladder, band_funding)
 
     # Sphere-1 boost: items needed to clear S_launch get placed at sphere-0
     # locations by AP's distribute_early_items.
