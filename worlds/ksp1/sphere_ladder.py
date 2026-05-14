@@ -1693,11 +1693,30 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
         all_sphere_names.append((f"S_intermediate_mid[{name}]", name, False))
 
     def _sort_key(entry):
-        _label, name, _pred = entry
+        label, name, _pred = entry
+        # Predictable spheres are anchored to canonical positions:
+        # S_launch first (group 0), S_orbit next (group 1), intermediates
+        # in the middle (group 2), and S_goal last (group 3).  Within
+        # the intermediate band, sort by min_kit complexity first so
+        # the chain walk grows gradually — sphere with small min_kit
+        # adds a tiny delta on top of prior; sphere with large min_kit
+        # absorbs the bigger jump only after smaller ones have built
+        # up the cumulative kit.  This prevents the "Duna Landing 1
+        # picked as first mid-band and gets 16 chain bumps in one
+        # sphere" failure mode.
+        if label == "S_launch":
+            group = 0
+        elif label == "S_orbit":
+            group = 1
+        elif label.startswith("S_goal"):
+            group = 3
+        else:
+            group = 2
         sig = ladder.location_signatures.get(name)
         if sig is None:
-            return (0.0, 0, name)
-        return (sig.dv, sig.body_chain_depth, name)
+            return (group, 0, 0.0, 0, name)
+        min_kit_size = len(location_min_kits.get(name, {}))
+        return (group, min_kit_size, sig.dv, sig.body_chain_depth, name)
 
     all_sphere_names.sort(key=_sort_key)
 
