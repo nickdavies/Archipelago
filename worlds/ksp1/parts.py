@@ -402,11 +402,14 @@ PART_REGISTRY: list[PartMapping] = [
     PartMapping("LargeTank", MiscEquipment, "Large Holding Tank", 1125,
                 {"provides": frozenset()}),
     PartMapping("Large_Crewed_Lab", MiscEquipment, "Mobile Processing Lab MPL-LG-2", 1187,
-                {"provides": frozenset({"capsule"})}),
+                # Passenger-only — no `resources` block in parts.json,
+                # cannot serve as a command module.
+                {"provides": frozenset()}),
     PartMapping("LgRadialSolarPanel", MiscEquipment, "OX-STAT-XL Photovoltaic Panels", 1199,
                 {"provides": frozenset({"solar_fixed"})}),
     PartMapping("MK1CrewCabin", MiscEquipment, "Mk1 Crew Cabin", 1144,
-                {"provides": frozenset({"capsule"})}),
+                # Passenger-only — no `resources` block, can't fly.
+                {"provides": frozenset()}),
     PartMapping("MK1IntakeFuselage", MiscEquipment, "Mk1 Diverterless Supersonic Intake", 1145,
                 {"provides": frozenset()}),
     PartMapping("Magnetometer", MiscEquipment, "Magnetometer Boom", 1139,
@@ -514,7 +517,8 @@ PART_REGISTRY: list[PartMapping] = [
     PartMapping("commDish", MiscEquipment, "Communotron 88-88", 1040,
                 {"provides": frozenset({"relay_t4"})}),
     PartMapping("crewCabin", MiscEquipment, "PPD-10 Hitchhiker Storage Container", 1206,
-                {"provides": frozenset({"capsule"})}),
+                # Passenger-only — no `resources` block, can't fly.
+                {"provides": frozenset()}),
     PartMapping("cupola", MiscEquipment, "PPD-12 Cupola Module", 1207,
                 {"provides": frozenset({"capsule"})}),
     PartMapping("deltaWing", MiscEquipment, "Delta Wing", 1046,
@@ -620,7 +624,8 @@ PART_REGISTRY: list[PartMapping] = [
     PartMapping("mk2Cockpit_Standard", MiscEquipment, "Mk2 Cockpit", 1157,
                 {"provides": frozenset({"capsule"})}),
     PartMapping("mk2CrewCabin", MiscEquipment, "MK2 Crew Cabin", 1135,
-                {"provides": frozenset({"capsule"})}),
+                # Passenger-only — no `resources` block, can't fly.
+                {"provides": frozenset()}),
     PartMapping("mk2DockingPort", MiscEquipment, "Mk2 Clamp-O-Tron", 1156,
                 {"provides": frozenset({"docking_port"})}),
     PartMapping("mk2DroneCore", MiscEquipment, "MK2 Drone Core", 1136,
@@ -638,7 +643,8 @@ PART_REGISTRY: list[PartMapping] = [
     PartMapping("mk3Cockpit_Shuttle", MiscEquipment, "Mk3 Cockpit", 1173,
                 {"provides": frozenset({"capsule", "reaction_wheel"})}),
     PartMapping("mk3CrewCabin", MiscEquipment, "Mk3 Passenger Module", 1179,
-                {"provides": frozenset({"capsule"})}),
+                # Passenger-only — no `resources` block, can't fly.
+                {"provides": frozenset()}),
     PartMapping("nacelleBody", MiscEquipment, "Engine Nacelle", 1063,
                 {"provides": frozenset()}),
     PartMapping("navLight1", MiscEquipment, "Navigation Light Mk1", 1192,
@@ -1440,33 +1446,42 @@ PROGRESSIVE_PART_TIERS: dict[str, dict[int, list[str]]] = {
         ],
     },
     # --- Capsules (crewed command pods) ---
+    # Tiers ranked by *effective dry mass* (listed mass minus removable
+    # propellant: MonoPropellant / LiquidFuel / Oxidizer; Ablator counted
+    # as structural since removing it removes reentry heat shielding).
+    # Tier 1 = heaviest band; each subsequent tier adds LIGHTER alternatives.
+    # The optimizer picks the lightest unlocked pod that satisfies the
+    # mission's crew requirement, so bumping Capsule shrinks rockets.
+    #
+    # Passenger-only modules (no `resources` block in parts.json — they
+    # cannot serve as command modules) are removed entirely from the chain:
+    # MK1CrewCabin, mk2CrewCabin, mk3CrewCabin (Mk3 Passenger Module),
+    # crewCabin (Hitchhiker), Large.Crewed.Lab.  Their `provides` no longer
+    # includes `capsule` so the capability system doesn't treat them as
+    # flyable command modules.
     "Progressive Capsule": {
-        1: [  # Basic: 1-crew sealed pods (External Command Seat moved to
-              # useful — it's an open seat, not a real capsule).
-            "mk1pod.v2",                # Mk1 Command Pod
-            "kv1Pod",                    # KV-1 (MH)
+        1: [  # >2.4t effective dry.  Both reps wheeled.
+            "mk3Cockpit.Shuttle",        # 3.10t, wheels, 4-crew
+            "mk1-3pod",                  # 2.48t, wheels, 3-crew
         ],
-        2: [  # Landers, 2-crew, planes
-            "landerCabinSmall",          # Mk1 Lander Can
-            "kv2Pod",                    # KV-2 (MH)
-            "Mk2Pod",                   # Mk2 Command Pod (MH)
-            "MEMLander",                 # M.E.M. (MH)
-            "MK1CrewCabin",             # Mk1 Crew Cabin
-            "Mark1Cockpit",              # Mk1 Cockpit
-            "Mark2Cockpit",              # Mk1 Inline Cockpit
-            "cupola",                    # Cupola
+        2: [  # 1.8t-2.4t.
+            "kv3Pod",                    # 2.25t, 3-crew
+            "mk2Cockpit.Standard",       # 1.94t, 1-crew
+            "mk2Cockpit.Inline",         # 1.90t, 2-crew
         ],
-        3: [  # Heavy/3+ crew, stations, spaceplanes
-            "mk1-3pod",                 # Mk1-3 Command Pod
-            "mk2LanderCabin.v2",        # Mk2 Lander Can
-            "kv3Pod",                    # KV-3 (MH)
-            "mk2Cockpit.Standard",       # Mk2 Cockpit
-            "mk2Cockpit.Inline",         # Mk2 Inline Cockpit
-            "mk2CrewCabin",              # Mk2 Crew Cabin
-            "mk3Cockpit.Shuttle",        # Mk3 Cockpit
-            "mk3CrewCabin",              # Mk3 Passenger Module
-            "crewCabin",                 # Hitchhiker
-            "Large.Crewed.Lab",          # Mobile Processing Lab
+        3: [  # 1.0t-1.8t.  Mk2Pod brings the second wheeled rep.
+            "Mk2Pod",                    # 1.56t, wheels, 2-crew
+            "kv2Pod",                    # 1.50t, 2-crew
+            "Mark1Cockpit",              # 1.22t, 1-crew
+            "mk2LanderCabin.v2",         # 1.20t, 2-crew
+        ],
+        4: [  # <1.0t.  mk1pod.v2 is the essential lightweight workhorse.
+            "Mark2Cockpit",              # 0.97t, 1-crew
+            "cupola",                    # 0.90t, 1-crew
+            "mk1pod.v2",                 # 0.76t, wheels, 1-crew
+            "kv1Pod",                    # 0.75t, 1-crew
+            "MEMLander",                 # 0.64t, 1-crew
+            "landerCabinSmall",          # 0.54t, 1-crew
         ],
     },
     # --- Probe Cores (by SAS level) ---
