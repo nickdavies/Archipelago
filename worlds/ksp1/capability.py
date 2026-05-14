@@ -1157,7 +1157,8 @@ def _evaluate_profile(
                 _aero_body = BODY_BY_NAME[_aero_e.body]
                 needed = _required_chute_count(payload, _aero_body, flags, diff)
                 if needed < 0:
-                    return ProfileResult(False, blocking=[BlockingInfo(
+                    # Surface partial-mass-attempt for the bumper scorer.
+                    return ProfileResult(False, launch_mass=payload, blocking=[BlockingInfo(
                         reason=BlockingReason.PARACHUTE_TERMINAL_VELOCITY,
                         body=_aero_body.name,
                     )])
@@ -1227,7 +1228,13 @@ def _evaluate_profile(
 
         if result is None:
             stage_diag = diagnostic_out[0] if diagnostic_out else None
-            return ProfileResult(False, blocking=[BlockingInfo(
+            # Surface the partial-mass-attempt to the bumper.  ``payload``
+            # is the running wet mass of every stage already computed
+            # (terminal → upstream), so it represents how heavy the
+            # launch vehicle would be if this stage could fly.  Lower is
+            # closer to feasible; the bumper's scorer uses this to rank
+            # infeasible candidates by mass-reduction progress.
+            return ProfileResult(False, launch_mass=payload, blocking=[BlockingInfo(
                 reason=BlockingReason.NO_VIABLE_STAGE,
                 body=body.name,
                 dv_needed=req_dv,

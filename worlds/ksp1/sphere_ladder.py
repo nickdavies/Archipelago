@@ -281,6 +281,59 @@ _PAYLOAD_MASS_REDUCING_CHAINS: tuple[str, ...] = (
 )
 
 
+# Chains whose usefulness is *narrow* — they only matter when the mission
+# actually exercises the corresponding equipment.  Bumping Heat Shield for
+# a Mun-Orbit mission, or Landing Leg for a flyby, never resolves anything;
+# the bumper just wastes an iteration.  Filtered out unless the mission
+# profile says they're used.
+_NARROW_CHAINS_REQUIRING_PROFILE_USE: frozenset[str] = frozenset({
+    "Progressive Heat Shield",
+    "Progressive Parachute",
+    "Progressive Landing Leg",
+    "Progressive Ladder",
+})
+
+
+def _relevant_narrow_chains(
+    body_name: str,
+    mission_type,
+    crewed: Optional[bool],
+) -> frozenset[str]:
+    """Return the subset of ``_NARROW_CHAINS_REQUIRING_PROFILE_USE`` that
+    the mission's profile alternatives actually exercise.
+
+    Heat Shield is relevant iff some profile edge needs it (aerobrake or
+    atmo-landing-aero).  Parachute is relevant iff some profile edge is
+    an atmospheric descent that can use one (ATMO_LANDING_AERO or
+    AEROBRAKE_CAPTURE).  Landing Leg is relevant iff some edge needs
+    legs.  Ladder is relevant iff some edge needs a ladder (low-gravity
+    body EVAs).
+
+    Narrow chains NOT in the returned set should be filtered out of the
+    bumper's candidate pool for this mission.
+    """
+    from .bodies import MISSION_PROFILES, EdgeType
+    profiles = MISSION_PROFILES.get((body_name, mission_type), [])
+    if not profiles:
+        # No physics profile (e.g., first-launch / sounding pseudo-events).
+        # Be permissive — return the whole set so we don't accidentally
+        # block a valid bump.
+        return _NARROW_CHAINS_REQUIRING_PROFILE_USE
+    relevant: set[str] = set()
+    for profile in profiles:
+        for edge in profile:
+            if edge.needs_heat_shield:
+                relevant.add("Progressive Heat Shield")
+            if edge.needs_landing_legs:
+                relevant.add("Progressive Landing Leg")
+            if edge.needs_ladder:
+                relevant.add("Progressive Ladder")
+            if edge.edge_type in (EdgeType.ATMO_LANDING_AERO,
+                                  EdgeType.AEROBRAKE_CAPTURE):
+                relevant.add("Progressive Parachute")
+    return frozenset(relevant)
+
+
 def _bump_candidates_for_stage_diag(
     diag: StageDiagnostic,
 ) -> frozenset[str]:
@@ -353,6 +406,7 @@ def _bump_candidates_for_stage_diag(
 def _payload_mass_audit_candidates(
     flags: EquipmentFlags,
     kit: dict[str, int],
+    narrow_relevant: Optional[frozenset[str]] = None,
 ) -> frozenset[str]:
     """When the bumper is stuck on a stage that can't lift its payload, the
     binding constraint may be downstream equipment mass rather than ascent
@@ -362,12 +416,19 @@ def _payload_mass_audit_candidates(
     We can't easily compute the mass delta cheaply, so this is a heuristic:
     return chains not yet maxed where bumping has a known mass-reduction
     pathway. ``_pick_bump``'s evaluator filters out useless bumps anyway.
+
+    Narrow chains (Heat Shield, Parachute, Landing Leg, Ladder) are only
+    included when ``narrow_relevant`` says the mission actually uses them.
     """
     cands: set[str] = set()
     for chain in _PAYLOAD_MASS_REDUCING_CHAINS:
         cap = PROGRESSIVE_CAPS.get(chain, 1)
-        if kit.get(chain, 0) < cap:
-            cands.add(chain)
+        if kit.get(chain, 0) >= cap:
+            continue
+        if chain in _NARROW_CHAINS_REQUIRING_PROFILE_USE:
+            if narrow_relevant is not None and chain not in narrow_relevant:
+                continue
+        cands.add(chain)
     return frozenset(cands)
 
 
@@ -580,6 +641,7 @@ def _wants_for_blocker(
     kit: dict[str, int],
     flags: Optional[EquipmentFlags] = None,
     rep_names: frozenset[str] = frozenset(),
+    narrow_relevant: Optional[frozenset[str]] = None,
 ) -> frozenset[str]:
     """Return uncapped candidate items for a single blocker.
 
@@ -590,16 +652,25 @@ def _wants_for_blocker(
 
     Chains in ``_CONDITIONAL_CHAINS`` are dropped when their predicate
     against ``rep_names`` says they're not useful for this seed.
+
+    Chains in ``_NARROW_CHAINS_REQUIRING_PROFILE_USE`` are dropped when
+    ``narrow_relevant`` (the set of narrow chains the current mission's
+    profile actually exercises) does not include them.
     """
     if b.reason == BlockingReason.NO_VIABLE_STAGE and b.stage_diag is not None:
         cands = _bump_candidates_for_stage_diag(b.stage_diag)
     else:
         cands = _BUMP_TABLE.get(b.reason, frozenset())
-    return frozenset(
-        c for c in cands
-        if kit.get(c, 0) < PROGRESSIVE_CAPS.get(c, 1)
-        and _CONDITIONAL_CHAINS.get(c, lambda _r: True)(rep_names)
-    )
+    def _allowed(c: str) -> bool:
+        if kit.get(c, 0) >= PROGRESSIVE_CAPS.get(c, 1):
+            return False
+        if not _CONDITIONAL_CHAINS.get(c, lambda _r: True)(rep_names):
+            return False
+        if c in _NARROW_CHAINS_REQUIRING_PROFILE_USE:
+            if narrow_relevant is not None and c not in narrow_relevant:
+                return False
+        return True
+    return frozenset(c for c in cands if _allowed(c))
 
 
 def _pick_bump(
@@ -613,6 +684,7 @@ def _pick_bump(
     enable_pair_lookahead: bool = False,
     evaluate_kit: Optional[Callable[[dict], "tuple[bool, float, int]"]] = None,
     rep_names: frozenset[str] = frozenset(),
+    narrow_relevant: Optional[frozenset[str]] = None,
 ) -> Optional[str]:
     """Choose the next progressive to bump.
 
@@ -640,7 +712,10 @@ def _pick_bump(
     wants: list[str] = []
     seen: set[str] = set()
     for b in blocking:
-        for cand in sorted(_wants_for_blocker(b, kit, flags=flags, rep_names=rep_names)):
+        for cand in sorted(_wants_for_blocker(
+            b, kit, flags=flags, rep_names=rep_names,
+            narrow_relevant=narrow_relevant,
+        )):
             if cand in seen:
                 continue
             seen.add(cand)
@@ -665,7 +740,7 @@ def _pick_bump(
     # shrinks upper-stage mass, restoring atmospheric-ascent TWR).
     if not wants:
         if has_mass_related_blocker and flags is not None:
-            audit = _payload_mass_audit_candidates(flags, kit)
+            audit = _payload_mass_audit_candidates(flags, kit, narrow_relevant=narrow_relevant)
             wants = sorted(audit)
         if not wants:
             return None
@@ -675,9 +750,15 @@ def _pick_bump(
         for cand in cands:
             feasible, mass, n_blocking = evaluate_with_bump(cand)
             feasibility_rank = 0 if feasible else 1
-            mass_score = mass if feasible else float("inf")
+            # `mass` comes from evaluate_with_bump pre-processed: it's the
+            # feasible launch_mass, or the partial-mass-attempt for stage-
+            # failure cases (lower = closer to feasible), or inf for early
+            # validation failures with no partial mass.  This lets the
+            # scorer rank "payload-mass-reducing bump shrank the rocket"
+            # higher than "fuel-tank bump made it heavier and still
+            # infeasible" without changing the candidate set.
             out.append((
-                feasibility_rank, mass_score, n_blocking,
+                feasibility_rank, mass, n_blocking,
                 _group_index(cand), rng.random(), cand,
             ))
         return out
@@ -703,7 +784,10 @@ def _pick_bump(
             and not best_feasible
             and has_mass_related_blocker
             and best_blocker_count >= current_blocker_count):
-        audit = _payload_mass_audit_candidates(flags, kit) if flags else frozenset()
+        audit = (
+            _payload_mass_audit_candidates(flags, kit, narrow_relevant=narrow_relevant)
+            if flags else frozenset()
+        )
         extra = sorted(audit - set(wants))
         if extra:
             extra_scored = _score(extra)
@@ -782,6 +866,10 @@ def minimal_rocket_for(
 
     diff = DIFFICULTY_PROFILES[difficulty]
     kit: dict[str, int] = dict(prior_kit)
+    # Pre-compute which narrow chains (HS / Parachute / Legs / Ladder) the
+    # mission actually exercises.  Bumping these for missions that don't
+    # use them is a wasted iteration; the bumper filters them out.
+    narrow_relevant = _relevant_narrow_chains(info.body, info.mission_type, info.crewed)
 
     def _count_fn(name: str, _k: dict[str, int] = kit) -> int:
         if name in PROGRESSIVE_CAPS:
@@ -813,9 +901,20 @@ def minimal_rocket_for(
             progressive_launch_pad=progressive_launch_pad,
         )
         trial_result = _evaluate(trial_flags, info, diff)
+        # When infeasible, `launch_mass` carries the optimizer's partial-
+        # mass-attempt (running payload at the failing stage).  Use it
+        # so the scorer can rank "this bump got us closer" without needing
+        # actual feasibility.  Zero means no partial info available
+        # (early validation failure); treat as inf so it's deprioritized.
+        if trial_result.feasible:
+            mass_score = trial_result.launch_mass
+        elif trial_result.launch_mass > 0.0:
+            mass_score = trial_result.launch_mass
+        else:
+            mass_score = float("inf")
         return (
             trial_result.feasible,
-            trial_result.launch_mass if trial_result.feasible else float("inf"),
+            mass_score,
             len(trial_result.blocking),
         )
 
@@ -836,9 +935,20 @@ def minimal_rocket_for(
             progressive_launch_pad=progressive_launch_pad,
         )
         trial_result = _evaluate(trial_flags, info, diff)
+        # When infeasible, `launch_mass` carries the optimizer's partial-
+        # mass-attempt (running payload at the failing stage).  Use it
+        # so the scorer can rank "this bump got us closer" without needing
+        # actual feasibility.  Zero means no partial info available
+        # (early validation failure); treat as inf so it's deprioritized.
+        if trial_result.feasible:
+            mass_score = trial_result.launch_mass
+        elif trial_result.launch_mass > 0.0:
+            mass_score = trial_result.launch_mass
+        else:
+            mass_score = float("inf")
         return (
             trial_result.feasible,
-            trial_result.launch_mass if trial_result.feasible else float("inf"),
+            mass_score,
             len(trial_result.blocking),
         )
 
@@ -884,6 +994,7 @@ def minimal_rocket_for(
             enable_pair_lookahead=stuck_iters >= 4,
             evaluate_kit=_evaluate_kit,
             rep_names=rep_names,
+            narrow_relevant=narrow_relevant,
         )
         if item is None:
             return None
