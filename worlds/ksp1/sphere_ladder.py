@@ -1164,11 +1164,30 @@ def _select_intermediates(
 def _predictable_spheres(world: "KSP1World") -> list[tuple[str, str]]:
     """Return (label, location_name) tuples for the always-enforced spheres.
 
-    Phase 1: enforce S_launch, S_orbit, and ONE S_goal (the hardest by
-    base dv).  Other goal locations get covered by the Pareto-frontier
-    logic added in Phase 2.  Single-sphere goal here keeps the chain
-    short and avoids inheriting the strictest rep-feasibility constraint
-    across every goal location.
+    S_launch + S_orbit anchor the bootstrap.  Then **every** physics-gated
+    goal location becomes its own S_goal sphere.  For multi-mission goals
+    like ``standard_sample_returns`` (11 sample-return locations), this
+    ensures the chain's cumulative kit is verified to reach *all* of them
+    — not just the hardest by dv.
+
+    Without this, a seed whose rep set can reach the hardest-dv goal but
+    not some easier-but-physics-different goal (e.g. Vall SR reachable
+    but Duna SR not) produces a silent HARDFAIL: fill succeeds, but the
+    game is unwinnable because one goal location isn't reachable.  With
+    every goal as a predictable sphere, the chain walker either includes
+    the kit for it (cumulative grows) or aborts via OptionError at
+    pre_fill time — same loud failure mode as today's single-goal logic,
+    just catching more cases.
+
+    The min_kit-size sort handles ordering: smaller-kit goals are walked
+    first, so the cumulative grows gradually through the goal band.
+
+    Skip goals not physics-gated by capability:
+      - Proxy goals (Eve/Tylo/Laythe Return/SR): rule is state.has_all
+        progression items; capability can't model them.  They become
+        reachable when the chain's cumulative covers every chain item.
+      - Tech tree goals: gate on accumulated science.  Handled by the
+        tech-tier post-pass.
     """
     from .rules import goal_spec_location_names
     out: list[tuple[str, str]] = [
@@ -1176,18 +1195,12 @@ def _predictable_spheres(world: "KSP1World") -> list[tuple[str, str]]:
         ("S_orbit", "Kerbin Orbit 1"),
     ]
     goal_names = list(goal_spec_location_names(world.goal_spec))
-    # Skip goals not physics-gated by capability:
-    # - Proxy goals (Eve/Tylo/Laythe Return/SR): rule is state.has_all
-    #   progression items; capability can't model them.
-    # - Tech tree goals: gate on accumulated science, not delta-v.
-    #   Phase 3 adds tech-tier post-pass handling.
     feasible_goals = [
         n for n in goal_names
         if not _is_proxy_goal(n) and _parse_location(n) is not None
     ]
-    if feasible_goals:
-        hardest = max(feasible_goals, key=_goal_dv)
-        out.append((f"S_goal[{hardest}]", hardest))
+    for goal_name in feasible_goals:
+        out.append((f"S_goal[{goal_name}]", goal_name))
     return out
 
 
