@@ -27,8 +27,6 @@ Key item names for real-item tests:
 import unittest
 from unittest.mock import patch, MagicMock
 
-from test.bases import WorldTestBase
-
 from worlds.ksp1.locations import (
     MISSION_LOCATION_NAMES,
     KERBIN_LOCATIONS,
@@ -39,12 +37,11 @@ from worlds.ksp1.locations import (
 from worlds.ksp1.bodies import ALL_BODIES, BodyName
 from worlds.ksp1.items import PROGRESSIVE_RD_NAME
 from worlds.ksp1.tech_tree import TECH_NODES, TIER_TO_BAND
+from worlds.ksp1.test.base import KSP1TestBase as _SharedKSP1TestBase
 
 
-class KSP1TestBase(WorldTestBase):
-    game = "Kerbal Space Program 1"
+class KSP1TestBase(_SharedKSP1TestBase):
     options = {"difficulty": 1}  # normal difficulty for determinism
-    run_default_tests = False  # fill tested once in test_generation.py
 
 
 # ---------------------------------------------------------------------------

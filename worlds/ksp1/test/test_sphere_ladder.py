@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import unittest
 
-from test.bases import WorldTestBase
-
 from worlds.ksp1.capability import (
     _pre_pass, evaluate_mission_detailed, _evaluate_sounding,
 )
@@ -19,16 +17,13 @@ from worlds.ksp1.bodies import DIFFICULTY_PROFILES, MissionType
 from worlds.ksp1.sphere_ladder import (
     _parse_location, _strict_less, _reqs_subset,
 )
-
-
-class KSP1TestBase(WorldTestBase):
-    game = "Kerbal Space Program 1"
-    run_default_tests = False
+from worlds.ksp1.test.base import KSP1TestBase
 
 
 class TestPredictableSpheres(KSP1TestBase):
     """The launch / orbit / goal spine must always be present."""
     options = {"goal": "duna_return", "difficulty": "normal"}
+    needs_real_pre_fill = True
 
     def test_launch_and_orbit_present(self) -> None:
         ladder = self.world._sphere_ladder
@@ -53,6 +48,7 @@ class TestDeltaPassesCheck(KSP1TestBase):
     ``evaluate_mission_detailed``.  This is the core ladder invariant.
     """
     options = {"goal": "duna_return", "difficulty": "normal"}
+    needs_real_pre_fill = True
 
     def test_each_sphere_satisfies_check(self) -> None:
         ladder = self.world._sphere_ladder
@@ -112,6 +108,7 @@ class TestRuleBNotBannedAtSphereLocation(KSP1TestBase):
     is self-contradictory.
     """
     options = {"goal": "duna_return", "difficulty": "normal"}
+    needs_real_pre_fill = True
 
     def test_sphere_boundary_accepts_one_of_its_delta_items(self) -> None:
         from worlds.ksp1.items import create_item
@@ -157,6 +154,7 @@ class TestSphereChainOrdered(KSP1TestBase):
     — the chain only grows, never shrinks or contradicts itself.
     """
     options = {"goal": "duna_return", "difficulty": "normal"}
+    needs_real_pre_fill = True
 
     def test_cumulative_kit_monotone(self) -> None:
         ladder = self.world._sphere_ladder
@@ -194,6 +192,7 @@ class TestSmallGoalMunFlag(KSP1TestBase):
     still construct a valid chain without raising.
     """
     options = {"goal": "mun_flag", "difficulty": "normal"}
+    needs_real_pre_fill = True
 
     def test_chain_constructed(self) -> None:
         ladder = self.world._sphere_ladder
@@ -208,6 +207,7 @@ class TestSphereLadderLocalEarlyItems(KSP1TestBase):
     ``local_early_items`` so AP places them at sphere-0 locations.
     """
     options = {"goal": "duna_return", "difficulty": "normal"}
+    needs_real_pre_fill = True
 
     def test_launch_delta_in_local_early(self) -> None:
         ladder = self.world._sphere_ladder
