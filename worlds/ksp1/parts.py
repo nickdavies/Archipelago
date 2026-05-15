@@ -63,18 +63,26 @@ class Engine:
     throttleable: bool
     has_gimbal: bool
     size_class: float       # metres: 0.625, 1.25, 2.5, 3.75, 5.0
-    fuel_type: str          # "lfo" | "lf" | "xenon"
+    fuel_type: str          # "lfo" | "lf" | "xenon" (derived tag)
     radial_mountable: bool = False  # True if engine has "srf" in bulkhead_profiles
+    # Stock-resource names the engine consumes (excluding ElectricCharge),
+    # sorted. Used for generic tank/engine compatibility.
+    propellants: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
 class FuelTank:
     name: str
     dry_mass: float         # tonnes
-    fuel_mass: float        # tonnes at 100% fill
-    fuel_type: str          # "lfo" | "lf" | "xenon" | "monoprop"
+    fuel_mass: float        # tonnes at 100% fill (sum of all carried propellants)
+    fuel_type: str          # "lfo" | "lf" | "xenon" | "monoprop" (derived tag)
     size_class: float       # metres
     max_count: int = 0      # 0 = unlimited; >0 caps optimizer tank count (adapters)
+    # Per-propellant mass at 100% fill (tonnes), e.g. {"LiquidFuel": 0.5,
+    # "Oxidizer": 0.5} for an LFO tank. Lets an engine that needs only a
+    # subset of the carried propellants drain the rest — except MonoPropellant,
+    # which cannot be drained (dedicated resource).
+    fuel_masses: tuple[tuple[str, float], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -394,11 +402,14 @@ PART_REGISTRY: list[PartMapping] = [
     PartMapping("LargeTank", MiscEquipment, "Large Holding Tank", 1125,
                 {"provides": frozenset()}),
     PartMapping("Large_Crewed_Lab", MiscEquipment, "Mobile Processing Lab MPL-LG-2", 1187,
-                {"provides": frozenset({"capsule"})}),
+                # Passenger-only — no `resources` block in parts.json,
+                # cannot serve as a command module.
+                {"provides": frozenset()}),
     PartMapping("LgRadialSolarPanel", MiscEquipment, "OX-STAT-XL Photovoltaic Panels", 1199,
                 {"provides": frozenset({"solar_fixed"})}),
     PartMapping("MK1CrewCabin", MiscEquipment, "Mk1 Crew Cabin", 1144,
-                {"provides": frozenset({"capsule"})}),
+                # Passenger-only — no `resources` block, can't fly.
+                {"provides": frozenset()}),
     PartMapping("MK1IntakeFuselage", MiscEquipment, "Mk1 Diverterless Supersonic Intake", 1145,
                 {"provides": frozenset()}),
     PartMapping("Magnetometer", MiscEquipment, "Magnetometer Boom", 1139,
@@ -506,7 +517,8 @@ PART_REGISTRY: list[PartMapping] = [
     PartMapping("commDish", MiscEquipment, "Communotron 88-88", 1040,
                 {"provides": frozenset({"relay_t4"})}),
     PartMapping("crewCabin", MiscEquipment, "PPD-10 Hitchhiker Storage Container", 1206,
-                {"provides": frozenset({"capsule"})}),
+                # Passenger-only — no `resources` block, can't fly.
+                {"provides": frozenset()}),
     PartMapping("cupola", MiscEquipment, "PPD-12 Cupola Module", 1207,
                 {"provides": frozenset({"capsule"})}),
     PartMapping("deltaWing", MiscEquipment, "Delta Wing", 1046,
@@ -612,7 +624,8 @@ PART_REGISTRY: list[PartMapping] = [
     PartMapping("mk2Cockpit_Standard", MiscEquipment, "Mk2 Cockpit", 1157,
                 {"provides": frozenset({"capsule"})}),
     PartMapping("mk2CrewCabin", MiscEquipment, "MK2 Crew Cabin", 1135,
-                {"provides": frozenset({"capsule"})}),
+                # Passenger-only — no `resources` block, can't fly.
+                {"provides": frozenset()}),
     PartMapping("mk2DockingPort", MiscEquipment, "Mk2 Clamp-O-Tron", 1156,
                 {"provides": frozenset({"docking_port"})}),
     PartMapping("mk2DroneCore", MiscEquipment, "MK2 Drone Core", 1136,
@@ -630,7 +643,8 @@ PART_REGISTRY: list[PartMapping] = [
     PartMapping("mk3Cockpit_Shuttle", MiscEquipment, "Mk3 Cockpit", 1173,
                 {"provides": frozenset({"capsule", "reaction_wheel"})}),
     PartMapping("mk3CrewCabin", MiscEquipment, "Mk3 Passenger Module", 1179,
-                {"provides": frozenset({"capsule"})}),
+                # Passenger-only — no `resources` block, can't fly.
+                {"provides": frozenset()}),
     PartMapping("nacelleBody", MiscEquipment, "Engine Nacelle", 1063,
                 {"provides": frozenset()}),
     PartMapping("navLight1", MiscEquipment, "Navigation Light Mk1", 1192,
@@ -947,6 +961,31 @@ PART_REGISTRY: list[PartMapping] = [
 # Builder helpers
 # ---------------------------------------------------------------------------
 
+# Propellants a tank cannot drain to become compatible with an engine that
+# doesn't consume them. MonoPropellant is RCS fuel — distinct supply chain,
+# not interchangeable with main propellant feed.
+UNDRAINABLE_PROPELLANTS: frozenset[str] = frozenset({"MonoPropellant"})
+
+
+def usable_fuel_mass(
+    tank: "FuelTank", engine_propellants: frozenset[str]
+) -> float:
+    """Return tonnes of usable propellant for an engine that consumes the
+    given propellant set, or 0.0 if the tank cannot fuel the engine.
+
+    All propellants the engine needs must be present in the tank with
+    positive mass. Propellants the tank carries that the engine does not
+    need are drained (0% fill), except those in UNDRAINABLE_PROPELLANTS.
+    """
+    tank_resources = dict(tank.fuel_masses)
+    have = frozenset(tank_resources)
+    if not engine_propellants <= have:
+        return 0.0
+    if (have - engine_propellants) & UNDRAINABLE_PROPELLANTS:
+        return 0.0
+    return sum(tank_resources[p] for p in engine_propellants)
+
+
 def _fuel_type_from_propellants(propellants: dict[str, float]) -> str:
     """Derive fuel_type from an engine's propellant dict."""
     keys = set(propellants.keys()) - {"ElectricCharge"}
@@ -1016,6 +1055,9 @@ def _build_part(part_type: type, cfg: dict, overrides: dict, name: str) -> AnyPa
         isp_atm = eng["isp_atm"]
         vac_thrust = eng["max_thrust"]
         atm_thrust = vac_thrust * (isp_atm / isp_vac) if isp_vac > 0 else 0.0
+        propellants = tuple(sorted(
+            p for p in eng["propellants"].keys() if p != "ElectricCharge"
+        ))
         return Engine(
             name=cfg_name,
             vac_isp=isp_vac,
@@ -1028,10 +1070,16 @@ def _build_part(part_type: type, cfg: dict, overrides: dict, name: str) -> AnyPa
             size_class=size,
             fuel_type=_fuel_type_from_propellants(eng["propellants"]),
             radial_mountable=is_radial,
+            propellants=propellants,
         )
 
     if part_type is FuelTank:
         resources = cfg.get("resources", {})
+        fuel_masses = tuple(sorted(
+            (name, amount * _RESOURCE_DENSITY[name])
+            for name, amount in resources.items()
+            if name != "ElectricCharge" and name in _RESOURCE_DENSITY
+        ))
         return FuelTank(
             name=cfg_name,
             dry_mass=mass,
@@ -1039,6 +1087,7 @@ def _build_part(part_type: type, cfg: dict, overrides: dict, name: str) -> AnyPa
             fuel_type=_fuel_type_from_resources(resources),
             size_class=size,
             max_count=overrides.get("max_count", 0),
+            fuel_masses=fuel_masses,
         )
 
     if part_type is SolidBooster:
@@ -1245,16 +1294,20 @@ PROGRESSIVE_PART_TIERS: dict[str, dict[int, list[str]]] = {
             "Rockomax8BW",              # X200-8 (4.0t)
             "Size1p5.Tank.03",           # FL-TX900 (4.5t, MH)
         ],
-        3: [  # Medium (5.0 - 18.0t fuel)
+        3: [  # Medium (5.0 - 32.0t fuel)
             "Size1p5.Tank.05",           # FL-C1000 (6.03t, MH)
             "Size1p5.Size2.Adapter.01",  # FL-A215 (6.0t, MH)
             "Rockomax16.BW",            # X200-16 (8.0t)
             "Size1p5.Tank.04",           # FL-TX1800 (9.0t, MH)
             "Rockomax32.BW",            # X200-32 (16.0t)
             "Size3SmallTank",            # S3-3600 (18.0t)
-        ],
-        4: [  # Large (> 18.0t fuel)
+            # Rockomax64.BW (Jumbo-64, 32t) sits at the top of T3 by
+            # size_class (2.5m).  Demoted from T4 because rep-analysis
+            # showed it as the universal underperformer there (78-89%
+            # Jool-moon feasibility vs 100% for all size-3+ T4 tanks).
             "Rockomax64.BW",            # Jumbo-64 (32.0t)
+        ],
+        4: [  # Large (>= 32.0t fuel, size_class 3+)
             "Size3MediumTank",           # S3-7200 (36.0t)
             "Size3LargeTank",            # S3-14400 (72.0t)
             "Size3.Size4.Adapter.01",    # S3-S4 Adapter (32.0t, MH)
@@ -1393,33 +1446,42 @@ PROGRESSIVE_PART_TIERS: dict[str, dict[int, list[str]]] = {
         ],
     },
     # --- Capsules (crewed command pods) ---
+    # Tiers ranked by *effective dry mass* (listed mass minus removable
+    # propellant: MonoPropellant / LiquidFuel / Oxidizer; Ablator counted
+    # as structural since removing it removes reentry heat shielding).
+    # Tier 1 = heaviest band; each subsequent tier adds LIGHTER alternatives.
+    # The optimizer picks the lightest unlocked pod that satisfies the
+    # mission's crew requirement, so bumping Capsule shrinks rockets.
+    #
+    # Passenger-only modules (no `resources` block in parts.json — they
+    # cannot serve as command modules) are removed entirely from the chain:
+    # MK1CrewCabin, mk2CrewCabin, mk3CrewCabin (Mk3 Passenger Module),
+    # crewCabin (Hitchhiker), Large.Crewed.Lab.  Their `provides` no longer
+    # includes `capsule` so the capability system doesn't treat them as
+    # flyable command modules.
     "Progressive Capsule": {
-        1: [  # Basic: 1-crew sealed pods (External Command Seat moved to
-              # useful — it's an open seat, not a real capsule).
-            "mk1pod.v2",                # Mk1 Command Pod
-            "kv1Pod",                    # KV-1 (MH)
+        1: [  # >2.4t effective dry.  Both reps wheeled.
+            "mk3Cockpit.Shuttle",        # 3.10t, wheels, 4-crew
+            "mk1-3pod",                  # 2.48t, wheels, 3-crew
         ],
-        2: [  # Landers, 2-crew, planes
-            "landerCabinSmall",          # Mk1 Lander Can
-            "kv2Pod",                    # KV-2 (MH)
-            "Mk2Pod",                   # Mk2 Command Pod (MH)
-            "MEMLander",                 # M.E.M. (MH)
-            "MK1CrewCabin",             # Mk1 Crew Cabin
-            "Mark1Cockpit",              # Mk1 Cockpit
-            "Mark2Cockpit",              # Mk1 Inline Cockpit
-            "cupola",                    # Cupola
+        2: [  # 1.8t-2.4t.
+            "kv3Pod",                    # 2.25t, 3-crew
+            "mk2Cockpit.Standard",       # 1.94t, 1-crew
+            "mk2Cockpit.Inline",         # 1.90t, 2-crew
         ],
-        3: [  # Heavy/3+ crew, stations, spaceplanes
-            "mk1-3pod",                 # Mk1-3 Command Pod
-            "mk2LanderCabin.v2",        # Mk2 Lander Can
-            "kv3Pod",                    # KV-3 (MH)
-            "mk2Cockpit.Standard",       # Mk2 Cockpit
-            "mk2Cockpit.Inline",         # Mk2 Inline Cockpit
-            "mk2CrewCabin",              # Mk2 Crew Cabin
-            "mk3Cockpit.Shuttle",        # Mk3 Cockpit
-            "mk3CrewCabin",              # Mk3 Passenger Module
-            "crewCabin",                 # Hitchhiker
-            "Large.Crewed.Lab",          # Mobile Processing Lab
+        3: [  # 1.0t-1.8t.  Mk2Pod brings the second wheeled rep.
+            "Mk2Pod",                    # 1.56t, wheels, 2-crew
+            "kv2Pod",                    # 1.50t, 2-crew
+            "Mark1Cockpit",              # 1.22t, 1-crew
+            "mk2LanderCabin.v2",         # 1.20t, 2-crew
+        ],
+        4: [  # <1.0t.  mk1pod.v2 is the essential lightweight workhorse.
+            "Mark2Cockpit",              # 0.97t, 1-crew
+            "cupola",                    # 0.90t, 1-crew
+            "mk1pod.v2",                 # 0.76t, wheels, 1-crew
+            "kv1Pod",                    # 0.75t, 1-crew
+            "MEMLander",                 # 0.64t, 1-crew
+            "landerCabinSmall",          # 0.54t, 1-crew
         ],
     },
     # --- Probe Cores (by SAS level) ---
@@ -1481,6 +1543,33 @@ PROGRESSIVE_PART_TIERS: dict[str, dict[int, list[str]]] = {
         4: [
             "commDish",                  # Communotron 88-88
             "RelayAntenna100",           # RA-100
+        ],
+    },
+    # --- SAS / Reaction Wheels (attitude control) ---
+    # Standalone reaction-wheel modules.  Each tier provides reaction wheels
+    # at increasing torque/mass.  Bumping this chain is the cheap fix for
+    # ``no_attitude_control`` blockers when probe-core/capsule reaction
+    # wheels are absent or insufficient.
+    "Progressive SAS": {
+        1: [
+            "sasModule",                 # Stock SAS Module (0.05t)
+        ],
+        2: [
+            "advSasModule",              # Advanced Inline Stabilizer (0.1t)
+        ],
+        3: [
+            "asasmodule1-2",             # Large Reaction Wheel Module (0.2t)
+        ],
+    },
+    # --- Xenon Tanks ---
+    # Three stock xenon containers — all tiny. Single tier; any copy unlocks
+    # the rep, granting xenon fuel storage so an ion-engine vacuum-engine
+    # rep is actually usable.
+    "Progressive Xenon Tank": {
+        1: [
+            "xenonTankRadial",           # PB-X50R (0.04t fuel, 0.625m radial)
+            "xenonTank",                 # PB-X150 (0.07t fuel, 0.625m)
+            "xenonTankLarge",            # PB-X750 (0.57t fuel, 1.25m)
         ],
     },
 }

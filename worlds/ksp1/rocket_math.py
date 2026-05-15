@@ -17,14 +17,18 @@ from .parts import (
     Engine, FuelTank, SolidBooster, MultiMount,
     MAX_RADIAL_ENGINES,
 )
+from .capability_reasons import StageDiagnostic, StageFailure
 
 G0: float = 9.80665  # standard gravity, m/s²
 
 FILL_LEVELS: tuple[float, ...] = (1.0, 0.75, 0.5, 0.25)
 
 # Parallel staging (asparagus/onion) reduces effective tank dry mass.
-# We model only a fraction of the theoretical benefit (golden rule).
-ASPARAGUS_DRY_MASS_FACTOR: float = 0.5
+# A constant-factor model under-models true multi-stage Tsiolkovsky by
+# 10-25% — even at factor 0.0 the single-stage formula can't reach the
+# product-of-mass-ratios that real asparagus achieves. Accepting that
+# under-model in exchange for simple per-iteration math.
+ASPARAGUS_DRY_MASS_FACTOR: float = 0.25
 ONION_DRY_MASS_FACTOR: float = 0.75
 
 # KSP symmetry tool modes. Radial boosters must use one of these counts.
@@ -231,6 +235,9 @@ def find_optimal_stage(
     available_multi_mounts: Optional[list[MultiMount]] = None,
     require_gimbal: bool = False,
     attitude_module_mass: float = 0.0,  # added to payload only if chosen prop lacks gimbal
+    diagnostic_out: Optional[list[StageDiagnostic]] = None,
+    body_name: str = "",                  # for diagnostic reporting only
+    launch_pad_mass_cap: float = float("inf"),  # for MASS_CAP_EXCEEDED diagnostic
 ) -> Optional[StageResult]:
     """
     Find the minimum-mass engine+tank configuration that meets *required_dv*
@@ -253,6 +260,25 @@ def find_optimal_stage(
     """
     best: Optional[StageResult] = None
     best_wet: float = float("inf")
+
+    # Near-miss diagnostic accumulators. Inexpensive: a handful of scalar
+    # updates per inner-loop iteration. Only synthesized at the end if no
+    # result was found AND the caller asked for a diagnostic.
+    _diag_engines_seen = 0          # engines that entered the loop
+    _diag_engines_passed_filter = 0 # engines that survived size/throttle/gimbal/isp
+    _diag_engines_hs_blocked = 0    # engines rejected for size > shield only
+    _diag_engines_throttle_blocked = 0
+    _diag_engines_gimbal_blocked = 0
+    _diag_engines_isp_blocked = 0
+    _diag_engines_no_tank = 0       # engines with empty compatible_tanks
+    _diag_smallest_hs_blocked_size = float("inf")
+    _diag_best_dv: float = 0.0
+    _diag_best_twr: float = 0.0
+    _diag_seen_dry_kills_ratio = False
+    _diag_seen_engine_too_big = False
+    _diag_seen_twr_short = False
+    _diag_engine_fuel_types: set[str] = set()
+    _diag_mass_cap_blocked = False  # at least one combo would meet dv/twr but mass>cap
 
     # Full payload = caller-supplied payload + heat shield (if needed)
     full_payload = payload_mass + (heat_shield_mass if needs_heat_shield else 0.0)
@@ -287,19 +313,29 @@ def find_optimal_stage(
     # Evaluate liquid engines + tanks
     # -----------------------------------------------------------------------
     for engine in available_engines:
+        _diag_engines_seen += 1
+        _diag_engine_fuel_types.add(engine.fuel_type)
         # Heat shield filter: engine must fit under the player's shield
         if needs_heat_shield:
             if max_heat_shield_size is None:
+                _diag_engines_hs_blocked += 1
+                if engine.size_class < _diag_smallest_hs_blocked_size:
+                    _diag_smallest_hs_blocked_size = engine.size_class
                 continue  # no shield at all
             if engine.size_class > max_heat_shield_size:
+                _diag_engines_hs_blocked += 1
+                if engine.size_class < _diag_smallest_hs_blocked_size:
+                    _diag_smallest_hs_blocked_size = engine.size_class
                 continue
 
         # Gimbal filter (atmospheric gravity turn without aero surfaces)
         if require_gimbal and not engine.has_gimbal:
+            _diag_engines_gimbal_blocked += 1
             continue
 
         # Throttle filter
         if requires_throttleable and not engine.throttleable:
+            _diag_engines_throttle_blocked += 1
             continue
 
         # Per-candidate attitude module charge. When the caller passes a
@@ -325,7 +361,9 @@ def find_optimal_stage(
         # redundant math.exp inside the tank/fill/engine-count loops).
         isp = engine.atm_isp if in_atmosphere else engine.vac_isp
         if isp <= 0:
+            _diag_engines_isp_blocked += 1
             continue
+        _diag_engines_passed_filter += 1
         R = _exp(required_dv / (isp * G0))
         R_minus_1 = R - 1
         isp_g0 = isp * G0
@@ -339,6 +377,9 @@ def find_optimal_stage(
             compatible_tanks = tanks_by_fuel_type.get(engine.fuel_type, ())
         else:
             compatible_tanks = [t for t in available_tanks if t.fuel_type == engine.fuel_type]
+        if not compatible_tanks:
+            _diag_engines_no_tank += 1
+            continue
 
         for tank in compatible_tanks:
             t_dry = tank.dry_mass
@@ -355,10 +396,12 @@ def find_optimal_stage(
             # At fill=1.0 this is maximised; if still <= 0, impossible.
             effective_dry = t_dry * dry_factor
             if t_fuel - R_minus_1 * effective_dry <= 0:
+                _diag_seen_dry_kills_ratio = True
                 continue
 
             # Engine must fit under or on the tank
             if e_size > t_size:
+                _diag_seen_engine_too_big = True
                 continue
 
             # Three mounting modes:
@@ -396,6 +439,7 @@ def find_optimal_stage(
                 for sm_df, sm_symmetric in _sub_modes:
                     sm_max = max_eng_parallel if sm_symmetric else max_eng_base
                     if min_engines > sm_max:
+                        _diag_seen_twr_short = True
                         continue
 
                     # Denominator for required tank count
@@ -436,6 +480,10 @@ def find_optimal_stage(
                         # Verify TWR at ignition with the actual tank count
                         thrust = thrust_per_eng * n_eng
                         if has_twr and thrust < twr_g * m_wet:
+                            twr_actual = thrust / (m_wet * gravity) if gravity > 0 else 0.0
+                            if twr_actual > _diag_best_twr:
+                                _diag_best_twr = twr_actual
+                            _diag_seen_twr_short = True
                             continue
 
                         # Verify delta-v (required_tanks rounds up, so check actual)
@@ -446,8 +494,13 @@ def find_optimal_stage(
                         if v_dry <= 0 or v_wet <= v_dry:
                             continue
                         actual_dv = isp_g0 * _log(v_wet / v_dry)
+                        if actual_dv > _diag_best_dv:
+                            _diag_best_dv = actual_dv
                         if actual_dv < required_dv:
                             continue
+                        # Mass-cap check (informational; the caller enforces).
+                        if m_wet > launch_pad_mass_cap:
+                            _diag_mass_cap_blocked = True
 
                         twr_ign = thrust / (m_wet * gravity) if gravity > 0 else 0.0
                         twr_bur = thrust / (m_dry * gravity) if gravity > 0 else 0.0
@@ -543,7 +596,171 @@ def find_optimal_stage(
                 best_wet = m_wet
             break  # found minimum SRB count, no need to try more
 
+    if best is None and diagnostic_out is not None:
+        diagnostic_out.append(_synthesize_diagnostic(
+            body_name=body_name,
+            in_atmosphere=in_atmosphere,
+            needs_heat_shield=needs_heat_shield,
+            require_gimbal=require_gimbal,
+            requires_throttleable=requires_throttleable,
+            max_heat_shield_size=max_heat_shield_size or 0.0,
+            min_twr=min_twr,
+            gravity=gravity,
+            required_dv=required_dv,
+            payload_mass=full_payload,
+            launch_pad_mass_cap=launch_pad_mass_cap,
+            engines_seen=_diag_engines_seen,
+            engines_passed_filter=_diag_engines_passed_filter,
+            engines_hs_blocked=_diag_engines_hs_blocked,
+            engines_throttle_blocked=_diag_engines_throttle_blocked,
+            engines_gimbal_blocked=_diag_engines_gimbal_blocked,
+            engines_no_tank=_diag_engines_no_tank,
+            smallest_hs_blocked_size=_diag_smallest_hs_blocked_size,
+            best_dv=_diag_best_dv,
+            best_twr=_diag_best_twr,
+            seen_dry_kills_ratio=_diag_seen_dry_kills_ratio,
+            seen_engine_too_big=_diag_seen_engine_too_big,
+            seen_twr_short=_diag_seen_twr_short,
+            engine_fuel_types=tuple(sorted(_diag_engine_fuel_types)),
+            mass_cap_blocked=_diag_mass_cap_blocked,
+        ))
+
     return best
+
+
+def _synthesize_diagnostic(
+    *,
+    body_name: str,
+    in_atmosphere: bool,
+    needs_heat_shield: bool,
+    require_gimbal: bool,
+    requires_throttleable: bool,
+    max_heat_shield_size: float,
+    min_twr: float,
+    gravity: float,
+    required_dv: float,
+    payload_mass: float,
+    launch_pad_mass_cap: float,
+    engines_seen: int,
+    engines_passed_filter: int,
+    engines_hs_blocked: int,
+    engines_throttle_blocked: int,
+    engines_gimbal_blocked: int,
+    engines_no_tank: int,
+    smallest_hs_blocked_size: float,
+    best_dv: float,
+    best_twr: float,
+    seen_dry_kills_ratio: bool,
+    seen_engine_too_big: bool,
+    seen_twr_short: bool,
+    engine_fuel_types: tuple[str, ...],
+    mass_cap_blocked: bool,
+) -> StageDiagnostic:
+    """Classify the dominant near-miss from accumulator state.
+
+    Order matters — pick the *earliest* failure mode encountered, since
+    fixing earlier ones is a prerequisite for the later ones.
+    """
+    # No engine ever survived basic filters.
+    if engines_passed_filter == 0:
+        # Specific filter reason — which one dominated?
+        if engines_hs_blocked and engines_hs_blocked == engines_seen:
+            return StageDiagnostic(
+                failure=StageFailure.HEAT_SHIELD_TOO_SMALL,
+                body=body_name, in_atmosphere=in_atmosphere,
+                group_needs_heat_shield=needs_heat_shield,
+                smallest_filtered_engine_size=(
+                    smallest_hs_blocked_size
+                    if smallest_hs_blocked_size != float("inf") else 0.0
+                ),
+                current_max_shield_size=max_heat_shield_size,
+                required_dv=required_dv, payload_mass=payload_mass,
+                engine_fuel_types_attempted=engine_fuel_types,
+            )
+        if require_gimbal and engines_gimbal_blocked == engines_seen:
+            return StageDiagnostic(
+                failure=StageFailure.REQUIRE_GIMBAL_NONE,
+                body=body_name, in_atmosphere=in_atmosphere,
+                required_dv=required_dv, payload_mass=payload_mass,
+                engine_fuel_types_attempted=engine_fuel_types,
+            )
+        if requires_throttleable and engines_throttle_blocked == engines_seen:
+            return StageDiagnostic(
+                failure=StageFailure.REQUIRE_THROTTLE_NONE,
+                body=body_name, in_atmosphere=in_atmosphere,
+                required_dv=required_dv, payload_mass=payload_mass,
+                engine_fuel_types_attempted=engine_fuel_types,
+            )
+        return StageDiagnostic(
+            failure=StageFailure.NO_ENGINES_AFTER_FILTER,
+            body=body_name, in_atmosphere=in_atmosphere,
+            group_needs_heat_shield=needs_heat_shield,
+            required_dv=required_dv, payload_mass=payload_mass,
+            engine_fuel_types_attempted=engine_fuel_types,
+        )
+
+    # Engines passed filters but had no tanks.
+    if engines_no_tank > 0 and engines_no_tank == engines_passed_filter:
+        return StageDiagnostic(
+            failure=StageFailure.NO_TANK_FOR_FUEL_TYPE,
+            body=body_name, in_atmosphere=in_atmosphere,
+            required_dv=required_dv, payload_mass=payload_mass,
+            engine_fuel_types_attempted=engine_fuel_types,
+        )
+
+    # Engines + tanks paired but build couldn't satisfy.
+    if mass_cap_blocked and best_dv >= required_dv:
+        return StageDiagnostic(
+            failure=StageFailure.MASS_CAP_EXCEEDED,
+            body=body_name, in_atmosphere=in_atmosphere,
+            required_dv=required_dv, best_dv_achieved=best_dv,
+            payload_mass=payload_mass, mass_cap=launch_pad_mass_cap,
+            engine_fuel_types_attempted=engine_fuel_types,
+        )
+    if best_dv > 0 and best_dv < required_dv:
+        return StageDiagnostic(
+            failure=StageFailure.DV_SHORT,
+            body=body_name, in_atmosphere=in_atmosphere,
+            required_dv=required_dv, best_dv_achieved=best_dv,
+            twr_floor=min_twr, best_twr_achieved=best_twr,
+            payload_mass=payload_mass,
+            engine_fuel_types_attempted=engine_fuel_types,
+        )
+    if seen_twr_short:
+        return StageDiagnostic(
+            failure=StageFailure.TWR_SHORT,
+            body=body_name, in_atmosphere=in_atmosphere,
+            required_dv=required_dv,
+            twr_floor=min_twr, best_twr_achieved=best_twr,
+            payload_mass=payload_mass,
+            engine_fuel_types_attempted=engine_fuel_types,
+        )
+    if seen_dry_kills_ratio:
+        return StageDiagnostic(
+            failure=StageFailure.DRY_MASS_KILLS_RATIO,
+            body=body_name, in_atmosphere=in_atmosphere,
+            required_dv=required_dv,
+            payload_mass=payload_mass,
+            engine_fuel_types_attempted=engine_fuel_types,
+        )
+    if seen_engine_too_big:
+        return StageDiagnostic(
+            failure=StageFailure.ENGINE_TOO_BIG_FOR_TANK,
+            body=body_name, in_atmosphere=in_atmosphere,
+            required_dv=required_dv,
+            payload_mass=payload_mass,
+            engine_fuel_types_attempted=engine_fuel_types,
+        )
+    # Catchall — shouldn't normally fire if all the rejection paths above
+    # are instrumented. If it does, return a generic DV_SHORT with zero
+    # best_dv so the bumper still has something to act on.
+    return StageDiagnostic(
+        failure=StageFailure.DV_SHORT,
+        body=body_name, in_atmosphere=in_atmosphere,
+        required_dv=required_dv, best_dv_achieved=best_dv,
+        payload_mass=payload_mass,
+        engine_fuel_types_attempted=engine_fuel_types,
+    )
 
 
 # ---------------------------------------------------------------------------

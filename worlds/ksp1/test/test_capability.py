@@ -110,7 +110,7 @@ def _make_flags(
         flags.lightest_probe = _PROBE_CORE
     if capsule:
         flags.has_capsule = True
-        flags.heaviest_capsule = _COMMAND_POD
+        flags.lightest_capsule = _COMMAND_POD
 
     if reaction_wheels:
         flags.has_reaction_wheels = True
@@ -1470,7 +1470,7 @@ class TestAttitudeBundleManifestReconciles(unittest.TestCase):
         )
         pod = PART_DB["mk1-3pod"][0]
         flags.has_capsule = True
-        flags.heaviest_capsule = pod
+        flags.lightest_capsule = pod
         rcs = PART_DB["RCSLinearSmall"][0]
         flags.has_rcs = True
         flags.lightest_rcs_thruster = rcs
@@ -1479,6 +1479,97 @@ class TestAttitudeBundleManifestReconciles(unittest.TestCase):
         self.assertIsNotNone(bundle)
         self.assertEqual(bundle.parts, ((4, "RCSLinearSmall"),))
         self.assertAlmostEqual(bundle.mass, 4 * rcs.mass, places=6)
+
+
+class TestStructuredBlockingReasons(unittest.TestCase):
+    """
+    Verifies that ProfileResult.blocking carries structured BlockingInfo
+    objects with the expected BlockingReason enum values.  Sphere-ladder
+    pre-fill consumes these structured values directly (no string parsing).
+    """
+
+    def test_empty_kit_mun_orbit_yields_propulsion_reasons(self) -> None:
+        from worlds.ksp1.capability import evaluate_mission_detailed, _pre_pass
+        from worlds.ksp1.capability_reasons import BlockingReason
+        flags = _pre_pass(lambda _n: 0, start_with_clamps=False)
+        result = evaluate_mission_detailed(
+            flags, _normal_diff(), "Mun", MissionType.ORBIT, None,
+        )
+        self.assertFalse(result.feasible)
+        reasons = {b.reason for b in result.blocking}
+        # An empty kit should report at least one of NO_FUEL / NO_ENGINE
+        # / NO_LAUNCH_ENGINE / STAGING_TIER_INSUFFICIENT.
+        self.assertTrue(reasons & {
+            BlockingReason.NO_FUEL,
+            BlockingReason.NO_ENGINE,
+            BlockingReason.NO_LAUNCH_ENGINE,
+            BlockingReason.STAGING_TIER_INSUFFICIENT,
+            BlockingReason.NO_PROBE_CORE,
+        }, f"Expected propulsion or command-module reason; got {reasons}")
+
+    def test_no_heat_shield_is_structured(self) -> None:
+        from worlds.ksp1.capability import _evaluate_profile
+        from worlds.ksp1.capability_reasons import BlockingReason
+        flags = _make_flags(
+            engines=[_MAINSAIL], tanks=[_FL_T400, _FL_T800],
+            probe_core=True, reaction_wheels=True,
+            solar=True, relay_tier=3, launch_clamp=True,
+            decoupler_stack=True,
+            parachutes=[_MK16, _MK16, _MK16, _MK16],
+        )
+        profiles = MISSION_PROFILES.get((BodyName.DUNA, MissionType.LAND), [])
+        aero_profiles = [p for p in profiles
+                         if any(e.needs_heat_shield for e in p)]
+        self.assertTrue(aero_profiles, "Test fixture: no aero profiles found")
+        result = _evaluate_profile(
+            aero_profiles[0], flags, _normal_diff(),
+            MissionType.LAND, is_crewed=False,
+        )
+        self.assertFalse(result.feasible)
+        self.assertIn(BlockingReason.NO_HEAT_SHIELD,
+                      {b.reason for b in result.blocking})
+
+    def test_launch_clamp_blocking_carries_enum(self) -> None:
+        from worlds.ksp1.capability_reasons import BlockingReason
+        flags = _make_flags(
+            engines=[_MAINSAIL, _SWIVEL],
+            tanks=[_FL_T400, _FL_T800, _X200_32],
+            probe_core=True, reaction_wheels=True,
+            solar=True, relay_tier=3,
+            launch_clamp=False, decoupler_stack=True,
+        )
+        body = BODY_BY_NAME[BodyName.DUNA]
+        result = _assess_one_body(body, flags, _normal_diff(), computed={})
+        self.assertEqual(len(result.blocking), 1)
+        self.assertEqual(result.blocking[0].reason,
+                         BlockingReason.NO_LAUNCH_CLAMP)
+        # And the legacy string view still matches.
+        self.assertIn("launch clamp", (result.blocking_reason or "").lower())
+
+    def test_relay_tier_too_low_carries_typed_fields(self) -> None:
+        from worlds.ksp1.capability import _evaluate_profile
+        from worlds.ksp1.capability_reasons import BlockingReason
+        flags = _make_flags(
+            engines=[_MAINSAIL, _SWIVEL],
+            tanks=[_FL_T400, _FL_T800, _X200_32],
+            probe_core=True, reaction_wheels=True,
+            solar=True, relay_tier=0,   # <-- too low for any outer body
+            launch_clamp=True, decoupler_stack=True,
+            heat_shields=[_SHIELD_25],
+            parachutes=[_MK16, _MK16, _MK16, _MK16],
+        )
+        profiles = MISSION_PROFILES.get((BodyName.DUNA, MissionType.ORBIT), [])
+        result = _evaluate_profile(
+            profiles[0], flags, _normal_diff(),
+            MissionType.ORBIT, is_crewed=False,
+        )
+        self.assertFalse(result.feasible)
+        relay_blockings = [b for b in result.blocking
+                           if b.reason == BlockingReason.RELAY_TIER_TOO_LOW]
+        self.assertTrue(relay_blockings,
+                        f"Expected RELAY_TIER_TOO_LOW; got {result.blocking}")
+        self.assertGreater(relay_blockings[0].relay_needed, 0)
+        self.assertEqual(relay_blockings[0].relay_available, 0)
 
 
 if __name__ == "__main__":

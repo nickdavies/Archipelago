@@ -1,8 +1,6 @@
 """Tests for the GoalSpec system (resolve_goal_spec, goal_spec_location_names, victory rules)."""
 import unittest
 
-from test.bases import WorldTestBase
-
 from worlds.ksp1.bodies import BodyName
 from worlds.ksp1.options import Goal
 from worlds.ksp1.rules import (
@@ -14,6 +12,7 @@ from worlds.ksp1.rules import (
     _STANDARD_RETURN_BODIES,
 )
 from worlds.ksp1.tech_tree import LEAF_TECH_NODES
+from worlds.ksp1.test.base import KSP1TestBase as _SharedKSP1TestBase
 
 
 # ---------------------------------------------------------------------------
@@ -190,9 +189,7 @@ class TestGoalSpecLocationNames(unittest.TestCase):
 # Full world tests for victory access rules
 # ---------------------------------------------------------------------------
 
-class KSP1TestBase(WorldTestBase):
-    game = "Kerbal Space Program 1"
-    run_default_tests = False  # fill tested once in test_generation.py
+KSP1TestBase = _SharedKSP1TestBase
 
 
 class TestMunReturnGoalReachability(KSP1TestBase):

@@ -7,12 +7,13 @@ from . import items, locations, regions, rules
 from .rules import GoalSpec, resolve_goal_spec, goal_spec_location_names
 from .capability import CAPABILITY_ITEMS, RocketCapability
 from .bodies import ALL_BODIES, MissionType
-from .items import ITEM_NAME_TO_ID, _FILLER_ITEMS
+from .items import ITEM_NAME_TO_ID, PROGRESSIVE_LAUNCH_PAD_CAPS, _FILLER_ITEMS
 from .parts import PROGRESSIVE_PART_TIERS
 from .locations import (
     ALL_EVENTS, EventName, KSC_BIOMES, KSC_LOCATION_PREFIX,
     KERBIN_LOCATIONS, LOCATION_NAME_TO_ID, MAX_TECH_SLOTS, MissionLocation,
     STARTING_INV_COUNTS, TECH_SLOTS_BY_DIFFICULTY, TechTreeLocation,
+    effective_starting_inv_count,
 )
 from .options import KSP1Options
 from .tech_tree import MAX_TIER, NODES_BY_TIER, TECH_NODES, TIER_TO_BAND
@@ -104,6 +105,10 @@ class KSP1World(World):
         rules.set_all_rules(self)
         rules.set_completion_condition(self, self.goal_spec)
 
+    def pre_fill(self) -> None:
+        from .sphere_ladder import apply_sphere_ladder
+        apply_sphere_ladder(self)
+
     def create_item(self, name: str) -> items.KSP1Item:
         return items.create_item(self, name)
 
@@ -144,7 +149,16 @@ class KSP1World(World):
             name: int(name.split()[-1])
             for name in _FILLER_ITEMS
         }
-        d["starting_inv_count"] = STARTING_INV_COUNTS[self.options.difficulty.value]
+        d["starting_inv_count"] = effective_starting_inv_count(
+            self.options, self.options.difficulty.value
+        )
+        # Mass-cap progression: only set when option is enabled. Caps are in
+        # tonnes, indexed by collected count of "Progressive Launch Pad"
+        # (0..N). The sentinel -1.0 marks "unlimited" so JSON can carry it.
+        if self.options.progressive_launch_pad:
+            d["progressive_launch_pad_caps"] = [
+                cap if cap != float("inf") else -1.0 for cap in PROGRESSIVE_LAUNCH_PAD_CAPS
+            ]
         return d
 
     # ------------------------------------------------------------------

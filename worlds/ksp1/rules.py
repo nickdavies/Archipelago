@@ -38,6 +38,7 @@ from .locations import (
     STARTING_INV_NAMES,
     TECH_SLOTS_BY_DIFFICULTY,
     TechTreeLocation,
+    effective_starting_inv_count,
     event_locations,
 )
 from .options import Difficulty, Goal, ItemPacing
@@ -144,6 +145,7 @@ def set_all_rules(world: KSP1World) -> None:
     _set_mission_rules(world, player)
     # Tech tree rules are now region entrance rules (see regions.py).
     _set_item_pacing_rules(world, player, difficulty)
+    _set_early_bucket_item_bans(world, player, difficulty)
     if world.goal_spec.is_kerbin_system_only:
         _set_interplanetary_item_rules(world, player)
 
@@ -352,7 +354,7 @@ def _set_item_pacing_rules(world: KSP1World, player: int, difficulty: int) -> No
         return
 
     num_slots = TECH_SLOTS_BY_DIFFICULTY[difficulty]
-    num_starting = STARTING_INV_COUNTS[difficulty]
+    num_starting = effective_starting_inv_count(world.options, difficulty)
     early_ban_rule = _make_early_ban_rule(player)
 
     # Band A: Starting Inventory
@@ -388,6 +390,35 @@ def _set_item_pacing_rules(world: KSP1World, player: int, difficulty: int) -> No
         for slot in range(1, num_slots + 1):
             name = str(TechTreeLocation(node.display_name, slot))
             add_item_rule(world.get_location(name), science_rule)
+
+
+# ---------------------------------------------------------------------------
+# Early-bucket targeted item bans
+# ---------------------------------------------------------------------------
+
+def _set_early_bucket_item_bans(world: KSP1World, player: int, difficulty: int) -> None:
+    """Ban Progressive Launch Pad from starter inventory only.
+
+    The Pad item is a blow-open item: collecting it raises the launch-mass
+    cap by a big jump and opens many bodies at once.  Keeping it out of
+    the starter bucket spreads its discovery across the game.
+    Sphere-ladder Rule B handles other early-bucket restrictions
+    (e.g. the differentiators previously banned by the now-removed
+    ``ban_differentiators_early`` option).
+    """
+    if not world.options.progressive_launch_pad:
+        return
+
+    from worlds.generic.Rules import add_item_rule
+    from .items import PROGRESSIVE_LAUNCH_PAD_NAME
+
+    num_starter = effective_starting_inv_count(world.options, difficulty)
+    starter_bucket = list(STARTING_INV_NAMES[:num_starter])
+
+    def starter_rule(item) -> bool:
+        return item.player != player or item.name != PROGRESSIVE_LAUNCH_PAD_NAME
+    for name in starter_bucket:
+        add_item_rule(world.get_location(name), starter_rule)
 
 
 # ---------------------------------------------------------------------------

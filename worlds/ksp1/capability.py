@@ -31,7 +31,9 @@ from .parts import (
     Parachute, LandingLeg, Decoupler, MiscEquipment,
     MultiMount, MULTI_MOUNT_TABLE,
     PROGRESSIVE_PART_TIERS, PROGRESSIVE_PART_NAMES, PROGRESSIVE_PART_COUNTS,
+    usable_fuel_mass,
 )
+from .capability_reasons import BlockingInfo, BlockingReason
 from .locations import (
     ALL_EVENTS, EVENT_BY_NAME, EventName, KERBIN_SYSTEM_BODY_NAMES,
     get_body_events,
@@ -73,7 +75,14 @@ CAPABILITY_ITEMS: frozenset[str] = frozenset(
         )
         for p in parts
     )
-) | frozenset(PROGRESSIVE_PART_COUNTS.keys())
+) | frozenset(PROGRESSIVE_PART_COUNTS.keys()) | {
+    # Non-part progressives that still affect capability. Without these
+    # the L2 fingerprint collapses different counts onto the same cache
+    # key — e.g. Pad=0 vs Pad=3 both fingerprint identically, so the
+    # first computed mass cap (100t base) is returned for everyone.
+    "Progressive Launch Pad",
+    "Progressive R&D",
+}
 
 # Terminal velocity threshold for parachute adequacy (m/s)
 _MAX_SAFE_LANDING_SPEED: float = 6.0
@@ -92,6 +101,18 @@ _MIN_EVA_JETPACK_TWR: float = 1.05
 # Sounding rocket parameters
 _SOUNDING_MIN_TWR: float = 1.1   # minimum sea-level TWR to count as a viable rocket
 
+
+
+# ---------------------------------------------------------------------------
+# Parts that nominally provide the ``capsule`` flag but cannot serve as
+# the terminal payload for real missions (no thermal protection, no
+# pressurized cabin, can't survive interplanetary or atmospheric reentry).
+# Excluded from ``lightest_capsule`` selection in _pre_pass.
+# ---------------------------------------------------------------------------
+
+_CAPSULE_EXCLUSIONS: frozenset[str] = frozenset({
+    "seatExternalCmd",   # external chair
+})
 
 
 # ---------------------------------------------------------------------------
@@ -140,7 +161,7 @@ class EquipmentFlags:
     best_heat_shield: Optional[HeatShield] = None
     total_chute_drag_area: float = 0.0             # sum of non-drogue drag areas
     parachute_count: int = 0
-    heaviest_capsule: Optional[MiscEquipment] = None
+    lightest_capsule: Optional[MiscEquipment] = None
     lightest_probe: Optional[MiscEquipment] = None
 
     # Support equipment — part references per category
@@ -163,6 +184,11 @@ class EquipmentFlags:
 
     # Solar distance for ION logic (set from the edge being evaluated)
     target_solar_au: float = 1.0
+
+    # Launch-pad mass cap (tonnes). Default is unlimited; set by progressive
+    # launch-pad tier when the option is enabled. Missions whose computed
+    # launch mass exceeds this are infeasible.
+    launch_pad_mass_cap: float = float("inf")
 
     # Available part lists (populated by pre-pass)
     available_engines: list[Engine] = field(default_factory=list)
@@ -194,7 +220,20 @@ class BodyAccessProfile:
     access: dict[EventName, bool] = field(
         default_factory=lambda: {ev.name: False for ev in ALL_EVENTS}
     )
-    blocking_reason: Optional[str] = None
+    # Structured blocking info; the first entry's __str__ is what
+    # `blocking_reason` reports. Mutation goes through ``set_blocking``
+    # (or direct ``blocking.append``); the legacy string attribute is
+    # derived.
+    blocking: list[BlockingInfo] = field(default_factory=list)
+
+    @property
+    def blocking_reason(self) -> Optional[str]:
+        """Back-compat string view of the first blocking entry."""
+        return str(self.blocking[0]) if self.blocking else None
+
+    def set_blocking(self, info: BlockingInfo) -> None:
+        """Replace any prior reasons with a single structured one."""
+        self.blocking = [info]
 
 
 def event_mission_info(event_name: str) -> tuple[str, bool | None]:
@@ -246,12 +285,22 @@ def _capability_fingerprint(state: CollectionState, player: int) -> frozenset[tu
     For progressive items, the count matters (unlocks different tiers).
     For individual items, count is capped at 1 (presence/absence).
     """
+    from .items import (
+        PROGRESSIVE_LAUNCH_PAD_NAME, PROGRESSIVE_LAUNCH_PAD_COUNT,
+        PROGRESSIVE_RD_NAME, PROGRESSIVE_RD_COUNT,
+    )
+    _NON_PART_PROGRESSIVE_COUNTS = {
+        PROGRESSIVE_LAUNCH_PAD_NAME: PROGRESSIVE_LAUNCH_PAD_COUNT,
+        PROGRESSIVE_RD_NAME: PROGRESSIVE_RD_COUNT,
+    }
     result: list[tuple[str, int]] = []
     for name in CAPABILITY_ITEMS:
         c = state.count(name, player)
         if c > 0:
             if name in PROGRESSIVE_PART_COUNTS:
                 result.append((name, min(c, PROGRESSIVE_PART_COUNTS[name])))
+            elif name in _NON_PART_PROGRESSIVE_COUNTS:
+                result.append((name, min(c, _NON_PART_PROGRESSIVE_COUNTS[name])))
             else:
                 result.append((name, 1))
     return frozenset(result)
@@ -313,7 +362,8 @@ def explain_body_unreachable(state: CollectionState, player: int, body_name: str
 
 def _pre_pass(item_count_fn: Callable[[str], int],
               start_with_clamps: bool,
-              rep_names: frozenset[str] = frozenset()) -> EquipmentFlags:
+              rep_names: frozenset[str] = frozenset(),
+              progressive_launch_pad: bool = False) -> EquipmentFlags:
     """
     Iterate every item the player has collected and build EquipmentFlags.
 
@@ -342,6 +392,16 @@ def _pre_pass(item_count_fn: Callable[[str], int],
     flags.has_vacuum_engine = item_count_fn("Progressive Vacuum Engine") > 0
     flags.has_lfo_fuel = item_count_fn("Progressive LFO Tank") > 0
     flags.has_srb_fuel = item_count_fn("Progressive SRB") > 0
+
+    # Launch-pad mass cap: indexed by collected count of
+    # "Progressive Launch Pad". 0 copies → starting cap; each additional
+    # copy raises the cap. Only active when the option is enabled
+    # (otherwise the default inf applies).
+    if progressive_launch_pad:
+        from .items import PROGRESSIVE_LAUNCH_PAD_NAME, PROGRESSIVE_LAUNCH_PAD_CAPS
+        pad_count = item_count_fn(PROGRESSIVE_LAUNCH_PAD_NAME)
+        idx = min(pad_count, len(PROGRESSIVE_LAUNCH_PAD_CAPS) - 1)
+        flags.launch_pad_mass_cap = PROGRESSIVE_LAUNCH_PAD_CAPS[idx]
 
     # Process parts: both progressive-unlocked and individual non-absorbed items
     for item_name, parts in PART_DB.items():
@@ -385,20 +445,49 @@ def _pre_pass(item_count_fn: Callable[[str], int],
     # Throttleable engine flag (for powered landing)
     flags.has_throttleable_engine = any(e.throttleable for e in flags.available_engines)
 
-    # Build fuel-type index for tanks, sorted for best-first search.
-    # Deduplicate by optimizer-relevant fields (dry_mass, fuel_mass, size_class)
-    # since many structural variants (adapters, mk2/mk3 fuselages) share stats.
-    # Sort by ratio (fuel/dry) desc then fuel_mass asc — the optimizer
-    # uses best_wet upper-bound pruning, so trying high-ratio small tanks
-    # first finds good solutions quickly and skips worse options.
+    # Build fuel-type index for tanks, keyed by engine fuel_type (consumer).
+    # Each tank appears under every engine fuel_type it can fuel. For tanks
+    # carrying propellants the engine doesn't need (e.g. LFO tank fueling a
+    # NERV that only consumes LiquidFuel), we synthesize a view tank with
+    # reduced fuel_mass — same dry mass, oxidizer drained. MonoPropellant
+    # cannot be drained, so monoprop-bearing tanks only fuel monoprop engines.
+    #
+    # Deduplicate by (engine_fuel_type, dry_mass, effective_fuel_mass, size_class).
+    # Sort each bucket by ratio (fuel/dry) desc then fuel_mass asc — the
+    # optimizer's best_wet upper-bound pruning finds good solutions fastest
+    # when high-ratio small tanks are tried first.
+    engine_propellants_by_ft: dict[str, frozenset[str]] = {}
+    for engine in flags.available_engines:
+        engine_propellants_by_ft.setdefault(
+            engine.fuel_type, frozenset(engine.propellants)
+        )
     tank_index: dict[str, list[FuelTank]] = {}
     seen_tank_stats: set[tuple[str, float, float, float]] = set()
-    for tank in flags.available_tanks:
-        key = (tank.fuel_type, tank.dry_mass, tank.fuel_mass, tank.size_class)
-        if key in seen_tank_stats:
-            continue
-        seen_tank_stats.add(key)
-        tank_index.setdefault(tank.fuel_type, []).append(tank)
+    for engine_ft, engine_props in engine_propellants_by_ft.items():
+        bucket: list[FuelTank] = []
+        for tank in flags.available_tanks:
+            eff_mass = usable_fuel_mass(tank, engine_props)
+            if eff_mass <= 0:
+                continue
+            key = (engine_ft, tank.dry_mass, eff_mass, tank.size_class)
+            if key in seen_tank_stats:
+                continue
+            seen_tank_stats.add(key)
+            if eff_mass == tank.fuel_mass:
+                bucket.append(tank)
+            else:
+                # Synthetic view: same physical tank, reduced fuel mass.
+                bucket.append(FuelTank(
+                    name=tank.name,
+                    dry_mass=tank.dry_mass,
+                    fuel_mass=eff_mass,
+                    fuel_type=engine_ft,
+                    size_class=tank.size_class,
+                    max_count=tank.max_count,
+                    fuel_masses=tank.fuel_masses,
+                ))
+        if bucket:
+            tank_index[engine_ft] = bucket
     for fuel_type in tank_index:
         tank_index[fuel_type].sort(
             key=lambda t: (
@@ -496,9 +585,15 @@ def _apply_misc(flags: EquipmentFlags, part: MiscEquipment, count: int) -> None:
             if flags.lightest_probe is None or part.mass < flags.lightest_probe.mass:
                 flags.lightest_probe = part
         elif flag == CF.CAPSULE:
+            # The external command seat (an exposed kerbal chair) provides
+            # the ``capsule`` flag but cannot survive interplanetary travel
+            # or atmospheric reentry — exclude it from terminal-payload
+            # consideration.
+            if part.name in _CAPSULE_EXCLUSIONS:
+                continue
             flags.has_capsule = True
-            if flags.heaviest_capsule is None or part.mass > flags.heaviest_capsule.mass:
-                flags.heaviest_capsule = part
+            if flags.lightest_capsule is None or part.mass < flags.lightest_capsule.mass:
+                flags.lightest_capsule = part
         elif flag == CF.REACTION_WHEEL:
             flags.has_reaction_wheels = True
             # Standalone wheel module = provides reaction_wheel without also
@@ -578,9 +673,17 @@ class ProfileResult:
     launch_mass: float = 0.0          # total wet mass at kerbin_surface
     stage_results: list[StageResult] = field(default_factory=list)
     edge_groups: list[list[MissionEdge]] = field(default_factory=list)
-    failure_reasons: list[str] = field(default_factory=list)
+    # Structured blocking info; ``failure_reasons`` is the legacy string
+    # view derived from ``blocking``. Producers populate ``blocking``;
+    # downstream consumers can read either.
+    blocking: list[BlockingInfo] = field(default_factory=list)
     # Command module + support equipment for the terminal stage: [(count, part_id), ...]
     terminal_parts: list[tuple[int, str]] = field(default_factory=list)
+
+    @property
+    def failure_reasons(self) -> list[str]:
+        """Back-compat string view of ``blocking``."""
+        return [str(b) for b in self.blocking]
 
 
 def _has_attitude_control(flags: EquipmentFlags) -> bool:
@@ -611,7 +714,7 @@ _TERMINAL_PARTS_WITH_INTERNAL_MONOPROP: frozenset[str] = frozenset({
 
 
 def _terminal_part(flags: EquipmentFlags, is_crewed: bool) -> Optional[MiscEquipment]:
-    return flags.heaviest_capsule if is_crewed else flags.lightest_probe
+    return flags.lightest_capsule if is_crewed else flags.lightest_probe
 
 
 def _terminal_has_built_in_wheels(flags: EquipmentFlags, is_crewed: bool) -> bool:
@@ -762,20 +865,20 @@ def _evaluate_profile(
     needs_ladder = any(e.needs_ladder for e in profile)
 
     # Collect all pre-check failures before attempting stage optimization.
-    reasons: list[str] = []
+    blocking: list[BlockingInfo] = []
 
     # Command check
     if is_crewed:
         if not flags.has_capsule:
-            reasons.append("no capsule for crewed mission")
+            blocking.append(BlockingInfo(reason=BlockingReason.NO_CAPSULE))
     else:
         if not flags.has_probe_core:
-            reasons.append("no probe core for unmanned mission")
+            blocking.append(BlockingInfo(reason=BlockingReason.NO_PROBE_CORE))
 
     # Attitude control (required by almost every edge via requires_attitude_control)
     if any(e.requires_attitude_control for e in profile):
         if not _has_attitude_control(flags):
-            reasons.append("no attitude control")
+            blocking.append(BlockingInfo(reason=BlockingReason.NO_ATTITUDE_CONTROL))
 
     # Landing legs
     if needs_legs:
@@ -784,20 +887,23 @@ def _evaluate_profile(
         ]
         required_tier = max((b.landing_leg_tier for b in leg_bodies), default=0)
         if flags.landing_leg_tier < required_tier:
-            reasons.append(
-                f"need leg tier {required_tier}, have {flags.landing_leg_tier}")
+            blocking.append(BlockingInfo(
+                reason=BlockingReason.LANDING_LEGS_MISSING,
+                leg_tier_needed=required_tier,
+                leg_tier_available=flags.landing_leg_tier,
+            ))
 
     # Ladder
     if needs_ladder and not flags.has_ladder:
-        reasons.append("need ladder for sample return")
+        blocking.append(BlockingInfo(reason=BlockingReason.NO_LADDER))
 
     # Heat shield
     if has_aero_edge and not flags.has_heat_shield:
-        reasons.append("no heat shield for aero edge")
+        blocking.append(BlockingInfo(reason=BlockingReason.NO_HEAT_SHIELD))
 
     # Parachutes (broad check: any parachutes at all for aero landing)
     if has_atmo_land_aero and not flags.has_parachutes:
-        reasons.append("no parachutes for aero landing")
+        blocking.append(BlockingInfo(reason=BlockingReason.NO_PARACHUTE))
 
     # Power: check each unique body in the profile
     # Detect if aero edges destroy fixed solar panels
@@ -816,15 +922,31 @@ def _evaluate_profile(
     for body_name, after_aero in body_aero_destroyed.items():
         body = BODY_BY_NAME[body_name]
         if not _check_power_for_body(flags, body, after_aero=after_aero):
-            reasons.append(f"insufficient power at {body_name} "
-                           f"(after_aero={after_aero})")
+            # "solar_helps" iff body.power_requirement is solar-based
+            # AND we're not in a post-aero state where only retractable/rtg
+            # would work.  This drives sphere-ladder bump priority (solar
+            # vs rtg).
+            solar_helps = body.power_requirement in ("solar", "solar_marginal") \
+                          and not after_aero
+            blocking.append(BlockingInfo(
+                reason=(BlockingReason.INSUFFICIENT_POWER_SOLAR_OK
+                        if solar_helps
+                        else BlockingReason.INSUFFICIENT_POWER_NEEDS_RTG),
+                body=body_name,
+                after_aero=after_aero,
+                solar_helps=solar_helps,
+            ))
 
     # Relay tier
     for edge in profile:
         body = BODY_BY_NAME[edge.body]
         if flags.relay_tier < body.min_relay_tier:
-            reasons.append(f"relay tier too low for {body.name}: "
-                           f"need {body.min_relay_tier}, have {flags.relay_tier}")
+            blocking.append(BlockingInfo(
+                reason=BlockingReason.RELAY_TIER_TOO_LOW,
+                body=body.name,
+                relay_needed=body.min_relay_tier,
+                relay_available=flags.relay_tier,
+            ))
             break  # one relay failure is sufficient
 
     # Propulsion gate: bail if the player has no engines or fuel at all.
@@ -838,21 +960,32 @@ def _evaluate_profile(
                     or bool(flags.available_tanks) or bool(flags.available_srbs))
 
     from .bodies import EdgeType as _ET
-    propulsion_reasons: set[str] = set()
+    # Dedup propulsion failures by (reason, edge_type) so two ascent
+    # edges don't double-report.
+    propulsion_seen: set[tuple[BlockingReason, str]] = set()
+    propulsion: list[BlockingInfo] = []
+    def _add_prop(r: BlockingReason, et_name: str) -> None:
+        key = (r, et_name)
+        if key in propulsion_seen:
+            return
+        propulsion_seen.add(key)
+        propulsion.append(BlockingInfo(reason=r, edge_type=et_name))
     for edge in profile:
         et = edge.edge_type
         if et == _ET.ATMOSPHERIC_ASCENT or et == _ET.ATMO_LANDING_PROPULSIVE:
             if not has_launch_engine:
-                propulsion_reasons.add(f"no launch engine for {et.name}")
+                _add_prop(BlockingReason.NO_LAUNCH_ENGINE, et.name)
             if not has_any_fuel:
-                propulsion_reasons.add(f"no fuel for {et.name}")
+                _add_prop(BlockingReason.NO_FUEL, et.name)
         elif et in (_ET.VACUUM_ASCENT, _ET.PURE_VACUUM,
                     _ET.PLANET_TRANSFER, _ET.VACUUM_LANDING):
             if not has_any_engine:
-                propulsion_reasons.add(f"no engine for {et.name}")
+                _add_prop(BlockingReason.NO_ENGINE, et.name)
             if not has_any_fuel:
-                propulsion_reasons.add(f"no fuel for {et.name}")
-    reasons.extend(sorted(propulsion_reasons))
+                _add_prop(BlockingReason.NO_FUEL, et.name)
+    # Sort for deterministic output matching the legacy `sorted(set)` path.
+    propulsion.sort(key=lambda b: str(b))
+    blocking.extend(propulsion)
 
     # ------------------------------------------------------------------
     # Stage grouping
@@ -867,13 +1000,15 @@ def _evaluate_profile(
     # player's decouplers allow, the profile is physically impossible.
     max_stages = 1 if flags.staging_tier == 0 else len(groups)
     if len(groups) > max_stages:
-        reasons.append(
-            f"need {len(groups)} stages but staging_tier={flags.staging_tier} "
-            f"only allows {max_stages}")
+        blocking.append(BlockingInfo(
+            reason=BlockingReason.STAGING_TIER_INSUFFICIENT,
+            stages_needed=len(groups),
+            stages_available=flags.staging_tier,
+        ))
 
     # Return all collected pre-check failures before attempting optimization.
-    if reasons:
-        return ProfileResult(False, failure_reasons=reasons)
+    if blocking:
+        return ProfileResult(False, blocking=blocking)
 
     # ------------------------------------------------------------------
     # Backward pass — compute masses from destination back to Kerbin
@@ -881,7 +1016,7 @@ def _evaluate_profile(
 
     # Terminal payload mass
     if is_crewed:
-        capsule_mass = flags.heaviest_capsule.mass if flags.heaviest_capsule else 0.0
+        capsule_mass = flags.lightest_capsule.mass if flags.lightest_capsule else 0.0
         terminal_mass = max(capsule_mass, 0.08)  # min capsule
     else:
         probe_mass = flags.lightest_probe.mass if flags.lightest_probe else 0.0
@@ -892,9 +1027,35 @@ def _evaluate_profile(
     terminal_equip = _terminal_equipment_mass(profile, flags)
     payload = terminal_mass + terminal_equip
 
+    # Global attitude strategy. One reaction wheel or RCS bundle covers
+    # every stage that flies under it: place it on the *last* (highest
+    # flight-order index) stage whose edges require attitude control. That
+    # stage's wet mass propagates downward as payload, so earlier stages
+    # automatically carry the wheel. Stages *above* that point (e.g. a
+    # passive aero-capture reentry) don't pay for it.
+    attitude_group_indices = [
+        i for i, g in enumerate(groups)
+        if any(e.requires_attitude_control for e in g)
+    ]
+    global_attitude_bundle: Optional[AttitudeBundle] = None
+    global_attitude_stage_idx: int = -1   # flight-order index of placement
+    global_attitude_force_gimbal: bool = False
+    if _PER_STAGE_ATTITUDE_ENABLED and attitude_group_indices:
+        if not _terminal_has_built_in_wheels(flags, is_crewed):
+            global_attitude_bundle = _attitude_bundle_for_stage(flags, is_crewed)
+            if global_attitude_bundle is not None:
+                global_attitude_stage_idx = attitude_group_indices[-1]
+            else:
+                # No wheel/RCS source anywhere — every attitude-requiring stage
+                # must pick a gimballed engine/SRB to self-provide control.
+                global_attitude_force_gimbal = True
+
     stage_results_list: list[StageResult] = []
 
-    for group in reversed(groups):
+    # ``reversed(groups)`` iterates terminal → ascent; track the matching
+    # flight-order index so we can hook stage-specific behaviour.
+    for rev_idx, group in enumerate(reversed(groups)):
+        flight_idx = len(groups) - 1 - rev_idx
         body = BODY_BY_NAME[group[0].body]
         solar_au = body.solar_distance_au
 
@@ -965,28 +1126,25 @@ def _evaluate_profile(
         if has_atmo_ascent_in_group and flags.lightest_aero_control:
             stage_payload += 4.0 * flags.lightest_aero_control.mass
             stage_equipment.append((4, flags.lightest_aero_control.name))
+        # Place the attitude bundle on the highest-flight-index stage that
+        # needs attitude. Its wet mass cascades down to earlier stages, so
+        # every prior stage carries it for free.
+        if (global_attitude_bundle is not None
+                and flight_idx == global_attitude_stage_idx):
+            stage_payload += global_attitude_bundle.mass
+            stage_equipment.extend(global_attitude_bundle.parts)
 
-        # Per-stage attitude control: a stage with `requires_attitude_control`
-        # edges needs an on-stage source — gimballed engine/SRB, a reaction
-        # wheel travelling on the terminal payload, or a concrete attitude
-        # bundle attached to this stage. The optimizer takes the bundle mass
-        # and only charges it for candidate propulsion that lacks gimbal
-        # (lets "ungimballed + bundle" trade against "gimballed alone"
-        # automatically). Bundle parts are appended to the manifest below
-        # iff the optimizer's chosen propulsion in fact lacks gimbal — so
-        # manifest mass and charged mass always reconcile exactly.
+        # Attitude control. The terminal-stage bundle (if any) is already
+        # priced into the payload, so this stage already carries it. If no
+        # bundle is available anywhere on the rocket and the group needs
+        # attitude control, the stage must self-provide via a gimballed
+        # engine/SRB. Atmospheric ascent stages have their own gimbal-or-aero
+        # gate above (separate concern from attitude bundling).
         group_needs_attitude = any(e.requires_attitude_control for e in group)
-        attitude_bundle: Optional[AttitudeBundle] = None
-        if (_PER_STAGE_ATTITUDE_ENABLED
+        if (global_attitude_force_gimbal
                 and group_needs_attitude
-                and not _terminal_has_built_in_wheels(flags, is_crewed)
                 and not needs_gimbal_engine):
-            attitude_bundle = _attitude_bundle_for_stage(flags, is_crewed)
-            if attitude_bundle is None:
-                # No bundle available — fall back to forcing a gimballed prop.
-                # If no gimballed engine/SRB exists either, find_optimal_stage
-                # will return None below and the profile is infeasible.
-                needs_gimbal_engine = True
+            needs_gimbal_engine = True
 
         # Parachute consumption check for aero landing edges in this group.
         # Use the landing edge's actual body (not the group's first body) since
@@ -999,8 +1157,11 @@ def _evaluate_profile(
                 _aero_body = BODY_BY_NAME[_aero_e.body]
                 needed = _required_chute_count(payload, _aero_body, flags, diff)
                 if needed < 0:
-                    return ProfileResult(False,
-                        failure_reasons=[f"parachute terminal velocity check failed at {_aero_body.name}"])
+                    # Surface partial-mass-attempt for the bumper scorer.
+                    return ProfileResult(False, launch_mass=payload, blocking=[BlockingInfo(
+                        reason=BlockingReason.PARACHUTE_TERMINAL_VELOCITY,
+                        body=_aero_body.name,
+                    )])
 
         # Aero-landing groups are passive — heat shield + parachutes do all
         # the work.  Skip the engine optimizer entirely.
@@ -1039,6 +1200,7 @@ def _evaluate_profile(
         else:
             parallel_mode = "none"
 
+        diagnostic_out: list = []
         stage_kwargs = dict(
             available_engines=eligible_engines,
             available_srbs=flags.available_srbs,
@@ -1057,21 +1219,27 @@ def _evaluate_profile(
             tanks_by_fuel_type=flags.tanks_by_fuel_type,
             available_multi_mounts=flags.available_multi_mounts,
             require_gimbal=needs_gimbal_engine,
-            attitude_module_mass=attitude_bundle.mass if attitude_bundle else 0.0,
+            diagnostic_out=diagnostic_out,
+            body_name=body.name,
+            launch_pad_mass_cap=flags.launch_pad_mass_cap,
         )
 
         result = find_optimal_stage(parallel_mode=parallel_mode, **stage_kwargs)
 
         if result is None:
-            return ProfileResult(False,
-                failure_reasons=[f"no viable stage for group dv={req_dv:.0f} m/s at {body.name}"])
-
-        # Bundle reconciliation: if the optimizer picked a non-gimballed
-        # engine/SRB AND we offered an attitude bundle, the bundle's mass was
-        # rolled into this stage's payload. Append the concrete parts to the
-        # manifest so summing manifest masses reproduces the charged mass.
-        if attitude_bundle is not None and not result.engine_has_gimbal:
-            stage_equipment.extend(attitude_bundle.parts)
+            stage_diag = diagnostic_out[0] if diagnostic_out else None
+            # Surface the partial-mass-attempt to the bumper.  ``payload``
+            # is the running wet mass of every stage already computed
+            # (terminal → upstream), so it represents how heavy the
+            # launch vehicle would be if this stage could fly.  Lower is
+            # closer to feasible; the bumper's scorer uses this to rank
+            # infeasible candidates by mass-reduction progress.
+            return ProfileResult(False, launch_mass=payload, blocking=[BlockingInfo(
+                reason=BlockingReason.NO_VIABLE_STAGE,
+                body=body.name,
+                dv_needed=req_dv,
+                stage_diag=stage_diag,
+            )])
 
         # Chutes for aero-landing edges in mixed groups
         if aero_land_edges:
@@ -1103,13 +1271,23 @@ def _evaluate_profile(
 
     # Build terminal parts list (command module + support equipment)
     terminal_parts: list[tuple[int, str]] = []
-    if is_crewed and flags.heaviest_capsule:
-        terminal_parts.append((1, flags.heaviest_capsule.name))
+    if is_crewed and flags.lightest_capsule:
+        terminal_parts.append((1, flags.lightest_capsule.name))
     elif not is_crewed and flags.lightest_probe:
         terminal_parts.append((1, flags.lightest_probe.name))
     support_mass, support_parts = _support_equipment_mass(flags, profile)
     terminal_parts.extend(support_parts)
 
+    if payload > flags.launch_pad_mass_cap:
+        return ProfileResult(
+            feasible=False,
+            launch_mass=payload,
+            blocking=[BlockingInfo(
+                reason=BlockingReason.LAUNCH_MASS_EXCEEDED,
+                mass_actual=payload,
+                mass_cap=flags.launch_pad_mass_cap,
+            )],
+        )
     return ProfileResult(
         feasible=True,
         launch_mass=payload,
@@ -1428,12 +1606,19 @@ def _assess_one_body(
         # Non-Kerbin moons: parent planet must be orbitally reachable
         parent_prof = computed[body.parent]
         if not parent_prof.access[EventName.ORBIT]:
-                prof.blocking_reason = f"parent {body.parent} orbit unreachable"
+                prof.set_blocking(BlockingInfo(
+                    reason=BlockingReason.PARENT_BODY_UNREACHABLE,
+                    body=body.name,
+                    parent_body=body.parent,
+                ))
                 return prof
 
     # --- Launch clamp gate for interplanetary ---
     if body.name not in KERBIN_SYSTEM_BODY_NAMES and not flags.has_launch_clamp:
-        prof.blocking_reason = "no launch clamp for interplanetary mission"
+        prof.set_blocking(BlockingInfo(
+            reason=BlockingReason.NO_LAUNCH_CLAMP,
+            body=body.name,
+        ))
         return prof
 
     # --- Evaluate the events that locations.py exposes for this body ---
@@ -1459,13 +1644,21 @@ def _assess_one_body(
         if event.mission_type == MissionType.SAMPLE_RETURN and body.eva_jetpack_twr < _MIN_EVA_JETPACK_TWR:
             profiles = _inject_ladder(profiles)
 
-        ok, reasons = _try_profiles_reason(profiles, flags, diff, event.mission_type, crewed=event.crewed)
+        ok, sub_blocking = _try_profiles_reason(profiles, flags, diff, event.mission_type, crewed=event.crewed)
         prof.access[event.name] = ok
-        if not ok and not prof.blocking_reason:
-            prof.blocking_reason = f"{event.mission_type}: {'; '.join(reasons)}"
+        if not ok and not prof.blocking:
+            prof.set_blocking(BlockingInfo(
+                reason=BlockingReason.EVENT_COMPOUND,
+                body=body.name,
+                mission_type=str(event.mission_type),
+                detail="; ".join(str(b) for b in sub_blocking),
+            ))
 
-    if not prof.access[EventName.ORBIT] and not prof.blocking_reason:
-        prof.blocking_reason = "orbit not achievable"
+    if not prof.access[EventName.ORBIT] and not prof.blocking:
+        prof.set_blocking(BlockingInfo(
+            reason=BlockingReason.ORBIT_NOT_ACHIEVABLE,
+            body=body.name,
+        ))
 
     return prof
 
@@ -1523,25 +1716,27 @@ def _try_profiles_reason(
     diff: DifficultyProfile,
     mission_type: MissionType,
     crewed: bool | None,
-) -> tuple[bool, list[str]]:
+) -> tuple[bool, list[BlockingInfo]]:
     """
-    Like _try_profiles but also returns deduplicated failure reasons
+    Like _try_profiles but also returns deduplicated blocking entries
     collected across all profile attempts on failure.
     """
-    all_reasons: list[str] = []
+    all_blocking: list[BlockingInfo] = []
     seen: set[str] = set()
     if not profiles:
-        return False, ["no profiles defined"]
+        return False, [BlockingInfo(reason=BlockingReason.NO_PROFILES,
+                                     mission_type=str(mission_type))]
     for is_crewed in _crewed_options(crewed, flags):
         for profile in profiles:
             result = _evaluate_profile(profile, flags, diff, mission_type, is_crewed=is_crewed)
             if result.feasible:
                 return True, []
-            for r in result.failure_reasons:
-                if r not in seen:
-                    seen.add(r)
-                    all_reasons.append(r)
-    return False, all_reasons
+            for b in result.blocking:
+                key = str(b)
+                if key not in seen:
+                    seen.add(key)
+                    all_blocking.append(b)
+    return False, all_blocking
 
 
 def evaluate_mission_detailed(
@@ -1570,16 +1765,21 @@ def evaluate_mission_detailed(
 
     # --- Other Kerbin-specific mission types ---
     if mission_type == MissionType.FIRST_LAUNCH:
+        # KSP fires the FirstLaunch event for any kerbal EVA off the pad as
+        # well as a real rocket launch. We model only the rocket path here
+        # as a conservative subset — false negatives are acceptable, and
+        # accepting "kerbal walks off pad" caused minimal_rocket_for to
+        # always pick Progressive Capsule for sphere 0 (Capsule alone makes
+        # the location feasible), which forced every starting inventory to
+        # contain a capsule and suppressed probe-only starts.
         sounding = _compute_sounding_altitude(flags)
-        ok = sounding > 0 or flags.has_capsule
-        if ok:
+        if sounding > 0:
             return ProfileResult(True)
-        reasons = []
-        if not flags.has_capsule:
-            reasons.append("no capsule (kerbal EVA path)")
-        if sounding <= 0:
-            reasons.append("no sounding altitude (propulsion path)")
-        return ProfileResult(False, failure_reasons=reasons)
+        # Delegate to the sounding-rocket evaluator (with threshold=0.1 to
+        # force a "needs altitude" failure) so the structured reasons name
+        # the specific missing parts (payload, propulsion).
+        sub = _evaluate_sounding(flags, 0.1)
+        return ProfileResult(False, blocking=list(sub.blocking))
 
     if mission_type == MissionType.FIRST_LANDING:
         sounding = _compute_sounding_altitude(flags)
@@ -1589,55 +1789,72 @@ def evaluate_mission_detailed(
         # Engine path: sounding + safe descent
         if sounding > 0 and (flags.has_parachutes or flags.has_throttleable_engine):
             return ProfileResult(True)
-        reasons = []
+        blocking_list = []
         if not flags.has_capsule:
-            reasons.append("no capsule (EVA path)")
+            blocking_list.append(BlockingInfo(
+                reason=BlockingReason.NO_CAPSULE, detail="EVA path"))
         if sounding <= 0:
-            reasons.append("no sounding altitude")
+            blocking_list.append(BlockingInfo(
+                reason=BlockingReason.NO_SOUNDING_ALTITUDE))
         elif not flags.has_parachutes and not flags.has_throttleable_engine:
-            reasons.append("no safe descent (need parachute or throttleable engine)")
-        return ProfileResult(False, failure_reasons=reasons)
+            blocking_list.append(BlockingInfo(
+                reason=BlockingReason.NO_SAFE_DESCENT))
+        return ProfileResult(False, blocking=blocking_list)
 
     if mission_type == MissionType.FIRST_STAGING:
         if flags.staging_tier >= 1:
             return ProfileResult(True)
-        return ProfileResult(False, failure_reasons=["no stack decoupler (staging_tier < 1)"])
+        return ProfileResult(False, blocking=[BlockingInfo(
+            reason=BlockingReason.STAGING_TIER_INSUFFICIENT,
+            stages_needed=0,
+            stages_available=0,
+        )])
 
     if mission_type == MissionType.SPLASHDOWN:
         sounding = _compute_sounding_altitude(flags)
-        reasons = []
-        if sounding < (threshold_km or 1.0):
-            reasons.append(f"sounding altitude {sounding:.1f} km < {threshold_km or 1.0:.0f} km")
+        blocking_list = []
+        threshold = threshold_km or 1.0
+        if sounding < threshold:
+            blocking_list.append(BlockingInfo(
+                reason=BlockingReason.SOUNDING_ALTITUDE_TOO_LOW,
+                altitude_km=sounding,
+                threshold_km=threshold,
+            ))
         if not flags.has_parachutes and not flags.has_throttleable_engine:
-            reasons.append("no safe descent (need parachute or throttleable engine)")
-        if reasons:
-            return ProfileResult(False, failure_reasons=reasons)
+            blocking_list.append(BlockingInfo(
+                reason=BlockingReason.NO_SAFE_DESCENT))
+        if blocking_list:
+            return ProfileResult(False, blocking=blocking_list)
         return ProfileResult(True)
 
     # --- Standard body mission profiles ---
     profiles = MISSION_PROFILES.get((body_name, mission_type), [])
     if not profiles:
-        return ProfileResult(False,
-                             failure_reasons=[f"no profiles for ({body_name}, {mission_type})"])
+        return ProfileResult(False, blocking=[BlockingInfo(
+            reason=BlockingReason.NO_PROFILES,
+            body=body_name,
+            mission_type=str(mission_type),
+        )])
 
     if mission_type == MissionType.SAMPLE_RETURN:
         body = BODY_BY_NAME[body_name]
         if body.eva_jetpack_twr < _MIN_EVA_JETPACK_TWR:
             profiles = _inject_ladder(profiles)
 
-    all_reasons: list[str] = []
+    all_blocking: list[BlockingInfo] = []
     seen: set[str] = set()
     for is_crewed in _crewed_options(crewed, flags):
         for profile in profiles:
             result = _evaluate_profile(profile, flags, diff, mission_type, is_crewed=is_crewed)
             if result.feasible:
                 return result
-            for r in result.failure_reasons:
-                if r not in seen:
-                    seen.add(r)
-                    all_reasons.append(r)
+            for b in result.blocking:
+                key = str(b)
+                if key not in seen:
+                    seen.add(key)
+                    all_blocking.append(b)
 
-    return ProfileResult(False, failure_reasons=all_reasons)
+    return ProfileResult(False, blocking=all_blocking)
 
 
 def _evaluate_sounding(flags: EquipmentFlags, threshold_km: float) -> ProfileResult:
@@ -1646,12 +1863,18 @@ def _evaluate_sounding(flags: EquipmentFlags, threshold_km: float) -> ProfileRes
     if sounding_km >= threshold_km:
         return ProfileResult(True, launch_mass=0.0)
 
-    reasons: list[str] = []
+    blocking_list: list[BlockingInfo] = []
     if sounding_km > 0:
-        reasons.append(f"sounding altitude {sounding_km:.1f} km < {threshold_km:.0f} km (need bigger SRB/engine)")
+        blocking_list.append(BlockingInfo(
+            reason=BlockingReason.SOUNDING_ALTITUDE_TOO_LOW,
+            altitude_km=sounding_km,
+            threshold_km=threshold_km,
+            detail="need bigger SRB/engine",
+        ))
     else:
         if not flags.has_probe_core and not flags.has_capsule:
-            reasons.append("no command module (need probe core or capsule)")
+            blocking_list.append(BlockingInfo(
+                reason=BlockingReason.NO_COMMAND_MODULE))
         elif not flags.has_probe_core and flags.has_capsule:
             missing = []
             if not flags.has_parachutes:
@@ -1659,12 +1882,16 @@ def _evaluate_sounding(flags: EquipmentFlags, threshold_km: float) -> ProfileRes
             if flags.staging_tier < 1:
                 missing.append("decoupler")
             if missing:
-                reasons.append(f"capsule-only sounding needs: {', '.join(missing)}")
+                blocking_list.append(BlockingInfo(
+                    reason=BlockingReason.CAPSULE_SOUNDING_INCOMPLETE,
+                    detail=", ".join(missing),
+                ))
         if not flags.available_srbs and not flags.available_engines:
-            reasons.append("no propulsion (need SRB or engine + fuel)")
+            blocking_list.append(BlockingInfo(
+                reason=BlockingReason.NO_PROPULSION))
         elif flags.available_engines and not flags.available_tanks:
-            reasons.append("engines but no fuel tanks")
-    return ProfileResult(False, failure_reasons=reasons)
+            blocking_list.append(BlockingInfo(reason=BlockingReason.NO_FUEL))
+    return ProfileResult(False, blocking=blocking_list)
 
 
 # ---------------------------------------------------------------------------
@@ -1691,10 +1918,10 @@ def _compute_sounding_altitude(flags: EquipmentFlags) -> float:
     payloads: list[float] = []
     if flags.lightest_probe:
         payloads.append(flags.lightest_probe.mass)
-    if flags.heaviest_capsule and flags.heaviest_capsule.mass > 0:
+    if flags.lightest_capsule and flags.lightest_capsule.mass > 0:
         # Crewed: survivable iff (decoupler + at least one parachute)
         if flags.has_parachutes and flags.staging_tier >= 1:
-            payloads.append(flags.heaviest_capsule.mass)
+            payloads.append(flags.lightest_capsule.mass)
 
     if not payloads:
         return 0.0
@@ -1749,10 +1976,11 @@ def compute_capability_from_items(
     difficulty_name: str,
     start_with_clamps: bool,
     rep_names: frozenset[str] = frozenset(),
+    progressive_launch_pad: bool = False,
 ) -> tuple[RocketCapability, EquipmentFlags]:
     """Compute capability without a CollectionState. For CLI/external tools."""
     diff = DIFFICULTY_PROFILES[difficulty_name]
-    flags = _pre_pass(item_count_fn, start_with_clamps, rep_names)
+    flags = _pre_pass(item_count_fn, start_with_clamps, rep_names, progressive_launch_pad)
     body_profiles = _assess_bodies(flags, diff)
     sounding_km = _compute_sounding_altitude(flags)
 
@@ -1806,6 +2034,7 @@ def _compute_capability(state: CollectionState, player: int) -> RocketCapability
     cap, _ = compute_capability_from_items(
         lambda name: state.count(name, player),
         difficulty_name, start_with_clamps, rep_names,
+        progressive_launch_pad=bool(options.progressive_launch_pad.value),
     )
     return cap
 

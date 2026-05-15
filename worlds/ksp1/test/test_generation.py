@@ -7,7 +7,6 @@ and science budget gaps.
 """
 import unittest
 
-from test.bases import WorldTestBase
 from BaseClasses import ItemClassification
 
 from worlds.ksp1.items import (
@@ -19,22 +18,20 @@ from worlds.ksp1.tech_tree import TECH_NODES, TIER_TO_BAND, MAX_RD_BAND, cumulat
 from worlds.ksp1.locations import EventName, TechTreeLocation
 from worlds.ksp1.options import Difficulty
 from worlds.ksp1.capability import get_capability, explain_body_unreachable
-
-
-class KSP1TestBase(WorldTestBase):
-    game = "Kerbal Space Program 1"
-    run_default_tests = False  # suppressed; fill runs only in TestFill and TestCompleteTechTreeGoalRD
+from worlds.ksp1.test.base import KSP1TestBase
 
 
 class TestFill(KSP1TestBase):
     """Runs AP fill once with default options — the canonical generation smoke test."""
     run_default_tests = True
+    needs_real_pre_fill = True  # fill needs sphere ladder side effects
 
 
 class TestFillStandardSampleReturns(KSP1TestBase):
     """Fill smoke test for standard_sample_returns on expert difficulty: crewed sample return from 11 bodies."""
     options = {"goal": "standard_sample_returns", "difficulty": "expert"}
     run_default_tests = True
+    needs_real_pre_fill = True
 
 
 class TestItemLocationBalance(KSP1TestBase):
@@ -200,17 +197,20 @@ class TestItemClassification(KSP1TestBase):
                 return item.classification
         raise KeyError(name)
 
-    def test_progressive_engine_items_are_progression(self):
-        """Progressive engine items should be progression-classified."""
+    def test_progressive_engine_items_in_pool(self):
+        """Progressive engine items must be in the pool. Per-seed,
+        `_reclassify_spare_progressives` may demote spare copies to
+        useful when the goal doesn't need every tier, so we don't
+        assert classification — only pool presence."""
         for name in (
             "Progressive Launch Engine",
             "Progressive Vacuum Engine",
         ):
-            self.assertEqual(
-                self._classification(name),
-                ItemClassification.progression,
-                f"{name} should be progression",
+            count = sum(
+                1 for item in self.multiworld.itempool
+                if item.name == name
             )
+            self.assertGreater(count, 0, f"{name} must be in the item pool")
 
     def test_rcs_is_useful(self):
         self.assertEqual(
@@ -219,14 +219,19 @@ class TestItemClassification(KSP1TestBase):
             "RCS Thruster should be useful, not progression",
         )
 
-    def test_progressive_ladder_is_progression(self):
-        # Telescopic ladders moved into Progressive Ladder group.
-        # The group item itself is progression; the tier-1/tier-2 parts are
-        # the sole reps of their tiers (always removed from pool by rep selection).
-        self.assertEqual(
-            self._classification("Progressive Ladder"),
-            ItemClassification.progression,
-            "Progressive Ladder should be progression",
+    def test_progressive_ladder_in_pool(self):
+        # Telescopic ladders moved into Progressive Ladder group; the
+        # group item itself replaces them in the pool. Per-seed,
+        # `_reclassify_spare_progressives` may demote some/all copies to
+        # useful when the goal doesn't need the chain, but the pool must
+        # always contain Progressive Ladder copies.
+        count = sum(
+            1 for item in self.multiworld.itempool
+            if item.name == "Progressive Ladder"
+        )
+        self.assertGreater(
+            count, 0,
+            "Progressive Ladder must be in the item pool",
         )
 
     def test_basic_ladder_is_useful(self):

@@ -1,17 +1,13 @@
 """Tests for progressive part representative selection and pacing (bug 056)."""
 import unittest
 
-from test.bases import WorldTestBase
 from BaseClasses import ItemClassification
 
 from worlds.ksp1.items import PROGRESSIVE_PART_ITEM_NAMES
 from worlds.ksp1.parts import (
     PROGRESSIVE_PART_TIERS, PROGRESSIVE_PART_NAMES, PROGRESSIVE_PART_COUNTS,
 )
-
-
-class KSP1TestBase(WorldTestBase):
-    game = "Kerbal Space Program 1"
+from worlds.ksp1.test.base import KSP1TestBase
 
 
 class TestRepresentativeSelection(KSP1TestBase):
