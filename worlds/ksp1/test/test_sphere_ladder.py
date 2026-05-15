@@ -92,7 +92,8 @@ class TestDeltaPassesCheck(KSP1TestBase):
             else:
                 result = evaluate_mission_detailed(
                     flags, diff, info.body, info.mission_type,
-                    info.crewed, info.threshold_km,
+                    info.crewed, self.world.mission_builder,
+                    threshold_km=info.threshold_km,
                 )
             self.assertTrue(
                 result.feasible,

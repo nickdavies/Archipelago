@@ -7,11 +7,17 @@ err toward overestimating the required delta-v (golden rule).
 
 Mission profile structure
 -------------------------
-MISSION_PROFILES maps (body_name, mission_type) to a list of profile
-alternatives.  Each alternative is an ordered list of MissionEdge objects
-describing the journey from kerbin_surface to the destination (and back for
-return missions).  The capability engine tries every alternative; if any one
+``MissionBuilder`` owns the mission graph for a given home body.  It builds a
+dict mapping ``(body_name, mission_type)`` to a list of profile alternatives;
+each alternative is an ordered list of ``MissionEdge`` objects describing the
+journey from ``{home}_surface`` to the destination (and back for return
+missions).  The capability engine tries every alternative; if any one
 succeeds the mission is considered achievable.
+
+The builder is owned by ``KSP1World`` (see ``world.mission_builder``) — this
+is the data-lifetime layer where the Phase 4 ``StartingBody`` option will
+plug in.  Phase 3a keeps ``home=BodyName.KERBIN`` hardcoded; later sub-phases
+will generalise re-rooting math.
 
 Node naming convention:
   "kerbin_surface", "kerbin_low_orbit", "kerbin_soi"
@@ -30,14 +36,14 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 
 class MissionType(StrEnum):
-    """Mission profile types — keys into MISSION_PROFILES."""
+    """Mission profile types — keys into MissionBuilder.profiles_for."""
     ORBIT = "orbit"
     LAND = "land"
     RETURN = "return"
     SAMPLE_RETURN = "sample_return"
     FLAG_PLANT = "flag_plant"
     ESCAPE = "escape"
-    # Kerbin-only mission types (not in MISSION_PROFILES)
+    # Home-body-only mission types (no MissionBuilder profile entry)
     SOUNDING = "sounding"
     FIRST_LAUNCH = "first_launch"
     FIRST_LANDING = "first_landing"
@@ -527,720 +533,678 @@ BODY_BY_NAME: dict[BodyName, Body] = {b.name: b for b in ALL_BODIES}
 
 
 # ---------------------------------------------------------------------------
-# Mission profile builder helpers
+# Mission profile graph type aliases
 # ---------------------------------------------------------------------------
 
-def _E(  # shorthand for MissionEdge
-    src: str, dst: str, et: EdgeType, dv: float, body: BodyName,
-    pc: float = 0.0, min_twr: float = 0.0,
-    throttle: bool = False, attitude: bool = False,
-    heat: bool = False, legs: bool = False,
-) -> MissionEdge:
-    return MissionEdge(
-        source=src, destination=dst, edge_type=et,
-        base_dv=dv, body=body, plane_change_dv=pc,
-        min_twr=min_twr, requires_throttleable=throttle,
-        requires_attitude_control=attitude,
-        needs_heat_shield=heat, needs_landing_legs=legs,
-    )
-
-
-AT = EdgeType.ATMOSPHERIC_ASCENT
-VA = EdgeType.VACUUM_ASCENT
-PV = EdgeType.PURE_VACUUM
-PT = EdgeType.PLANET_TRANSFER
-VL = EdgeType.VACUUM_LANDING
-ALP = EdgeType.ATMO_LANDING_PROPULSIVE
-ALA = EdgeType.ATMO_LANDING_AERO
-AB = EdgeType.AEROBRAKE_CAPTURE
-
-# Kerbin ascent — always the first edge of every profile
-_KERBIN_ASCENT = _E("kerbin_surface", "kerbin_low_orbit", AT, 3400, BodyName.KERBIN,
-                    min_twr=1.3, throttle=True, attitude=True)
-# Kerbin escape to SOI edge
-_KERBIN_ESCAPE = _E("kerbin_low_orbit", "kerbin_soi", PV, 950, BodyName.KERBIN,
-                    attitude=True)
-# Kerbin aero reentry (return missions)
-_KERBIN_REENTRY = _E("kerbin_intercept", "kerbin_surface", ALA, 100, BodyName.KERBIN,
-                     heat=True)
-
-
-def _planet_transfer(dv_k: float, dv_ei: float, pc: float, planet: BodyName) -> list[MissionEdge]:
-    """Two edges for a Kerbin SOI → planet intercept → planet SOI transfer."""
-    return [
-        _E("kerbin_soi", f"{planet}_intercept", PT, dv_k, BodyName.KERBIN, pc=pc, attitude=True),
-        _E(f"{planet}_intercept", f"{planet}_soi", PV, dv_ei, planet, attitude=True),
-    ]
-
-
-def _kerbin_return_transfer(dv_k: float, pc: float, planet: BodyName) -> list[MissionEdge]:
-    """Two edges for planet SOI → Kerbin intercept transfer."""
-    return [
-        _E(f"{planet}_soi", "kerbin_intercept", PT, dv_k, planet, pc=pc, attitude=True),
-    ]
+MissionProfiles = dict[tuple[BodyName, MissionType], list[list[MissionEdge]]]
 
 
 # ---------------------------------------------------------------------------
-# Mission profiles
+# MissionBuilder
 # ---------------------------------------------------------------------------
-# Keys: (body_name_lowercase, mission_type)
-# Values: list of profile alternatives (each alternative is list[MissionEdge])
 
-MissionProfiles = dict[tuple[BodyName, str], list[list[MissionEdge]]]
-
-MISSION_PROFILES: MissionProfiles = {}
-
-
-def _add(body: BodyName, mission: MissionType, *profiles: list[MissionEdge]) -> None:
-    MISSION_PROFILES[(body, mission)] = list(profiles)
-
-
-# ===========================================================================
-# Kerbin
-# ===========================================================================
-# Deorbit: reentry from low orbit (heat shield + parachutes)
-_KERBIN_DEORBIT = _E("kerbin_low_orbit", "kerbin_surface", ALA, 100, BodyName.KERBIN,
-                     heat=True)
-
-_add(BodyName.KERBIN, MissionType.ORBIT,  [_KERBIN_ASCENT])
-_add(BodyName.KERBIN, MissionType.ESCAPE, [_KERBIN_ASCENT, _KERBIN_ESCAPE])
-_add(BodyName.KERBIN, MissionType.LAND,   [_KERBIN_ASCENT, _KERBIN_DEORBIT])
-_add(BodyName.KERBIN, MissionType.FLAG_PLANT,    [])  # 0 dv — walk out and plant
-_add(BodyName.KERBIN, MissionType.RETURN,        [_KERBIN_ASCENT, _KERBIN_DEORBIT])
-# WARNING: sample_return MUST stay empty — kerbal EVAs from the launchpad,
-# takes a surface sample, and recovers. No rocket needed. Do not add edges.
-_add(BodyName.KERBIN, MissionType.SAMPLE_RETURN, [])
-
-
-# ===========================================================================
-# Mun
-# ===========================================================================
-
-_MUN_TRANSFER = [
-    _KERBIN_ASCENT,
-    _E("kerbin_low_orbit", "mun_intercept", PV, 860, BodyName.KERBIN, attitude=True),
-    _E("mun_intercept", "mun_soi", PV, 0, BodyName.MUN, attitude=True),  # SOI entry
-]
-
-_MUN_ORBIT = _MUN_TRANSFER + [
-    _E("mun_soi", "mun_low_orbit", PV, 310, BodyName.MUN, attitude=True),  # orbit insertion
-]
-
-_MUN_LAND = _MUN_ORBIT + [
-    _E("mun_low_orbit", "mun_surface", VL, 580, BodyName.MUN,
-       min_twr=1.2, throttle=True, attitude=True, legs=True),
-]
-
-_MUN_RETURN = _MUN_LAND + [
-    _E("mun_surface", "mun_low_orbit", VA, 580, BodyName.MUN,
-       min_twr=1.2, throttle=True, attitude=True),
-    _E("mun_low_orbit", "kerbin_intercept", PV, 1170, BodyName.MUN, attitude=True),
-    _KERBIN_REENTRY,
-]
-
-_MUN_SAMPLE_RETURN = _MUN_RETURN  # ladder check applied dynamically in _assess_body
-
-_add(BodyName.MUN, MissionType.ESCAPE,        _MUN_TRANSFER)
-_add(BodyName.MUN, MissionType.ORBIT,         _MUN_ORBIT)
-_add(BodyName.MUN, MissionType.LAND,          _MUN_LAND)
-_add(BodyName.MUN, MissionType.RETURN,        _MUN_RETURN)
-_add(BodyName.MUN, MissionType.SAMPLE_RETURN, _MUN_SAMPLE_RETURN)
-
-
-# ===========================================================================
-# Minmus
-# ===========================================================================
-
-_MINMUS_TRANSFER = [
-    _KERBIN_ASCENT,
-    _E("kerbin_low_orbit", "minmus_intercept", PV, 930, BodyName.KERBIN,
-       pc=340, attitude=True),
-    _E("minmus_intercept", "minmus_soi", PV, 0, BodyName.MINMUS, attitude=True),  # SOI entry
-]
-
-_MINMUS_ORBIT = _MINMUS_TRANSFER + [
-    _E("minmus_soi", "minmus_low_orbit", PV, 160, BodyName.MINMUS, attitude=True),  # orbit insertion
-]
-
-_MINMUS_LAND = _MINMUS_ORBIT + [
-    _E("minmus_low_orbit", "minmus_surface", VL, 180, BodyName.MINMUS,
-       min_twr=1.2, throttle=True, attitude=True, legs=True),
-]
-
-_MINMUS_RETURN = _MINMUS_LAND + [
-    _E("minmus_surface", "minmus_low_orbit", VA, 180, BodyName.MINMUS,
-       min_twr=1.2, throttle=True, attitude=True),
-    _E("minmus_low_orbit", "kerbin_intercept", PV, 1090, BodyName.MINMUS, attitude=True),
-    _KERBIN_REENTRY,
-]
-
-_add(BodyName.MINMUS, MissionType.ESCAPE,        _MINMUS_TRANSFER)
-_add(BodyName.MINMUS, MissionType.ORBIT,         _MINMUS_ORBIT)
-_add(BodyName.MINMUS, MissionType.LAND,          _MINMUS_LAND)
-_add(BodyName.MINMUS, MissionType.RETURN,        _MINMUS_RETURN)
-_add(BodyName.MINMUS, MissionType.SAMPLE_RETURN, _MINMUS_RETURN)
-
-
-# ===========================================================================
-# Moho  (no atmosphere, very high dv, large plane change)
-# ===========================================================================
-
-_MOHO_TRANSFER = [
-    _KERBIN_ASCENT,
-    _KERBIN_ESCAPE,
-    _E("kerbin_soi", "moho_intercept", PT, 760, BodyName.KERBIN,
-       pc=2520, attitude=True),
-    _E("moho_intercept", "moho_soi", PV, 0, BodyName.MOHO, attitude=True),  # SOI entry
-]
-
-_MOHO_ORBIT = _MOHO_TRANSFER + [
-    _E("moho_soi", "moho_low_orbit", PV, 2410, BodyName.MOHO, attitude=True),  # orbit insertion
-]
-
-_MOHO_LAND = _MOHO_ORBIT + [
-    _E("moho_low_orbit", "moho_surface", VL, 870, BodyName.MOHO,
-       min_twr=1.2, throttle=True, attitude=True, legs=True),
-]
-
-_MOHO_RETURN = _MOHO_LAND + [
-    _E("moho_surface", "moho_low_orbit", VA, 870, BodyName.MOHO,
-       min_twr=1.2, throttle=True, attitude=True),
-    _E("moho_low_orbit", "kerbin_intercept", PV, 3170, BodyName.MOHO,
-       pc=2520, attitude=True),
-    _KERBIN_REENTRY,
-]
-
-_add(BodyName.MOHO, MissionType.ESCAPE,        _MOHO_TRANSFER)
-_add(BodyName.MOHO, MissionType.ORBIT,         _MOHO_ORBIT)
-_add(BodyName.MOHO, MissionType.LAND,          _MOHO_LAND)
-_add(BodyName.MOHO, MissionType.RETURN,        _MOHO_RETURN)
-_add(BodyName.MOHO, MissionType.SAMPLE_RETURN, _MOHO_RETURN)
-
-
-# ===========================================================================
-# Eve  (thick atmosphere — land is one-way; return is extremely hard)
-# ===========================================================================
-
-_EVE_TRANSFER = [
-    _KERBIN_ASCENT,
-    _KERBIN_ESCAPE,
-    _E("kerbin_soi", "eve_intercept", PT, 90, BodyName.KERBIN, pc=430, attitude=True),
-    _E("eve_intercept", "eve_soi", PV, 80, BodyName.EVE, attitude=True),
-]
-
-# Aero capture into Eve orbit
-_EVE_ORBIT_AERO = _EVE_TRANSFER + [
-    _E("eve_soi", "eve_low_orbit", AB, 100, BodyName.EVE, heat=True),
-]
-
-# Propulsive capture into Eve orbit
-_EVE_ORBIT_PROP = _EVE_TRANSFER + [
-    _E("eve_soi", "eve_low_orbit", PV, 1330, BodyName.EVE, attitude=True),
-]
-
-# Eve land — aero descent (only realistic option)
-_EVE_LAND_AERO = _EVE_ORBIT_AERO + [
-    _E("eve_low_orbit", "eve_surface", ALA, 100, BodyName.EVE, heat=True, legs=True),
-]
-
-# Eve land — propulsive descent (brute force, very expensive)
-_EVE_LAND_PROP = _EVE_ORBIT_PROP + [
-    _E("eve_low_orbit", "eve_surface", ALP, 1330, BodyName.EVE,
-       min_twr=1.3, throttle=True, attitude=True, legs=True),
-]
-
-# Eve return from surface (atmosphere is thick — 8000 m/s ascent!)
-_EVE_RETURN_AERO = _EVE_LAND_AERO + [
-    _E("eve_surface", "eve_low_orbit", AT, 8000, BodyName.EVE,
-       min_twr=1.3, throttle=True, attitude=True),
-    _E("eve_low_orbit", "kerbin_intercept", PV, 1420, BodyName.EVE,
-       pc=430, attitude=True),
-    _KERBIN_REENTRY,
-]
-
-_EVE_RETURN_PROP = _EVE_LAND_PROP + [
-    _E("eve_surface", "eve_low_orbit", AT, 8000, BodyName.EVE,
-       min_twr=1.3, throttle=True, attitude=True),
-    _E("eve_low_orbit", "kerbin_intercept", PV, 1420, BodyName.EVE,
-       pc=430, attitude=True),
-    _KERBIN_REENTRY,
-]
-
-_add(BodyName.EVE, MissionType.ESCAPE,        _EVE_TRANSFER)
-_add(BodyName.EVE, MissionType.ORBIT,         _EVE_ORBIT_AERO, _EVE_ORBIT_PROP)
-_add(BodyName.EVE, MissionType.LAND,          _EVE_LAND_AERO,  _EVE_LAND_PROP)
-_add(BodyName.EVE, MissionType.RETURN,        _EVE_RETURN_AERO, _EVE_RETURN_PROP)
-_add(BodyName.EVE, MissionType.SAMPLE_RETURN, _EVE_RETURN_AERO, _EVE_RETURN_PROP)
-
-
-# ===========================================================================
-# Gilly  (Eve moon, extremely low gravity)
-# ===========================================================================
-
-_GILLY_TRANSFER = _EVE_ORBIT_AERO + [
-    _E("eve_low_orbit", "gilly_intercept", PV, 60, BodyName.EVE, attitude=True),
-    _E("gilly_intercept", "gilly_soi", PV, 0, BodyName.GILLY, attitude=True),  # SOI entry
-]
-
-_GILLY_ORBIT = _GILLY_TRANSFER + [
-    _E("gilly_soi", "gilly_low_orbit", PV, 410, BodyName.GILLY, attitude=True),  # orbit insertion
-]
-
-_GILLY_LAND = _GILLY_ORBIT + [
-    _E("gilly_low_orbit", "gilly_surface", VL, 30, BodyName.GILLY,
-       min_twr=1.2, throttle=True, attitude=True, legs=True),
-]
-
-_GILLY_RETURN = _GILLY_LAND + [
-    _E("gilly_surface", "gilly_low_orbit", VA, 30, BodyName.GILLY,
-       min_twr=1.2, throttle=True, attitude=True),
-    _E("gilly_low_orbit", "eve_low_orbit", PV, 470, BodyName.GILLY, attitude=True),
-    _E("eve_low_orbit", "kerbin_intercept", PV, 1420, BodyName.EVE,
-       pc=430, attitude=True),
-    _KERBIN_REENTRY,
-]
-
-_add(BodyName.GILLY, MissionType.ESCAPE,        _GILLY_TRANSFER)
-_add(BodyName.GILLY, MissionType.ORBIT,         _GILLY_ORBIT)
-_add(BodyName.GILLY, MissionType.LAND,          _GILLY_LAND)
-_add(BodyName.GILLY, MissionType.RETURN,        _GILLY_RETURN)
-_add(BodyName.GILLY, MissionType.SAMPLE_RETURN, _GILLY_RETURN)
-
-
-# ===========================================================================
-# Duna  (atmosphere — multiple landing strategies)
-# ===========================================================================
-
-_DUNA_TRANSFER = [
-    _KERBIN_ASCENT,
-    _KERBIN_ESCAPE,
-    _E("kerbin_soi", "duna_intercept", PT, 130, BodyName.KERBIN, pc=10, attitude=True),
-    _E("duna_intercept", "duna_soi", PV, 250, BodyName.DUNA, attitude=True),  # SOI entry
-]
-
-# Propulsive capture + propulsive landing
-_DUNA_ORBIT_PROP = _DUNA_TRANSFER + [
-    _E("duna_soi", "duna_low_orbit", PV, 360, BodyName.DUNA, attitude=True),
-]
-
-# Aerobrake into orbit
-_DUNA_ORBIT_AERO = _DUNA_TRANSFER + [
-    _E("duna_soi", "duna_low_orbit", AB, 100, BodyName.DUNA, heat=True),
-]
-
-_DUNA_LAND_PROP = _DUNA_ORBIT_PROP + [
-    _E("duna_low_orbit", "duna_surface", ALP, 1450, BodyName.DUNA,
-       min_twr=1.3, throttle=True, attitude=True, legs=True),
-]
-
-_DUNA_LAND_AERO = _DUNA_ORBIT_AERO + [
-    _E("duna_low_orbit", "duna_surface", ALA, 200, BodyName.DUNA,
-       heat=True, legs=True),
-]
-
-_DUNA_RETURN_PROP = _DUNA_LAND_PROP + [
-    _E("duna_surface", "duna_low_orbit", AT, 1450, BodyName.DUNA,
-       min_twr=1.3, throttle=True, attitude=True),
-    _E("duna_low_orbit", "kerbin_intercept", PV, 610, BodyName.DUNA,
-       pc=10, attitude=True),
-    _KERBIN_REENTRY,
-]
-
-_DUNA_RETURN_AERO = _DUNA_LAND_AERO + [
-    _E("duna_surface", "duna_low_orbit", AT, 1450, BodyName.DUNA,
-       min_twr=1.3, throttle=True, attitude=True),
-    _E("duna_low_orbit", "kerbin_intercept", PV, 610, BodyName.DUNA,
-       pc=10, attitude=True),
-    _KERBIN_REENTRY,
-]
-
-_add(BodyName.DUNA, MissionType.ESCAPE,        _DUNA_TRANSFER)
-_add(BodyName.DUNA, MissionType.ORBIT,         _DUNA_ORBIT_PROP, _DUNA_ORBIT_AERO)
-_add(BodyName.DUNA, MissionType.LAND,          _DUNA_LAND_PROP,  _DUNA_LAND_AERO)
-_add(BodyName.DUNA, MissionType.RETURN,        _DUNA_RETURN_PROP, _DUNA_RETURN_AERO)
-_add(BodyName.DUNA, MissionType.SAMPLE_RETURN, _DUNA_RETURN_PROP, _DUNA_RETURN_AERO)
-
-
-# ===========================================================================
-# Ike  (Duna moon, airless)
-# ===========================================================================
-
-_IKE_TRANSFER = _DUNA_ORBIT_PROP + [
-    _E("duna_low_orbit", "ike_intercept", PV, 30, BodyName.DUNA, attitude=True),
-    _E("ike_intercept", "ike_soi", PV, 0, BodyName.IKE, attitude=True),  # SOI entry
-]
-
-_IKE_ORBIT = _IKE_TRANSFER + [
-    _E("ike_soi", "ike_low_orbit", PV, 180, BodyName.IKE, attitude=True),  # orbit insertion
-]
-
-_IKE_LAND = _IKE_ORBIT + [
-    _E("ike_low_orbit", "ike_surface", VL, 390, BodyName.IKE,
-       min_twr=1.2, throttle=True, attitude=True, legs=True),
-]
-
-_IKE_RETURN = _IKE_LAND + [
-    _E("ike_surface", "ike_low_orbit", VA, 390, BodyName.IKE,
-       min_twr=1.2, throttle=True, attitude=True),
-    _E("ike_low_orbit", "duna_low_orbit", PV, 210, BodyName.IKE, attitude=True),
-    _E("duna_low_orbit", "kerbin_intercept", PV, 610, BodyName.DUNA,
-       pc=10, attitude=True),
-    _KERBIN_REENTRY,
-]
-
-_add(BodyName.IKE, MissionType.ESCAPE,        _IKE_TRANSFER)
-_add(BodyName.IKE, MissionType.ORBIT,         _IKE_ORBIT)
-_add(BodyName.IKE, MissionType.LAND,          _IKE_LAND)
-_add(BodyName.IKE, MissionType.RETURN,        _IKE_RETURN)
-_add(BodyName.IKE, MissionType.SAMPLE_RETURN, _IKE_RETURN)
-
-
-# ===========================================================================
-# Dres  (airless, significant plane change)
-# ===========================================================================
-
-_DRES_TRANSFER = [
-    _KERBIN_ASCENT,
-    _KERBIN_ESCAPE,
-    _E("kerbin_soi", "dres_intercept", PT, 610, BodyName.KERBIN,
-       pc=1010, attitude=True),
-    _E("dres_intercept", "dres_soi", PV, 0, BodyName.DRES, attitude=True),  # SOI entry
-]
-
-_DRES_ORBIT = _DRES_TRANSFER + [
-    _E("dres_soi", "dres_low_orbit", PV, 1290, BodyName.DRES, attitude=True),  # orbit insertion
-]
-
-_DRES_LAND = _DRES_ORBIT + [
-    _E("dres_low_orbit", "dres_surface", VL, 430, BodyName.DRES,
-       min_twr=1.2, throttle=True, attitude=True, legs=True),
-]
-
-_DRES_RETURN = _DRES_LAND + [
-    _E("dres_surface", "dres_low_orbit", VA, 430, BodyName.DRES,
-       min_twr=1.2, throttle=True, attitude=True),
-    _E("dres_low_orbit", "kerbin_intercept", PV, 1900, BodyName.DRES,
-       pc=1010, attitude=True),
-    _KERBIN_REENTRY,
-]
-
-_add(BodyName.DRES, MissionType.ESCAPE,        _DRES_TRANSFER)
-_add(BodyName.DRES, MissionType.ORBIT,         _DRES_ORBIT)
-_add(BodyName.DRES, MissionType.LAND,          _DRES_LAND)
-_add(BodyName.DRES, MissionType.RETURN,        _DRES_RETURN)
-_add(BodyName.DRES, MissionType.SAMPLE_RETURN, _DRES_RETURN)
-
-
-# ===========================================================================
-# Jool  (cannot land; orbit only)
-# ===========================================================================
-
-_JOOL_TRANSFER = [
-    _KERBIN_ASCENT,
-    _KERBIN_ESCAPE,
-    _E("kerbin_soi", "jool_intercept", PT, 980, BodyName.KERBIN, pc=270, attitude=True),
-    _E("jool_intercept", "jool_soi", PV, 160, BodyName.JOOL, attitude=True),  # SOI entry
-]
-
-# Aerobrake into Jool orbit
-_JOOL_ORBIT_AERO = _JOOL_TRANSFER + [
-    _E("jool_soi", "jool_low_orbit", AB, 100, BodyName.JOOL, heat=True),
-]
-
-# Propulsive capture (expensive)
-_JOOL_ORBIT_PROP = _JOOL_TRANSFER + [
-    _E("jool_soi", "jool_low_orbit", PV, 2810, BodyName.JOOL, attitude=True),
-]
-
-_JOOL_RETURN_AERO = _JOOL_ORBIT_AERO + [
-    _E("jool_low_orbit", "kerbin_intercept", PV, 3790, BodyName.JOOL,
-       pc=270, attitude=True),
-    _KERBIN_REENTRY,
-]
-
-_JOOL_RETURN_PROP = _JOOL_ORBIT_PROP + [
-    _E("jool_low_orbit", "kerbin_intercept", PV, 3790, BodyName.JOOL,
-       pc=270, attitude=True),
-    _KERBIN_REENTRY,
-]
-
-_add(BodyName.JOOL, MissionType.ESCAPE, _JOOL_TRANSFER)
-_add(BodyName.JOOL, MissionType.ORBIT,  _JOOL_ORBIT_AERO, _JOOL_ORBIT_PROP)
-_add(BodyName.JOOL, MissionType.RETURN, _JOOL_RETURN_AERO, _JOOL_RETURN_PROP)
-
-
-# ===========================================================================
-# Laythe  (Jool moon, atmosphere)
-# ===========================================================================
-
-_LAYTHE_TRANSFER = _JOOL_ORBIT_AERO + [
-    _E("jool_low_orbit", "laythe_intercept", PV, 930, BodyName.JOOL, attitude=True),
-    _E("laythe_intercept", "laythe_soi", PV, 0, BodyName.LAYTHE, attitude=True),  # SOI entry
-]
-
-_LAYTHE_ORBIT = _LAYTHE_TRANSFER + [
-    _E("laythe_soi", "laythe_low_orbit", PV, 1070, BodyName.LAYTHE, attitude=True),  # orbit insertion
-]
-
-_LAYTHE_LAND_AERO = _LAYTHE_ORBIT + [
-    _E("laythe_low_orbit", "laythe_surface", ALA, 200, BodyName.LAYTHE,
-       heat=True, legs=True),
-]
-
-_LAYTHE_LAND_PROP = _LAYTHE_ORBIT + [
-    _E("laythe_low_orbit", "laythe_surface", ALP, 2900, BodyName.LAYTHE,
-       min_twr=1.3, throttle=True, attitude=True, legs=True),
-]
-
-_LAYTHE_RETURN_AERO = _LAYTHE_LAND_AERO + [
-    _E("laythe_surface", "laythe_low_orbit", AT, 2900, BodyName.LAYTHE,
-       min_twr=1.3, throttle=True, attitude=True),
-    _E("laythe_low_orbit", "jool_low_orbit", PV, 2000, BodyName.LAYTHE, attitude=True),
-    _E("jool_low_orbit", "kerbin_intercept", PV, 3790, BodyName.JOOL,
-       pc=270, attitude=True),
-    _KERBIN_REENTRY,
-]
-
-_LAYTHE_RETURN_PROP = _LAYTHE_LAND_PROP + [
-    _E("laythe_surface", "laythe_low_orbit", AT, 2900, BodyName.LAYTHE,
-       min_twr=1.3, throttle=True, attitude=True),
-    _E("laythe_low_orbit", "jool_low_orbit", PV, 2000, BodyName.LAYTHE, attitude=True),
-    _E("jool_low_orbit", "kerbin_intercept", PV, 3790, BodyName.JOOL,
-       pc=270, attitude=True),
-    _KERBIN_REENTRY,
-]
-
-_add(BodyName.LAYTHE, MissionType.ESCAPE,        _LAYTHE_TRANSFER)
-_add(BodyName.LAYTHE, MissionType.ORBIT,         _LAYTHE_ORBIT)
-_add(BodyName.LAYTHE, MissionType.LAND,          _LAYTHE_LAND_AERO, _LAYTHE_LAND_PROP)
-_add(BodyName.LAYTHE, MissionType.RETURN,        _LAYTHE_RETURN_AERO, _LAYTHE_RETURN_PROP)
-_add(BodyName.LAYTHE, MissionType.SAMPLE_RETURN, _LAYTHE_RETURN_AERO, _LAYTHE_RETURN_PROP)
-
-
-# ===========================================================================
-# Vall  (Jool moon, airless)
-# ===========================================================================
-
-_VALL_TRANSFER = _JOOL_ORBIT_AERO + [
-    _E("jool_low_orbit", "vall_intercept", PV, 620, BodyName.JOOL, attitude=True),
-    _E("vall_intercept", "vall_soi", PV, 0, BodyName.VALL, attitude=True),  # SOI entry
-]
-
-_VALL_ORBIT = _VALL_TRANSFER + [
-    _E("vall_soi", "vall_low_orbit", PV, 910, BodyName.VALL, attitude=True),  # orbit insertion
-]
-
-_VALL_LAND = _VALL_ORBIT + [
-    _E("vall_low_orbit", "vall_surface", VL, 860, BodyName.VALL,
-       min_twr=1.2, throttle=True, attitude=True, legs=True),
-]
-
-_VALL_RETURN = _VALL_LAND + [
-    _E("vall_surface", "vall_low_orbit", VA, 860, BodyName.VALL,
-       min_twr=1.2, throttle=True, attitude=True),
-    _E("vall_low_orbit", "jool_low_orbit", PV, 1530, BodyName.VALL, attitude=True),
-    _E("jool_low_orbit", "kerbin_intercept", PV, 3790, BodyName.JOOL,
-       pc=270, attitude=True),
-    _KERBIN_REENTRY,
-]
-
-_add(BodyName.VALL, MissionType.ESCAPE,        _VALL_TRANSFER)
-_add(BodyName.VALL, MissionType.ORBIT,         _VALL_ORBIT)
-_add(BodyName.VALL, MissionType.LAND,          _VALL_LAND)
-_add(BodyName.VALL, MissionType.RETURN,        _VALL_RETURN)
-_add(BodyName.VALL, MissionType.SAMPLE_RETURN, _VALL_RETURN)
-
-
-# ===========================================================================
-# Tylo  (Jool moon, airless, high gravity — hardest landing in the system)
-# ===========================================================================
-
-_TYLO_TRANSFER = _JOOL_ORBIT_AERO + [
-    _E("jool_low_orbit", "tylo_intercept", PV, 400, BodyName.JOOL, attitude=True),
-    _E("tylo_intercept", "tylo_soi", PV, 0, BodyName.TYLO, attitude=True),  # SOI entry
-]
-
-_TYLO_ORBIT = _TYLO_TRANSFER + [
-    _E("tylo_soi", "tylo_low_orbit", PV, 1100, BodyName.TYLO, attitude=True),  # orbit insertion
-]
-
-_TYLO_LAND = _TYLO_ORBIT + [
-    _E("tylo_low_orbit", "tylo_surface", VL, 2270, BodyName.TYLO,
-       min_twr=1.2, throttle=True, attitude=True, legs=True),
-]
-
-_TYLO_RETURN = _TYLO_LAND + [
-    _E("tylo_surface", "tylo_low_orbit", VA, 2270, BodyName.TYLO,
-       min_twr=1.2, throttle=True, attitude=True),
-    _E("tylo_low_orbit", "jool_low_orbit", PV, 1500, BodyName.TYLO, attitude=True),
-    _E("jool_low_orbit", "kerbin_intercept", PV, 3790, BodyName.JOOL,
-       pc=270, attitude=True),
-    _KERBIN_REENTRY,
-]
-
-_add(BodyName.TYLO, MissionType.ESCAPE,        _TYLO_TRANSFER)
-_add(BodyName.TYLO, MissionType.ORBIT,         _TYLO_ORBIT)
-_add(BodyName.TYLO, MissionType.LAND,          _TYLO_LAND)
-_add(BodyName.TYLO, MissionType.RETURN,        _TYLO_RETURN)
-_add(BodyName.TYLO, MissionType.SAMPLE_RETURN, _TYLO_RETURN)
-
-
-# ===========================================================================
-# Bop  (Jool moon, airless, high inclination)
-# ===========================================================================
-
-_BOP_TRANSFER = _JOOL_ORBIT_AERO + [
-    _E("jool_low_orbit", "bop_intercept", PV, 220, BodyName.JOOL,
-       pc=2440, attitude=True),
-    _E("bop_intercept", "bop_soi", PV, 0, BodyName.BOP, attitude=True),  # SOI entry
-]
-
-_BOP_ORBIT = _BOP_TRANSFER + [
-    _E("bop_soi", "bop_low_orbit", PV, 900, BodyName.BOP, attitude=True),  # orbit insertion
-]
-
-_BOP_LAND = _BOP_ORBIT + [
-    _E("bop_low_orbit", "bop_surface", VL, 230, BodyName.BOP,
-       min_twr=1.2, throttle=True, attitude=True, legs=True),
-]
-
-_BOP_RETURN = _BOP_LAND + [
-    _E("bop_surface", "bop_low_orbit", VA, 230, BodyName.BOP,
-       min_twr=1.2, throttle=True, attitude=True),
-    _E("bop_low_orbit", "jool_low_orbit", PV, 1120, BodyName.BOP,
-       pc=2440, attitude=True),
-    _E("jool_low_orbit", "kerbin_intercept", PV, 3790, BodyName.JOOL,
-       pc=270, attitude=True),
-    _KERBIN_REENTRY,
-]
-
-_add(BodyName.BOP, MissionType.ESCAPE,        _BOP_TRANSFER)
-_add(BodyName.BOP, MissionType.ORBIT,         _BOP_ORBIT)
-_add(BodyName.BOP, MissionType.LAND,          _BOP_LAND)
-_add(BodyName.BOP, MissionType.RETURN,        _BOP_RETURN)
-_add(BodyName.BOP, MissionType.SAMPLE_RETURN, _BOP_RETURN)
-
-
-# ===========================================================================
-# Pol  (Jool moon, airless, inclined)
-# ===========================================================================
-
-_POL_TRANSFER = _JOOL_ORBIT_AERO + [
-    _E("jool_low_orbit", "pol_intercept", PV, 160, BodyName.JOOL,
-       pc=700, attitude=True),
-    _E("pol_intercept", "pol_soi", PV, 0, BodyName.POL, attitude=True),  # SOI entry
-]
-
-_POL_ORBIT = _POL_TRANSFER + [
-    _E("pol_soi", "pol_low_orbit", PV, 820, BodyName.POL, attitude=True),  # orbit insertion
-]
-
-_POL_LAND = _POL_ORBIT + [
-    _E("pol_low_orbit", "pol_surface", VL, 130, BodyName.POL,
-       min_twr=1.2, throttle=True, attitude=True, legs=True),
-]
-
-_POL_RETURN = _POL_LAND + [
-    _E("pol_surface", "pol_low_orbit", VA, 130, BodyName.POL,
-       min_twr=1.2, throttle=True, attitude=True),
-    _E("pol_low_orbit", "jool_low_orbit", PV, 980, BodyName.POL,
-       pc=700, attitude=True),
-    _E("jool_low_orbit", "kerbin_intercept", PV, 3790, BodyName.JOOL,
-       pc=270, attitude=True),
-    _KERBIN_REENTRY,
-]
-
-_add(BodyName.POL, MissionType.ESCAPE,        _POL_TRANSFER)
-_add(BodyName.POL, MissionType.ORBIT,         _POL_ORBIT)
-_add(BodyName.POL, MissionType.LAND,          _POL_LAND)
-_add(BodyName.POL, MissionType.RETURN,        _POL_RETURN)
-_add(BodyName.POL, MissionType.SAMPLE_RETURN, _POL_RETURN)
-
-
-# ===========================================================================
-# Eeloo  (distant, icy, no atmosphere)
-# ===========================================================================
-
-_EELOO_TRANSFER = [
-    _KERBIN_ASCENT,
-    _KERBIN_ESCAPE,
-    _E("kerbin_soi", "eeloo_intercept", PT, 1140, BodyName.KERBIN,
-       pc=1330, attitude=True),
-    _E("eeloo_intercept", "eeloo_soi", PV, 0, BodyName.EELOO, attitude=True),  # SOI entry
-]
-
-_EELOO_ORBIT = _EELOO_TRANSFER + [
-    _E("eeloo_soi", "eeloo_low_orbit", PV, 1370, BodyName.EELOO, attitude=True),  # orbit insertion
-]
-
-_EELOO_LAND = _EELOO_ORBIT + [
-    _E("eeloo_low_orbit", "eeloo_surface", VL, 620, BodyName.EELOO,
-       min_twr=1.2, throttle=True, attitude=True, legs=True),
-]
-
-_EELOO_RETURN = _EELOO_LAND + [
-    _E("eeloo_surface", "eeloo_low_orbit", VA, 620, BodyName.EELOO,
-       min_twr=1.2, throttle=True, attitude=True),
-    _E("eeloo_low_orbit", "kerbin_intercept", PV, 2510, BodyName.EELOO,
-       pc=1330, attitude=True),
-    _KERBIN_REENTRY,
-]
-
-_add(BodyName.EELOO, MissionType.ESCAPE,        _EELOO_TRANSFER)
-_add(BodyName.EELOO, MissionType.ORBIT,         _EELOO_ORBIT)
-_add(BodyName.EELOO, MissionType.LAND,          _EELOO_LAND)
-_add(BodyName.EELOO, MissionType.RETURN,        _EELOO_RETURN)
-_add(BodyName.EELOO, MissionType.SAMPLE_RETURN, _EELOO_RETURN)
-
-
-# ===========================================================================
-# Kerbol  (orbit only — cannot land)
-# ===========================================================================
-
-_KERBOL_ORBIT = [
-    _KERBIN_ASCENT,
-    _KERBIN_ESCAPE,
-    _E("kerbin_soi", "kerbol_low_orbit", PT, 6000, BodyName.KERBOL,
-       attitude=True),
-]
-
-_KERBOL_RETURN = _KERBOL_ORBIT + [
-    _E("kerbol_low_orbit", "kerbin_intercept", PV, 6000, BodyName.KERBOL, attitude=True),
-    _KERBIN_REENTRY,
-]
-
-# Kerbol has no flyby / SOI-leave checks (you start inside its SOI), so
-# no ESCAPE profile is registered. ORBIT/RETURN are the only Kerbol events.
-_add(BodyName.KERBOL, MissionType.ORBIT,  _KERBOL_ORBIT)
-_add(BodyName.KERBOL, MissionType.RETURN, _KERBOL_RETURN)
-
-# ESCAPE/flyby profiles are now declared explicitly per body above.
-# (Historically these were auto-generated by stripping the last edge from
-#  the ORBIT profile, but that silently dropped destination relay-tier
-#  checks when SOI entry and orbit insertion were merged into one edge.
-#  See bug 075 / plans/ssr_variance_investigation.md for context.)
-# Sanity check: every body that has an ORBIT profile and exposes
-# flyby/SOI-leave checks also has an explicit ESCAPE profile. Kerbol is
-# excluded — the player is already inside its SOI so no flyby is possible.
-for _body_name, _mission_type in list(MISSION_PROFILES):
-    if (_mission_type == MissionType.ORBIT
-            and _body_name != BodyName.KERBOL
-            and (_body_name, MissionType.ESCAPE) not in MISSION_PROFILES):
-        raise RuntimeError(
-            f"{_body_name} has an ORBIT profile but no ESCAPE profile. "
-            "Add an explicit `_add(body, MissionType.ESCAPE, _<BODY>_TRANSFER)`."
+class MissionBuilder:
+    """Owns the mission graph for a given home body.
+
+    Construct one per ``KSP1World`` (Phase 4 hooks the ``StartingBody`` option
+    in here; Phase 3a only supports ``home=BodyName.KERBIN``).
+
+    The builder constructs every ``(body, mission_type) → list[list[MissionEdge]]``
+    profile in ``__init__`` and exposes it through ``profiles_for`` /
+    ``all_profiles``.  Cross-validation against ``locations.get_body_events``
+    runs at construction time, surfacing missing-profile bugs eagerly.
+
+    Internal node naming follows ``"{body}_surface"`` / ``"{body}_low_orbit"``
+    / ``"{body}_soi"`` / ``"{body}_intercept"`` so each ``MissionEdge`` carries
+    body-keyed source/destination strings independent of which body is home.
+    """
+
+    # EdgeType shorthand — kept class-level so the long _build method stays
+    # readable without polluting the module namespace.
+    _AT  = EdgeType.ATMOSPHERIC_ASCENT
+    _VA  = EdgeType.VACUUM_ASCENT
+    _PV  = EdgeType.PURE_VACUUM
+    _PT  = EdgeType.PLANET_TRANSFER
+    _VL  = EdgeType.VACUUM_LANDING
+    _ALP = EdgeType.ATMO_LANDING_PROPULSIVE
+    _ALA = EdgeType.ATMO_LANDING_AERO
+    _AB  = EdgeType.AEROBRAKE_CAPTURE
+
+    def __init__(self, home: BodyName):
+        if home != BodyName.KERBIN:
+            # Phase 3a ports today's Kerbin-hub graph behind the class
+            # without changing semantics. Phase 3b/3c will generalise the
+            # ascent/transfer/reentry edges so non-Kerbin homes work.
+            raise NotImplementedError(
+                f"MissionBuilder currently only supports home=KERBIN; got {home}. "
+                "Re-rooting math will land in a later Phase 3 sub-phase."
+            )
+        self.home: BodyName = home
+        self._profiles: MissionProfiles = {}
+        self._build()
+        self._validate()
+
+    # ------------------------------------------------------------------
+    # Public lookup API
+    # ------------------------------------------------------------------
+
+    def profiles_for(
+        self, body: BodyName, mission_type: MissionType
+    ) -> list[list[MissionEdge]]:
+        """Return profile alternatives for ``(body, mission_type)`` or ``[]``."""
+        return self._profiles.get((body, mission_type), [])
+
+    def has_profile(self, body: BodyName, mission_type: MissionType) -> bool:
+        return (body, mission_type) in self._profiles
+
+    def all_keys(self):
+        return self._profiles.keys()
+
+    def all_profiles(self) -> MissionProfiles:
+        """Return the underlying ``(body, mission_type) → profiles`` dict.
+
+        Returned dict is the builder's live state — callers must not mutate it.
+        """
+        return self._profiles
+
+    # ------------------------------------------------------------------
+    # Edge construction helpers (private)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _edge(
+        src: str, dst: str, et: EdgeType, dv: float, body: BodyName,
+        pc: float = 0.0, min_twr: float = 0.0,
+        throttle: bool = False, attitude: bool = False,
+        heat: bool = False, legs: bool = False,
+    ) -> MissionEdge:
+        return MissionEdge(
+            source=src, destination=dst, edge_type=et,
+            base_dv=dv, body=body, plane_change_dv=pc,
+            min_twr=min_twr, requires_throttleable=throttle,
+            requires_attitude_control=attitude,
+            needs_heat_shield=heat, needs_landing_legs=legs,
         )
-del _body_name, _mission_type
 
-# Auto-generate flag-plant profiles from landing profiles.
-# Flag plant is the same mission as a crewed landing — if no explicit
-# FLAG_PLANT profile exists, copy the LAND profile.
-# Kerbin already has an explicit empty FLAG_PLANT entry — skip it.
-for _body_name, _mission_type in list(MISSION_PROFILES):
-    if _mission_type == MissionType.LAND and (_body_name, MissionType.FLAG_PLANT) not in MISSION_PROFILES:
-        MISSION_PROFILES[(_body_name, MissionType.FLAG_PLANT)] = MISSION_PROFILES[(_body_name, MissionType.LAND)]
-del _body_name, _mission_type
+    def _planet_transfer(
+        self, dv_k: float, dv_ei: float, pc: float, planet: BodyName
+    ) -> list[MissionEdge]:
+        """Two edges for a Kerbin SOI → planet intercept → planet SOI transfer."""
+        return [
+            self._edge("kerbin_soi", f"{planet}_intercept", self._PT, dv_k,
+                       BodyName.KERBIN, pc=pc, attitude=True),
+            self._edge(f"{planet}_intercept", f"{planet}_soi", self._PV, dv_ei,
+                       planet, attitude=True),
+        ]
 
+    def _kerbin_return_transfer(
+        self, dv_k: float, pc: float, planet: BodyName
+    ) -> list[MissionEdge]:
+        """One edge for a planet SOI → Kerbin intercept transfer."""
+        return [
+            self._edge(f"{planet}_soi", "kerbin_intercept", self._PT, dv_k,
+                       planet, pc=pc, attitude=True),
+        ]
+
+    def _add(
+        self, body: BodyName, mission: MissionType, *profiles: list[MissionEdge]
+    ) -> None:
+        self._profiles[(body, mission)] = list(profiles)
+
+    # ------------------------------------------------------------------
+    # Mission graph construction
+    # ------------------------------------------------------------------
+
+    def _build(self) -> None:
+        """Populate ``self._profiles`` with every supported mission."""
+        AT, VA, PV, PT = self._AT, self._VA, self._PV, self._PT
+        VL, ALP, ALA, AB = self._VL, self._ALP, self._ALA, self._AB
+        E = self._edge
+
+        # ----- Home (Kerbin) trunk edges -------------------------------
+        kerbin_ascent = E(
+            "kerbin_surface", "kerbin_low_orbit", AT, 3400, BodyName.KERBIN,
+            min_twr=1.3, throttle=True, attitude=True,
+        )
+        kerbin_escape = E(
+            "kerbin_low_orbit", "kerbin_soi", PV, 950, BodyName.KERBIN,
+            attitude=True,
+        )
+        kerbin_reentry = E(
+            "kerbin_intercept", "kerbin_surface", ALA, 100, BodyName.KERBIN,
+            heat=True,
+        )
+        kerbin_deorbit = E(
+            "kerbin_low_orbit", "kerbin_surface", ALA, 100, BodyName.KERBIN,
+            heat=True,
+        )
+
+        # ----- Kerbin --------------------------------------------------
+        self._add(BodyName.KERBIN, MissionType.ORBIT,  [kerbin_ascent])
+        self._add(BodyName.KERBIN, MissionType.ESCAPE, [kerbin_ascent, kerbin_escape])
+        self._add(BodyName.KERBIN, MissionType.LAND,   [kerbin_ascent, kerbin_deorbit])
+        self._add(BodyName.KERBIN, MissionType.FLAG_PLANT, [])  # 0 dv — walk out and plant
+        self._add(BodyName.KERBIN, MissionType.RETURN, [kerbin_ascent, kerbin_deorbit])
+        # WARNING: sample_return MUST stay empty — kerbal EVAs from the launchpad,
+        # takes a surface sample, and recovers. No rocket needed. Do not add edges.
+        self._add(BodyName.KERBIN, MissionType.SAMPLE_RETURN, [])
+
+        # ----- Mun -----------------------------------------------------
+        mun_transfer = [
+            kerbin_ascent,
+            E("kerbin_low_orbit", "mun_intercept", PV, 860, BodyName.KERBIN, attitude=True),
+            E("mun_intercept", "mun_soi", PV, 0, BodyName.MUN, attitude=True),
+        ]
+        mun_orbit = mun_transfer + [
+            E("mun_soi", "mun_low_orbit", PV, 310, BodyName.MUN, attitude=True),
+        ]
+        mun_land = mun_orbit + [
+            E("mun_low_orbit", "mun_surface", VL, 580, BodyName.MUN,
+              min_twr=1.2, throttle=True, attitude=True, legs=True),
+        ]
+        mun_return = mun_land + [
+            E("mun_surface", "mun_low_orbit", VA, 580, BodyName.MUN,
+              min_twr=1.2, throttle=True, attitude=True),
+            E("mun_low_orbit", "kerbin_intercept", PV, 1170, BodyName.MUN, attitude=True),
+            kerbin_reentry,
+        ]
+        self._add(BodyName.MUN, MissionType.ESCAPE,        mun_transfer)
+        self._add(BodyName.MUN, MissionType.ORBIT,         mun_orbit)
+        self._add(BodyName.MUN, MissionType.LAND,          mun_land)
+        self._add(BodyName.MUN, MissionType.RETURN,        mun_return)
+        # Ladder check applied dynamically in capability.py (_inject_ladder).
+        self._add(BodyName.MUN, MissionType.SAMPLE_RETURN, mun_return)
+
+        # ----- Minmus --------------------------------------------------
+        minmus_transfer = [
+            kerbin_ascent,
+            E("kerbin_low_orbit", "minmus_intercept", PV, 930, BodyName.KERBIN,
+              pc=340, attitude=True),
+            E("minmus_intercept", "minmus_soi", PV, 0, BodyName.MINMUS, attitude=True),
+        ]
+        minmus_orbit = minmus_transfer + [
+            E("minmus_soi", "minmus_low_orbit", PV, 160, BodyName.MINMUS, attitude=True),
+        ]
+        minmus_land = minmus_orbit + [
+            E("minmus_low_orbit", "minmus_surface", VL, 180, BodyName.MINMUS,
+              min_twr=1.2, throttle=True, attitude=True, legs=True),
+        ]
+        minmus_return = minmus_land + [
+            E("minmus_surface", "minmus_low_orbit", VA, 180, BodyName.MINMUS,
+              min_twr=1.2, throttle=True, attitude=True),
+            E("minmus_low_orbit", "kerbin_intercept", PV, 1090, BodyName.MINMUS, attitude=True),
+            kerbin_reentry,
+        ]
+        self._add(BodyName.MINMUS, MissionType.ESCAPE,        minmus_transfer)
+        self._add(BodyName.MINMUS, MissionType.ORBIT,         minmus_orbit)
+        self._add(BodyName.MINMUS, MissionType.LAND,          minmus_land)
+        self._add(BodyName.MINMUS, MissionType.RETURN,        minmus_return)
+        self._add(BodyName.MINMUS, MissionType.SAMPLE_RETURN, minmus_return)
+
+        # ----- Moho (no atmosphere, very high dv, large plane change) -
+        moho_transfer = [
+            kerbin_ascent,
+            kerbin_escape,
+            E("kerbin_soi", "moho_intercept", PT, 760, BodyName.KERBIN,
+              pc=2520, attitude=True),
+            E("moho_intercept", "moho_soi", PV, 0, BodyName.MOHO, attitude=True),
+        ]
+        moho_orbit = moho_transfer + [
+            E("moho_soi", "moho_low_orbit", PV, 2410, BodyName.MOHO, attitude=True),
+        ]
+        moho_land = moho_orbit + [
+            E("moho_low_orbit", "moho_surface", VL, 870, BodyName.MOHO,
+              min_twr=1.2, throttle=True, attitude=True, legs=True),
+        ]
+        moho_return = moho_land + [
+            E("moho_surface", "moho_low_orbit", VA, 870, BodyName.MOHO,
+              min_twr=1.2, throttle=True, attitude=True),
+            E("moho_low_orbit", "kerbin_intercept", PV, 3170, BodyName.MOHO,
+              pc=2520, attitude=True),
+            kerbin_reentry,
+        ]
+        self._add(BodyName.MOHO, MissionType.ESCAPE,        moho_transfer)
+        self._add(BodyName.MOHO, MissionType.ORBIT,         moho_orbit)
+        self._add(BodyName.MOHO, MissionType.LAND,          moho_land)
+        self._add(BodyName.MOHO, MissionType.RETURN,        moho_return)
+        self._add(BodyName.MOHO, MissionType.SAMPLE_RETURN, moho_return)
+
+        # ----- Eve (thick atmosphere — land is one-way; return very hard)
+        eve_transfer = [
+            kerbin_ascent,
+            kerbin_escape,
+            E("kerbin_soi", "eve_intercept", PT, 90, BodyName.KERBIN, pc=430, attitude=True),
+            E("eve_intercept", "eve_soi", PV, 80, BodyName.EVE, attitude=True),
+        ]
+        # Aero capture into Eve orbit
+        eve_orbit_aero = eve_transfer + [
+            E("eve_soi", "eve_low_orbit", AB, 100, BodyName.EVE, heat=True),
+        ]
+        # Propulsive capture into Eve orbit
+        eve_orbit_prop = eve_transfer + [
+            E("eve_soi", "eve_low_orbit", PV, 1330, BodyName.EVE, attitude=True),
+        ]
+        # Eve land — aero descent (only realistic option)
+        eve_land_aero = eve_orbit_aero + [
+            E("eve_low_orbit", "eve_surface", ALA, 100, BodyName.EVE, heat=True, legs=True),
+        ]
+        # Eve land — propulsive descent (brute force, very expensive)
+        eve_land_prop = eve_orbit_prop + [
+            E("eve_low_orbit", "eve_surface", ALP, 1330, BodyName.EVE,
+              min_twr=1.3, throttle=True, attitude=True, legs=True),
+        ]
+        # Eve return — atmosphere is thick (8000 m/s ascent!)
+        eve_return_aero = eve_land_aero + [
+            E("eve_surface", "eve_low_orbit", AT, 8000, BodyName.EVE,
+              min_twr=1.3, throttle=True, attitude=True),
+            E("eve_low_orbit", "kerbin_intercept", PV, 1420, BodyName.EVE,
+              pc=430, attitude=True),
+            kerbin_reentry,
+        ]
+        eve_return_prop = eve_land_prop + [
+            E("eve_surface", "eve_low_orbit", AT, 8000, BodyName.EVE,
+              min_twr=1.3, throttle=True, attitude=True),
+            E("eve_low_orbit", "kerbin_intercept", PV, 1420, BodyName.EVE,
+              pc=430, attitude=True),
+            kerbin_reentry,
+        ]
+        self._add(BodyName.EVE, MissionType.ESCAPE,        eve_transfer)
+        self._add(BodyName.EVE, MissionType.ORBIT,         eve_orbit_aero, eve_orbit_prop)
+        self._add(BodyName.EVE, MissionType.LAND,          eve_land_aero,  eve_land_prop)
+        self._add(BodyName.EVE, MissionType.RETURN,        eve_return_aero, eve_return_prop)
+        self._add(BodyName.EVE, MissionType.SAMPLE_RETURN, eve_return_aero, eve_return_prop)
+
+        # ----- Gilly (Eve moon, extremely low gravity) -----------------
+        gilly_transfer = eve_orbit_aero + [
+            E("eve_low_orbit", "gilly_intercept", PV, 60, BodyName.EVE, attitude=True),
+            E("gilly_intercept", "gilly_soi", PV, 0, BodyName.GILLY, attitude=True),
+        ]
+        gilly_orbit = gilly_transfer + [
+            E("gilly_soi", "gilly_low_orbit", PV, 410, BodyName.GILLY, attitude=True),
+        ]
+        gilly_land = gilly_orbit + [
+            E("gilly_low_orbit", "gilly_surface", VL, 30, BodyName.GILLY,
+              min_twr=1.2, throttle=True, attitude=True, legs=True),
+        ]
+        gilly_return = gilly_land + [
+            E("gilly_surface", "gilly_low_orbit", VA, 30, BodyName.GILLY,
+              min_twr=1.2, throttle=True, attitude=True),
+            E("gilly_low_orbit", "eve_low_orbit", PV, 470, BodyName.GILLY, attitude=True),
+            E("eve_low_orbit", "kerbin_intercept", PV, 1420, BodyName.EVE,
+              pc=430, attitude=True),
+            kerbin_reentry,
+        ]
+        self._add(BodyName.GILLY, MissionType.ESCAPE,        gilly_transfer)
+        self._add(BodyName.GILLY, MissionType.ORBIT,         gilly_orbit)
+        self._add(BodyName.GILLY, MissionType.LAND,          gilly_land)
+        self._add(BodyName.GILLY, MissionType.RETURN,        gilly_return)
+        self._add(BodyName.GILLY, MissionType.SAMPLE_RETURN, gilly_return)
+
+        # ----- Duna (atmosphere — multiple landing strategies) ---------
+        duna_transfer = [
+            kerbin_ascent,
+            kerbin_escape,
+            E("kerbin_soi", "duna_intercept", PT, 130, BodyName.KERBIN, pc=10, attitude=True),
+            E("duna_intercept", "duna_soi", PV, 250, BodyName.DUNA, attitude=True),
+        ]
+        duna_orbit_prop = duna_transfer + [
+            E("duna_soi", "duna_low_orbit", PV, 360, BodyName.DUNA, attitude=True),
+        ]
+        duna_orbit_aero = duna_transfer + [
+            E("duna_soi", "duna_low_orbit", AB, 100, BodyName.DUNA, heat=True),
+        ]
+        duna_land_prop = duna_orbit_prop + [
+            E("duna_low_orbit", "duna_surface", ALP, 1450, BodyName.DUNA,
+              min_twr=1.3, throttle=True, attitude=True, legs=True),
+        ]
+        duna_land_aero = duna_orbit_aero + [
+            E("duna_low_orbit", "duna_surface", ALA, 200, BodyName.DUNA,
+              heat=True, legs=True),
+        ]
+        duna_return_prop = duna_land_prop + [
+            E("duna_surface", "duna_low_orbit", AT, 1450, BodyName.DUNA,
+              min_twr=1.3, throttle=True, attitude=True),
+            E("duna_low_orbit", "kerbin_intercept", PV, 610, BodyName.DUNA,
+              pc=10, attitude=True),
+            kerbin_reentry,
+        ]
+        duna_return_aero = duna_land_aero + [
+            E("duna_surface", "duna_low_orbit", AT, 1450, BodyName.DUNA,
+              min_twr=1.3, throttle=True, attitude=True),
+            E("duna_low_orbit", "kerbin_intercept", PV, 610, BodyName.DUNA,
+              pc=10, attitude=True),
+            kerbin_reentry,
+        ]
+        self._add(BodyName.DUNA, MissionType.ESCAPE,        duna_transfer)
+        self._add(BodyName.DUNA, MissionType.ORBIT,         duna_orbit_prop, duna_orbit_aero)
+        self._add(BodyName.DUNA, MissionType.LAND,          duna_land_prop,  duna_land_aero)
+        self._add(BodyName.DUNA, MissionType.RETURN,        duna_return_prop, duna_return_aero)
+        self._add(BodyName.DUNA, MissionType.SAMPLE_RETURN, duna_return_prop, duna_return_aero)
+
+        # ----- Ike (Duna moon, airless) --------------------------------
+        ike_transfer = duna_orbit_prop + [
+            E("duna_low_orbit", "ike_intercept", PV, 30, BodyName.DUNA, attitude=True),
+            E("ike_intercept", "ike_soi", PV, 0, BodyName.IKE, attitude=True),
+        ]
+        ike_orbit = ike_transfer + [
+            E("ike_soi", "ike_low_orbit", PV, 180, BodyName.IKE, attitude=True),
+        ]
+        ike_land = ike_orbit + [
+            E("ike_low_orbit", "ike_surface", VL, 390, BodyName.IKE,
+              min_twr=1.2, throttle=True, attitude=True, legs=True),
+        ]
+        ike_return = ike_land + [
+            E("ike_surface", "ike_low_orbit", VA, 390, BodyName.IKE,
+              min_twr=1.2, throttle=True, attitude=True),
+            E("ike_low_orbit", "duna_low_orbit", PV, 210, BodyName.IKE, attitude=True),
+            E("duna_low_orbit", "kerbin_intercept", PV, 610, BodyName.DUNA,
+              pc=10, attitude=True),
+            kerbin_reentry,
+        ]
+        self._add(BodyName.IKE, MissionType.ESCAPE,        ike_transfer)
+        self._add(BodyName.IKE, MissionType.ORBIT,         ike_orbit)
+        self._add(BodyName.IKE, MissionType.LAND,          ike_land)
+        self._add(BodyName.IKE, MissionType.RETURN,        ike_return)
+        self._add(BodyName.IKE, MissionType.SAMPLE_RETURN, ike_return)
+
+        # ----- Dres (airless, significant plane change) ----------------
+        dres_transfer = [
+            kerbin_ascent,
+            kerbin_escape,
+            E("kerbin_soi", "dres_intercept", PT, 610, BodyName.KERBIN,
+              pc=1010, attitude=True),
+            E("dres_intercept", "dres_soi", PV, 0, BodyName.DRES, attitude=True),
+        ]
+        dres_orbit = dres_transfer + [
+            E("dres_soi", "dres_low_orbit", PV, 1290, BodyName.DRES, attitude=True),
+        ]
+        dres_land = dres_orbit + [
+            E("dres_low_orbit", "dres_surface", VL, 430, BodyName.DRES,
+              min_twr=1.2, throttle=True, attitude=True, legs=True),
+        ]
+        dres_return = dres_land + [
+            E("dres_surface", "dres_low_orbit", VA, 430, BodyName.DRES,
+              min_twr=1.2, throttle=True, attitude=True),
+            E("dres_low_orbit", "kerbin_intercept", PV, 1900, BodyName.DRES,
+              pc=1010, attitude=True),
+            kerbin_reentry,
+        ]
+        self._add(BodyName.DRES, MissionType.ESCAPE,        dres_transfer)
+        self._add(BodyName.DRES, MissionType.ORBIT,         dres_orbit)
+        self._add(BodyName.DRES, MissionType.LAND,          dres_land)
+        self._add(BodyName.DRES, MissionType.RETURN,        dres_return)
+        self._add(BodyName.DRES, MissionType.SAMPLE_RETURN, dres_return)
+
+        # ----- Jool (cannot land; orbit only) --------------------------
+        jool_transfer = [
+            kerbin_ascent,
+            kerbin_escape,
+            E("kerbin_soi", "jool_intercept", PT, 980, BodyName.KERBIN, pc=270, attitude=True),
+            E("jool_intercept", "jool_soi", PV, 160, BodyName.JOOL, attitude=True),
+        ]
+        jool_orbit_aero = jool_transfer + [
+            E("jool_soi", "jool_low_orbit", AB, 100, BodyName.JOOL, heat=True),
+        ]
+        jool_orbit_prop = jool_transfer + [
+            E("jool_soi", "jool_low_orbit", PV, 2810, BodyName.JOOL, attitude=True),
+        ]
+        jool_return_aero = jool_orbit_aero + [
+            E("jool_low_orbit", "kerbin_intercept", PV, 3790, BodyName.JOOL,
+              pc=270, attitude=True),
+            kerbin_reentry,
+        ]
+        jool_return_prop = jool_orbit_prop + [
+            E("jool_low_orbit", "kerbin_intercept", PV, 3790, BodyName.JOOL,
+              pc=270, attitude=True),
+            kerbin_reentry,
+        ]
+        self._add(BodyName.JOOL, MissionType.ESCAPE, jool_transfer)
+        self._add(BodyName.JOOL, MissionType.ORBIT,  jool_orbit_aero, jool_orbit_prop)
+        self._add(BodyName.JOOL, MissionType.RETURN, jool_return_aero, jool_return_prop)
+
+        # ----- Laythe (Jool moon, atmosphere) --------------------------
+        laythe_transfer = jool_orbit_aero + [
+            E("jool_low_orbit", "laythe_intercept", PV, 930, BodyName.JOOL, attitude=True),
+            E("laythe_intercept", "laythe_soi", PV, 0, BodyName.LAYTHE, attitude=True),
+        ]
+        laythe_orbit = laythe_transfer + [
+            E("laythe_soi", "laythe_low_orbit", PV, 1070, BodyName.LAYTHE, attitude=True),
+        ]
+        laythe_land_aero = laythe_orbit + [
+            E("laythe_low_orbit", "laythe_surface", ALA, 200, BodyName.LAYTHE,
+              heat=True, legs=True),
+        ]
+        laythe_land_prop = laythe_orbit + [
+            E("laythe_low_orbit", "laythe_surface", ALP, 2900, BodyName.LAYTHE,
+              min_twr=1.3, throttle=True, attitude=True, legs=True),
+        ]
+        laythe_return_aero = laythe_land_aero + [
+            E("laythe_surface", "laythe_low_orbit", AT, 2900, BodyName.LAYTHE,
+              min_twr=1.3, throttle=True, attitude=True),
+            E("laythe_low_orbit", "jool_low_orbit", PV, 2000, BodyName.LAYTHE, attitude=True),
+            E("jool_low_orbit", "kerbin_intercept", PV, 3790, BodyName.JOOL,
+              pc=270, attitude=True),
+            kerbin_reentry,
+        ]
+        laythe_return_prop = laythe_land_prop + [
+            E("laythe_surface", "laythe_low_orbit", AT, 2900, BodyName.LAYTHE,
+              min_twr=1.3, throttle=True, attitude=True),
+            E("laythe_low_orbit", "jool_low_orbit", PV, 2000, BodyName.LAYTHE, attitude=True),
+            E("jool_low_orbit", "kerbin_intercept", PV, 3790, BodyName.JOOL,
+              pc=270, attitude=True),
+            kerbin_reentry,
+        ]
+        self._add(BodyName.LAYTHE, MissionType.ESCAPE,        laythe_transfer)
+        self._add(BodyName.LAYTHE, MissionType.ORBIT,         laythe_orbit)
+        self._add(BodyName.LAYTHE, MissionType.LAND,          laythe_land_aero, laythe_land_prop)
+        self._add(BodyName.LAYTHE, MissionType.RETURN,        laythe_return_aero, laythe_return_prop)
+        self._add(BodyName.LAYTHE, MissionType.SAMPLE_RETURN, laythe_return_aero, laythe_return_prop)
+
+        # ----- Vall (Jool moon, airless) -------------------------------
+        vall_transfer = jool_orbit_aero + [
+            E("jool_low_orbit", "vall_intercept", PV, 620, BodyName.JOOL, attitude=True),
+            E("vall_intercept", "vall_soi", PV, 0, BodyName.VALL, attitude=True),
+        ]
+        vall_orbit = vall_transfer + [
+            E("vall_soi", "vall_low_orbit", PV, 910, BodyName.VALL, attitude=True),
+        ]
+        vall_land = vall_orbit + [
+            E("vall_low_orbit", "vall_surface", VL, 860, BodyName.VALL,
+              min_twr=1.2, throttle=True, attitude=True, legs=True),
+        ]
+        vall_return = vall_land + [
+            E("vall_surface", "vall_low_orbit", VA, 860, BodyName.VALL,
+              min_twr=1.2, throttle=True, attitude=True),
+            E("vall_low_orbit", "jool_low_orbit", PV, 1530, BodyName.VALL, attitude=True),
+            E("jool_low_orbit", "kerbin_intercept", PV, 3790, BodyName.JOOL,
+              pc=270, attitude=True),
+            kerbin_reentry,
+        ]
+        self._add(BodyName.VALL, MissionType.ESCAPE,        vall_transfer)
+        self._add(BodyName.VALL, MissionType.ORBIT,         vall_orbit)
+        self._add(BodyName.VALL, MissionType.LAND,          vall_land)
+        self._add(BodyName.VALL, MissionType.RETURN,        vall_return)
+        self._add(BodyName.VALL, MissionType.SAMPLE_RETURN, vall_return)
+
+        # ----- Tylo (Jool moon, airless, high gravity — hardest landing)
+        tylo_transfer = jool_orbit_aero + [
+            E("jool_low_orbit", "tylo_intercept", PV, 400, BodyName.JOOL, attitude=True),
+            E("tylo_intercept", "tylo_soi", PV, 0, BodyName.TYLO, attitude=True),
+        ]
+        tylo_orbit = tylo_transfer + [
+            E("tylo_soi", "tylo_low_orbit", PV, 1100, BodyName.TYLO, attitude=True),
+        ]
+        tylo_land = tylo_orbit + [
+            E("tylo_low_orbit", "tylo_surface", VL, 2270, BodyName.TYLO,
+              min_twr=1.2, throttle=True, attitude=True, legs=True),
+        ]
+        tylo_return = tylo_land + [
+            E("tylo_surface", "tylo_low_orbit", VA, 2270, BodyName.TYLO,
+              min_twr=1.2, throttle=True, attitude=True),
+            E("tylo_low_orbit", "jool_low_orbit", PV, 1500, BodyName.TYLO, attitude=True),
+            E("jool_low_orbit", "kerbin_intercept", PV, 3790, BodyName.JOOL,
+              pc=270, attitude=True),
+            kerbin_reentry,
+        ]
+        self._add(BodyName.TYLO, MissionType.ESCAPE,        tylo_transfer)
+        self._add(BodyName.TYLO, MissionType.ORBIT,         tylo_orbit)
+        self._add(BodyName.TYLO, MissionType.LAND,          tylo_land)
+        self._add(BodyName.TYLO, MissionType.RETURN,        tylo_return)
+        self._add(BodyName.TYLO, MissionType.SAMPLE_RETURN, tylo_return)
+
+        # ----- Bop (Jool moon, airless, high inclination) --------------
+        bop_transfer = jool_orbit_aero + [
+            E("jool_low_orbit", "bop_intercept", PV, 220, BodyName.JOOL,
+              pc=2440, attitude=True),
+            E("bop_intercept", "bop_soi", PV, 0, BodyName.BOP, attitude=True),
+        ]
+        bop_orbit = bop_transfer + [
+            E("bop_soi", "bop_low_orbit", PV, 900, BodyName.BOP, attitude=True),
+        ]
+        bop_land = bop_orbit + [
+            E("bop_low_orbit", "bop_surface", VL, 230, BodyName.BOP,
+              min_twr=1.2, throttle=True, attitude=True, legs=True),
+        ]
+        bop_return = bop_land + [
+            E("bop_surface", "bop_low_orbit", VA, 230, BodyName.BOP,
+              min_twr=1.2, throttle=True, attitude=True),
+            E("bop_low_orbit", "jool_low_orbit", PV, 1120, BodyName.BOP,
+              pc=2440, attitude=True),
+            E("jool_low_orbit", "kerbin_intercept", PV, 3790, BodyName.JOOL,
+              pc=270, attitude=True),
+            kerbin_reentry,
+        ]
+        self._add(BodyName.BOP, MissionType.ESCAPE,        bop_transfer)
+        self._add(BodyName.BOP, MissionType.ORBIT,         bop_orbit)
+        self._add(BodyName.BOP, MissionType.LAND,          bop_land)
+        self._add(BodyName.BOP, MissionType.RETURN,        bop_return)
+        self._add(BodyName.BOP, MissionType.SAMPLE_RETURN, bop_return)
+
+        # ----- Pol (Jool moon, airless, inclined) ----------------------
+        pol_transfer = jool_orbit_aero + [
+            E("jool_low_orbit", "pol_intercept", PV, 160, BodyName.JOOL,
+              pc=700, attitude=True),
+            E("pol_intercept", "pol_soi", PV, 0, BodyName.POL, attitude=True),
+        ]
+        pol_orbit = pol_transfer + [
+            E("pol_soi", "pol_low_orbit", PV, 820, BodyName.POL, attitude=True),
+        ]
+        pol_land = pol_orbit + [
+            E("pol_low_orbit", "pol_surface", VL, 130, BodyName.POL,
+              min_twr=1.2, throttle=True, attitude=True, legs=True),
+        ]
+        pol_return = pol_land + [
+            E("pol_surface", "pol_low_orbit", VA, 130, BodyName.POL,
+              min_twr=1.2, throttle=True, attitude=True),
+            E("pol_low_orbit", "jool_low_orbit", PV, 980, BodyName.POL,
+              pc=700, attitude=True),
+            E("jool_low_orbit", "kerbin_intercept", PV, 3790, BodyName.JOOL,
+              pc=270, attitude=True),
+            kerbin_reentry,
+        ]
+        self._add(BodyName.POL, MissionType.ESCAPE,        pol_transfer)
+        self._add(BodyName.POL, MissionType.ORBIT,         pol_orbit)
+        self._add(BodyName.POL, MissionType.LAND,          pol_land)
+        self._add(BodyName.POL, MissionType.RETURN,        pol_return)
+        self._add(BodyName.POL, MissionType.SAMPLE_RETURN, pol_return)
+
+        # ----- Eeloo (distant, icy, no atmosphere) ---------------------
+        eeloo_transfer = [
+            kerbin_ascent,
+            kerbin_escape,
+            E("kerbin_soi", "eeloo_intercept", PT, 1140, BodyName.KERBIN,
+              pc=1330, attitude=True),
+            E("eeloo_intercept", "eeloo_soi", PV, 0, BodyName.EELOO, attitude=True),
+        ]
+        eeloo_orbit = eeloo_transfer + [
+            E("eeloo_soi", "eeloo_low_orbit", PV, 1370, BodyName.EELOO, attitude=True),
+        ]
+        eeloo_land = eeloo_orbit + [
+            E("eeloo_low_orbit", "eeloo_surface", VL, 620, BodyName.EELOO,
+              min_twr=1.2, throttle=True, attitude=True, legs=True),
+        ]
+        eeloo_return = eeloo_land + [
+            E("eeloo_surface", "eeloo_low_orbit", VA, 620, BodyName.EELOO,
+              min_twr=1.2, throttle=True, attitude=True),
+            E("eeloo_low_orbit", "kerbin_intercept", PV, 2510, BodyName.EELOO,
+              pc=1330, attitude=True),
+            kerbin_reentry,
+        ]
+        self._add(BodyName.EELOO, MissionType.ESCAPE,        eeloo_transfer)
+        self._add(BodyName.EELOO, MissionType.ORBIT,         eeloo_orbit)
+        self._add(BodyName.EELOO, MissionType.LAND,          eeloo_land)
+        self._add(BodyName.EELOO, MissionType.RETURN,        eeloo_return)
+        self._add(BodyName.EELOO, MissionType.SAMPLE_RETURN, eeloo_return)
+
+        # ----- Kerbol (orbit only — cannot land) -----------------------
+        kerbol_orbit = [
+            kerbin_ascent,
+            kerbin_escape,
+            E("kerbin_soi", "kerbol_low_orbit", PT, 6000, BodyName.KERBOL, attitude=True),
+        ]
+        kerbol_return = kerbol_orbit + [
+            E("kerbol_low_orbit", "kerbin_intercept", PV, 6000, BodyName.KERBOL,
+              attitude=True),
+            kerbin_reentry,
+        ]
+        # Kerbol has no flyby / SOI-leave checks (you start inside its SOI), so
+        # no ESCAPE profile is registered. ORBIT/RETURN are the only Kerbol events.
+        self._add(BodyName.KERBOL, MissionType.ORBIT,  kerbol_orbit)
+        self._add(BodyName.KERBOL, MissionType.RETURN, kerbol_return)
+
+        # ----- Auto-fill: flag plant defaults to crewed landing --------
+        # Flag plant is the same mission as a crewed landing — if no explicit
+        # FLAG_PLANT profile exists, copy the LAND profile.  Kerbin already
+        # registered an explicit empty FLAG_PLANT entry; the existence check
+        # below preserves it.
+        for (body_name, mission_type) in list(self._profiles):
+            if mission_type == MissionType.LAND and (body_name, MissionType.FLAG_PLANT) not in self._profiles:
+                self._profiles[(body_name, MissionType.FLAG_PLANT)] = self._profiles[(body_name, MissionType.LAND)]
+
+    # ------------------------------------------------------------------
+    # Cross-validation
+    # ------------------------------------------------------------------
+
+    def _validate(self) -> None:
+        """Sanity-check the built profile graph.
+
+        Two checks:
+        1. Every body that has an ``ORBIT`` profile (and isn't Kerbol) must
+           also declare an explicit ``ESCAPE`` profile.  Historically these
+           were auto-generated by stripping the last edge of ORBIT, which
+           silently dropped relay-tier gates when SOI-entry and orbit-
+           insertion were merged into a single edge.  See bug 075 /
+           ``plans/ssr_variance_investigation.md``.
+        2. Every ``(body, event)`` that ``locations.get_body_events`` exposes
+           as a real check must have a profile entry, except FLAG_PLANT
+           (auto-derived from LAND above) and EVA-in-Orbit (shares the ORBIT
+           profile via its ``mission_type``).  Missing entries would cause
+           silent KeyError in rule-evaluation, so we surface them eagerly.
+        """
+        # (1) ESCAPE coverage — intrinsic to the mission graph.
+        for (body_name, mission_type) in list(self._profiles):
+            if (mission_type == MissionType.ORBIT
+                    and body_name != BodyName.KERBOL
+                    and (body_name, MissionType.ESCAPE) not in self._profiles):
+                raise RuntimeError(
+                    f"{body_name} has an ORBIT profile but no ESCAPE profile. "
+                    "Add an explicit ``self._add(body, MissionType.ESCAPE, ...)``."
+                )
+
+        # (2) Cross-module coverage — every body/event check must have a profile.
+        # Deferred import: locations.py imports from bodies.py.
+        from .locations import EVENT_BY_NAME, get_body_events
+        for body in ALL_BODIES:
+            for event_name in get_body_events(body):
+                event = EVENT_BY_NAME[event_name]
+                if event.mission_type == MissionType.FLAG_PLANT:
+                    continue  # derived from LAND in _build
+                key = (body.name, event.mission_type)
+                if key not in self._profiles:
+                    raise AssertionError(
+                        f"MissionBuilder: no profile for {key} "
+                        f"(location {body.name} {event_name} would have no rule)"
+                    )
 
 # ---------------------------------------------------------------------------
 # Science budget estimator (used by tech-tree access rules)

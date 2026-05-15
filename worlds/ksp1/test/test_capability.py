@@ -7,9 +7,18 @@ bypassing the CollectionState so we don't need a full world setup.
 import unittest
 
 from worlds.ksp1.bodies import (
-    ALL_BODIES, MISSION_PROFILES, BODY_BY_NAME, DIFFICULTY_PROFILES,
-    BodyName, MissionType, effective_dv,
+    ALL_BODIES, BODY_BY_NAME, DIFFICULTY_PROFILES,
+    BodyName, MissionBuilder, MissionType, effective_dv,
 )
+
+# Phase 3a refactor: MISSION_PROFILES is no longer a module-level constant in
+# bodies.py — it now lives behind ``MissionBuilder``.  Tests construct one
+# Kerbin-home builder here so existing ``MISSION_PROFILES.get((body, mt), [])``
+# assertions keep working without per-test edits.  Tests that drive
+# capability internals (``_assess_bodies``, ``_assess_one_body``,
+# ``evaluate_mission_detailed``) pass ``MISSION_BUILDER`` explicitly.
+MISSION_BUILDER = MissionBuilder(home=BodyName.KERBIN)
+MISSION_PROFILES = MISSION_BUILDER.all_profiles()
 from worlds.ksp1.locations import EventName
 from worlds.ksp1.capability import (
     BodyAccessProfile, EquipmentFlags,
@@ -308,7 +317,7 @@ class TestLaunchClampGate(unittest.TestCase):
     def test_duna_blocked_without_clamp(self) -> None:
         flags = self._interplanetary_flags_no_clamp()
         body = BODY_BY_NAME[BodyName.DUNA]
-        result = _assess_one_body(body, flags, _normal_diff(), computed={})
+        result = _assess_one_body(body, flags, _normal_diff(), computed={}, mission_builder=MISSION_BUILDER)
         self.assertFalse(result.access.get("Orbit", False),
                          "Duna orbit should be blocked without launch clamp")
         self.assertIn("launch clamp", (result.blocking_reason or "").lower())
@@ -319,7 +328,7 @@ class TestLaunchClampGate(unittest.TestCase):
         flags.available_landing_legs = []
         flags.landing_leg_tier = 0
         body = BODY_BY_NAME[BodyName.MUN]
-        result = _assess_one_body(body, flags, _normal_diff(), computed={})
+        result = _assess_one_body(body, flags, _normal_diff(), computed={}, mission_builder=MISSION_BUILDER)
         # Mun orbit should still be assessable (clamp not required)
         # It may fail for other reasons (no landing legs for land check),
         # but the orbit check itself should proceed
@@ -331,7 +340,7 @@ class TestLaunchClampGate(unittest.TestCase):
         flags = self._interplanetary_flags_no_clamp()
         flags.has_launch_clamp = True
         body = BODY_BY_NAME[BodyName.DUNA]
-        result = _assess_one_body(body, flags, _normal_diff(), computed={})
+        result = _assess_one_body(body, flags, _normal_diff(), computed={}, mission_builder=MISSION_BUILDER)
         # The clamp gate is no longer blocking; the blocking_reason (if any)
         # must NOT be about launch clamps.
         self.assertNotIn("launch clamp", (result.blocking_reason or "").lower())
@@ -464,7 +473,7 @@ class TestParentGating(unittest.TestCase):
             BodyName.EVE: BodyAccessProfile(access={"Orbit": False})
         }
         gilly = BODY_BY_NAME[BodyName.GILLY]
-        result = _assess_one_body(gilly, flags, _normal_diff(), computed)  # type: ignore[arg-type]
+        result = _assess_one_body(gilly, flags, _normal_diff(), computed, MISSION_BUILDER)  # type: ignore[arg-type]
         self.assertFalse(result.access.get("Orbit", False))
         self.assertIn("parent", (result.blocking_reason or "").lower())
 
@@ -480,7 +489,7 @@ class TestParentGating(unittest.TestCase):
             BodyName.EVE: BodyAccessProfile(access={"Orbit": True})
         }
         gilly = BODY_BY_NAME[BodyName.GILLY]
-        result = _assess_one_body(gilly, flags, _normal_diff(), computed)  # type: ignore[arg-type]
+        result = _assess_one_body(gilly, flags, _normal_diff(), computed, MISSION_BUILDER)  # type: ignore[arg-type]
         # Parent gating is cleared — any remaining blocking reason must NOT
         # be about the parent chain (it may fail for physics/dv reasons which
         # is expected for the tiny test fixture vs. the full Eve system journey).
@@ -615,14 +624,14 @@ class TestNoEngines(unittest.TestCase):
     def test_mun_orbit_false_without_engines(self) -> None:
         flags = self._no_engine_flags()
         mun = BODY_BY_NAME[BodyName.MUN]
-        result = _assess_one_body(mun, flags, _normal_diff(), computed={})
+        result = _assess_one_body(mun, flags, _normal_diff(), computed={}, mission_builder=MISSION_BUILDER)
         self.assertFalse(result.access.get("Orbit", False),
                          "Mun orbit should be False without engines")
 
     def test_all_bodies_orbit_false_without_engines(self) -> None:
         flags = self._no_engine_flags()
         # Assess every non-Kerbin body; none should be orbitally reachable.
-        all_results = _assess_bodies(flags, _normal_diff())
+        all_results = _assess_bodies(flags, _normal_diff(), MISSION_BUILDER)
         for body_name, prof in all_results.items():
             if body_name == BodyName.KERBIN:
                 continue  # Kerbin is the starting body, always True
@@ -798,7 +807,7 @@ class TestDunaReturn(unittest.TestCase):
     def test_duna_can_return_to_kerbin(self) -> None:
         flags = self._duna_return_flags()
         duna = BODY_BY_NAME[BodyName.DUNA]
-        result = _assess_one_body(duna, flags, _normal_diff(), computed={})
+        result = _assess_one_body(duna, flags, _normal_diff(), computed={}, mission_builder=MISSION_BUILDER)
         self.assertTrue(
             result.access.get("Return", False),
             f"Duna return should succeed with 3-stage rocket + heat shield + chutes. "
@@ -849,7 +858,7 @@ class TestInterplanetaryBodies(unittest.TestCase):
 
     def test_inner_and_middle_bodies_orbitally_reachable(self) -> None:
         flags = self._full_kit_flags()
-        results = _assess_bodies(flags, _normal_diff())
+        results = _assess_bodies(flags, _normal_diff(), MISSION_BUILDER)
         for body_name in (BodyName.MUN, BodyName.MINMUS, BodyName.MOHO, BodyName.EVE, BodyName.DUNA, BodyName.DRES):
             prof = results[body_name]
             self.assertTrue(
@@ -862,7 +871,7 @@ class TestInterplanetaryBodies(unittest.TestCase):
         # Jool and Eeloo require min_relay_tier=4.  Tier 3 should block them.
         flags = self._full_kit_flags()
         self.assertEqual(flags.relay_tier, 3)
-        results = _assess_bodies(flags, _normal_diff())
+        results = _assess_bodies(flags, _normal_diff(), MISSION_BUILDER)
         for body_name in (BodyName.JOOL, BodyName.EELOO):
             prof = results[body_name]
             self.assertFalse(
@@ -1494,6 +1503,7 @@ class TestStructuredBlockingReasons(unittest.TestCase):
         flags = _pre_pass(lambda _n: 0, start_with_clamps=False)
         result = evaluate_mission_detailed(
             flags, _normal_diff(), "Mun", MissionType.ORBIT, None,
+            MISSION_BUILDER,
         )
         self.assertFalse(result.feasible)
         reasons = {b.reason for b in result.blocking}
@@ -1539,7 +1549,7 @@ class TestStructuredBlockingReasons(unittest.TestCase):
             launch_clamp=False, decoupler_stack=True,
         )
         body = BODY_BY_NAME[BodyName.DUNA]
-        result = _assess_one_body(body, flags, _normal_diff(), computed={})
+        result = _assess_one_body(body, flags, _normal_diff(), computed={}, mission_builder=MISSION_BUILDER)
         self.assertEqual(len(result.blocking), 1)
         self.assertEqual(result.blocking[0].reason,
                          BlockingReason.NO_LAUNCH_CLAMP)

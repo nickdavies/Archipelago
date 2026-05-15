@@ -13,7 +13,7 @@ from typing import Optional
 
 from worlds.ksp1.bodies import (
     ALL_BODIES, BODY_BY_NAME, BodyName, MissionType, DIFFICULTY_PROFILES, EdgeType,
-    MISSION_PROFILES, MissionEdge,
+    MissionBuilder, MissionEdge,
 )
 from worlds.ksp1.capability import (
     EquipmentFlags, ProfileResult,
@@ -159,7 +159,7 @@ def _profile_prereqs(profile: list[MissionEdge]) -> list[str]:
     return reqs
 
 
-def _format_profile_summary(info: CheckInfo) -> list[str]:
+def _format_profile_summary(info: CheckInfo, mission_builder: MissionBuilder) -> list[str]:
     """Return lines summarising the mission profile pre-checks for a check."""
     lines: list[str] = []
 
@@ -208,7 +208,7 @@ def _format_profile_summary(info: CheckInfo) -> list[str]:
     lines.append(f"  Profile: [{info.mission_type}, {crewed_label}]")
     lines.append(f"  Command: {cmd}")
 
-    profiles = MISSION_PROFILES.get((info.body_name, info.mission_type), [])
+    profiles = mission_builder.profiles_for(info.body_name, info.mission_type)
     if not profiles:
         lines.append("    (no profiles defined)")
         return lines
@@ -238,6 +238,7 @@ def format_rocket_output(
     result: Optional[ProfileResult],
     flags: Optional[EquipmentFlags],
     difficulty_name: str,
+    mission_builder: MissionBuilder,
     sounding_altitude_km: float = 0.0,
 ) -> list[str]:
     """Return lines of the rocket breakdown for a given check.
@@ -264,7 +265,7 @@ def format_rocket_output(
     lines.append(f"  Mission: {check_name}")
     lines.append(f"  Body: {body_name} | Difficulty: {difficulty_name}")
     lines.append(f"  In logic: {logic_str}")
-    lines.extend(_format_profile_summary(info))
+    lines.extend(_format_profile_summary(info, mission_builder))
     if info.mission_type == MissionType.SOUNDING and info.threshold_km is not None:
         lines.append(f"  Sounding altitude: {sounding_altitude_km:.1f} km "
                      f"(need {info.threshold_km:.0f} km)")
@@ -421,6 +422,7 @@ def build_bug_report_dict(
     checked_names: list[str],
     missing_count: int,
     in_logic_locs: list[str],
+    mission_builder: MissionBuilder,
     check_name: Optional[str] = None,
     user_description: Optional[str] = None,
 ) -> dict:
@@ -449,7 +451,8 @@ def build_bug_report_dict(
         lambda name: items_by_name.get(name, 0),
         difficulty_name,
         bool(slot_data.get("start_with_launch_clamps", 1)),
-        rep_names,
+        mission_builder,
+        rep_names=rep_names,
     )
     report["equipment_flags"] = {
         "staging_tier": flags.staging_tier,
@@ -477,6 +480,7 @@ def build_bug_report_dict(
             diff = DIFFICULTY_PROFILES[difficulty_name]
             result = evaluate_mission_detailed(
                 flags, diff, info.body_name, info.mission_type, info.crewed,
+                mission_builder,
                 threshold_km=info.threshold_km,
             )
             report["rocket"] = {

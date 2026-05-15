@@ -22,9 +22,9 @@ from typing import TYPE_CHECKING, Callable, Optional
 from BaseClasses import CollectionState
 
 from .bodies import (
-    BODY_BY_NAME, MISSION_PROFILES, ALL_BODIES,
+    BODY_BY_NAME, ALL_BODIES,
     BodyName, MissionType, DifficultyProfile, DIFFICULTY_PROFILES,
-    Body, MissionEdge, EdgeType, effective_dv, parent_chain,
+    Body, MissionEdge, MissionBuilder, EdgeType, effective_dv, parent_chain,
 )
 from .parts import (
     PART_DB, CapabilityFlag, Engine, FuelTank, SolidBooster, HeatShield,
@@ -46,17 +46,10 @@ from .rocket_math import (
 if TYPE_CHECKING:
     from .world import KSP1World
 
-# Import-time assertion: every body/event combo that locations.py exposes as
-# an actual check must have a MISSION_PROFILES entry. Missing entries cause
-# silent KeyError at runtime. This catches registration gaps (e.g. a new body
-# added without RETURN profiles). `get_body_events` is the single source of
-# truth for which events apply to which body — special-case bodies (Kerbol)
-# naturally drop out by returning an empty event set.
-for _body in ALL_BODIES:
-    for _event_name in get_body_events(_body):
-        _key = (_body.name, EVENT_BY_NAME[_event_name].mission_type)
-        assert _key in MISSION_PROFILES, f"Missing MISSION_PROFILES entry: {_key}"
-del _body, _event_name, _key
+# NOTE: cross-validation that every body/event has a profile now lives inside
+# ``MissionBuilder._validate`` (see bodies.py).  It runs once at the first
+# ``MissionBuilder(BodyName.KERBIN)`` construction (world.generate_early /
+# test-file module-level builders), so registration gaps surface eagerly there.
 
 # Item names that affect capability computation. Built once at module load
 # from PART_DB: any item containing an Engine, FuelTank, SolidBooster,
@@ -1572,6 +1565,7 @@ def _best_chute_for_body(
 def _assess_bodies(
     flags: EquipmentFlags,
     diff: DifficultyProfile,
+    mission_builder: MissionBuilder,
 ) -> dict[str, BodyAccessProfile]:
     """
     Populate a BodyAccessProfile for every body in ALL_BODIES.
@@ -1588,7 +1582,7 @@ def _assess_bodies(
     moons = [b for b in ALL_BODIES if b.parent is not None]
 
     for body in planets + moons:
-        results[body.name] = _assess_one_body(body, flags, diff, results)
+        results[body.name] = _assess_one_body(body, flags, diff, results, mission_builder)
 
     return results
 
@@ -1598,6 +1592,7 @@ def _assess_one_body(
     flags: EquipmentFlags,
     diff: DifficultyProfile,
     computed: dict[str, BodyAccessProfile],
+    mission_builder: MissionBuilder,
 ) -> BodyAccessProfile:
     prof = BodyAccessProfile()
 
@@ -1633,7 +1628,7 @@ def _assess_one_body(
             prof.access[event.name] = False
             continue
 
-        profiles = MISSION_PROFILES.get((body.name, event.mission_type))
+        profiles = mission_builder.profiles_for(body.name, event.mission_type)
 
         # Empty profile = always achievable (e.g. Kerbin launchpad EVA).
         if not profiles:
@@ -1745,6 +1740,7 @@ def evaluate_mission_detailed(
     body_name: str,
     mission_type: MissionType,
     crewed: bool | None,
+    mission_builder: MissionBuilder,
     threshold_km: float | None = None,
 ) -> ProfileResult:
     """
@@ -1828,7 +1824,7 @@ def evaluate_mission_detailed(
         return ProfileResult(True)
 
     # --- Standard body mission profiles ---
-    profiles = MISSION_PROFILES.get((body_name, mission_type), [])
+    profiles = mission_builder.profiles_for(body_name, mission_type)
     if not profiles:
         return ProfileResult(False, blocking=[BlockingInfo(
             reason=BlockingReason.NO_PROFILES,
@@ -1975,13 +1971,14 @@ def compute_capability_from_items(
     item_count_fn: Callable[[str], int],
     difficulty_name: str,
     start_with_clamps: bool,
+    mission_builder: MissionBuilder,
     rep_names: frozenset[str] = frozenset(),
     progressive_launch_pad: bool = False,
 ) -> tuple[RocketCapability, EquipmentFlags]:
     """Compute capability without a CollectionState. For CLI/external tools."""
     diff = DIFFICULTY_PROFILES[difficulty_name]
     flags = _pre_pass(item_count_fn, start_with_clamps, rep_names, progressive_launch_pad)
-    body_profiles = _assess_bodies(flags, diff)
+    body_profiles = _assess_bodies(flags, diff, mission_builder)
     sounding_km = _compute_sounding_altitude(flags)
 
     if flags.has_rtg:
@@ -2033,7 +2030,8 @@ def _compute_capability(state: CollectionState, player: int) -> RocketCapability
     )
     cap, _ = compute_capability_from_items(
         lambda name: state.count(name, player),
-        difficulty_name, start_with_clamps, rep_names,
+        difficulty_name, start_with_clamps, world.mission_builder,
+        rep_names=rep_names,
         progressive_launch_pad=bool(options.progressive_launch_pad.value),
     )
     return cap
@@ -2051,21 +2049,7 @@ for _item_name, _parts in PART_DB.items():
                 f"{_part.name} has multi_mount flag but not in MULTI_MOUNT_TABLE"
             )
 
-# (b) Mission profile coverage: every (body, event) that locations.py exposes
-#     as a real check must have a MISSION_PROFILES entry, except flag_plant
-#     (derived from crewed landing during _add) and EVA in Orbit (shares
-#     orbit profile via its mission_type).
-for _body in ALL_BODIES:
-    for _event_name in get_body_events(_body):
-        _event = EVENT_BY_NAME[_event_name]
-        if _event.mission_type == MissionType.FLAG_PLANT:
-            continue  # derived from crewed_landing
-        _key = (_body.name, _event.mission_type)
-        assert _key in MISSION_PROFILES, (
-            f"No MISSION_PROFILES entry for {_key}"
-        )
-
-# (c) Every MiscEquipment flag in parts.py must be a recognized CapabilityFlag.
+# (b) Every MiscEquipment flag in parts.py must be a recognized CapabilityFlag.
 _KNOWN_FLAGS: frozenset[str] = frozenset(CapabilityFlag)
 
 for _item_name, _parts in PART_DB.items():
@@ -2076,4 +2060,7 @@ for _item_name, _parts in PART_DB.items():
                 f"Part {_part.name} has unrecognized flags: {_unknown}"
             )
 
-del _item_name, _parts, _part, _body, _event, _key, _unknown, _KNOWN_FLAGS
+del _item_name, _parts, _part, _unknown, _KNOWN_FLAGS
+
+# Mission-profile coverage assertion now lives in MissionBuilder._validate
+# (bodies.py); it runs at builder construction.

@@ -24,7 +24,7 @@ from Options import OptionError
 
 from .bodies import (
     BODY_BY_NAME, BodyName, DIFFICULTY_PROFILES, DifficultyProfile,
-    MISSION_PROFILES, MissionType,
+    MissionBuilder, MissionType,
 )
 from .capability import (
     EquipmentFlags, ProfileResult,
@@ -298,6 +298,7 @@ def _relevant_narrow_chains(
     body_name: str,
     mission_type,
     crewed: Optional[bool],
+    mission_builder: MissionBuilder,
 ) -> frozenset[str]:
     """Return the subset of ``_NARROW_CHAINS_REQUIRING_PROFILE_USE`` that
     the mission's profile alternatives actually exercise.
@@ -312,8 +313,8 @@ def _relevant_narrow_chains(
     Narrow chains NOT in the returned set should be filtered out of the
     bumper's candidate pool for this mission.
     """
-    from .bodies import MISSION_PROFILES, EdgeType
-    profiles = MISSION_PROFILES.get((body_name, mission_type), [])
+    from .bodies import EdgeType
+    profiles = mission_builder.profiles_for(body_name, mission_type)
     if not profiles:
         # No physics profile (e.g., first-launch / sounding pseudo-events).
         # Be permissive — return the whole set so we don't accidentally
@@ -574,6 +575,7 @@ def _evaluate(
     flags: EquipmentFlags,
     info: _LocationMissionInfo,
     diff: DifficultyProfile,
+    mission_builder: MissionBuilder,
 ) -> ProfileResult:
     """Dispatch to the right evaluator for a location's mission type."""
     if info.mission_type == MissionType.SOUNDING:
@@ -581,7 +583,8 @@ def _evaluate(
     return evaluate_mission_detailed(
         flags, diff,
         info.body, info.mission_type, info.crewed,
-        info.threshold_km,
+        mission_builder,
+        threshold_km=info.threshold_km,
     )
 
 
@@ -841,6 +844,7 @@ def minimal_rocket_for(
     progressive_launch_pad: bool,
     start_with_clamps: bool,
     rng: Random,
+    mission_builder: MissionBuilder,
     precollected_names: frozenset[str] = frozenset(),
 ) -> Optional[MinimalRocket]:
     """Compute the minimum delta of progressive items beyond ``prior_kit``
@@ -869,7 +873,7 @@ def minimal_rocket_for(
     # Pre-compute which narrow chains (HS / Parachute / Legs / Ladder) the
     # mission actually exercises.  Bumping these for missions that don't
     # use them is a wasted iteration; the bumper filters them out.
-    narrow_relevant = _relevant_narrow_chains(info.body, info.mission_type, info.crewed)
+    narrow_relevant = _relevant_narrow_chains(info.body, info.mission_type, info.crewed, mission_builder)
 
     def _count_fn(name: str, _k: dict[str, int] = kit) -> int:
         if name in PROGRESSIVE_CAPS:
@@ -900,7 +904,7 @@ def minimal_rocket_for(
             rep_names=rep_names,
             progressive_launch_pad=progressive_launch_pad,
         )
-        trial_result = _evaluate(trial_flags, info, diff)
+        trial_result = _evaluate(trial_flags, info, diff, mission_builder)
         # When infeasible, `launch_mass` carries the optimizer's partial-
         # mass-attempt (running payload at the failing stage).  Use it
         # so the scorer can rank "this bump got us closer" without needing
@@ -934,7 +938,7 @@ def minimal_rocket_for(
             rep_names=rep_names,
             progressive_launch_pad=progressive_launch_pad,
         )
-        trial_result = _evaluate(trial_flags, info, diff)
+        trial_result = _evaluate(trial_flags, info, diff, mission_builder)
         # When infeasible, `launch_mass` carries the optimizer's partial-
         # mass-attempt (running payload at the failing stage).  Use it
         # so the scorer can rank "this bump got us closer" without needing
@@ -965,7 +969,7 @@ def minimal_rocket_for(
             rep_names=rep_names,
             progressive_launch_pad=progressive_launch_pad,
         )
-        result = _evaluate(flags, info, diff)
+        result = _evaluate(flags, info, diff, mission_builder)
         if result.feasible:
             delta = {
                 k: v - prior_kit.get(k, 0)
@@ -1043,6 +1047,7 @@ def _build_rocket_or_raise(
         progressive_launch_pad=bool(world.options.progressive_launch_pad),
         start_with_clamps=bool(world.options.start_with_launch_clamps),
         rng=world.random,
+        mission_builder=world.mission_builder,
         precollected_names=precollected_names,
     )
     if rocket is None:
@@ -1056,13 +1061,13 @@ def _build_rocket_or_raise(
     return rocket
 
 
-def _goal_dv(name: str) -> float:
+def _goal_dv(name: str, mission_builder: MissionBuilder) -> float:
     """Cheapest profile delta-v for a goal location, used for sphere
     ordering and 'hardest-goal' selection."""
     info = _parse_location(name)
     if info is None:
         return 0.0
-    profiles = MISSION_PROFILES.get((info.body, info.mission_type), [])
+    profiles = mission_builder.profiles_for(info.body, info.mission_type)
     if not profiles:
         return 0.0
     return min(sum(e.base_dv for e in profile) for profile in profiles)
@@ -1262,6 +1267,7 @@ def _compute_location_signatures(
             loc.name, prior_kit={}, rep_names=rep_names,
             difficulty=difficulty, progressive_launch_pad=pad_on,
             start_with_clamps=clamps, rng=world.random,
+            mission_builder=world.mission_builder,
             precollected_names=precollected_names,
         )
         if rocket is None:
@@ -1270,7 +1276,7 @@ def _compute_location_signatures(
         # ordering scalar.  The mass-based ``rocket.profile_dv``
         # (launch_mass) does not order correctly across bodies because
         # heavier missions ≠ harder dv requirements.
-        intrinsic_dv = _goal_dv(loc.name)
+        intrinsic_dv = _goal_dv(loc.name, world.mission_builder)
         sigs[loc.name] = LocationSignature(
             dv=intrinsic_dv,
             requirements=rocket.requirements,
@@ -1474,6 +1480,7 @@ def _compute_tech_tier_signatures(
         cap, _flags = compute_capability_from_items(
             _count_fn, difficulty_name,
             start_with_clamps=clamps,
+            mission_builder=world.mission_builder,
             rep_names=rep_names,
             progressive_launch_pad=pad_on,
         )
@@ -1758,6 +1765,7 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
                 bool(world.options.progressive_launch_pad),
                 bool(world.options.start_with_launch_clamps),
                 world.random,
+                world.mission_builder,
                 precollected_names=precollected_names,
             )
             if rocket is None:
