@@ -1765,21 +1765,21 @@ def evaluate_mission_detailed(
 
     # --- Other Kerbin-specific mission types ---
     if mission_type == MissionType.FIRST_LAUNCH:
+        # KSP fires the FirstLaunch event for any kerbal EVA off the pad as
+        # well as a real rocket launch. We model only the rocket path here
+        # as a conservative subset — false negatives are acceptable, and
+        # accepting "kerbal walks off pad" caused minimal_rocket_for to
+        # always pick Progressive Capsule for sphere 0 (Capsule alone makes
+        # the location feasible), which forced every starting inventory to
+        # contain a capsule and suppressed probe-only starts.
         sounding = _compute_sounding_altitude(flags)
-        ok = sounding > 0 or flags.has_capsule
-        if ok:
+        if sounding > 0:
             return ProfileResult(True)
-        blocking_list: list[BlockingInfo] = []
-        if not flags.has_capsule:
-            blocking_list.append(BlockingInfo(
-                reason=BlockingReason.NO_CAPSULE, detail="kerbal EVA path"))
-        if sounding <= 0:
-            # Delegate to the sounding-rocket evaluator (with threshold=0.1
-            # to force a "needs altitude" failure) so the structured
-            # reasons name the specific missing parts (payload, propulsion).
-            sub = _evaluate_sounding(flags, 0.1)
-            blocking_list.extend(sub.blocking)
-        return ProfileResult(False, blocking=blocking_list)
+        # Delegate to the sounding-rocket evaluator (with threshold=0.1 to
+        # force a "needs altitude" failure) so the structured reasons name
+        # the specific missing parts (payload, propulsion).
+        sub = _evaluate_sounding(flags, 0.1)
+        return ProfileResult(False, blocking=list(sub.blocking))
 
     if mission_type == MissionType.FIRST_LANDING:
         sounding = _compute_sounding_altitude(flags)
