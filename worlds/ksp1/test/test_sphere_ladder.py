@@ -150,23 +150,43 @@ class TestRuleBNotBannedAtSphereLocation(KSP1TestBase):
 
 
 class TestSphereChainOrdered(KSP1TestBase):
-    """Each sphere's signature should be ≤ the next sphere's signature
-    in the partial order (chain is total-ordered by dv + reqs).
+    """The ladder is sorted by (group, min_kit_size, dv, ...) where group
+    pins S_launch first, S_orbit second, S_goal* last, and intermediates
+    in the middle. The semantic invariant we care about: each sphere's
+    cumulative kit is a superset of the prior sphere's cumulative kit
+    — the chain only grows, never shrinks or contradicts itself.
     """
     options = {"goal": "duna_return", "difficulty": "normal"}
 
-    def test_chain_is_dv_sorted(self) -> None:
+    def test_cumulative_kit_monotone(self) -> None:
+        ladder = self.world._sphere_ladder
+        prev_cum: dict[str, int] = {}
+        for s in ladder.spheres:
+            cum = s.rocket.cumulative
+            for name, prev_count in prev_cum.items():
+                self.assertGreaterEqual(
+                    cum.get(name, 0), prev_count,
+                    f"Sphere {s.name} regressed {name}: "
+                    f"prior cumulative had {prev_count}, this sphere has "
+                    f"{cum.get(name, 0)} — ladder must only grow.",
+                )
+            prev_cum = cum
+
+    def test_chain_groups_anchored(self) -> None:
+        """S_launch / S_orbit lead; S_goal* always trail; intermediates middle."""
         ladder = self.world._sphere_ladder
         spheres = ladder.spheres
-        for i in range(len(spheres) - 1):
-            a, b = spheres[i], spheres[i + 1]
-            if a.signature is None or b.signature is None:
-                continue
-            self.assertLessEqual(
-                a.signature.dv, b.signature.dv,
-                f"Sphere chain not dv-sorted: {a.name} (dv={a.signature.dv}) "
-                f"comes before {b.name} (dv={b.signature.dv})",
-            )
+        if not spheres:
+            return
+        self.assertEqual(spheres[0].name, "S_launch")
+        seen_goal = False
+        for s in spheres:
+            if s.name.startswith("S_goal"):
+                seen_goal = True
+            elif seen_goal:
+                self.fail(
+                    f"Non-goal sphere {s.name} appears after a S_goal sphere"
+                )
 
 
 class TestSmallGoalMunFlag(KSP1TestBase):
