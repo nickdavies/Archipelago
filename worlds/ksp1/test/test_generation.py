@@ -23,7 +23,7 @@ from worlds.ksp1.capability import get_capability, explain_body_unreachable
 
 class KSP1TestBase(WorldTestBase):
     game = "Kerbal Space Program 1"
-    run_default_tests = False  # suppressed; fill runs only in TestFill and TestCompleteTechTreeGoalRD
+    run_default_tests = False  # suppressed; fill runs only in TestFill and TestFillStandardSampleReturns
 
 
 class TestFill(KSP1TestBase):
