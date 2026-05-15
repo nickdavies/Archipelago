@@ -24,8 +24,11 @@ G0: float = 9.80665  # standard gravity, m/s²
 FILL_LEVELS: tuple[float, ...] = (1.0, 0.75, 0.5, 0.25)
 
 # Parallel staging (asparagus/onion) reduces effective tank dry mass.
-# We model only a fraction of the theoretical benefit (golden rule).
-ASPARAGUS_DRY_MASS_FACTOR: float = 0.5
+# A constant-factor model under-models true multi-stage Tsiolkovsky by
+# 10-25% — even at factor 0.0 the single-stage formula can't reach the
+# product-of-mass-ratios that real asparagus achieves. Accepting that
+# under-model in exchange for simple per-iteration math.
+ASPARAGUS_DRY_MASS_FACTOR: float = 0.25
 ONION_DRY_MASS_FACTOR: float = 0.75
 
 # KSP symmetry tool modes. Radial boosters must use one of these counts.
