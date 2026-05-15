@@ -200,17 +200,20 @@ class TestItemClassification(KSP1TestBase):
                 return item.classification
         raise KeyError(name)
 
-    def test_progressive_engine_items_are_progression(self):
-        """Progressive engine items should be progression-classified."""
+    def test_progressive_engine_items_in_pool(self):
+        """Progressive engine items must be in the pool. Per-seed,
+        `_reclassify_spare_progressives` may demote spare copies to
+        useful when the goal doesn't need every tier, so we don't
+        assert classification — only pool presence."""
         for name in (
             "Progressive Launch Engine",
             "Progressive Vacuum Engine",
         ):
-            self.assertEqual(
-                self._classification(name),
-                ItemClassification.progression,
-                f"{name} should be progression",
+            count = sum(
+                1 for item in self.multiworld.itempool
+                if item.name == name
             )
+            self.assertGreater(count, 0, f"{name} must be in the item pool")
 
     def test_rcs_is_useful(self):
         self.assertEqual(
@@ -219,14 +222,19 @@ class TestItemClassification(KSP1TestBase):
             "RCS Thruster should be useful, not progression",
         )
 
-    def test_progressive_ladder_is_progression(self):
-        # Telescopic ladders moved into Progressive Ladder group.
-        # The group item itself is progression; the tier-1/tier-2 parts are
-        # the sole reps of their tiers (always removed from pool by rep selection).
-        self.assertEqual(
-            self._classification("Progressive Ladder"),
-            ItemClassification.progression,
-            "Progressive Ladder should be progression",
+    def test_progressive_ladder_in_pool(self):
+        # Telescopic ladders moved into Progressive Ladder group; the
+        # group item itself replaces them in the pool. Per-seed,
+        # `_reclassify_spare_progressives` may demote some/all copies to
+        # useful when the goal doesn't need the chain, but the pool must
+        # always contain Progressive Ladder copies.
+        count = sum(
+            1 for item in self.multiworld.itempool
+            if item.name == "Progressive Ladder"
+        )
+        self.assertGreater(
+            count, 0,
+            "Progressive Ladder must be in the item pool",
         )
 
     def test_basic_ladder_is_useful(self):
