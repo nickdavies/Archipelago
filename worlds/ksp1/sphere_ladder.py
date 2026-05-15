@@ -1155,7 +1155,10 @@ def _select_intermediates(
 
     rng = world.random
     n_low = min(rng.randint(1, 3), len(pool_low))
-    n_mid = min(rng.randint(2, 7), len(pool_mid))
+    # Floor at 3 mid intermediates so the orbit→goal kit growth is spread
+    # across several spheres rather than packed into S_goal (fewer fill errs
+    # when the goal requires a lot of progressives — e.g. Duna Return).
+    n_mid = min(rng.randint(3, 7), len(pool_mid))
     chosen_low = rng.sample(pool_low, n_low) if n_low else []
     chosen_mid = rng.sample(pool_mid, n_mid) if n_mid else []
     return chosen_low, chosen_mid
