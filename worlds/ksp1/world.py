@@ -6,7 +6,7 @@ from worlds.AutoWorld import LogicMixin, WebWorld, World
 from . import items, locations, regions, rules
 from .rules import GoalSpec, resolve_goal_spec, goal_spec_location_names
 from .capability import CAPABILITY_ITEMS, RocketCapability
-from .bodies import ALL_BODIES, MissionType
+from .bodies import ALL_BODIES, BodyName, MissionBuilder, MissionType
 from .items import ITEM_NAME_TO_ID, PROGRESSIVE_LAUNCH_PAD_CAPS, _FILLER_ITEMS
 from .parts import PROGRESSIVE_PART_TIERS
 from .locations import (
@@ -75,9 +75,16 @@ class KSP1World(World):
     # Resolved goal specification (preset or custom).
     goal_spec: GoalSpec
 
+    # Mission graph builder for this world.  Phase 3a pins the home body to
+    # KERBIN here — Phase 4 lifts this pin behind the player-facing
+    # StartingBody option.  Owned by the world so its data lifetime matches
+    # the future option's lifetime.
+    mission_builder: MissionBuilder
+
     def generate_early(self) -> None:
         """Resolve goal spec and apply ExcludeLateTechTree."""
         self.capability_cache = {}
+        self.mission_builder = MissionBuilder(home=BodyName.KERBIN)
 
         # UT regen: restore options from original generation's slot_data.
         passthrough = getattr(self.multiworld, "re_gen_passthrough", {})
@@ -253,7 +260,8 @@ class KSP1World(World):
             lambda name: state.count(name, self.player),
             difficulty_name,
             bool(self.options.start_with_launch_clamps.value),
-            rep_names,
+            self.mission_builder,
+            rep_names=rep_names,
         )
 
         result = None
@@ -261,12 +269,13 @@ class KSP1World(World):
             diff = DIFFICULTY_PROFILES[difficulty_name]
             result = evaluate_mission_detailed(
                 flags, diff, info.body_name, info.mission_type, info.crewed,
+                self.mission_builder,
                 threshold_km=info.threshold_km,
             )
 
         lines = format_rocket_output(
             target_name, in_logic, False, info, result, flags,
-            difficulty_name,
+            difficulty_name, self.mission_builder,
             sounding_altitude_km=cap.sounding_altitude_km,
         )
         return [{"type": "text", "text": "\n".join(lines)}]

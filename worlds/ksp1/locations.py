@@ -135,7 +135,7 @@ class EventDef:
     """
     name: EventName
     scale: int                            # location slots per body for this event
-    mission_type: MissionType             # key into MISSION_PROFILES
+    mission_type: MissionType             # key into MissionBuilder.profiles_for
     crewed: bool | None                   # None=try both, True=crewed only, False=unmanned only
     requires_landing: bool                # only applies to landable bodies
 

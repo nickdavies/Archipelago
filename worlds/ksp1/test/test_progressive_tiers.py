@@ -9,12 +9,16 @@ individual items" without requiring production code changes.
 import unittest
 from typing import Callable
 
-from worlds.ksp1.bodies import BodyName
+from worlds.ksp1.bodies import BodyName, MissionBuilder
 from worlds.ksp1.parts import (
     PART_DB, PROGRESSIVE_PART_TIERS, PROGRESSIVE_PART_NAMES,
     PROGRESSIVE_PART_COUNTS,
 )
 from worlds.ksp1.capability import compute_capability_from_items
+
+# Phase 3a refactor: tests instantiate a Kerbin-home MissionBuilder once at
+# module load and pass it into every ``compute_capability_from_items`` call.
+MISSION_BUILDER = MissionBuilder(home=BodyName.KERBIN)
 
 
 def _make_item_count_fn(
@@ -58,7 +62,7 @@ class TestTierZeroGating(unittest.TestCase):
     def test_no_orbit_without_progressive(self):
         """Zero progressive items → cannot reach Kerbin orbit."""
         fn = _make_item_count_fn({}, include_all_individual=True)
-        cap, flags = compute_capability_from_items(fn, "normal", start_with_clamps=True)
+        cap, flags = compute_capability_from_items(fn, "normal", start_with_clamps=True, mission_builder=MISSION_BUILDER)
         kerbin = cap.bodies.get(BodyName.KERBIN)
         self.assertFalse(
             kerbin is not None and kerbin.access.get("Orbit", False),
@@ -76,7 +80,7 @@ class TestTierOneCapability(unittest.TestCase):
 
     def test_kerbin_orbit_achievable(self):
         fn = _make_item_count_fn(self._tier1_all())
-        cap, _ = compute_capability_from_items(fn, "normal", start_with_clamps=True)
+        cap, _ = compute_capability_from_items(fn, "normal", start_with_clamps=True, mission_builder=MISSION_BUILDER)
         kerbin = cap.bodies.get(BodyName.KERBIN)
         self.assertIsNotNone(kerbin)
         self.assertTrue(
@@ -86,7 +90,7 @@ class TestTierOneCapability(unittest.TestCase):
 
     def test_mun_flyby_likely(self):
         fn = _make_item_count_fn(self._tier1_all())
-        cap, _ = compute_capability_from_items(fn, "normal", start_with_clamps=True)
+        cap, _ = compute_capability_from_items(fn, "normal", start_with_clamps=True, mission_builder=MISSION_BUILDER)
         mun = cap.bodies.get(BodyName.MUN)
         # Flyby = can_escape from Kerbin is enough to reach Mun SOI
         kerbin = cap.bodies.get(BodyName.KERBIN)
@@ -99,7 +103,7 @@ class TestTierOneCapability(unittest.TestCase):
     def test_not_too_powerful(self):
         """Tier 1 should NOT reach Duna orbit (too generous if so)."""
         fn = _make_item_count_fn(self._tier1_all())
-        cap, _ = compute_capability_from_items(fn, "normal", start_with_clamps=True)
+        cap, _ = compute_capability_from_items(fn, "normal", start_with_clamps=True, mission_builder=MISSION_BUILDER)
         duna = cap.bodies.get(BodyName.DUNA)
         if duna is not None:
             self.assertFalse(
@@ -116,7 +120,7 @@ class TestTierTwoCapability(unittest.TestCase):
 
     def test_mun_return(self):
         fn = _make_item_count_fn(self._tier2_all())
-        cap, _ = compute_capability_from_items(fn, "normal", start_with_clamps=True)
+        cap, _ = compute_capability_from_items(fn, "normal", start_with_clamps=True, mission_builder=MISSION_BUILDER)
         mun = cap.bodies.get(BodyName.MUN)
         self.assertIsNotNone(mun)
         self.assertTrue(
@@ -126,7 +130,7 @@ class TestTierTwoCapability(unittest.TestCase):
 
     def test_minmus_return(self):
         fn = _make_item_count_fn(self._tier2_all())
-        cap, _ = compute_capability_from_items(fn, "normal", start_with_clamps=True)
+        cap, _ = compute_capability_from_items(fn, "normal", start_with_clamps=True, mission_builder=MISSION_BUILDER)
         minmus = cap.bodies.get(BodyName.MINMUS)
         self.assertIsNotNone(minmus)
         self.assertTrue(
@@ -143,7 +147,7 @@ class TestTierThreeCapability(unittest.TestCase):
 
     def test_duna_return(self):
         fn = _make_item_count_fn(self._tier3_all())
-        cap, _ = compute_capability_from_items(fn, "normal", start_with_clamps=True)
+        cap, _ = compute_capability_from_items(fn, "normal", start_with_clamps=True, mission_builder=MISSION_BUILDER)
         duna = cap.bodies.get(BodyName.DUNA)
         self.assertIsNotNone(duna)
         self.assertTrue(
@@ -154,7 +158,7 @@ class TestTierThreeCapability(unittest.TestCase):
     def test_duna_orbit(self):
         """Tier 3 should enable Duna orbit (Jool may need T4 tanks)."""
         fn = _make_item_count_fn(self._tier3_all())
-        cap, _ = compute_capability_from_items(fn, "normal", start_with_clamps=True)
+        cap, _ = compute_capability_from_items(fn, "normal", start_with_clamps=True, mission_builder=MISSION_BUILDER)
         duna = cap.bodies.get(BodyName.DUNA)
         self.assertIsNotNone(duna)
         self.assertTrue(
@@ -177,14 +181,14 @@ class TestAllTiersMaxed(unittest.TestCase):
         def all_items_fn(name: str) -> int:
             return 1 if name in PART_DB else 0
 
-        cap_all, _ = compute_capability_from_items(all_items_fn, "normal", start_with_clamps=True)
+        cap_all, _ = compute_capability_from_items(all_items_fn, "normal", start_with_clamps=True, mission_builder=MISSION_BUILDER)
         all_orbitals = {
             b for b, bp in cap_all.bodies.items() if bp.access.get("Orbit", False)
         }
 
         # Progressive maxed
         fn_prog = _make_item_count_fn(self._all_max(), include_all_individual=True)
-        cap_prog, _ = compute_capability_from_items(fn_prog, "normal", start_with_clamps=True)
+        cap_prog, _ = compute_capability_from_items(fn_prog, "normal", start_with_clamps=True, mission_builder=MISSION_BUILDER)
         prog_orbitals = {
             b for b, bp in cap_prog.bodies.items() if bp.access.get("Orbit", False)
         }
@@ -205,7 +209,7 @@ class TestMixedTierCombos(unittest.TestCase):
         levels = {name: 1 for name in PROGRESSIVE_PART_COUNTS}
         levels["Progressive Launch Engine"] = 2
         fn = _make_item_count_fn(levels)
-        cap, _ = compute_capability_from_items(fn, "normal", start_with_clamps=True)
+        cap, _ = compute_capability_from_items(fn, "normal", start_with_clamps=True, mission_builder=MISSION_BUILDER)
         kerbin = cap.bodies.get(BodyName.KERBIN)
         self.assertTrue(kerbin and kerbin.access.get("Orbit", False))
         # With bigger engines but small tanks, should at least reach Kerbin escape
@@ -220,7 +224,7 @@ class TestMixedTierCombos(unittest.TestCase):
             "Progressive Probe Core": 1,
         }
         fn = _make_item_count_fn(levels, include_all_individual=False)
-        cap, _ = compute_capability_from_items(fn, "normal", start_with_clamps=True)
+        cap, _ = compute_capability_from_items(fn, "normal", start_with_clamps=True, mission_builder=MISSION_BUILDER)
         kerbin = cap.bodies.get(BodyName.KERBIN)
         self.assertFalse(
             kerbin is not None and kerbin.access.get("Orbit", False),
@@ -238,7 +242,7 @@ class TestMixedTierCombos(unittest.TestCase):
             "Progressive Relay": 1,
         }
         fn = _make_item_count_fn(levels, include_all_individual=True)
-        cap, _ = compute_capability_from_items(fn, "normal", start_with_clamps=True)
+        cap, _ = compute_capability_from_items(fn, "normal", start_with_clamps=True, mission_builder=MISSION_BUILDER)
         # With Flea+Mite+Shrimp, should at least achieve sounding altitude
         self.assertGreater(
             cap.sounding_altitude_km, 0,
@@ -254,7 +258,7 @@ class TestDifficultyInteraction(unittest.TestCase):
 
     def test_tier1_orbit_casual(self):
         fn = _make_item_count_fn(self._tier1_all())
-        cap, _ = compute_capability_from_items(fn, "casual", start_with_clamps=True)
+        cap, _ = compute_capability_from_items(fn, "casual", start_with_clamps=True, mission_builder=MISSION_BUILDER)
         kerbin = cap.bodies.get(BodyName.KERBIN)
         self.assertTrue(
             kerbin and kerbin.access.get("Orbit", False),
@@ -263,7 +267,7 @@ class TestDifficultyInteraction(unittest.TestCase):
 
     def test_tier1_orbit_expert(self):
         fn = _make_item_count_fn(self._tier1_all())
-        cap, _ = compute_capability_from_items(fn, "expert", start_with_clamps=True)
+        cap, _ = compute_capability_from_items(fn, "expert", start_with_clamps=True, mission_builder=MISSION_BUILDER)
         kerbin = cap.bodies.get(BodyName.KERBIN)
         self.assertTrue(
             kerbin and kerbin.access.get("Orbit", False),

@@ -26,7 +26,7 @@ from BaseClasses import MultiWorld
 from test.general import setup_multiworld
 
 from worlds.ksp1.bodies import (
-    ALL_BODIES, DIFFICULTY_PROFILES, MISSION_PROFILES, effective_dv,
+    ALL_BODIES, BodyName, DIFFICULTY_PROFILES, MissionBuilder, effective_dv,
 )
 from worlds.ksp1.capability import (
     compute_capability_from_items, evaluate_mission_detailed,
@@ -227,6 +227,7 @@ def cmd_rocket(ap: APState, check_name: str, verbose: bool = False) -> None:
     """Show detailed rocket design for a specific check."""
     multiworld, player = build_world_and_state(ap)
     state = multiworld.state
+    world: KSP1World = multiworld.worlds[player]
 
     loc_obj = None
     for loc in multiworld.get_locations(player):
@@ -257,7 +258,8 @@ def cmd_rocket(ap: APState, check_name: str, verbose: bool = False) -> None:
         lambda name: state.count(name, player),
         difficulty_name,
         bool(ap.slot_data.get("start_with_launch_clamps", 1)),
-        rep_names,
+        world.mission_builder,
+        rep_names=rep_names,
     )
 
     result = None
@@ -265,11 +267,13 @@ def cmd_rocket(ap: APState, check_name: str, verbose: bool = False) -> None:
         diff = DIFFICULTY_PROFILES[difficulty_name]
         result = evaluate_mission_detailed(
             flags, diff, info.body_name, info.mission_type, info.crewed,
+            world.mission_builder,
             threshold_km=info.threshold_km,
         )
 
     lines = format_rocket_output(
         check_name, in_logic, already_checked, info, result, flags, difficulty_name,
+        world.mission_builder,
         sounding_altitude_km=cap.sounding_altitude_km,
     )
     for line in lines:
@@ -305,20 +309,22 @@ def _print_parts_list(ap: APState) -> None:
 
 
 # ---------------------------------------------------------------------------
-# missions — static dump of MISSION_PROFILES sorted by delta-v
+# missions — static dump of the Kerbin-home mission graph sorted by delta-v
 # ---------------------------------------------------------------------------
 
 def cmd_missions(difficulty_name: str) -> None:
-    """Dump every mission in MISSION_PROFILES sorted by delta-v ascending.
+    """Dump every mission in the Kerbin-home mission graph sorted by delta-v
+    ascending.
 
     No server connection required — pure static walk of the mission graph.
     For each (body, mission_type) we pick the cheapest profile alternative
     by raw base_dv sum, and also report the difficulty-adjusted budget.
     """
     diff = DIFFICULTY_PROFILES[difficulty_name]
+    mission_builder = MissionBuilder(home=BodyName.KERBIN)
 
     rows: list[tuple[float, float, str, str, int, int]] = []
-    for (body_name, mission_type), profiles in MISSION_PROFILES.items():
+    for (body_name, mission_type), profiles in mission_builder.all_profiles().items():
         if not profiles:
             # Zero-dv missions (Kerbin flag_plant, Kerbin sample_return)
             rows.append((0.0, 0.0, str(body_name), str(mission_type), 0, 0))
@@ -369,6 +375,7 @@ def cmd_bug_report(ap: APState, check_name: str | None = None) -> None:
     # Compute in-logic locations
     multiworld, player = build_world_and_state(ap)
     state = multiworld.state
+    world: KSP1World = multiworld.worlds[player]
     in_logic_locs = []
     for loc in multiworld.get_locations(player):
         if loc.address is None:
@@ -385,6 +392,7 @@ def cmd_bug_report(ap: APState, check_name: str | None = None) -> None:
         checked_names=checked_names,
         missing_count=len(ap.missing_locations),
         in_logic_locs=in_logic_locs,
+        mission_builder=world.mission_builder,
         check_name=check_name,
     )
     print(json.dumps(report, indent=2))
