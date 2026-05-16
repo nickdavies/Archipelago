@@ -385,32 +385,44 @@ class TestKerbinEarlyLocations(KSP1TestBase):
         """Altitude check locations require strictly increasing sounding thresholds.
 
         Uses mocked capability to avoid depending on the SRB physics model.
+        Altitudes are read from ``KERBIN_LOCATIONS`` so this stays correct
+        if the milestone schedule shifts (Phase 3a moved from 5/15/25/…/70
+        to 5/10/16/20/30/45/70).
         """
-        # sounding = 10 km: 5 km passes, 15 km does not
+        from worlds.ksp1.locations import KERBIN_LOCATIONS
+        altitudes = sorted(
+            int(loc.threshold_km)
+            for loc in KERBIN_LOCATIONS
+            if loc.mission_type == MissionType.SOUNDING
+            and loc.threshold_km is not None
+            and loc.threshold_km >= 1.0  # exclude First Crash (0.1 km)
+        )
+
+        # sounding = 10 km: only the lowest milestones pass
         cap = _make_zero_cap()
         cap.sounding_altitude_km = 10.0
         with patch("worlds.ksp1.rules.get_capability", return_value=cap):
-            self.assertTrue(self.can_reach_location("Kerbin 5km Altitude"),
-                            "5 km check must pass with 10 km sounding")
-            self.assertFalse(self.can_reach_location("Kerbin 15km Altitude"),
-                             "15 km check must fail with 10 km sounding")
-            self.assertFalse(self.can_reach_location("Kerbin 70km Altitude"),
-                             "70 km check must fail with 10 km sounding")
+            for km in altitudes:
+                name = f"Kerbin {km}km Altitude"
+                if km <= 10:
+                    self.assertTrue(self.can_reach_location(name),
+                                    f"{km} km check must pass with 10 km sounding")
+                else:
+                    self.assertFalse(self.can_reach_location(name),
+                                     f"{km} km check must fail with 10 km sounding")
 
-        # sounding = 50 km: 5–45 km pass, 55–70 km do not
+        # sounding = 50 km: everything below 50 km passes, top tier fails
         cap2 = _make_zero_cap()
         cap2.sounding_altitude_km = 50.0
         with patch("worlds.ksp1.rules.get_capability", return_value=cap2):
-            for threshold in (5, 15, 25, 35, 45):
-                self.assertTrue(
-                    self.can_reach_location(f"Kerbin {threshold}km Altitude"),
-                    f"{threshold} km check must pass with 50 km sounding",
-                )
-            for threshold in (55, 70):
-                self.assertFalse(
-                    self.can_reach_location(f"Kerbin {threshold}km Altitude"),
-                    f"{threshold} km check must fail with 50 km sounding",
-                )
+            for km in altitudes:
+                name = f"Kerbin {km}km Altitude"
+                if km <= 50:
+                    self.assertTrue(self.can_reach_location(name),
+                                    f"{km} km check must pass with 50 km sounding")
+                else:
+                    self.assertFalse(self.can_reach_location(name),
+                                     f"{km} km check must fail with 50 km sounding")
 
 
 # ---------------------------------------------------------------------------

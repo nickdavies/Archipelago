@@ -151,6 +151,14 @@ class Body:
     eva_jetpack_twr: float          # precomputed: 0.5/(0.09375*surface_gravity)
     dv: BodyDeltaV
 
+    # --- Suborbital altitude ladder ---
+    # Top of the home-body altitude-record milestone ladder (km).  For
+    # atmospheric bodies this is the Kármán-equivalent (where the atmo
+    # ends); for vacuum bodies it's ``low_orbit_alt_km - 5`` (a 5 km
+    # buffer below LKO).  Used by ``home_altitude_milestones`` to
+    # generate the per-home suborbital location set.
+    safe_altitude_km: float = 0.0
+
     # --- Science budget (for tech-tree access rules) ---
     has_ocean: bool = False         # body has splashable liquid surface
     num_biomes: int = 1             # distinct landed biomes
@@ -162,6 +170,43 @@ class Body:
     landed_mult: float = 0.0        # Landed multiplier (0 = can't land)
     splashed_mult: float = 0.0      # Splashed multiplier (0 = no ocean)
     all_parts_proxy: bool = False    # True = return rules use all-parts proxy (can't model ascent)
+
+    # ------------------------------------------------------------------
+    # Suborbital ascent physics
+    # ------------------------------------------------------------------
+    def max_suborbital_altitude_km(self, dv: float, twr: float) -> float:
+        """Apoapsis altitude (km) achievable from this body's surface
+        given a single-stage rocket with ``dv`` budget and constant
+        ascent ``twr``.
+
+        Model: straight-up flight, no atmospheric drag, simple gravity-
+        drag approximation ``h = dv²·(twr−1) / (2·g·twr·1000)``.  Ignoring
+        atmospheric drag overestimates altitude on atmo bodies — current
+        capability uses vacuum Isp anyway, so this matches that
+        convention.  Returns 0 if TWR ≤ 1 (cannot lift off).
+        """
+        if twr <= 1.0 or dv <= 0.0:
+            return 0.0
+        return (dv * dv) * (twr - 1.0) / (2.0 * self.surface_gravity * twr * 1000.0)
+
+    def suborbital_dv_required(self, altitude_km: float, twr: float = 1.2) -> float:
+        """Inverse of ``max_suborbital_altitude_km`` — dv needed to
+        apoapsis-touch ``altitude_km`` from this body's surface at
+        constant ascent ``twr``.
+
+        Returns ``math.inf`` if TWR ≤ 1.  ``twr=1.2`` is the
+        sounding-rocket floor we model: just enough thrust to lift off
+        and climb without wasted gravity drag.  Going higher overstates
+        the dv required because real sounding rockets typically run
+        TWR close to the minimum to maximise altitude per unit fuel.
+        """
+        if twr <= 1.0:
+            return math.inf
+        if altitude_km <= 0.0:
+            return 0.0
+        return math.sqrt(
+            2.0 * self.surface_gravity * twr * 1000.0 * altitude_km / (twr - 1.0)
+        )
 
 
 def _jetpack_twr(g: float) -> float:
@@ -221,6 +266,7 @@ KERBIN = Body(
         dvGL=3400, dvLE=950, dvEI=None, dvK=None,
         dvLI=None, dvPL=None, dvPE=None, dvPlaneChange=0,
     ),
+    safe_altitude_km=70.0,  # Kármán line; atmosphere edge
     has_ocean=True, num_biomes=9, num_splash_biomes=2,
     space_low_mult=1.5, space_high_mult=1.0,
     fly_low_mult=1.0, fly_high_mult=0.7,
@@ -240,6 +286,7 @@ MUN = Body(
         dvGL=580, dvLE=None, dvEI=None, dvK=None,
         dvLI=310, dvPL=860, dvPE=None, dvPlaneChange=0,
     ),
+    safe_altitude_km=19.0,  # LKO 14 + 5 buffer (vacuum)
     num_biomes=7,
     space_low_mult=4.0, space_high_mult=2.0,
     landed_mult=9.0,
@@ -258,6 +305,7 @@ MINMUS = Body(
         dvGL=180, dvLE=None, dvEI=None, dvK=None,
         dvLI=160, dvPL=930, dvPE=None, dvPlaneChange=340,
     ),
+    safe_altitude_km=15.0,  # LKO 10 + 5 buffer (vacuum)
     num_biomes=9,
     space_low_mult=5.0, space_high_mult=2.5,
     landed_mult=12.0,
@@ -276,6 +324,7 @@ MOHO = Body(
         dvGL=870, dvLE=None, dvEI=None, dvK=760,
         dvLI=2410, dvPL=None, dvPE=None, dvPlaneChange=2520,
     ),
+    safe_altitude_km=25.0,  # LKO 20 + 5 buffer (vacuum)
     num_biomes=6,
     space_low_mult=8.0, space_high_mult=4.0,
     landed_mult=9.0,
@@ -294,6 +343,7 @@ EVE = Body(
         dvGL=8000, dvLE=1330, dvEI=80, dvK=90,
         dvLI=None, dvPL=None, dvPE=None, dvPlaneChange=430,
     ),
+    safe_altitude_km=90.0,  # Kármán line; atmosphere edge
     has_ocean=True, num_biomes=8, num_splash_biomes=3,
     space_low_mult=8.0, space_high_mult=4.0,
     fly_low_mult=2.0, fly_high_mult=1.5,
@@ -314,6 +364,7 @@ GILLY = Body(
         dvGL=30, dvLE=None, dvEI=None, dvK=None,
         dvLI=410, dvPL=None, dvPE=60, dvPlaneChange=0,
     ),
+    safe_altitude_km=11.0,  # LKO 6 + 5 buffer (tiny vacuum body)
     num_biomes=3,
     space_low_mult=9.0, space_high_mult=4.5,
     landed_mult=12.0,
@@ -332,6 +383,7 @@ DUNA = Body(
         dvGL=1450, dvLE=360, dvEI=250, dvK=130,
         dvLI=None, dvPL=None, dvPE=None, dvPlaneChange=10,
     ),
+    safe_altitude_km=50.0,  # Kármán line; atmosphere edge
     num_biomes=5,
     space_low_mult=8.0, space_high_mult=4.0,
     fly_low_mult=1.5, fly_high_mult=1.2,
@@ -351,6 +403,7 @@ IKE = Body(
         dvGL=390, dvLE=None, dvEI=None, dvK=None,
         dvLI=180, dvPL=None, dvPE=30, dvPlaneChange=0,
     ),
+    safe_altitude_km=15.0,  # LKO 10 + 5 buffer (vacuum)
     num_biomes=5,
     space_low_mult=8.0, space_high_mult=4.0,
     landed_mult=8.0,
@@ -369,6 +422,7 @@ DRES = Body(
         dvGL=430, dvLE=None, dvEI=None, dvK=610,
         dvLI=1290, dvPL=None, dvPE=None, dvPlaneChange=1010,
     ),
+    safe_altitude_km=30.0,  # LKO 25 + 5 buffer (vacuum)
     num_biomes=5,
     space_low_mult=8.0, space_high_mult=4.0,
     landed_mult=8.0,
@@ -387,6 +441,7 @@ JOOL = Body(
         dvGL=14000, dvLE=2810, dvEI=160, dvK=980,
         dvLI=None, dvPL=None, dvPE=None, dvPlaneChange=270,
     ),
+    safe_altitude_km=200.0,  # Kármán line; atmosphere edge (gas giant)
     num_biomes=0,
     space_low_mult=12.0, space_high_mult=6.0,
     fly_low_mult=6.0, fly_high_mult=4.0,
@@ -405,6 +460,7 @@ LAYTHE = Body(
         dvGL=2900, dvLE=None, dvEI=None, dvK=None,
         dvLI=1070, dvPL=None, dvPE=930, dvPlaneChange=0,
     ),
+    safe_altitude_km=50.0,  # Kármán line; atmosphere edge
     has_ocean=True, num_biomes=9, num_splash_biomes=4,
     space_low_mult=12.0, space_high_mult=6.0,
     fly_low_mult=4.0, fly_high_mult=3.0,
@@ -425,6 +481,7 @@ VALL = Body(
         dvGL=860, dvLE=None, dvEI=None, dvK=None,
         dvLI=910, dvPL=None, dvPE=620, dvPlaneChange=0,
     ),
+    safe_altitude_km=20.0,  # LKO 15 + 5 buffer (vacuum)
     num_biomes=9,
     space_low_mult=12.0, space_high_mult=6.0,
     landed_mult=12.0,
@@ -443,6 +500,7 @@ TYLO = Body(
         dvGL=2270, dvLE=None, dvEI=None, dvK=None,
         dvLI=1100, dvPL=None, dvPE=400, dvPlaneChange=0,
     ),
+    safe_altitude_km=35.0,  # LKO 30 + 5 buffer (vacuum)
     num_biomes=6,
     space_low_mult=12.0, space_high_mult=6.0,
     landed_mult=12.0,
@@ -462,6 +520,7 @@ BOP = Body(
         dvGL=230, dvLE=None, dvEI=None, dvK=None,
         dvLI=900, dvPL=None, dvPE=220, dvPlaneChange=2440,
     ),
+    safe_altitude_km=15.0,  # LKO 10 + 5 buffer (vacuum)
     num_biomes=4,
     space_low_mult=12.0, space_high_mult=6.0,
     landed_mult=12.0,
@@ -480,6 +539,7 @@ POL = Body(
         dvGL=130, dvLE=None, dvEI=None, dvK=None,
         dvLI=820, dvPL=None, dvPE=160, dvPlaneChange=700,
     ),
+    safe_altitude_km=11.0,  # LKO 6 + 5 buffer (tiny vacuum body)
     num_biomes=4,
     space_low_mult=12.0, space_high_mult=6.0,
     landed_mult=12.0,
@@ -498,6 +558,7 @@ EELOO = Body(
         dvGL=620, dvLE=None, dvEI=None, dvK=1140,
         dvLI=1370, dvPL=None, dvPE=None, dvPlaneChange=1330,
     ),
+    safe_altitude_km=15.0,  # LKO 10 + 5 buffer (vacuum)
     num_biomes=7,
     space_low_mult=15.0, space_high_mult=7.5,
     landed_mult=15.0,
@@ -516,6 +577,10 @@ KERBOL = Body(
         dvGL=67000, dvLE=None, dvEI=None, dvK=6000,
         dvLI=13700, dvPL=None, dvPE=None, dvPlaneChange=0,
     ),
+    # Kerbol can't be landed/launched-from; safe_altitude is meaningless
+    # but a non-zero value keeps the home-altitude-milestone math safe
+    # if anyone ever tries.  Atmosphere ends ~600 km on the wiki.
+    safe_altitude_km=600.0,
     num_biomes=0,
     space_low_mult=2.0, space_high_mult=1.0,
 )
@@ -587,6 +652,15 @@ class MissionBuilder:
     # ------------------------------------------------------------------
     # Public lookup API
     # ------------------------------------------------------------------
+
+    @property
+    def home_body(self) -> "Body":
+        """The resolved ``Body`` object for the home body name.
+
+        Convenience for callers that need physics properties (gravity,
+        atmosphere flags) rather than just the ``BodyName`` enum value.
+        """
+        return BODY_BY_NAME[self.home]
 
     def profiles_for(
         self, body: BodyName, mission_type: MissionType
@@ -1267,6 +1341,71 @@ def science_budget(
         ) * body.num_splash_biomes
 
     return orbital + flying + landed + splashed
+
+
+# ---------------------------------------------------------------------------
+# Home-body altitude milestone ladder
+# ---------------------------------------------------------------------------
+
+# Hand-tuned fraction-of-safe-altitude schedule per N.  The shape is
+# "denser at the low end, with a few round-number stops in the middle,
+# converging on the safe-altitude target."  Not a pure power-law — the
+# user prefers a few clustered low milestones over uniform spacing.
+# Add new entries here as N grows; ``home_altitude_milestones`` rejects
+# unknown N rather than guessing.
+_HOME_ALTITUDE_FRACTIONS: dict[int, tuple[float, ...]] = {
+    7: (0.071, 0.143, 0.229, 0.286, 0.429, 0.643, 1.0),
+}
+
+
+def home_altitude_milestones(home: Body, n: int = 7) -> list[int]:
+    """Return the suborbital altitude-record milestones (km) for ``home``.
+
+    Multiplies a hand-tuned fraction schedule by ``home.safe_altitude_km``,
+    rounds to whole km, and deduplicates by forcing each subsequent
+    milestone to be at least 1 km above the previous.  For Kerbin
+    (safe=70) at ``n=7`` this yields ``[5, 10, 16, 20, 30, 45, 70]``.
+
+    Raises ``ValueError`` if no fraction schedule exists for ``n``.  The
+    expectation is that future scope (more milestones) edits
+    ``_HOME_ALTITUDE_FRACTIONS`` to add an explicit hand-tuned curve.
+    """
+    fractions = _HOME_ALTITUDE_FRACTIONS.get(n)
+    if fractions is None:
+        raise ValueError(
+            f"home_altitude_milestones: no fraction schedule for n={n}. "
+            f"Known schedules: {sorted(_HOME_ALTITUDE_FRACTIONS)}. "
+            f"Add an entry to _HOME_ALTITUDE_FRACTIONS."
+        )
+    if home.safe_altitude_km <= 0.0:
+        raise ValueError(
+            f"home_altitude_milestones: {home.name} has no safe_altitude_km "
+            f"set (got {home.safe_altitude_km})."
+        )
+    raw = [f * home.safe_altitude_km for f in fractions]
+    out: list[int] = []
+    prev = 0
+    for r in raw:
+        # Strict-ascending dedup: each milestone is at least 1 km above
+        # the previous.  Matters for tiny vacuum bodies (Gilly, Pol)
+        # where the fraction schedule compresses into a few km.
+        candidate = max(prev + 1, int(round(r)))
+        if candidate > int(round(home.safe_altitude_km)):
+            # Dedup pushed past the top.  The fraction schedule isn't
+            # scaled appropriately for this body's safe_altitude.  Phase
+            # 3a only generates Kerbin milestones in production, so this
+            # only fires if a future caller asks for milestones on a
+            # body with safe_altitude < n+a-few.  Real fix is a body-
+            # scale-aware schedule (Phase 3b/4).
+            raise ValueError(
+                f"home_altitude_milestones: n={n} produces milestone "
+                f"{candidate} km > safe_altitude={home.safe_altitude_km} km "
+                f"for {home.name}.  Reduce n or add a body-tailored "
+                f"fraction schedule."
+            )
+        out.append(candidate)
+        prev = candidate
+    return out
 
 
 # ---------------------------------------------------------------------------

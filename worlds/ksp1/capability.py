@@ -1755,11 +1755,13 @@ def evaluate_mission_detailed(
     first_landing, first_staging, splashdown) evaluate the relevant
     capability flags.
     """
+    home = mission_builder.home_body
+
     # --- Sounding rocket (altitude milestones, first crash) ---
     if mission_type == MissionType.SOUNDING:
-        return _evaluate_sounding(flags, threshold_km or 0.0)
+        return _evaluate_sounding(flags, threshold_km or 0.0, home)
 
-    # --- Other Kerbin-specific mission types ---
+    # --- Other home-body-specific mission types ---
     if mission_type == MissionType.FIRST_LAUNCH:
         # KSP fires the FirstLaunch event for any kerbal EVA off the pad as
         # well as a real rocket launch. We model only the rocket path here
@@ -1768,17 +1770,17 @@ def evaluate_mission_detailed(
         # always pick Progressive Capsule for sphere 0 (Capsule alone makes
         # the location feasible), which forced every starting inventory to
         # contain a capsule and suppressed probe-only starts.
-        sounding = _compute_sounding_altitude(flags)
+        sounding = _compute_sounding_altitude(flags, home)
         if sounding > 0:
             return ProfileResult(True)
         # Delegate to the sounding-rocket evaluator (with threshold=0.1 to
         # force a "needs altitude" failure) so the structured reasons name
         # the specific missing parts (payload, propulsion).
-        sub = _evaluate_sounding(flags, 0.1)
+        sub = _evaluate_sounding(flags, 0.1, home)
         return ProfileResult(False, blocking=list(sub.blocking))
 
     if mission_type == MissionType.FIRST_LANDING:
-        sounding = _compute_sounding_altitude(flags)
+        sounding = _compute_sounding_altitude(flags, home)
         # Capsule-only path (kerbal EVA)
         if flags.has_capsule:
             return ProfileResult(True)
@@ -1807,7 +1809,7 @@ def evaluate_mission_detailed(
         )])
 
     if mission_type == MissionType.SPLASHDOWN:
-        sounding = _compute_sounding_altitude(flags)
+        sounding = _compute_sounding_altitude(flags, home)
         blocking_list = []
         threshold = threshold_km or 1.0
         if sounding < threshold:
@@ -1853,9 +1855,9 @@ def evaluate_mission_detailed(
     return ProfileResult(False, blocking=all_blocking)
 
 
-def _evaluate_sounding(flags: EquipmentFlags, threshold_km: float) -> ProfileResult:
+def _evaluate_sounding(flags: EquipmentFlags, threshold_km: float, home: Body) -> ProfileResult:
     """Evaluate sounding rocket capability against a target altitude."""
-    sounding_km = _compute_sounding_altitude(flags)
+    sounding_km = _compute_sounding_altitude(flags, home)
     if sounding_km >= threshold_km:
         return ProfileResult(True, launch_mass=0.0)
 
@@ -1894,21 +1896,29 @@ def _evaluate_sounding(flags: EquipmentFlags, threshold_km: float) -> ProfileRes
 # Step 4: Assemble RocketCapability
 # ---------------------------------------------------------------------------
 
-def _compute_sounding_altitude(flags: EquipmentFlags) -> float:
+def _compute_sounding_altitude(flags: EquipmentFlags, home: Body) -> float:
     """
     Estimate the maximum altitude (km) achievable with a single-stage sounding
-    rocket built from the player's current parts.
+    rocket built from the player's current parts, launched from ``home``.
 
-    Formula: h_km = Δv² · (twr − 1) / (2 · g · twr · 1000)
-    (No atmospheric drag; generous gravity-drag approximation; uses vacuum Isp
-    since drag becomes negligible in the upper atmosphere.)
+    Back-computation goes through ``home.max_suborbital_altitude_km(dv, twr)``
+    (no atm drag; simple gravity-drag).  ``home.surface_gravity`` is used for
+    TWR; ``9.81`` (the Isp reference constant ``g0``) is used for the
+    rocket equation.  Engine thrust uses sea-level ``atm_thrust`` on atmo
+    bodies and ``vac_thrust`` on vacuum bodies — the engine actually
+    performs at vac in vacuum, so atm_thrust would understate it.
+
+    Vacuum Isp is used throughout: drag is ignored, so the dv that does
+    real work is the high-altitude regime where atm Isp loss is small.
 
     Payload options:
       • Probe core (unmanned) — no survival constraint.
       • Capsule (crewed) — requires decoupler + parachute so the pod can
         separate from the rocket body and land safely.
     """
-    g = 9.81
+    G0 = 9.81  # standard Isp reference (physical constant, not body-dependent)
+    g = home.surface_gravity
+    use_atm_thrust = home.has_atmosphere
     best_km = 0.0
 
     payloads: list[float] = []
@@ -1927,7 +1937,7 @@ def _compute_sounding_altitude(flags: EquipmentFlags) -> float:
         for engine in flags.available_engines:
             if engine.fuel_type not in ("lfo", "lf"):
                 continue  # ion/xenon have negligible atm thrust
-            thrust = engine.atm_thrust
+            thrust = engine.atm_thrust if use_atm_thrust else engine.vac_thrust
             m_base = engine.mass + payload_mass
             max_total = thrust / (_SOUNDING_MIN_TWR * g)
             if m_base >= max_total:
@@ -1944,11 +1954,11 @@ def _compute_sounding_altitude(flags: EquipmentFlags) -> float:
                 m_dry = m_base + n * tank.dry_mass
                 if m_dry <= 0 or m0 <= m_dry:
                     continue
-                dv = engine.vac_isp * g * math.log(m0 / m_dry)
+                dv = engine.vac_isp * G0 * math.log(m0 / m_dry)
                 twr = thrust / (g * m0)
                 if twr < _SOUNDING_MIN_TWR:
                     continue
-                h_km = dv ** 2 * (twr - 1.0) / (2.0 * g * twr * 1000.0)
+                h_km = home.max_suborbital_altitude_km(dv, twr)
                 best_km = max(best_km, h_km)
 
         # Solid rocket boosters
@@ -1957,11 +1967,12 @@ def _compute_sounding_altitude(flags: EquipmentFlags) -> float:
             m_dry = srb.dry_mass + payload_mass
             if m_dry <= 0 or m0 <= m_dry:
                 continue
-            twr = srb.atm_thrust / (g * m0)
+            thrust = srb.atm_thrust if use_atm_thrust else srb.vac_thrust
+            twr = thrust / (g * m0)
             if twr < _SOUNDING_MIN_TWR:
                 continue
-            dv = srb.vac_isp * g * math.log(m0 / m_dry)
-            h_km = dv ** 2 * (twr - 1.0) / (2.0 * g * twr * 1000.0)
+            dv = srb.vac_isp * G0 * math.log(m0 / m_dry)
+            h_km = home.max_suborbital_altitude_km(dv, twr)
             best_km = max(best_km, h_km)
 
     return best_km
@@ -1979,7 +1990,7 @@ def compute_capability_from_items(
     diff = DIFFICULTY_PROFILES[difficulty_name]
     flags = _pre_pass(item_count_fn, start_with_clamps, rep_names, progressive_launch_pad)
     body_profiles = _assess_bodies(flags, diff, mission_builder)
-    sounding_km = _compute_sounding_altitude(flags)
+    sounding_km = _compute_sounding_altitude(flags, mission_builder.home_body)
 
     if flags.has_rtg:
         power_str = "rtg"
