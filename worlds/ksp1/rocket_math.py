@@ -21,6 +21,33 @@ from .capability_reasons import StageDiagnostic, StageFailure
 
 G0: float = 9.80665  # standard gravity, m/s²
 
+# Stock-system constants — Kerbol's μ and Kerbin's solar orbital radius
+# (KSP wiki values).  Used by ``hohmann_v_inf`` for interplanetary transfer
+# math; ``bodies.planet_transfer_dv`` wraps it with per-Body lookups.
+GM_SUN: float = 1.1723328e18                 # m³/s²
+KERBIN_SOLAR_RADIUS_M: int = 13_599_840_256  # m
+
+
+def hohmann_v_inf(r1: float, r2: float, mu: float) -> tuple[float, float]:
+    """Hohmann transfer between circular orbits at radii ``r1`` and ``r2``
+    around a body with gravitational parameter ``mu``.
+
+    Returns the v∞ excess at each endpoint — the velocity above the local
+    circular-orbit speed needed to enter (at r1) or leave (at r2) the
+    transfer ellipse.  Both values are positive.  Plane-change cost is
+    *not* included; the caller adds it as ``plane_change_dv`` on the
+    transfer edge so the difficulty profile's ``plane_change_fraction``
+    governs how much of it is actually paid.
+    """
+    if r1 == r2:
+        return 0.0, 0.0
+    a = (r1 + r2) / 2.0
+    v_circ_1 = math.sqrt(mu / r1)
+    v_trans_1 = math.sqrt(mu * (2.0 / r1 - 1.0 / a))
+    v_circ_2 = math.sqrt(mu / r2)
+    v_trans_2 = math.sqrt(mu * (2.0 / r2 - 1.0 / a))
+    return abs(v_trans_1 - v_circ_1), abs(v_circ_2 - v_trans_2)
+
 FILL_LEVELS: tuple[float, ...] = (1.0, 0.75, 0.5, 0.25)
 
 # Parallel staging (asparagus/onion) reduces effective tank dry mass.

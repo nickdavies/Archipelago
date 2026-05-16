@@ -7,25 +7,29 @@ err toward overestimating the required delta-v (golden rule).
 
 Mission profile structure
 -------------------------
-``MissionBuilder`` owns the mission graph for a given home body.  It builds a
-dict mapping ``(body_name, mission_type)`` to a list of profile alternatives;
-each alternative is an ordered list of ``MissionEdge`` objects describing the
-journey from ``{home}_surface`` to the destination (and back for return
-missions).  The capability engine tries every alternative; if any one
-succeeds the mission is considered achievable.
+``MissionBuilder`` owns the mission graph for a given home body.  Internally
+it maintains two edge sets: an *outbound* graph (explore-out from the home
+body, free to capture into any intermediate SOI) and a *return* graph
+(restricted: paths must terminate at home.surface and may not capture into
+any non-home SOI on the way back).  For each ``(target_body, mission_type)``
+the builder enumerates simple paths through these graphs and stores them
+as profile alternatives.
 
 The builder is owned by ``KSP1World`` (see ``world.mission_builder``) — this
 is the data-lifetime layer where the Phase 4 ``StartingBody`` option will
-plug in.  Phase 3a keeps ``home=BodyName.KERBIN`` hardcoded; later sub-phases
-will generalise re-rooting math.
+plug in.  Inter-planet transfer dvs come from Hohmann math at solar-frame
+radii (see ``planet_transfer_dv``); moon-system transfers reuse the per-body
+``dvLI`` / ``dvPL`` / ``dvPE`` values.  Plane-change cost is carried on
+each transfer edge as ``plane_change_dv`` and the difficulty profile's
+``plane_change_fraction`` controls how much of it is actually paid.
 
 Node naming convention:
-  "kerbin_surface", "kerbin_low_orbit", "kerbin_soi"
   "{body}_surface", "{body}_low_orbit", "{body}_soi", "{body}_intercept"
 """
 from __future__ import annotations
 
 import math
+from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum, StrEnum, auto
 from typing import Optional
@@ -150,12 +154,13 @@ class Body:
     power_requirement: str          # "solar" | "solar_marginal" | "rtg"
     eva_jetpack_twr: float          # precomputed: 0.5/(0.09375*surface_gravity)
     dv: BodyDeltaV
+    radius_km: float                # body equatorial radius (KSP wiki value)
 
     # --- Suborbital altitude ladder ---
     # Top of the home-body altitude-record milestone ladder (km).  For
     # atmospheric bodies this is the Kármán-equivalent (where the atmo
     # ends); for vacuum bodies it's ``low_orbit_alt_km - 5`` (a 5 km
-    # buffer below LKO).  Used by ``home_altitude_milestones`` to
+    # buffer below low orbit).  Used by ``home_altitude_milestones`` to
     # generate the per-home suborbital location set.
     safe_altitude_km: float = 0.0
 
@@ -170,6 +175,30 @@ class Body:
     landed_mult: float = 0.0        # Landed multiplier (0 = can't land)
     splashed_mult: float = 0.0      # Splashed multiplier (0 = no ocean)
     all_parts_proxy: bool = False    # True = return rules use all-parts proxy (can't model ascent)
+
+    # ------------------------------------------------------------------
+    # Orbital constants
+    # ------------------------------------------------------------------
+    @property
+    def gm(self) -> float:
+        """Gravitational parameter (m³/s²) — ``surface_gravity·R²``."""
+        r = self.radius_km * 1000.0
+        return self.surface_gravity * r * r
+
+    @property
+    def lo_radius_m(self) -> float:
+        """Low-orbit radius (m) from body centre."""
+        return (self.radius_km + self.low_orbit_alt_km) * 1000.0
+
+    @property
+    def lo_circular_velocity(self) -> float:
+        """Circular orbital velocity at low orbit (m/s)."""
+        return math.sqrt(self.gm / self.lo_radius_m)
+
+    @property
+    def lo_escape_velocity(self) -> float:
+        """Escape velocity at low orbit (m/s) — used in Oberth-combined burns."""
+        return math.sqrt(2.0 * self.gm / self.lo_radius_m)
 
     # ------------------------------------------------------------------
     # Suborbital ascent physics
@@ -266,6 +295,7 @@ KERBIN = Body(
         dvGL=3400, dvLE=950, dvEI=None, dvK=None,
         dvLI=None, dvPL=None, dvPE=None, dvPlaneChange=0,
     ),
+    radius_km=600,
     safe_altitude_km=70.0,  # Kármán line; atmosphere edge
     has_ocean=True, num_biomes=9, num_splash_biomes=2,
     space_low_mult=1.5, space_high_mult=1.0,
@@ -286,7 +316,8 @@ MUN = Body(
         dvGL=580, dvLE=None, dvEI=None, dvK=None,
         dvLI=310, dvPL=860, dvPE=None, dvPlaneChange=0,
     ),
-    safe_altitude_km=19.0,  # LKO 14 + 5 buffer (vacuum)
+    radius_km=200,
+    safe_altitude_km=19.0,  # low orbit 14 + 5 buffer (vacuum)
     num_biomes=7,
     space_low_mult=4.0, space_high_mult=2.0,
     landed_mult=9.0,
@@ -305,7 +336,8 @@ MINMUS = Body(
         dvGL=180, dvLE=None, dvEI=None, dvK=None,
         dvLI=160, dvPL=930, dvPE=None, dvPlaneChange=340,
     ),
-    safe_altitude_km=15.0,  # LKO 10 + 5 buffer (vacuum)
+    radius_km=60,
+    safe_altitude_km=15.0,  # low orbit 10 + 5 buffer (vacuum)
     num_biomes=9,
     space_low_mult=5.0, space_high_mult=2.5,
     landed_mult=12.0,
@@ -324,7 +356,8 @@ MOHO = Body(
         dvGL=870, dvLE=None, dvEI=None, dvK=760,
         dvLI=2410, dvPL=None, dvPE=None, dvPlaneChange=2520,
     ),
-    safe_altitude_km=25.0,  # LKO 20 + 5 buffer (vacuum)
+    radius_km=250,
+    safe_altitude_km=25.0,  # low orbit 20 + 5 buffer (vacuum)
     num_biomes=6,
     space_low_mult=8.0, space_high_mult=4.0,
     landed_mult=9.0,
@@ -343,6 +376,7 @@ EVE = Body(
         dvGL=8000, dvLE=1330, dvEI=80, dvK=90,
         dvLI=None, dvPL=None, dvPE=None, dvPlaneChange=430,
     ),
+    radius_km=700,
     safe_altitude_km=90.0,  # Kármán line; atmosphere edge
     has_ocean=True, num_biomes=8, num_splash_biomes=3,
     space_low_mult=8.0, space_high_mult=4.0,
@@ -364,7 +398,8 @@ GILLY = Body(
         dvGL=30, dvLE=None, dvEI=None, dvK=None,
         dvLI=410, dvPL=None, dvPE=60, dvPlaneChange=0,
     ),
-    safe_altitude_km=11.0,  # LKO 6 + 5 buffer (tiny vacuum body)
+    radius_km=13,
+    safe_altitude_km=11.0,  # low orbit 6 + 5 buffer (tiny vacuum body)
     num_biomes=3,
     space_low_mult=9.0, space_high_mult=4.5,
     landed_mult=12.0,
@@ -383,6 +418,7 @@ DUNA = Body(
         dvGL=1450, dvLE=360, dvEI=250, dvK=130,
         dvLI=None, dvPL=None, dvPE=None, dvPlaneChange=10,
     ),
+    radius_km=320,
     safe_altitude_km=50.0,  # Kármán line; atmosphere edge
     num_biomes=5,
     space_low_mult=8.0, space_high_mult=4.0,
@@ -403,7 +439,8 @@ IKE = Body(
         dvGL=390, dvLE=None, dvEI=None, dvK=None,
         dvLI=180, dvPL=None, dvPE=30, dvPlaneChange=0,
     ),
-    safe_altitude_km=15.0,  # LKO 10 + 5 buffer (vacuum)
+    radius_km=130,
+    safe_altitude_km=15.0,  # low orbit 10 + 5 buffer (vacuum)
     num_biomes=5,
     space_low_mult=8.0, space_high_mult=4.0,
     landed_mult=8.0,
@@ -422,7 +459,8 @@ DRES = Body(
         dvGL=430, dvLE=None, dvEI=None, dvK=610,
         dvLI=1290, dvPL=None, dvPE=None, dvPlaneChange=1010,
     ),
-    safe_altitude_km=30.0,  # LKO 25 + 5 buffer (vacuum)
+    radius_km=138,
+    safe_altitude_km=30.0,  # low orbit 25 + 5 buffer (vacuum)
     num_biomes=5,
     space_low_mult=8.0, space_high_mult=4.0,
     landed_mult=8.0,
@@ -441,6 +479,7 @@ JOOL = Body(
         dvGL=14000, dvLE=2810, dvEI=160, dvK=980,
         dvLI=None, dvPL=None, dvPE=None, dvPlaneChange=270,
     ),
+    radius_km=6000,
     safe_altitude_km=200.0,  # Kármán line; atmosphere edge (gas giant)
     num_biomes=0,
     space_low_mult=12.0, space_high_mult=6.0,
@@ -460,6 +499,7 @@ LAYTHE = Body(
         dvGL=2900, dvLE=None, dvEI=None, dvK=None,
         dvLI=1070, dvPL=None, dvPE=930, dvPlaneChange=0,
     ),
+    radius_km=500,
     safe_altitude_km=50.0,  # Kármán line; atmosphere edge
     has_ocean=True, num_biomes=9, num_splash_biomes=4,
     space_low_mult=12.0, space_high_mult=6.0,
@@ -481,7 +521,8 @@ VALL = Body(
         dvGL=860, dvLE=None, dvEI=None, dvK=None,
         dvLI=910, dvPL=None, dvPE=620, dvPlaneChange=0,
     ),
-    safe_altitude_km=20.0,  # LKO 15 + 5 buffer (vacuum)
+    radius_km=300,
+    safe_altitude_km=20.0,  # low orbit 15 + 5 buffer (vacuum)
     num_biomes=9,
     space_low_mult=12.0, space_high_mult=6.0,
     landed_mult=12.0,
@@ -500,7 +541,8 @@ TYLO = Body(
         dvGL=2270, dvLE=None, dvEI=None, dvK=None,
         dvLI=1100, dvPL=None, dvPE=400, dvPlaneChange=0,
     ),
-    safe_altitude_km=35.0,  # LKO 30 + 5 buffer (vacuum)
+    radius_km=600,
+    safe_altitude_km=35.0,  # low orbit 30 + 5 buffer (vacuum)
     num_biomes=6,
     space_low_mult=12.0, space_high_mult=6.0,
     landed_mult=12.0,
@@ -520,7 +562,8 @@ BOP = Body(
         dvGL=230, dvLE=None, dvEI=None, dvK=None,
         dvLI=900, dvPL=None, dvPE=220, dvPlaneChange=2440,
     ),
-    safe_altitude_km=15.0,  # LKO 10 + 5 buffer (vacuum)
+    radius_km=65,
+    safe_altitude_km=15.0,  # low orbit 10 + 5 buffer (vacuum)
     num_biomes=4,
     space_low_mult=12.0, space_high_mult=6.0,
     landed_mult=12.0,
@@ -539,7 +582,8 @@ POL = Body(
         dvGL=130, dvLE=None, dvEI=None, dvK=None,
         dvLI=820, dvPL=None, dvPE=160, dvPlaneChange=700,
     ),
-    safe_altitude_km=11.0,  # LKO 6 + 5 buffer (tiny vacuum body)
+    radius_km=44,
+    safe_altitude_km=11.0,  # low orbit 6 + 5 buffer (tiny vacuum body)
     num_biomes=4,
     space_low_mult=12.0, space_high_mult=6.0,
     landed_mult=12.0,
@@ -558,7 +602,8 @@ EELOO = Body(
         dvGL=620, dvLE=None, dvEI=None, dvK=1140,
         dvLI=1370, dvPL=None, dvPE=None, dvPlaneChange=1330,
     ),
-    safe_altitude_km=15.0,  # LKO 10 + 5 buffer (vacuum)
+    radius_km=210,
+    safe_altitude_km=15.0,  # low orbit 10 + 5 buffer (vacuum)
     num_biomes=7,
     space_low_mult=15.0, space_high_mult=7.5,
     landed_mult=15.0,
@@ -577,6 +622,7 @@ KERBOL = Body(
         dvGL=67000, dvLE=None, dvEI=None, dvK=6000,
         dvLI=13700, dvPL=None, dvPE=None, dvPlaneChange=0,
     ),
+    radius_km=261600,
     # Kerbol can't be landed/launched-from; safe_altitude is meaningless
     # but a non-zero value keeps the home-altitude-milestone math safe
     # if anyone ever tries.  Atmosphere ends ~600 km on the wiki.
@@ -598,6 +644,55 @@ BODY_BY_NAME: dict[BodyName, Body] = {b.name: b for b in ALL_BODIES}
 
 
 # ---------------------------------------------------------------------------
+# Interplanetary transfer dv (Body-aware wrapper around rocket_math.hohmann_v_inf)
+# ---------------------------------------------------------------------------
+
+def planet_transfer_dv(src: "Body", dst: "Body") -> tuple[float, float, float]:
+    """Hohmann transfer dvs between two bodies, accounting for the Oberth
+    effect at departure.
+
+    Both bodies use their parent-system solar radius for the heliocentric
+    Hohmann math (moons inherit their planet's ``solar_distance_au``).
+    Kerbol is not a valid argument — it isn't a mission destination
+    (``locations.get_body_events`` returns ``()`` for it) and the helper
+    is never called with it.
+    Returns ``(depart_lo_dv, arrive_v_inf, plane_change_dv)``:
+
+    * ``depart_lo_dv`` is the **combined one-burn TLI** from the source
+      body's low orbit to the destination intercept.  Computed as
+      ``sqrt(v_escape² + v_inf_solar²) - v_circ`` at the source's low orbit,
+      where ``v_inf_solar`` is the heliocentric Hohmann v∞ at the source.
+      This is the dv a player actually spends at low orbit periapsis; the
+      Oberth effect collapses the naive two-burn (escape + transfer)
+      into a single, much cheaper burn.
+    * ``arrive_v_inf`` is the residual heliocentric velocity at the
+      destination intercept.  In our model we treat arrival as a passive
+      coast into the destination SOI (the orbital insertion burn at the
+      destination low orbit is the separate ``dvLE``/``dvLI`` capture edge,
+      which already captures the Oberth side of arrival).  This value
+      is currently informational; capability code uses the low orbit depart dv
+      plus the destination's capture edge.
+    * ``plane_change_dv`` is the worst-case inclination-change cost
+      between the two bodies' orbital planes.  The fraction actually
+      paid is governed by ``DifficultyProfile.plane_change_fraction``
+      (see ``effective_dv``).
+    """
+    from .rocket_math import hohmann_v_inf, GM_SUN, KERBIN_SOLAR_RADIUS_M
+    r1 = src.solar_distance_au * KERBIN_SOLAR_RADIUS_M
+    r2 = dst.solar_distance_au * KERBIN_SOLAR_RADIUS_M
+    v_inf_solar_src, v_inf_solar_dst = hohmann_v_inf(r1, r2, GM_SUN)
+    # Oberth-combined departure burn from src's low orbit.  Burning at
+    # low-orbit periapsis is far cheaper than escaping to SOI first and
+    # then adding v∞ — the engine sees a high local velocity that converts
+    # kinetic energy efficiently.
+    v_esc = src.lo_escape_velocity
+    v_circ = src.lo_circular_velocity
+    depart_lo_dv = math.sqrt(v_esc * v_esc + v_inf_solar_src * v_inf_solar_src) - v_circ
+    plane_change = max(src.dv.dvPlaneChange, dst.dv.dvPlaneChange)
+    return depart_lo_dv, v_inf_solar_dst, plane_change
+
+
+# ---------------------------------------------------------------------------
 # Mission profile graph type aliases
 # ---------------------------------------------------------------------------
 
@@ -611,21 +706,35 @@ MissionProfiles = dict[tuple[BodyName, MissionType], list[list[MissionEdge]]]
 class MissionBuilder:
     """Owns the mission graph for a given home body.
 
-    Construct one per ``KSP1World`` (Phase 4 hooks the ``StartingBody`` option
-    in here; Phase 3a only supports ``home=BodyName.KERBIN``).
+    The graph is a weighted DAG of ``MissionEdge`` objects between body
+    nodes (``"{body}_surface"`` / ``"{body}_low_orbit"`` / ``"{body}_soi"``
+    / ``"{body}_intercept"``).  Two edge sets are maintained:
 
-    The builder constructs every ``(body, mission_type) → list[list[MissionEdge]]``
-    profile in ``__init__`` and exposes it through ``profiles_for`` /
-    ``all_profiles``.  Cross-validation against ``locations.get_body_events``
-    runs at construction time, surfacing missing-profile bugs eagerly.
+    * ``_outbound`` — explore-out from ``home.surface``.  Includes captures
+      into every body's SOI, both propulsive and aerobrake variants where
+      applicable.
+    * ``_return`` — restricted: paths must terminate at ``home.surface``
+      and may not capture into any non-home SOI on the way back.  Edges
+      cover ascents, escapes, the ``planet.SOI → home.intercept``
+      interplanetary return burn, the home reentry, and combined
+      ``moon.low orbit → home.intercept`` shortcuts for moons of the home body.
 
-    Internal node naming follows ``"{body}_surface"`` / ``"{body}_low_orbit"``
-    / ``"{body}_soi"`` / ``"{body}_intercept"`` so each ``MissionEdge`` carries
-    body-keyed source/destination strings independent of which body is home.
+    For each ``(target_body, mission_type)`` the builder enumerates simple
+    paths through these graphs.  Edges that have a *scheme* tag
+    (``"aero"`` / ``"prop"``) are alternatives at the same decision point;
+    paths that mix incompatible scheme tags are dropped, so each kept
+    profile uses a consistent scheme (aerobrake-capture pairs with aero-
+    landing, etc.).
+
+    Interplanetary transfer dvs come from ``planet_transfer_dv`` (solar-
+    frame Hohmann).  Moon-system transfers reuse the per-body ``dvLI`` /
+    ``dvPL`` / ``dvPE`` values.  Plane change is carried on transfer
+    edges as ``plane_change_dv`` and discounted by the difficulty
+    profile's ``plane_change_fraction`` in ``effective_dv``.
     """
 
-    # EdgeType shorthand — kept class-level so the long _build method stays
-    # readable without polluting the module namespace.
+    # EdgeType shorthand — kept class-level so the long edge-construction
+    # methods stay readable without polluting the module namespace.
     _AT  = EdgeType.ATMOSPHERIC_ASCENT
     _VA  = EdgeType.VACUUM_ASCENT
     _PV  = EdgeType.PURE_VACUUM
@@ -635,18 +744,20 @@ class MissionBuilder:
     _ALA = EdgeType.ATMO_LANDING_AERO
     _AB  = EdgeType.AEROBRAKE_CAPTURE
 
+    # Cap on profile alternatives per (body, mission_type).  Atmospheric
+    # destinations naturally produce 2 (aero + prop schemes); the cap
+    # guards against accidental combinatorial blow-ups from future graph
+    # additions.
+    _MAX_PROFILE_ALTS = 4
+
     def __init__(self, home: BodyName):
-        if home != BodyName.KERBIN:
-            # Phase 3a ports today's Kerbin-hub graph behind the class
-            # without changing semantics. Phase 3b/3c will generalise the
-            # ascent/transfer/reentry edges so non-Kerbin homes work.
-            raise NotImplementedError(
-                f"MissionBuilder currently only supports home=KERBIN; got {home}. "
-                "Re-rooting math will land in a later Phase 3 sub-phase."
-            )
         self.home: BodyName = home
+        # Per-node edge lists, tagged with ("", "aero", or "prop"):
+        self._outbound: dict[str, list[tuple[str, MissionEdge]]] = defaultdict(list)
+        self._return: dict[str, list[tuple[str, MissionEdge]]] = defaultdict(list)
+        self._build_graph()
         self._profiles: MissionProfiles = {}
-        self._build()
+        self._build_profiles()
         self._validate()
 
     # ------------------------------------------------------------------
@@ -700,540 +811,451 @@ class MissionBuilder:
             needs_heat_shield=heat, needs_landing_legs=legs,
         )
 
-    def _planet_transfer(
-        self, dv_k: float, dv_ei: float, pc: float, planet: BodyName
-    ) -> list[MissionEdge]:
-        """Two edges for a Kerbin SOI → planet intercept → planet SOI transfer."""
-        return [
-            self._edge("kerbin_soi", f"{planet}_intercept", self._PT, dv_k,
-                       BodyName.KERBIN, pc=pc, attitude=True),
-            self._edge(f"{planet}_intercept", f"{planet}_soi", self._PV, dv_ei,
-                       planet, attitude=True),
-        ]
+    def _add_out(self, edge: MissionEdge, scheme: str = "") -> None:
+        """Register ``edge`` in the outbound graph, optionally with a scheme tag."""
+        self._outbound[edge.source].append((scheme, edge))
 
-    def _kerbin_return_transfer(
-        self, dv_k: float, pc: float, planet: BodyName
-    ) -> list[MissionEdge]:
-        """One edge for a planet SOI → Kerbin intercept transfer."""
-        return [
-            self._edge(f"{planet}_soi", "kerbin_intercept", self._PT, dv_k,
-                       planet, pc=pc, attitude=True),
-        ]
+    def _add_ret(self, edge: MissionEdge, scheme: str = "") -> None:
+        """Register ``edge`` in the return graph, optionally with a scheme tag."""
+        self._return[edge.source].append((scheme, edge))
 
     def _add(
         self, body: BodyName, mission: MissionType, *profiles: list[MissionEdge]
     ) -> None:
+        """Store one or more profile alternatives for ``(body, mission)``.
+
+        Empty-profile passthrough (e.g. Kerbin FLAG_PLANT) is preserved.
+        """
         self._profiles[(body, mission)] = list(profiles)
 
     # ------------------------------------------------------------------
-    # Mission graph construction
+    # Graph construction
     # ------------------------------------------------------------------
 
-    def _build(self) -> None:
-        """Populate ``self._profiles`` with every supported mission."""
-        AT, VA, PV, PT = self._AT, self._VA, self._PV, self._PT
-        VL, ALP, ALA, AB = self._VL, self._ALP, self._ALA, self._AB
-        E = self._edge
+    def _planets(self) -> list["Body"]:
+        """Bodies with no parent — the inter-planet transfer nodes."""
+        return [b for b in ALL_BODIES if b.parent is None]
 
-        # ----- Home (Kerbin) trunk edges -------------------------------
-        kerbin_ascent = E(
-            "kerbin_surface", "kerbin_low_orbit", AT, 3400, BodyName.KERBIN,
-            min_twr=1.3, throttle=True, attitude=True,
+    def _moons_of(self, parent: BodyName) -> list["Body"]:
+        return [b for b in ALL_BODIES if b.parent == parent]
+
+    def _build_graph(self) -> None:
+        """Populate ``_outbound`` and ``_return`` edge sets from body data."""
+        for body in ALL_BODIES:
+            self._add_body_trunk(body)
+        for moon in ALL_BODIES:
+            if moon.parent is not None and moon.name != BodyName.KERBOL:
+                self._add_moon_outbound_access(moon)
+        # Inter-planet outbound transfers (Hohmann depart at src's solar
+        # radius).  Kerbol is skipped — it's not a mission destination
+        # (``locations.get_body_events`` returns ``()`` for it) so no
+        # transfer edges to/from it would ever be used.  Kerbol remains
+        # in ``ALL_BODIES`` for its solar-distance reference.
+        for src in self._planets():
+            if src.name == BodyName.KERBOL:
+                continue
+            for dst in self._planets():
+                if dst.name == BodyName.KERBOL or src.name == dst.name:
+                    continue
+                self._add_planet_outbound_transfer(src, dst)
+        # Return-only edges that converge on home.surface.
+        self._add_home_return_paths()
+
+    def _add_body_trunk(self, body: "Body") -> None:
+        """Ascent, escape/capture, landing edges for a single body.
+
+        Ascent, escape and aero/prop landing are direction-symmetric (they
+        appear in both graphs).  Captures and passive arrivals (intercept →
+        SOI) are outbound-only — the restricted return graph never captures
+        into a non-home SOI.
+        """
+        bn = body.name
+        bnl = bn.lower()
+        s   = f"{bnl}_surface"
+        lo = f"{bnl}_low_orbit"
+        soi = f"{bnl}_soi"
+        ic  = f"{bnl}_intercept"
+
+        # Ascent — surface → low orbit (atmospheric or vacuum).
+        if body.can_land and body.dv.dvGL > 0:
+            ascent_type = self._AT if body.has_atmosphere else self._VA
+            min_twr_ascent = 1.3 if body.has_atmosphere else 1.2
+            ascent = self._edge(
+                s, lo, ascent_type, body.dv.dvGL, bn,
+                min_twr=min_twr_ascent, throttle=True, attitude=True,
+            )
+            self._add_out(ascent)
+            self._add_ret(ascent)
+
+        # SOI escape & capture (low orbit ↔ SOI).  Use ``dvLE`` when present
+        # (Kerbin / Eve / Duna / Jool — planets that the data models with
+        # an explicit low orbit→SOI burn), otherwise fall back to ``dvLI``
+        # (Moho / Dres / Eeloo planets, and every moon).  Kerbol has no
+        # escape node in our model: you start inside its SOI and never
+        # leave the heliocentric frame, so skip these edges for Kerbol.
+        escape_dv = body.dv.dvLE if body.dv.dvLE is not None else body.dv.dvLI
+        if escape_dv is not None and bn != BodyName.KERBOL:
+            escape = self._edge(lo, soi, self._PV, escape_dv, bn, attitude=True)
+            self._add_out(escape)
+            self._add_ret(escape)
+            # Passive arrival — intercept → SOI (zero-dv coast, outbound only).
+            passive = self._edge(ic, soi, self._PV, 0, bn, attitude=True)
+            self._add_out(passive)
+            # Capture — SOI → low orbit.  Aerobrake variant exists only for
+            # atmospheric *planets* (atmospheric moons like Laythe are too
+            # thin and orbital velocities too high relative to parent for
+            # aerobrake-to-low orbit to be reliable; preserves existing
+            # convention of prop-only capture for moons).  Scheme tags
+            # are applied only when both alternatives exist at the same
+            # decision point — that way a path can mix "aero capture at
+            # Jool" with "prop landing at a moon of Jool" without the
+            # scheme constraint blocking it.
+            capture_has_aero_alt = body.has_atmosphere and body.parent is None
+            capture_prop = self._edge(soi, lo, self._PV, escape_dv, bn, attitude=True)
+            self._add_out(capture_prop, scheme="prop" if capture_has_aero_alt else "")
+            if capture_has_aero_alt:
+                capture_aero = self._edge(soi, lo, self._AB, 100, bn, heat=True)
+                self._add_out(capture_aero, scheme="aero")
+            # Moon SOI → parent low orbit: passive transit when leaving a moon's
+            # SOI.  After escape you find yourself in the parent's frame at
+            # roughly low orbit altitude (Hill-sphere radius is small relative
+            # to parent's orbital radius).  Required for moon-home outbound
+            # paths to reach the parent system's transfer hub.
+            if body.parent is not None:
+                exit_to_parent = self._edge(
+                    soi, f"{body.parent.lower()}_low_orbit",
+                    self._PV, 0, bn, attitude=True,
+                )
+                self._add_out(exit_to_parent)
+                self._add_ret(exit_to_parent)
+
+        # Landing — low orbit → surface.
+        if body.can_land and body.dv.dvGL > 0:
+            if body.has_atmosphere:
+                # Aero descent uses heatshield + parachute; nominal 100 m/s
+                # for terminal-velocity course correction.
+                land_aero = self._edge(
+                    lo, s, self._ALA, 100, bn, heat=True, legs=True,
+                )
+                self._add_out(land_aero, scheme="aero")
+                # Propulsive descent must overcome ascent-equivalent dv.
+                land_prop = self._edge(
+                    lo, s, self._ALP, body.dv.dvGL, bn,
+                    min_twr=1.3, throttle=True, attitude=True, legs=True,
+                )
+                self._add_out(land_prop, scheme="prop")
+            else:
+                land = self._edge(
+                    lo, s, self._VL, body.dv.dvGL, bn,
+                    min_twr=1.2, throttle=True, attitude=True, legs=True,
+                )
+                self._add_out(land)
+
+    def _add_moon_outbound_access(self, moon: "Body") -> None:
+        """Parent.low orbit → moon.intercept TLI edge (outbound only).
+
+        The combined moon-escape edge that pairs with this for returns
+        (moon.low orbit → parent.low orbit or moon.low orbit → home.intercept) is registered
+        from ``_add_home_return_paths`` so it can target the right node
+        based on whether the moon's parent is also home.
+        """
+        tli_dv = moon.dv.dvPL if moon.dv.dvPL is not None else moon.dv.dvPE
+        if tli_dv is None:
+            return
+        tli = self._edge(
+            f"{moon.parent.lower()}_low_orbit", f"{moon.name.lower()}_intercept",
+            self._PV, tli_dv, moon.parent,
+            pc=moon.dv.dvPlaneChange, attitude=True,
         )
-        kerbin_escape = E(
-            "kerbin_low_orbit", "kerbin_soi", PV, 950, BodyName.KERBIN,
-            attitude=True,
+        self._add_out(tli)
+
+    def _add_planet_outbound_transfer(self, src: "Body", dst: "Body") -> None:
+        """``src.low orbit → dst.intercept`` — Oberth-combined TLI burn from src's
+        low orbit.  Burning at low orbit periapsis is the realistic single-burn
+        TLI a player executes; splitting into escape-then-transfer would
+        double-count the escape energy that's already absorbed at low orbit."""
+        depart_dv, _arrive, pc = planet_transfer_dv(src, dst)
+        edge = self._edge(
+            f"{src.name.lower()}_low_orbit", f"{dst.name.lower()}_intercept",
+            self._PT, depart_dv, src.name, pc=pc, attitude=True,
         )
-        kerbin_reentry = E(
-            "kerbin_intercept", "kerbin_surface", ALA, 100, BodyName.KERBIN,
-            heat=True,
-        )
-        kerbin_deorbit = E(
-            "kerbin_low_orbit", "kerbin_surface", ALA, 100, BodyName.KERBIN,
-            heat=True,
-        )
+        self._add_out(edge)
 
-        # ----- Kerbin --------------------------------------------------
-        self._add(BodyName.KERBIN, MissionType.ORBIT,  [kerbin_ascent])
-        self._add(BodyName.KERBIN, MissionType.ESCAPE, [kerbin_ascent, kerbin_escape])
-        self._add(BodyName.KERBIN, MissionType.LAND,   [kerbin_ascent, kerbin_deorbit])
-        self._add(BodyName.KERBIN, MissionType.FLAG_PLANT, [])  # 0 dv — walk out and plant
-        self._add(BodyName.KERBIN, MissionType.RETURN, [kerbin_ascent, kerbin_deorbit])
-        # WARNING: sample_return MUST stay empty — kerbal EVAs from the launchpad,
-        # takes a surface sample, and recovers. No rocket needed. Do not add edges.
-        self._add(BodyName.KERBIN, MissionType.SAMPLE_RETURN, [])
+    def _add_home_return_paths(self) -> None:
+        """Register the return-only edges that converge on ``home.surface``.
 
-        # ----- Mun -----------------------------------------------------
-        mun_transfer = [
-            kerbin_ascent,
-            E("kerbin_low_orbit", "mun_intercept", PV, 860, BodyName.KERBIN, attitude=True),
-            E("mun_intercept", "mun_soi", PV, 0, BodyName.MUN, attitude=True),
-        ]
-        mun_orbit = mun_transfer + [
-            E("mun_soi", "mun_low_orbit", PV, 310, BodyName.MUN, attitude=True),
-        ]
-        mun_land = mun_orbit + [
-            E("mun_low_orbit", "mun_surface", VL, 580, BodyName.MUN,
-              min_twr=1.2, throttle=True, attitude=True, legs=True),
-        ]
-        mun_return = mun_land + [
-            E("mun_surface", "mun_low_orbit", VA, 580, BodyName.MUN,
-              min_twr=1.2, throttle=True, attitude=True),
-            E("mun_low_orbit", "kerbin_intercept", PV, 1170, BodyName.MUN, attitude=True),
-            kerbin_reentry,
-        ]
-        self._add(BodyName.MUN, MissionType.ESCAPE,        mun_transfer)
-        self._add(BodyName.MUN, MissionType.ORBIT,         mun_orbit)
-        self._add(BodyName.MUN, MissionType.LAND,          mun_land)
-        self._add(BodyName.MUN, MissionType.RETURN,        mun_return)
-        # Ladder check applied dynamically in capability.py (_inject_ladder).
-        self._add(BodyName.MUN, MissionType.SAMPLE_RETURN, mun_return)
+        Restricted-return rule: paths through this graph cannot capture into
+        any non-home SOI.  They can only ascend / escape SOIs and traverse
+        interplanetary segments that terminate at ``home.intercept`` (or,
+        for the home body's parent SOI when home is a moon, at home's
+        intercept inside the parent frame).
+        """
+        home = self.home_body
+        hn = home.name
+        hnl = hn.lower()
 
-        # ----- Minmus --------------------------------------------------
-        minmus_transfer = [
-            kerbin_ascent,
-            E("kerbin_low_orbit", "minmus_intercept", PV, 930, BodyName.KERBIN,
-              pc=340, attitude=True),
-            E("minmus_intercept", "minmus_soi", PV, 0, BodyName.MINMUS, attitude=True),
-        ]
-        minmus_orbit = minmus_transfer + [
-            E("minmus_soi", "minmus_low_orbit", PV, 160, BodyName.MINMUS, attitude=True),
-        ]
-        minmus_land = minmus_orbit + [
-            E("minmus_low_orbit", "minmus_surface", VL, 180, BodyName.MINMUS,
-              min_twr=1.2, throttle=True, attitude=True, legs=True),
-        ]
-        minmus_return = minmus_land + [
-            E("minmus_surface", "minmus_low_orbit", VA, 180, BodyName.MINMUS,
-              min_twr=1.2, throttle=True, attitude=True),
-            E("minmus_low_orbit", "kerbin_intercept", PV, 1090, BodyName.MINMUS, attitude=True),
-            kerbin_reentry,
-        ]
-        self._add(BodyName.MINMUS, MissionType.ESCAPE,        minmus_transfer)
-        self._add(BodyName.MINMUS, MissionType.ORBIT,         minmus_orbit)
-        self._add(BodyName.MINMUS, MissionType.LAND,          minmus_land)
-        self._add(BodyName.MINMUS, MissionType.RETURN,        minmus_return)
-        self._add(BodyName.MINMUS, MissionType.SAMPLE_RETURN, minmus_return)
+        # Interplanetary returns: from each non-home planet's low orbit direct to
+        # home.intercept (Oberth-combined TLI back home).  For moon-home,
+        # the home's parent planet is handled via parent.low orbit → home.intercept
+        # below (one fewer SOI traversal).
+        for planet in self._planets():
+            if planet.name == hn or planet.name == BodyName.KERBOL:
+                continue
+            if home.parent is not None and planet.name == home.parent:
+                continue
+            depart_dv, _, pc = planet_transfer_dv(planet, home)
+            self._add_ret(self._edge(
+                f"{planet.name.lower()}_low_orbit", f"{hnl}_intercept",
+                self._PT, depart_dv, planet.name, pc=pc, attitude=True,
+            ))
 
-        # ----- Moho (no atmosphere, very high dv, large plane change) -
-        moho_transfer = [
-            kerbin_ascent,
-            kerbin_escape,
-            E("kerbin_soi", "moho_intercept", PT, 760, BodyName.KERBIN,
-              pc=2520, attitude=True),
-            E("moho_intercept", "moho_soi", PV, 0, BodyName.MOHO, attitude=True),
-        ]
-        moho_orbit = moho_transfer + [
-            E("moho_soi", "moho_low_orbit", PV, 2410, BodyName.MOHO, attitude=True),
-        ]
-        moho_land = moho_orbit + [
-            E("moho_low_orbit", "moho_surface", VL, 870, BodyName.MOHO,
-              min_twr=1.2, throttle=True, attitude=True, legs=True),
-        ]
-        moho_return = moho_land + [
-            E("moho_surface", "moho_low_orbit", VA, 870, BodyName.MOHO,
-              min_twr=1.2, throttle=True, attitude=True),
-            E("moho_low_orbit", "kerbin_intercept", PV, 3170, BodyName.MOHO,
-              pc=2520, attitude=True),
-            kerbin_reentry,
-        ]
-        self._add(BodyName.MOHO, MissionType.ESCAPE,        moho_transfer)
-        self._add(BodyName.MOHO, MissionType.ORBIT,         moho_orbit)
-        self._add(BodyName.MOHO, MissionType.LAND,          moho_land)
-        self._add(BodyName.MOHO, MissionType.RETURN,        moho_return)
-        self._add(BodyName.MOHO, MissionType.SAMPLE_RETURN, moho_return)
+        # Moons of home (planet-home case): the combined "escape moon and
+        # transfer back to home" burn goes directly to home.intercept,
+        # skipping home.low-orbit insertion (matches today's mun_low_orbit →
+        # kerbin_intercept pattern).
+        if home.parent is None:
+            for moon in self._moons_of(hn):
+                tli_dv = moon.dv.dvPL if moon.dv.dvPL is not None else moon.dv.dvPE
+                if tli_dv is None:
+                    continue
+                combined = moon.dv.dvLI + tli_dv
+                self._add_ret(self._edge(
+                    f"{moon.name.lower()}_low_orbit", f"{hnl}_intercept",
+                    self._PV, combined, moon.name,
+                    pc=moon.dv.dvPlaneChange, attitude=True,
+                ))
+        else:
+            # Moon-home case: parent.low orbit → home.intercept (used by sibling
+            # moons returning home, and by inter-planet returns that land
+            # at parent.low orbit after the Hohmann arrival).
+            tli_home = home.dv.dvPL if home.dv.dvPL is not None else home.dv.dvPE
+            if tli_home is not None:
+                self._add_ret(self._edge(
+                    f"{home.parent.lower()}_low_orbit", f"{hnl}_intercept",
+                    self._PV, tli_home, home.parent,
+                    pc=home.dv.dvPlaneChange, attitude=True,
+                ))
 
-        # ----- Eve (thick atmosphere — land is one-way; return very hard)
-        eve_transfer = [
-            kerbin_ascent,
-            kerbin_escape,
-            E("kerbin_soi", "eve_intercept", PT, 90, BodyName.KERBIN, pc=430, attitude=True),
-            E("eve_intercept", "eve_soi", PV, 80, BodyName.EVE, attitude=True),
-        ]
-        # Aero capture into Eve orbit
-        eve_orbit_aero = eve_transfer + [
-            E("eve_soi", "eve_low_orbit", AB, 100, BodyName.EVE, heat=True),
-        ]
-        # Propulsive capture into Eve orbit
-        eve_orbit_prop = eve_transfer + [
-            E("eve_soi", "eve_low_orbit", PV, 1330, BodyName.EVE, attitude=True),
-        ]
-        # Eve land — aero descent (only realistic option)
-        eve_land_aero = eve_orbit_aero + [
-            E("eve_low_orbit", "eve_surface", ALA, 100, BodyName.EVE, heat=True, legs=True),
-        ]
-        # Eve land — propulsive descent (brute force, very expensive)
-        eve_land_prop = eve_orbit_prop + [
-            E("eve_low_orbit", "eve_surface", ALP, 1330, BodyName.EVE,
-              min_twr=1.3, throttle=True, attitude=True, legs=True),
-        ]
-        # Eve return — atmosphere is thick (8000 m/s ascent!)
-        eve_return_aero = eve_land_aero + [
-            E("eve_surface", "eve_low_orbit", AT, 8000, BodyName.EVE,
-              min_twr=1.3, throttle=True, attitude=True),
-            E("eve_low_orbit", "kerbin_intercept", PV, 1420, BodyName.EVE,
-              pc=430, attitude=True),
-            kerbin_reentry,
-        ]
-        eve_return_prop = eve_land_prop + [
-            E("eve_surface", "eve_low_orbit", AT, 8000, BodyName.EVE,
-              min_twr=1.3, throttle=True, attitude=True),
-            E("eve_low_orbit", "kerbin_intercept", PV, 1420, BodyName.EVE,
-              pc=430, attitude=True),
-            kerbin_reentry,
-        ]
-        self._add(BodyName.EVE, MissionType.ESCAPE,        eve_transfer)
-        self._add(BodyName.EVE, MissionType.ORBIT,         eve_orbit_aero, eve_orbit_prop)
-        self._add(BodyName.EVE, MissionType.LAND,          eve_land_aero,  eve_land_prop)
-        self._add(BodyName.EVE, MissionType.RETURN,        eve_return_aero, eve_return_prop)
-        self._add(BodyName.EVE, MissionType.SAMPLE_RETURN, eve_return_aero, eve_return_prop)
+        # Foreign moons (parent != home; for moon-home, this includes home's
+        # own siblings): moon.low orbit → parent.low orbit combined escape.  Lets return
+        # paths from foreign moons rejoin the trunk graph at the parent's low orbit.
+        for moon in ALL_BODIES:
+            if moon.parent is None or moon.name == hn:
+                continue
+            if home.parent is None and moon.parent == hn:
+                continue  # moons of planet-home are handled above
+            tli_dv = moon.dv.dvPL if moon.dv.dvPL is not None else moon.dv.dvPE
+            if tli_dv is None:
+                continue
+            combined = moon.dv.dvLI + tli_dv
+            self._add_ret(self._edge(
+                f"{moon.name.lower()}_low_orbit", f"{moon.parent.lower()}_low_orbit",
+                self._PV, combined, moon.name,
+                pc=moon.dv.dvPlaneChange, attitude=True,
+            ))
 
-        # ----- Gilly (Eve moon, extremely low gravity) -----------------
-        gilly_transfer = eve_orbit_aero + [
-            E("eve_low_orbit", "gilly_intercept", PV, 60, BodyName.EVE, attitude=True),
-            E("gilly_intercept", "gilly_soi", PV, 0, BodyName.GILLY, attitude=True),
-        ]
-        gilly_orbit = gilly_transfer + [
-            E("gilly_soi", "gilly_low_orbit", PV, 410, BodyName.GILLY, attitude=True),
-        ]
-        gilly_land = gilly_orbit + [
-            E("gilly_low_orbit", "gilly_surface", VL, 30, BodyName.GILLY,
-              min_twr=1.2, throttle=True, attitude=True, legs=True),
-        ]
-        gilly_return = gilly_land + [
-            E("gilly_surface", "gilly_low_orbit", VA, 30, BodyName.GILLY,
-              min_twr=1.2, throttle=True, attitude=True),
-            E("gilly_low_orbit", "eve_low_orbit", PV, 470, BodyName.GILLY, attitude=True),
-            E("eve_low_orbit", "kerbin_intercept", PV, 1420, BodyName.EVE,
-              pc=430, attitude=True),
-            kerbin_reentry,
-        ]
-        self._add(BodyName.GILLY, MissionType.ESCAPE,        gilly_transfer)
-        self._add(BodyName.GILLY, MissionType.ORBIT,         gilly_orbit)
-        self._add(BodyName.GILLY, MissionType.LAND,          gilly_land)
-        self._add(BodyName.GILLY, MissionType.RETURN,        gilly_return)
-        self._add(BodyName.GILLY, MissionType.SAMPLE_RETURN, gilly_return)
+        # Home reentry (intercept → surface).  Atmospheric homes do aero
+        # descent with a heatshield; vacuum homes need a propulsive landing.
+        if home.can_land:
+            if home.has_atmosphere:
+                reentry = self._edge(
+                    f"{hnl}_intercept", f"{hnl}_surface",
+                    self._ALA, 100, hn, heat=True,
+                )
+            else:
+                reentry = self._edge(
+                    f"{hnl}_intercept", f"{hnl}_surface",
+                    self._VL, home.dv.dvGL, hn,
+                    min_twr=1.2, throttle=True, attitude=True, legs=True,
+                )
+            self._add_ret(reentry)
+            self._add_out(reentry)
 
-        # ----- Duna (atmosphere — multiple landing strategies) ---------
-        duna_transfer = [
-            kerbin_ascent,
-            kerbin_escape,
-            E("kerbin_soi", "duna_intercept", PT, 130, BodyName.KERBIN, pc=10, attitude=True),
-            E("duna_intercept", "duna_soi", PV, 250, BodyName.DUNA, attitude=True),
-        ]
-        duna_orbit_prop = duna_transfer + [
-            E("duna_soi", "duna_low_orbit", PV, 360, BodyName.DUNA, attitude=True),
-        ]
-        duna_orbit_aero = duna_transfer + [
-            E("duna_soi", "duna_low_orbit", AB, 100, BodyName.DUNA, heat=True),
-        ]
-        duna_land_prop = duna_orbit_prop + [
-            E("duna_low_orbit", "duna_surface", ALP, 1450, BodyName.DUNA,
-              min_twr=1.3, throttle=True, attitude=True, legs=True),
-        ]
-        duna_land_aero = duna_orbit_aero + [
-            E("duna_low_orbit", "duna_surface", ALA, 200, BodyName.DUNA,
-              heat=True, legs=True),
-        ]
-        duna_return_prop = duna_land_prop + [
-            E("duna_surface", "duna_low_orbit", AT, 1450, BodyName.DUNA,
-              min_twr=1.3, throttle=True, attitude=True),
-            E("duna_low_orbit", "kerbin_intercept", PV, 610, BodyName.DUNA,
-              pc=10, attitude=True),
-            kerbin_reentry,
-        ]
-        duna_return_aero = duna_land_aero + [
-            E("duna_surface", "duna_low_orbit", AT, 1450, BodyName.DUNA,
-              min_twr=1.3, throttle=True, attitude=True),
-            E("duna_low_orbit", "kerbin_intercept", PV, 610, BodyName.DUNA,
-              pc=10, attitude=True),
-            kerbin_reentry,
-        ]
-        self._add(BodyName.DUNA, MissionType.ESCAPE,        duna_transfer)
-        self._add(BodyName.DUNA, MissionType.ORBIT,         duna_orbit_prop, duna_orbit_aero)
-        self._add(BodyName.DUNA, MissionType.LAND,          duna_land_prop,  duna_land_aero)
-        self._add(BodyName.DUNA, MissionType.RETURN,        duna_return_prop, duna_return_aero)
-        self._add(BodyName.DUNA, MissionType.SAMPLE_RETURN, duna_return_prop, duna_return_aero)
+    # ------------------------------------------------------------------
+    # Path enumeration
+    # ------------------------------------------------------------------
 
-        # ----- Ike (Duna moon, airless) --------------------------------
-        ike_transfer = duna_orbit_prop + [
-            E("duna_low_orbit", "ike_intercept", PV, 30, BodyName.DUNA, attitude=True),
-            E("ike_intercept", "ike_soi", PV, 0, BodyName.IKE, attitude=True),
-        ]
-        ike_orbit = ike_transfer + [
-            E("ike_soi", "ike_low_orbit", PV, 180, BodyName.IKE, attitude=True),
-        ]
-        ike_land = ike_orbit + [
-            E("ike_low_orbit", "ike_surface", VL, 390, BodyName.IKE,
-              min_twr=1.2, throttle=True, attitude=True, legs=True),
-        ]
-        ike_return = ike_land + [
-            E("ike_surface", "ike_low_orbit", VA, 390, BodyName.IKE,
-              min_twr=1.2, throttle=True, attitude=True),
-            E("ike_low_orbit", "duna_low_orbit", PV, 210, BodyName.IKE, attitude=True),
-            E("duna_low_orbit", "kerbin_intercept", PV, 610, BodyName.DUNA,
-              pc=10, attitude=True),
-            kerbin_reentry,
-        ]
-        self._add(BodyName.IKE, MissionType.ESCAPE,        ike_transfer)
-        self._add(BodyName.IKE, MissionType.ORBIT,         ike_orbit)
-        self._add(BodyName.IKE, MissionType.LAND,          ike_land)
-        self._add(BodyName.IKE, MissionType.RETURN,        ike_return)
-        self._add(BodyName.IKE, MissionType.SAMPLE_RETURN, ike_return)
+    def _find_outbound_paths(
+        self, src: str, dst: str
+    ) -> list[list[MissionEdge]]:
+        return self._find_paths(self._outbound, src, dst)
 
-        # ----- Dres (airless, significant plane change) ----------------
-        dres_transfer = [
-            kerbin_ascent,
-            kerbin_escape,
-            E("kerbin_soi", "dres_intercept", PT, 610, BodyName.KERBIN,
-              pc=1010, attitude=True),
-            E("dres_intercept", "dres_soi", PV, 0, BodyName.DRES, attitude=True),
-        ]
-        dres_orbit = dres_transfer + [
-            E("dres_soi", "dres_low_orbit", PV, 1290, BodyName.DRES, attitude=True),
-        ]
-        dres_land = dres_orbit + [
-            E("dres_low_orbit", "dres_surface", VL, 430, BodyName.DRES,
-              min_twr=1.2, throttle=True, attitude=True, legs=True),
-        ]
-        dres_return = dres_land + [
-            E("dres_surface", "dres_low_orbit", VA, 430, BodyName.DRES,
-              min_twr=1.2, throttle=True, attitude=True),
-            E("dres_low_orbit", "kerbin_intercept", PV, 1900, BodyName.DRES,
-              pc=1010, attitude=True),
-            kerbin_reentry,
-        ]
-        self._add(BodyName.DRES, MissionType.ESCAPE,        dres_transfer)
-        self._add(BodyName.DRES, MissionType.ORBIT,         dres_orbit)
-        self._add(BodyName.DRES, MissionType.LAND,          dres_land)
-        self._add(BodyName.DRES, MissionType.RETURN,        dres_return)
-        self._add(BodyName.DRES, MissionType.SAMPLE_RETURN, dres_return)
+    def _find_return_paths(
+        self, src: str, dst: str
+    ) -> list[list[MissionEdge]]:
+        return self._find_paths(self._return, src, dst)
 
-        # ----- Jool (cannot land; orbit only) --------------------------
-        jool_transfer = [
-            kerbin_ascent,
-            kerbin_escape,
-            E("kerbin_soi", "jool_intercept", PT, 980, BodyName.KERBIN, pc=270, attitude=True),
-            E("jool_intercept", "jool_soi", PV, 160, BodyName.JOOL, attitude=True),
-        ]
-        jool_orbit_aero = jool_transfer + [
-            E("jool_soi", "jool_low_orbit", AB, 100, BodyName.JOOL, heat=True),
-        ]
-        jool_orbit_prop = jool_transfer + [
-            E("jool_soi", "jool_low_orbit", PV, 2810, BodyName.JOOL, attitude=True),
-        ]
-        jool_return_aero = jool_orbit_aero + [
-            E("jool_low_orbit", "kerbin_intercept", PV, 3790, BodyName.JOOL,
-              pc=270, attitude=True),
-            kerbin_reentry,
-        ]
-        jool_return_prop = jool_orbit_prop + [
-            E("jool_low_orbit", "kerbin_intercept", PV, 3790, BodyName.JOOL,
-              pc=270, attitude=True),
-            kerbin_reentry,
-        ]
-        self._add(BodyName.JOOL, MissionType.ESCAPE, jool_transfer)
-        self._add(BodyName.JOOL, MissionType.ORBIT,  jool_orbit_aero, jool_orbit_prop)
-        self._add(BodyName.JOOL, MissionType.RETURN, jool_return_aero, jool_return_prop)
+    def _find_paths(
+        self,
+        graph: dict[str, list[tuple[str, MissionEdge]]],
+        src: str,
+        dst: str,
+    ) -> list[list[MissionEdge]]:
+        """Enumerate scheme-consistent simple paths from ``src`` to ``dst``.
 
-        # ----- Laythe (Jool moon, atmosphere) --------------------------
-        laythe_transfer = jool_orbit_aero + [
-            E("jool_low_orbit", "laythe_intercept", PV, 930, BodyName.JOOL, attitude=True),
-            E("laythe_intercept", "laythe_soi", PV, 0, BodyName.LAYTHE, attitude=True),
-        ]
-        laythe_orbit = laythe_transfer + [
-            E("laythe_soi", "laythe_low_orbit", PV, 1070, BodyName.LAYTHE, attitude=True),
-        ]
-        laythe_land_aero = laythe_orbit + [
-            E("laythe_low_orbit", "laythe_surface", ALA, 200, BodyName.LAYTHE,
-              heat=True, legs=True),
-        ]
-        laythe_land_prop = laythe_orbit + [
-            E("laythe_low_orbit", "laythe_surface", ALP, 2900, BodyName.LAYTHE,
-              min_twr=1.3, throttle=True, attitude=True, legs=True),
-        ]
-        laythe_return_aero = laythe_land_aero + [
-            E("laythe_surface", "laythe_low_orbit", AT, 2900, BodyName.LAYTHE,
-              min_twr=1.3, throttle=True, attitude=True),
-            E("laythe_low_orbit", "jool_low_orbit", PV, 2000, BodyName.LAYTHE, attitude=True),
-            E("jool_low_orbit", "kerbin_intercept", PV, 3790, BodyName.JOOL,
-              pc=270, attitude=True),
-            kerbin_reentry,
-        ]
-        laythe_return_prop = laythe_land_prop + [
-            E("laythe_surface", "laythe_low_orbit", AT, 2900, BodyName.LAYTHE,
-              min_twr=1.3, throttle=True, attitude=True),
-            E("laythe_low_orbit", "jool_low_orbit", PV, 2000, BodyName.LAYTHE, attitude=True),
-            E("jool_low_orbit", "kerbin_intercept", PV, 3790, BodyName.JOOL,
-              pc=270, attitude=True),
-            kerbin_reentry,
-        ]
-        self._add(BodyName.LAYTHE, MissionType.ESCAPE,        laythe_transfer)
-        self._add(BodyName.LAYTHE, MissionType.ORBIT,         laythe_orbit)
-        self._add(BodyName.LAYTHE, MissionType.LAND,          laythe_land_aero, laythe_land_prop)
-        self._add(BodyName.LAYTHE, MissionType.RETURN,        laythe_return_aero, laythe_return_prop)
-        self._add(BodyName.LAYTHE, MissionType.SAMPLE_RETURN, laythe_return_aero, laythe_return_prop)
+        A path can use edges with empty scheme tags freely.  Once an edge
+        with a non-empty tag is taken, every subsequent tagged edge on
+        that path must share the same tag — this is what keeps "aero
+        capture + prop landing" from showing up as a profile alternative.
 
-        # ----- Vall (Jool moon, airless) -------------------------------
-        vall_transfer = jool_orbit_aero + [
-            E("jool_low_orbit", "vall_intercept", PV, 620, BodyName.JOOL, attitude=True),
-            E("vall_intercept", "vall_soi", PV, 0, BodyName.VALL, attitude=True),
-        ]
-        vall_orbit = vall_transfer + [
-            E("vall_soi", "vall_low_orbit", PV, 910, BodyName.VALL, attitude=True),
-        ]
-        vall_land = vall_orbit + [
-            E("vall_low_orbit", "vall_surface", VL, 860, BodyName.VALL,
-              min_twr=1.2, throttle=True, attitude=True, legs=True),
-        ]
-        vall_return = vall_land + [
-            E("vall_surface", "vall_low_orbit", VA, 860, BodyName.VALL,
-              min_twr=1.2, throttle=True, attitude=True),
-            E("vall_low_orbit", "jool_low_orbit", PV, 1530, BodyName.VALL, attitude=True),
-            E("jool_low_orbit", "kerbin_intercept", PV, 3790, BodyName.JOOL,
-              pc=270, attitude=True),
-            kerbin_reentry,
-        ]
-        self._add(BodyName.VALL, MissionType.ESCAPE,        vall_transfer)
-        self._add(BodyName.VALL, MissionType.ORBIT,         vall_orbit)
-        self._add(BodyName.VALL, MissionType.LAND,          vall_land)
-        self._add(BodyName.VALL, MissionType.RETURN,        vall_return)
-        self._add(BodyName.VALL, MissionType.SAMPLE_RETURN, vall_return)
+        Each path uses at most one ``PLANET_TRANSFER`` edge — gravity-
+        assist routing through intermediate planet SOIs isn't modelled,
+        so multi-hop interplanetary itineraries are unphysical and only
+        bloat the alternative count without representing a real choice
+        the player can make.
 
-        # ----- Tylo (Jool moon, airless, high gravity — hardest landing)
-        tylo_transfer = jool_orbit_aero + [
-            E("jool_low_orbit", "tylo_intercept", PV, 400, BodyName.JOOL, attitude=True),
-            E("tylo_intercept", "tylo_soi", PV, 0, BodyName.TYLO, attitude=True),
-        ]
-        tylo_orbit = tylo_transfer + [
-            E("tylo_soi", "tylo_low_orbit", PV, 1100, BodyName.TYLO, attitude=True),
-        ]
-        tylo_land = tylo_orbit + [
-            E("tylo_low_orbit", "tylo_surface", VL, 2270, BodyName.TYLO,
-              min_twr=1.2, throttle=True, attitude=True, legs=True),
-        ]
-        tylo_return = tylo_land + [
-            E("tylo_surface", "tylo_low_orbit", VA, 2270, BodyName.TYLO,
-              min_twr=1.2, throttle=True, attitude=True),
-            E("tylo_low_orbit", "jool_low_orbit", PV, 1500, BodyName.TYLO, attitude=True),
-            E("jool_low_orbit", "kerbin_intercept", PV, 3790, BodyName.JOOL,
-              pc=270, attitude=True),
-            kerbin_reentry,
-        ]
-        self._add(BodyName.TYLO, MissionType.ESCAPE,        tylo_transfer)
-        self._add(BodyName.TYLO, MissionType.ORBIT,         tylo_orbit)
-        self._add(BodyName.TYLO, MissionType.LAND,          tylo_land)
-        self._add(BodyName.TYLO, MissionType.RETURN,        tylo_return)
-        self._add(BodyName.TYLO, MissionType.SAMPLE_RETURN, tylo_return)
+        Results are sorted by total ``base_dv`` ascending and capped at
+        ``_MAX_PROFILE_ALTS``.
+        """
+        results: list[list[MissionEdge]] = []
+        cap = self._MAX_PROFILE_ALTS
 
-        # ----- Bop (Jool moon, airless, high inclination) --------------
-        bop_transfer = jool_orbit_aero + [
-            E("jool_low_orbit", "bop_intercept", PV, 220, BodyName.JOOL,
-              pc=2440, attitude=True),
-            E("bop_intercept", "bop_soi", PV, 0, BodyName.BOP, attitude=True),
-        ]
-        bop_orbit = bop_transfer + [
-            E("bop_soi", "bop_low_orbit", PV, 900, BodyName.BOP, attitude=True),
-        ]
-        bop_land = bop_orbit + [
-            E("bop_low_orbit", "bop_surface", VL, 230, BodyName.BOP,
-              min_twr=1.2, throttle=True, attitude=True, legs=True),
-        ]
-        bop_return = bop_land + [
-            E("bop_surface", "bop_low_orbit", VA, 230, BodyName.BOP,
-              min_twr=1.2, throttle=True, attitude=True),
-            E("bop_low_orbit", "jool_low_orbit", PV, 1120, BodyName.BOP,
-              pc=2440, attitude=True),
-            E("jool_low_orbit", "kerbin_intercept", PV, 3790, BodyName.JOOL,
-              pc=270, attitude=True),
-            kerbin_reentry,
-        ]
-        self._add(BodyName.BOP, MissionType.ESCAPE,        bop_transfer)
-        self._add(BodyName.BOP, MissionType.ORBIT,         bop_orbit)
-        self._add(BodyName.BOP, MissionType.LAND,          bop_land)
-        self._add(BodyName.BOP, MissionType.RETURN,        bop_return)
-        self._add(BodyName.BOP, MissionType.SAMPLE_RETURN, bop_return)
+        def dfs(node: str, path: list[MissionEdge], scheme: str,
+                visited: set[str], pt_count: int) -> None:
+            if len(results) >= cap * 2:
+                return
+            if node == dst:
+                results.append(list(path))
+                return
+            for edge_scheme, edge in graph.get(node, []):
+                if edge.destination in visited:
+                    continue
+                if edge_scheme and scheme and edge_scheme != scheme:
+                    continue
+                next_pt = pt_count + (1 if edge.edge_type == EdgeType.PLANET_TRANSFER else 0)
+                if next_pt > 1:
+                    continue
+                new_scheme = scheme or edge_scheme
+                visited.add(edge.destination)
+                path.append(edge)
+                dfs(edge.destination, path, new_scheme, visited, next_pt)
+                path.pop()
+                visited.remove(edge.destination)
 
-        # ----- Pol (Jool moon, airless, inclined) ----------------------
-        pol_transfer = jool_orbit_aero + [
-            E("jool_low_orbit", "pol_intercept", PV, 160, BodyName.JOOL,
-              pc=700, attitude=True),
-            E("pol_intercept", "pol_soi", PV, 0, BodyName.POL, attitude=True),
-        ]
-        pol_orbit = pol_transfer + [
-            E("pol_soi", "pol_low_orbit", PV, 820, BodyName.POL, attitude=True),
-        ]
-        pol_land = pol_orbit + [
-            E("pol_low_orbit", "pol_surface", VL, 130, BodyName.POL,
-              min_twr=1.2, throttle=True, attitude=True, legs=True),
-        ]
-        pol_return = pol_land + [
-            E("pol_surface", "pol_low_orbit", VA, 130, BodyName.POL,
-              min_twr=1.2, throttle=True, attitude=True),
-            E("pol_low_orbit", "jool_low_orbit", PV, 980, BodyName.POL,
-              pc=700, attitude=True),
-            E("jool_low_orbit", "kerbin_intercept", PV, 3790, BodyName.JOOL,
-              pc=270, attitude=True),
-            kerbin_reentry,
-        ]
-        self._add(BodyName.POL, MissionType.ESCAPE,        pol_transfer)
-        self._add(BodyName.POL, MissionType.ORBIT,         pol_orbit)
-        self._add(BodyName.POL, MissionType.LAND,          pol_land)
-        self._add(BodyName.POL, MissionType.RETURN,        pol_return)
-        self._add(BodyName.POL, MissionType.SAMPLE_RETURN, pol_return)
+        dfs(src, [], "", {src}, 0)
+        results.sort(key=lambda p: sum(e.base_dv for e in p))
+        return results[:cap]
 
-        # ----- Eeloo (distant, icy, no atmosphere) ---------------------
-        eeloo_transfer = [
-            kerbin_ascent,
-            kerbin_escape,
-            E("kerbin_soi", "eeloo_intercept", PT, 1140, BodyName.KERBIN,
-              pc=1330, attitude=True),
-            E("eeloo_intercept", "eeloo_soi", PV, 0, BodyName.EELOO, attitude=True),
-        ]
-        eeloo_orbit = eeloo_transfer + [
-            E("eeloo_soi", "eeloo_low_orbit", PV, 1370, BodyName.EELOO, attitude=True),
-        ]
-        eeloo_land = eeloo_orbit + [
-            E("eeloo_low_orbit", "eeloo_surface", VL, 620, BodyName.EELOO,
-              min_twr=1.2, throttle=True, attitude=True, legs=True),
-        ]
-        eeloo_return = eeloo_land + [
-            E("eeloo_surface", "eeloo_low_orbit", VA, 620, BodyName.EELOO,
-              min_twr=1.2, throttle=True, attitude=True),
-            E("eeloo_low_orbit", "kerbin_intercept", PV, 2510, BodyName.EELOO,
-              pc=1330, attitude=True),
-            kerbin_reentry,
-        ]
-        self._add(BodyName.EELOO, MissionType.ESCAPE,        eeloo_transfer)
-        self._add(BodyName.EELOO, MissionType.ORBIT,         eeloo_orbit)
-        self._add(BodyName.EELOO, MissionType.LAND,          eeloo_land)
-        self._add(BodyName.EELOO, MissionType.RETURN,        eeloo_return)
-        self._add(BodyName.EELOO, MissionType.SAMPLE_RETURN, eeloo_return)
+    # ------------------------------------------------------------------
+    # Profile construction
+    # ------------------------------------------------------------------
 
-        # ----- Kerbol (orbit only — cannot land) -----------------------
-        kerbol_orbit = [
-            kerbin_ascent,
-            kerbin_escape,
-            E("kerbin_soi", "kerbol_low_orbit", PT, 6000, BodyName.KERBOL, attitude=True),
-        ]
-        kerbol_return = kerbol_orbit + [
-            E("kerbol_low_orbit", "kerbin_intercept", PV, 6000, BodyName.KERBOL,
-              attitude=True),
-            kerbin_reentry,
-        ]
-        # Kerbol has no flyby / SOI-leave checks (you start inside its SOI), so
-        # no ESCAPE profile is registered. ORBIT/RETURN are the only Kerbol events.
-        self._add(BodyName.KERBOL, MissionType.ORBIT,  kerbol_orbit)
-        self._add(BodyName.KERBOL, MissionType.RETURN, kerbol_return)
+    def _build_profiles(self) -> None:
+        """Populate ``self._profiles`` from the outbound + return graphs."""
+        for body in ALL_BODIES:
+            if body.name == self.home:
+                self._build_home_profiles(body)
+            else:
+                self._build_destination_profiles(body)
 
-        # ----- Auto-fill: flag plant defaults to crewed landing --------
-        # Flag plant is the same mission as a crewed landing — if no explicit
-        # FLAG_PLANT profile exists, copy the LAND profile.  Kerbin already
-        # registered an explicit empty FLAG_PLANT entry; the existence check
-        # below preserves it.
+        # FLAG_PLANT defaults to LAND when no explicit entry exists.  Home
+        # body registers its own (empty) FLAG_PLANT in _build_home_profiles
+        # and that entry is preserved by the membership check.
         for (body_name, mission_type) in list(self._profiles):
-            if mission_type == MissionType.LAND and (body_name, MissionType.FLAG_PLANT) not in self._profiles:
-                self._profiles[(body_name, MissionType.FLAG_PLANT)] = self._profiles[(body_name, MissionType.LAND)]
+            if (mission_type == MissionType.LAND
+                    and (body_name, MissionType.FLAG_PLANT) not in self._profiles):
+                self._profiles[(body_name, MissionType.FLAG_PLANT)] = \
+                    self._profiles[(body_name, MissionType.LAND)]
+
+    def _build_home_profiles(self, home: "Body") -> None:
+        """Profiles for the home body itself.
+
+        Home gets the canonical short paths: ORBIT = ascent only; ESCAPE =
+        ascent + SOI escape; LAND / RETURN = ascent + deorbit (matches the
+        existing "go up and come back" semantic).  FLAG_PLANT and
+        SAMPLE_RETURN stay empty (the Kerbal walks out from the launchpad).
+        """
+        hn = home.name
+        hnl = hn.lower()
+        ascent_paths = self._find_outbound_paths(f"{hnl}_surface", f"{hnl}_low_orbit")
+        if ascent_paths:
+            ascent = ascent_paths[0]  # single ascent edge for a body
+            self._add(hn, MissionType.ORBIT, ascent)
+
+            if hn != BodyName.KERBOL:
+                escape_paths = self._find_outbound_paths(
+                    f"{hnl}_surface", f"{hnl}_soi",
+                )
+                if escape_paths:
+                    self._add(hn, MissionType.ESCAPE, escape_paths[0])
+
+            # LAND / RETURN — append a deorbit edge to the ascent path.
+            # Prefer aero deorbit when atmospheric; fall back to whichever
+            # exists (vacuum body uses VACUUM_LANDING with full dvGL).
+            lo_edges = self._outbound.get(f"{hnl}_low_orbit", [])
+            deorbit_aero = [e for s, e in lo_edges
+                            if s == "aero" and e.destination == f"{hnl}_surface"]
+            deorbit_any = [e for s, e in lo_edges
+                           if e.destination == f"{hnl}_surface"]
+            deorbit = (deorbit_aero or deorbit_any or [None])[0]
+            if deorbit is not None:
+                land_profile = ascent + [deorbit]
+                self._add(hn, MissionType.LAND, land_profile)
+                self._add(hn, MissionType.RETURN, land_profile)
+
+        # FLAG_PLANT and SAMPLE_RETURN: walk out from launchpad (Kerbal EVA),
+        # no rocket required.  See user note in CLAUDE.md about Kerbin
+        # SAMPLE_RETURN: this must stay empty.
+        self._add(hn, MissionType.FLAG_PLANT, [])
+        self._add(hn, MissionType.SAMPLE_RETURN, [])
+
+    def _build_destination_profiles(self, body: "Body") -> None:
+        """Profiles for a non-home destination body."""
+        bn = body.name
+        # Kerbol is not a mission destination.  ``locations.get_body_events``
+        # returns ``()`` for it (root body — no flyby/escape/landed checks
+        # exist), so no caller ever queries ``mission_builder.profiles_for(
+        # BodyName.KERBOL, …)``.  Generating profiles here would just be
+        # dead state, and Hohmann math from Kerbol's deep gravity well
+        # produces unrealistic dvs anyway (return ≈ 40 km/s).  Kerbol stays
+        # in ``ALL_BODIES`` for its solar-distance reference, but earns
+        # no profile entries.
+        if bn == BodyName.KERBOL:
+            return
+        bnl = bn.lower()
+        home_surface = f"{self.home.lower()}_surface"
+
+        target_soi = f"{bnl}_soi"
+        target_lo = f"{bnl}_low_orbit"
+        target_surf = f"{bnl}_surface" if body.can_land else None
+
+        # ESCAPE — reach the body's SOI boundary.
+        escape_paths = self._find_outbound_paths(home_surface, target_soi)
+        if escape_paths:
+            self._add(bn, MissionType.ESCAPE, *escape_paths)
+
+        # ORBIT — reach the body's low orbit node.
+        orbit_paths = self._find_outbound_paths(home_surface, target_lo)
+        if orbit_paths:
+            self._add(bn, MissionType.ORBIT, *orbit_paths)
+
+        # LAND — reach the body's surface.
+        if body.can_land and target_surf is not None:
+            land_paths = self._find_outbound_paths(home_surface, target_surf)
+            if land_paths:
+                self._add(bn, MissionType.LAND, *land_paths)
+
+        # RETURN / SAMPLE_RETURN — outbound to the deepest accessible node,
+        # then a restricted return path back to home.surface.  Cap the
+        # cartesian product to MAX alternatives total (sort by dv to keep
+        # the cheapest ones).
+        return_origin = target_surf if body.can_land else target_lo
+        home_surf = f"{self.home.lower()}_surface"
+        outbound_alts = self._find_outbound_paths(home_surface, return_origin)
+        return_alts = self._find_return_paths(return_origin, home_surf)
+        if outbound_alts and return_alts:
+            combos: list[list[MissionEdge]] = []
+            for out in outbound_alts:
+                for ret in return_alts:
+                    combos.append(out + ret)
+            combos.sort(key=lambda p: sum(e.base_dv for e in p))
+            combos = combos[:self._MAX_PROFILE_ALTS]
+            self._add(bn, MissionType.RETURN, *combos)
+            # SAMPLE_RETURN requires landing to take a sample — only register
+            # it for bodies you can actually land on.  Jool / Kerbol "return"
+            # missions are flyby-and-back, not sample retrieval.
+            if body.can_land:
+                self._add(bn, MissionType.SAMPLE_RETURN, *combos)
 
     # ------------------------------------------------------------------
     # Cross-validation
@@ -1272,7 +1294,7 @@ class MissionBuilder:
             for event_name in get_body_events(body):
                 event = EVENT_BY_NAME[event_name]
                 if event.mission_type == MissionType.FLAG_PLANT:
-                    continue  # derived from LAND in _build
+                    continue  # derived from LAND in _build_profiles
                 key = (body.name, event.mission_type)
                 if key not in self._profiles:
                     raise AssertionError(
