@@ -38,7 +38,10 @@ from typing import TYPE_CHECKING
 
 from BaseClasses import Location
 
-from .bodies import ALL_BODIES, BodyName, MissionType
+from .bodies import (
+    ALL_BODIES, BODY_BY_NAME, BodyName, MissionType,
+    home_altitude_milestones,
+)
 from .tech_tree import TECH_NODES
 
 if TYPE_CHECKING:
@@ -260,24 +263,39 @@ class KerbinLocationDef:
     threshold_km: float | None = None
 
 
-KERBIN_LOCATIONS: tuple[KerbinLocationDef, ...] = (
-    KerbinLocationDef("Kerbin First Launch", MissionType.FIRST_LAUNCH),
-    KerbinLocationDef("Kerbin First Landing", MissionType.FIRST_LANDING),
-    KerbinLocationDef("Kerbin First Crash", MissionType.SOUNDING, 0.1),
-    KerbinLocationDef("Kerbin 5km Altitude", MissionType.SOUNDING, 5.0),
-    KerbinLocationDef("Kerbin 15km Altitude", MissionType.SOUNDING, 15.0),
-    KerbinLocationDef("Kerbin 25km Altitude", MissionType.SOUNDING, 25.0),
-    KerbinLocationDef("Kerbin 35km Altitude", MissionType.SOUNDING, 35.0),
-    KerbinLocationDef("Kerbin 45km Altitude", MissionType.SOUNDING, 45.0),
-    KerbinLocationDef("Kerbin 55km Altitude", MissionType.SOUNDING, 55.0),
-    KerbinLocationDef("Kerbin 70km Altitude", MissionType.SOUNDING, 70.0),
-    KerbinLocationDef("Kerbin Splashdown", MissionType.SPLASHDOWN, 1.0),
-    KerbinLocationDef("Kerbin First Staging", MissionType.FIRST_STAGING),
-)
+# Phase 3a: the altitude-record milestones are generated from the home
+# body's ``safe_altitude_km`` via ``home_altitude_milestones`` (bodies.py).
+# Phase 3a pins home to Kerbin, so the milestone count is still 7 and the
+# top value is still 70 km — but the inner values are now denser at the
+# low end (5/10/16/20/30/45/70 vs the old 5/15/25/35/45/55/70).  This is
+# the only intentional behaviour change in §E.
+_HOME_BODY: BodyName = BodyName.KERBIN
+
+_altitude_milestones = home_altitude_milestones(BODY_BY_NAME[_HOME_BODY], n=7)
+
+
+def _build_kerbin_locations() -> tuple[KerbinLocationDef, ...]:
+    home = str(_HOME_BODY)
+    entries: list[KerbinLocationDef] = [
+        KerbinLocationDef(f"{home} First Launch", MissionType.FIRST_LAUNCH),
+        KerbinLocationDef(f"{home} First Landing", MissionType.FIRST_LANDING),
+        KerbinLocationDef(f"{home} First Crash", MissionType.SOUNDING, 0.1),
+    ]
+    entries.extend(
+        KerbinLocationDef(f"{home} {km}km Altitude", MissionType.SOUNDING, float(km))
+        for km in _altitude_milestones
+    )
+    entries.append(KerbinLocationDef(f"{home} Splashdown", MissionType.SPLASHDOWN, 1.0))
+    entries.append(KerbinLocationDef(f"{home} First Staging", MissionType.FIRST_STAGING))
+    return tuple(entries)
+
+
+KERBIN_LOCATIONS: tuple[KerbinLocationDef, ...] = _build_kerbin_locations()
 
 KERBIN_LOCATION_NAMES: list[str] = [loc.name for loc in KERBIN_LOCATIONS]
 
-assert len(KERBIN_LOCATION_NAMES) == 12
+# 3 firsts + N altitude milestones + Splashdown + First Staging
+assert len(KERBIN_LOCATION_NAMES) == 5 + len(_altitude_milestones)
 
 # ---------------------------------------------------------------------------
 # Per-body mission location names (217 total, generated from body data)

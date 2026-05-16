@@ -579,7 +579,8 @@ def _evaluate(
 ) -> ProfileResult:
     """Dispatch to the right evaluator for a location's mission type."""
     if info.mission_type == MissionType.SOUNDING:
-        return _evaluate_sounding(flags, info.threshold_km or 0.0)
+        return _evaluate_sounding(flags, info.threshold_km or 0.0,
+                                  mission_builder.home_body)
     return evaluate_mission_detailed(
         flags, diff,
         info.body, info.mission_type, info.crewed,

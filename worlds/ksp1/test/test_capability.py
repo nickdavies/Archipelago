@@ -19,6 +19,7 @@ from worlds.ksp1.bodies import (
 # ``evaluate_mission_detailed``) pass ``MISSION_BUILDER`` explicitly.
 MISSION_BUILDER = MissionBuilder(home=BodyName.KERBIN)
 MISSION_PROFILES = MISSION_BUILDER.all_profiles()
+HOME_BODY = MISSION_BUILDER.home_body
 from worlds.ksp1.locations import EventName
 from worlds.ksp1.capability import (
     BodyAccessProfile, EquipmentFlags,
@@ -767,7 +768,7 @@ class TestAtmosphericAscentControl(unittest.TestCase):
             tanks=[_FL_T800],
             probe_core=True,
         )
-        alt = _compute_sounding_altitude(flags)
+        alt = _compute_sounding_altitude(flags, HOME_BODY)
         self.assertGreater(
             alt, 70.0,
             f"Dart sounding altitude should exceed 70 km, got {alt:.1f} km",
@@ -942,17 +943,17 @@ class TestSoundingRocketAltitude(unittest.TestCase):
 
     def test_empty_flags_zero(self) -> None:
         flags = _make_flags()
-        self.assertEqual(_compute_sounding_altitude(flags), 0.0)
+        self.assertEqual(_compute_sounding_altitude(flags, HOME_BODY), 0.0)
 
     def test_probe_core_no_engine_zero(self) -> None:
         # Probe core alone, no engine -> no thrust, no altitude
         flags = _make_flags(probe_core=True)
-        self.assertEqual(_compute_sounding_altitude(flags), 0.0)
+        self.assertEqual(_compute_sounding_altitude(flags, HOME_BODY), 0.0)
 
     def test_capsule_only_zero(self) -> None:
         # Capsule, no engine -> zero
         flags = _make_flags(capsule=True)
-        self.assertEqual(_compute_sounding_altitude(flags), 0.0)
+        self.assertEqual(_compute_sounding_altitude(flags, HOME_BODY), 0.0)
 
     def test_probe_reliant_ft800_above_70km(self) -> None:
         # Probe + LFO engine + LFO tank — should clear all 7 altitude milestones
@@ -961,13 +962,13 @@ class TestSoundingRocketAltitude(unittest.TestCase):
             tanks=[_FL_T800],
             probe_core=True,
         )
-        alt = _compute_sounding_altitude(flags)
+        alt = _compute_sounding_altitude(flags, HOME_BODY)
         self.assertGreater(alt, 70.0, f"Expected > 70 km, got {alt:.1f} km")
 
     def test_probe_hammer_srb_above_70km(self) -> None:
         # SRB path: Hammer SRB + probe core
         flags = _make_flags(srbs=[_HAMMER], probe_core=True)
-        alt = _compute_sounding_altitude(flags)
+        alt = _compute_sounding_altitude(flags, HOME_BODY)
         self.assertGreater(alt, 70.0, f"Expected > 70 km, got {alt:.1f} km")
 
     def test_crewed_no_parachute_zero(self) -> None:
@@ -978,7 +979,7 @@ class TestSoundingRocketAltitude(unittest.TestCase):
             capsule=True,
             staging_tier=1,  # has decoupler
         )
-        self.assertEqual(_compute_sounding_altitude(flags), 0.0)
+        self.assertEqual(_compute_sounding_altitude(flags, HOME_BODY), 0.0)
 
     def test_crewed_no_decoupler_zero(self) -> None:
         # Capsule + engine + tank + parachute but no decoupler -> can't separate
@@ -989,7 +990,7 @@ class TestSoundingRocketAltitude(unittest.TestCase):
             parachutes=[_MK16],
             staging_tier=0,  # no decoupler
         )
-        self.assertEqual(_compute_sounding_altitude(flags), 0.0)
+        self.assertEqual(_compute_sounding_altitude(flags, HOME_BODY), 0.0)
 
     def test_crewed_full_kit_above_70km(self) -> None:
         # Capsule + engine + tank + parachute + decoupler -> survivable crewed flight
@@ -1000,7 +1001,7 @@ class TestSoundingRocketAltitude(unittest.TestCase):
             parachutes=[_MK16],
             staging_tier=1,  # has decoupler
         )
-        alt = _compute_sounding_altitude(flags)
+        alt = _compute_sounding_altitude(flags, HOME_BODY)
         self.assertGreater(alt, 70.0, f"Expected > 70 km, got {alt:.1f} km")
 
     # --- Analytic precision tests -------------------------------------------
@@ -1016,7 +1017,7 @@ class TestSoundingRocketAltitude(unittest.TestCase):
                 sounding uses atm values for thrust, vac for ISP)
         """
         flags = _make_flags(srbs=[_FLEA], probe_core=True)
-        alt = _compute_sounding_altitude(flags)
+        alt = _compute_sounding_altitude(flags, HOME_BODY)
         # Flea + probe should reach > 100 km regardless of exact formula details
         self.assertGreater(alt, 100.0, f"got {alt:.2f} km")
 
@@ -1027,7 +1028,7 @@ class TestSoundingRocketAltitude(unittest.TestCase):
           Real Hammer has lower ISP (195) and less fuel than old Thumper data.
         """
         flags = _make_flags(srbs=[_HAMMER], probe_core=True)
-        alt = _compute_sounding_altitude(flags)
+        alt = _compute_sounding_altitude(flags, HOME_BODY)
         # Hammer + probe should comfortably clear 70 km
         self.assertGreater(alt, 70.0, f"got {alt:.2f} km")
 
@@ -1037,7 +1038,7 @@ class TestSoundingRocketAltitude(unittest.TestCase):
           Optimizer stacks tanks to maximize altitude within TWR constraints.
         """
         flags = _make_flags(engines=[_RELIANT], tanks=[_FL_T400], probe_core=True)
-        alt = _compute_sounding_altitude(flags)
+        alt = _compute_sounding_altitude(flags, HOME_BODY)
         # Should comfortably reach above 70 km (orbital altitude)
         self.assertGreater(alt, 70.0, f"got {alt:.2f} km")
 
@@ -1049,8 +1050,8 @@ class TestSoundingRocketAltitude(unittest.TestCase):
         """
         flea_flags = _make_flags(srbs=[_FLEA], probe_core=True)
         reliant_flags = _make_flags(engines=[_RELIANT], tanks=[_FL_T400], probe_core=True)
-        flea_alt = _compute_sounding_altitude(flea_flags)
-        reliant_alt = _compute_sounding_altitude(reliant_flags)
+        flea_alt = _compute_sounding_altitude(flea_flags, HOME_BODY)
+        reliant_alt = _compute_sounding_altitude(reliant_flags, HOME_BODY)
         # Both should be well above 70 km
         self.assertGreater(flea_alt, 70.0)
         self.assertGreater(reliant_alt, 70.0)
