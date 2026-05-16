@@ -96,7 +96,7 @@ class KSP1World(World):
         # call get_capability before any create_items has run.
         items.select_progressive_representatives(self)
 
-        self.goal_spec = resolve_goal_spec(self.options)
+        self.goal_spec = resolve_goal_spec(self.options, self.mission_builder.home)
         if self.options.exclude_late_tech_tree:
             late_tier_locs: set[str] = {
                 str(TechTreeLocation(node.display_name, slot))

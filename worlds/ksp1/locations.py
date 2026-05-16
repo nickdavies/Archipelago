@@ -252,15 +252,19 @@ KSC_BIOME_NAMES: list[str] = [KSC_LOCATION_PREFIX + name for _, name in KSC_BIOM
 
 @dataclass(frozen=True)
 class KerbinLocationDef:
-    """Metadata for a Kerbin-specific mission location.
+    """Metadata for a home-body-specific mission location.
 
-    This is the single source of truth for Kerbin location names, mission types,
-    and altitude thresholds — used by rules.py (access rules) and
-    capability_format.py (CLI/tracker display).
+    Single source of truth for the home-body location names, mission types,
+    altitude thresholds, and the body itself — used by rules.py (access
+    rules), sphere_ladder.py (parsing), and capability_format.py
+    (CLI/tracker display).  The "Kerbin" prefix on the name is for the
+    current home (Phase 3a pins it to Kerbin); ``body`` carries the
+    actual home BodyName so callers don't have to re-derive it.
     """
     name: str
     mission_type: MissionType
     threshold_km: float | None = None
+    body: BodyName = BodyName.KERBIN
 
 
 # Phase 3a: the altitude-record milestones are generated from the home
@@ -275,18 +279,19 @@ _altitude_milestones = home_altitude_milestones(BODY_BY_NAME[_HOME_BODY], n=7)
 
 
 def _build_kerbin_locations() -> tuple[KerbinLocationDef, ...]:
-    home = str(_HOME_BODY)
+    name_prefix = str(_HOME_BODY)
+    home = _HOME_BODY
     entries: list[KerbinLocationDef] = [
-        KerbinLocationDef(f"{home} First Launch", MissionType.FIRST_LAUNCH),
-        KerbinLocationDef(f"{home} First Landing", MissionType.FIRST_LANDING),
-        KerbinLocationDef(f"{home} First Crash", MissionType.SOUNDING, 0.1),
+        KerbinLocationDef(f"{name_prefix} First Launch", MissionType.FIRST_LAUNCH, body=home),
+        KerbinLocationDef(f"{name_prefix} First Landing", MissionType.FIRST_LANDING, body=home),
+        KerbinLocationDef(f"{name_prefix} First Crash", MissionType.SOUNDING, 0.1, body=home),
     ]
     entries.extend(
-        KerbinLocationDef(f"{home} {km}km Altitude", MissionType.SOUNDING, float(km))
+        KerbinLocationDef(f"{name_prefix} {km}km Altitude", MissionType.SOUNDING, float(km), body=home)
         for km in _altitude_milestones
     )
-    entries.append(KerbinLocationDef(f"{home} Splashdown", MissionType.SPLASHDOWN, 1.0))
-    entries.append(KerbinLocationDef(f"{home} First Staging", MissionType.FIRST_STAGING))
+    entries.append(KerbinLocationDef(f"{name_prefix} Splashdown", MissionType.SPLASHDOWN, 1.0, body=home))
+    entries.append(KerbinLocationDef(f"{name_prefix} First Staging", MissionType.FIRST_STAGING, body=home))
     return tuple(entries)
 
 
@@ -330,12 +335,6 @@ MISSION_LOCATION_NAMES: list[str] = [str(m) for m in MISSION_LOCATIONS]
 assert len(MISSION_LOCATION_NAMES) == 244, (
     f"Expected 244 per-body mission locations, got {len(MISSION_LOCATION_NAMES)}"
 )
-
-# Bodies in the Kerbin system — derived from ALL_BODIES, not hardcoded.
-KERBIN_SYSTEM_BODY_NAMES: frozenset[BodyName] = frozenset(
-    b.name for b in ALL_BODIES if b.name == BodyName.KERBIN or b.parent == BodyName.KERBIN
-)
-
 
 # ---------------------------------------------------------------------------
 # Build the full LOCATION_TABLE (name → id offset)
