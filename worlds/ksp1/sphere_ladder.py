@@ -1436,13 +1436,13 @@ def _compute_tech_tier_signatures(
     """
     from .bodies import ALL_BODIES, science_budget
     from .capability import compute_capability_from_items
-    from .locations import EventName, TECH_SLOTS_BY_DIFFICULTY, TechTreeLocation
-    from .rules import _SCIENCE_SAFETY
+    from .locations import EventName, TechTreeLocation, effective_tech_slots_per_node
+    from .rules import effective_science_safety
     from .tech_tree import TECH_NODES, TIER_TO_BAND, cumulative_tier_cost
 
     difficulty_idx = world.options.difficulty.value
     difficulty_name = ["casual", "normal", "expert", "insane"][difficulty_idx]
-    safety = _SCIENCE_SAFETY[difficulty_idx]
+    safety = effective_science_safety(world.options, difficulty_idx)
     pad_on = bool(world.options.progressive_launch_pad)
     clamps = bool(world.options.start_with_launch_clamps)
     rep_names = frozenset(
@@ -1495,7 +1495,7 @@ def _compute_tech_tier_signatures(
     # tier in this band).  Used by the caller to inject Progressive R&D
     # into the chain at the right sphere depth.
     band_funding: dict[int, SphereBoundary] = {}
-    num_slots = TECH_SLOTS_BY_DIFFICULTY[difficulty_idx]
+    num_slots = effective_tech_slots_per_node(world.options, difficulty_idx)
     tier_set = sorted({n.tier for n in TECH_NODES})
 
     # Max kit needed at any point in the chain (per-name max over

@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from Options import Choice, ExcludeLocations, ItemsAccessibility, OptionSet, PerGameCommonOptions, Range, Toggle
+from Options import Choice, ExcludeLocations, ItemsAccessibility, NamedRange, OptionSet, PerGameCommonOptions, Range, Toggle
 
 from .bodies import ALL_BODIES
 
@@ -76,12 +76,14 @@ class FlybyBodies(OptionSet):
 class Difficulty(Choice):
     """
     Controls delta-V margins and hardware requirement strictness.
-    Also controls KSC starting slots and tech tree slots per node.
 
-    casual  -- Generous margins; 20 KSC starts, 4 tech slots/node.
-    normal  -- Default margins; 15 KSC starts, 4 tech slots/node.
-    expert  -- Tight margins;   10 KSC starts, 3 tech slots/node.
-    insane  -- Exact delta-V;    5 KSC starts, 2 tech slots/node.
+    Also sets defaults for Tech Slots Per Node, Starting Inventory Count,
+    and Science Safety Factor — each of which can be overridden independently.
+
+    casual  -- Generous margins; 20 starts, 4 tech slots/node, 50% science.
+    normal  -- Default margins;  15 starts, 4 tech slots/node, 70% science.
+    expert  -- Tight margins;    10 starts, 3 tech slots/node, 85% science.
+    insane  -- Exact delta-V;     5 starts, 2 tech slots/node, 100% science.
     """
     display_name = "Difficulty"
 
@@ -91,6 +93,78 @@ class Difficulty(Choice):
     option_insane = 3
 
     default = option_normal
+
+
+class TechSlotsPerNode(NamedRange):
+    """
+    Number of AP location slots created per tech tree node (62 nodes total).
+
+    More slots = larger location pool, looser fill.  Fewer slots = tighter
+    item pool tension and faster progression pacing.
+
+    WARNING: Lowering this shrinks the location pool and can cause fill
+    failures on long goals (e.g. standard_sample_returns, flag_every_body).
+    If generation fails: reroll with a new seed, or raise this value, or
+    raise Starting Inventory Count to give the fill algorithm more room.
+    Short goals (mun_flag, duna_return) are unaffected.
+
+    auto -- Derived from Difficulty (casual/normal=4, expert=3, insane=2).
+    1..4 -- Explicit override.
+    """
+    display_name = "Tech Slots Per Node"
+    range_start = 1
+    range_end = 4
+    default = -1
+    special_range_names = {"auto": -1}
+
+
+class StartingInventoryCount(NamedRange):
+    """
+    Number of zero-requirement bootstrap locations available at run start.
+
+    These auto-check on connect — the AP fill algorithm uses them to seed
+    your initial parts kit.  Higher = easier bootstrap, more wide-open
+    early game.  Lower = scarcer starts, tighter pacing.
+
+    The Progressive Launch Pad bonus (+3, capped at 20) still applies on
+    top of this when enabled.
+
+    WARNING: Lowering this shrinks the location pool and can cause fill
+    failures on long goals (e.g. standard_sample_returns, flag_every_body).
+    If generation fails: reroll with a new seed, or raise this value, or
+    raise Tech Slots Per Node to give the fill algorithm more room.
+    Short goals (mun_flag, duna_return) are unaffected.
+
+    auto  -- Derived from Difficulty (20/15/10/5).
+    0..20 -- Explicit override.
+    """
+    display_name = "Starting Inventory Count"
+    range_start = 0
+    range_end = 20
+    default = -1
+    special_range_names = {"auto": -1}
+
+
+class ScienceSafetyFactor(NamedRange):
+    """
+    Percentage of estimated accessible science counted toward tech tree gates.
+
+    The capability system estimates how much science the player could earn
+    from reachable bodies; this factor scales that estimate.  Lower = stricter
+    (tech tiers unlock later, more bodies must be reachable first).  Higher =
+    more permissive.  This is the single most impactful knob for tech tree
+    progression pacing.
+
+    Does NOT affect fill success — only tech tree gating.  Safe to tune.
+
+    auto    -- Derived from Difficulty (casual=50, normal=70, expert=85, insane=100).
+    0..100  -- Explicit percentage override.
+    """
+    display_name = "Science Safety Factor"
+    range_start = 0
+    range_end = 100
+    default = -1
+    special_range_names = {"auto": -1}
 
 
 class StartWithLaunchClamps(Toggle):
@@ -198,6 +272,9 @@ class ProgressiveLaunchPad(Toggle):
 class KSP1Options(PerGameCommonOptions):
     goal: Goal
     difficulty: Difficulty
+    tech_slots_per_node: TechSlotsPerNode
+    starting_inventory_count: StartingInventoryCount
+    science_safety_factor: ScienceSafetyFactor
     start_with_launch_clamps: StartWithLaunchClamps
     item_pacing: ItemPacing
     accessibility: KSP1Accessibility

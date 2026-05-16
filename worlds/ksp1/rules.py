@@ -34,11 +34,10 @@ from .locations import (
     KERBIN_LOCATION_NAMES,
     MISSION_LOCATION_NAMES,
     MissionLocation,
-    STARTING_INV_COUNTS,
     STARTING_INV_NAMES,
-    TECH_SLOTS_BY_DIFFICULTY,
     TechTreeLocation,
     effective_starting_inv_count,
+    effective_tech_slots_per_node,
     event_locations,
 )
 from .options import Difficulty, Goal, ItemPacing
@@ -57,6 +56,14 @@ _SCIENCE_SAFETY: dict[int, float] = {
     Difficulty.option_expert: 0.85,
     Difficulty.option_insane: 1.00,
 }
+
+
+def effective_science_safety(options, difficulty: int) -> float:
+    """Science-budget safety fraction (0..1). Respects ``science_safety_factor``."""
+    override = getattr(options, "science_safety_factor", None)
+    if override is not None and override.value >= 0:
+        return override.value / 100.0
+    return _SCIENCE_SAFETY[difficulty]
 
 # Science needed to declare the tech tree complete (buy all 62 nodes)
 _TECH_TREE_COMPLETE_SCIENCE = cumulative_tier_cost(MAX_TIER)
@@ -81,12 +88,12 @@ def _make_all_parts_rule(player: int) -> Callable[[CollectionState], bool]:
 # Science heuristic helpers
 # ---------------------------------------------------------------------------
 
-def _accessible_science(state: CollectionState, player: int, difficulty: int) -> float:
+def _accessible_science(state: CollectionState, player: int, safety: float) -> float:
     """
     Estimate the total science the player can earn from all bodies they can
     currently reach, given their current instrument and crew equipment.
 
-    Multiplied by the difficulty safety factor before returning.
+    Multiplied by the safety factor before returning.
     """
     cap = get_capability(state, player)
 
@@ -100,12 +107,12 @@ def _accessible_science(state: CollectionState, player: int, difficulty: int) ->
             cap.has_capsule, body_cap.access[EventName.CREWED_LANDING],
         )
 
-    return total * _SCIENCE_SAFETY[difficulty]
+    return total * safety
 
 
-def _can_afford_tier(state: CollectionState, player: int, tier: int, difficulty: int) -> bool:
+def _can_afford_tier(state: CollectionState, player: int, tier: int, safety: float) -> bool:
     """Return True if the player's accessible science budget can cover all nodes through *tier*."""
-    return _accessible_science(state, player, difficulty) >= cumulative_tier_cost(tier)
+    return _accessible_science(state, player, safety) >= cumulative_tier_cost(tier)
 
 
 # ---------------------------------------------------------------------------
@@ -113,10 +120,9 @@ def _can_afford_tier(state: CollectionState, player: int, tier: int, difficulty:
 # ---------------------------------------------------------------------------
 
 def _make_science_threshold_rule(
-    player: int, threshold: float, difficulty: int
+    player: int, threshold: float, safety: float
 ) -> Callable[[CollectionState], bool]:
     """Return a rule that passes when accessible science * safety >= threshold."""
-    safety = _SCIENCE_SAFETY[difficulty]
     def rule(state: CollectionState) -> bool:
         cap = get_capability(state, player)
         total = 0.0
@@ -153,8 +159,9 @@ def set_all_rules(world: KSP1World) -> None:
 def set_completion_condition(world: KSP1World, goal_spec: GoalSpec) -> None:
     player = world.player
     difficulty = world.options.difficulty.value
+    safety = effective_science_safety(world.options, difficulty)
 
-    _set_victory_rules(world, player, goal_spec, difficulty)
+    _set_victory_rules(world, player, goal_spec, safety)
 
 
 # ---------------------------------------------------------------------------
@@ -353,7 +360,7 @@ def _set_item_pacing_rules(world: KSP1World, player: int, difficulty: int) -> No
     if pacing == ItemPacing.option_off:
         return
 
-    num_slots = TECH_SLOTS_BY_DIFFICULTY[difficulty]
+    num_slots = effective_tech_slots_per_node(world.options, difficulty)
     num_starting = effective_starting_inv_count(world.options, difficulty)
     early_ban_rule = _make_early_ban_rule(player)
 
@@ -623,11 +630,11 @@ def create_victory_location(world: KSP1World) -> None:
 
 
 def _set_victory_rules(
-    world: KSP1World, player: int, spec: GoalSpec, difficulty: int
+    world: KSP1World, player: int, spec: GoalSpec, safety: float
 ) -> None:
     """Set the access rule and completion condition on the Victory event."""
     victory_location = world.get_location("Victory")
-    victory_location.access_rule = _make_goal_spec_rule(player, spec, difficulty)
+    victory_location.access_rule = _make_goal_spec_rule(player, spec, safety)
 
     world.multiworld.completion_condition[player] = (
         lambda state: state.can_reach("Victory", "Location", player)
@@ -635,7 +642,7 @@ def _set_victory_rules(
 
 
 def _make_goal_spec_rule(
-    player: int, spec: GoalSpec, difficulty: int
+    player: int, spec: GoalSpec, safety: float
 ) -> Callable[[CollectionState], bool]:
     """Build a composite access rule from a GoalSpec."""
     sub_rules: list[Callable[[CollectionState], bool]] = []
@@ -705,7 +712,7 @@ def _make_goal_spec_rule(
 
     # Complete tech tree
     if spec.complete_tech_tree:
-        science_rule = _make_science_threshold_rule(player, _TECH_TREE_COMPLETE_SCIENCE, difficulty)
+        science_rule = _make_science_threshold_rule(player, _TECH_TREE_COMPLETE_SCIENCE, safety)
         def tech_rule(state: CollectionState) -> bool:
             if not state.has(PROGRESSIVE_RD_NAME, player, MAX_RD_BAND):
                 return False

@@ -175,9 +175,21 @@ STARTING_INV_COUNTS: dict[int, int] = {0: 20, 1: 15, 2: 10, 3: 5}
 PROGRESSIVE_LAUNCH_PAD_STARTER_BONUS: int = 3
 
 
+def effective_tech_slots_per_node(options, difficulty: int) -> int:
+    """Tech slots/node for this world. Respects ``tech_slots_per_node`` if set."""
+    override = getattr(options, "tech_slots_per_node", None)
+    if override is not None and override.value >= 0:
+        return override.value
+    return TECH_SLOTS_BY_DIFFICULTY[difficulty]
+
+
 def effective_starting_inv_count(options, difficulty: int) -> int:
     """Starter-inventory slot count for this world (incl. launch-pad bonus)."""
-    base = STARTING_INV_COUNTS[difficulty]
+    override = getattr(options, "starting_inventory_count", None)
+    if override is not None and override.value >= 0:
+        base = override.value
+    else:
+        base = STARTING_INV_COUNTS[difficulty]
     if (getattr(options, "progressive_launch_pad", None)
             and options.progressive_launch_pad.value):
         base = min(base + PROGRESSIVE_LAUNCH_PAD_STARTER_BONUS, MAX_STARTING_INV)
@@ -372,7 +384,7 @@ def create_all_locations(world: KSP1World) -> None:
     """
     difficulty = world.options.difficulty.value
     num_starting = effective_starting_inv_count(world.options, difficulty)
-    num_tech_slots = TECH_SLOTS_BY_DIFFICULTY[difficulty]
+    num_tech_slots = effective_tech_slots_per_node(world.options, difficulty)
 
     menu = world.get_region("Menu")
 

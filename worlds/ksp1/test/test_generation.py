@@ -116,13 +116,15 @@ class TestScienceBudget(KSP1TestBase):
         )
 
     def test_full_state_affords_all_tiers_normal(self):
+        from worlds.ksp1.rules import effective_science_safety
         self.collect_all_but([])
         state = self.multiworld.state
         difficulty = self.world.options.difficulty.value
+        safety = effective_science_safety(self.world.options, difficulty)
         max_tier = max(node.tier for node in TECH_NODES)
         for tier in range(1, max_tier + 1):
             cost = cumulative_tier_cost(tier)
-            science = _accessible_science(state, self.player, difficulty)
+            science = _accessible_science(state, self.player, safety)
             self.assertGreaterEqual(
                 science, cost,
                 f"Full item state cannot afford tier {tier} "

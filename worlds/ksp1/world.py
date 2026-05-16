@@ -12,8 +12,8 @@ from .parts import PROGRESSIVE_PART_TIERS
 from .locations import (
     ALL_EVENTS, EventName, KSC_BIOMES, KSC_LOCATION_PREFIX,
     KERBIN_LOCATIONS, LOCATION_NAME_TO_ID, MAX_TECH_SLOTS, MissionLocation,
-    STARTING_INV_COUNTS, TECH_SLOTS_BY_DIFFICULTY, TechTreeLocation,
-    effective_starting_inv_count,
+    TechTreeLocation,
+    effective_starting_inv_count, effective_tech_slots_per_node,
 )
 from .options import KSP1Options
 from .tech_tree import MAX_TIER, NODES_BY_TIER, TECH_NODES, TIER_TO_BAND
@@ -117,7 +117,9 @@ class KSP1World(World):
 
     def fill_slot_data(self) -> dict[str, Any]:
         d = self.options.as_dict("goal", "difficulty", "start_with_launch_clamps", "item_pacing")
-        d["tech_slots_per_node"] = TECH_SLOTS_BY_DIFFICULTY[self.options.difficulty.value]
+        d["tech_slots_per_node"] = effective_tech_slots_per_node(
+            self.options, self.options.difficulty.value
+        )
         d["node_bands"] = {n.node_id: TIER_TO_BAND[n.tier] for n in TECH_NODES}
         d["goal_locations"] = goal_spec_location_names(self.goal_spec)
         d["goal_display_name"] = self.goal_spec.display_name
