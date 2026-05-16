@@ -1344,6 +1344,36 @@ def science_budget(
 
 
 # ---------------------------------------------------------------------------
+# Home-system bodies
+# ---------------------------------------------------------------------------
+
+def home_system_bodies(home: BodyName) -> frozenset[BodyName]:
+    """Bodies that share the home's "local neighbourhood" — no interplanetary
+    transfer needed to reach them.
+
+    - Home is a planet → ``{home} ∪ home's moons``.
+    - Home is a moon → ``{home, home.parent} ∪ home.parent's other moons``.
+
+    The home-system set gates the "launch clamps required for interplanetary"
+    rule in capability and the item-pacing sphere-0 split in rules.  For
+    home=Kerbin this returns ``{Kerbin, Mun, Minmus}``.
+    """
+    home_body = BODY_BY_NAME[home]
+    if home_body.parent is None:
+        # Planet home: home + its moons.
+        return frozenset(
+            b.name for b in ALL_BODIES
+            if b.name == home or b.parent == home
+        )
+    # Moon home: home + parent planet + parent's other moons.
+    parent = home_body.parent
+    return frozenset(
+        b.name for b in ALL_BODIES
+        if b.name == home or b.name == parent or b.parent == parent
+    )
+
+
+# ---------------------------------------------------------------------------
 # Home-body altitude milestone ladder
 # ---------------------------------------------------------------------------
 

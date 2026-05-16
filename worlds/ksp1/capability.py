@@ -24,7 +24,8 @@ from BaseClasses import CollectionState
 from .bodies import (
     BODY_BY_NAME, ALL_BODIES,
     BodyName, MissionType, DifficultyProfile, DIFFICULTY_PROFILES,
-    Body, MissionEdge, MissionBuilder, EdgeType, effective_dv, parent_chain,
+    Body, MissionEdge, MissionBuilder, EdgeType,
+    effective_dv, home_system_bodies, parent_chain,
 )
 from .parts import (
     PART_DB, CapabilityFlag, Engine, FuelTank, SolidBooster, HeatShield,
@@ -35,7 +36,7 @@ from .parts import (
 )
 from .capability_reasons import BlockingInfo, BlockingReason
 from .locations import (
-    ALL_EVENTS, EVENT_BY_NAME, EventName, KERBIN_SYSTEM_BODY_NAMES,
+    ALL_EVENTS, EVENT_BY_NAME, EventName,
     get_body_events,
 )
 from .rocket_math import (
@@ -1595,10 +1596,14 @@ def _assess_one_body(
     mission_builder: MissionBuilder,
 ) -> BodyAccessProfile:
     prof = BodyAccessProfile()
+    home_system = home_system_bodies(mission_builder.home)
 
     # --- Parent gating ---
-    if body.parent is not None and body.parent != BodyName.KERBIN:
-        # Non-Kerbin moons: parent planet must be orbitally reachable
+    # Moons whose parent is in the home system are trivially reachable
+    # (the parent is the home, or shares the home's local neighbourhood).
+    # Moons whose parent is interplanetary need the parent orbitally
+    # reachable before the moon can be considered.
+    if body.parent is not None and body.parent not in home_system:
         parent_prof = computed[body.parent]
         if not parent_prof.access[EventName.ORBIT]:
                 prof.set_blocking(BlockingInfo(
@@ -1609,7 +1614,7 @@ def _assess_one_body(
                 return prof
 
     # --- Launch clamp gate for interplanetary ---
-    if body.name not in KERBIN_SYSTEM_BODY_NAMES and not flags.has_launch_clamp:
+    if body.name not in home_system and not flags.has_launch_clamp:
         prof.set_blocking(BlockingInfo(
             reason=BlockingReason.NO_LAUNCH_CLAMP,
             body=body.name,

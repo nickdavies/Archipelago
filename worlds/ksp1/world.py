@@ -91,7 +91,7 @@ class KSP1World(World):
         if isinstance(passthrough, dict) and self.game in passthrough:
             self._apply_slot_data(passthrough[self.game])
 
-        self.goal_spec = resolve_goal_spec(self.options)
+        self.goal_spec = resolve_goal_spec(self.options, self.mission_builder.home)
         if self.options.exclude_late_tech_tree:
             late_tier_locs: set[str] = {
                 str(TechTreeLocation(node.display_name, slot))

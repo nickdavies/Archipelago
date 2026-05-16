@@ -22,14 +22,16 @@ from typing import TYPE_CHECKING, Callable
 
 from BaseClasses import CollectionState, ItemClassification
 
-from .bodies import ALL_BODIES, BODY_BY_NAME, BodyName, MissionType, science_budget
+from .bodies import (
+    ALL_BODIES, BODY_BY_NAME, BodyName, MissionType,
+    home_system_bodies, science_budget,
+)
 from .capability import get_capability
 from .items import ITEM_TABLE, PROGRESSIVE_RD_NAME, PROGRESSIVE_PART_ITEM_NAMES, SCIENCE_PACK_NAMES
 from .locations import (
     EVENT_BY_NAME,
     EventName,
     KERBIN_LOCATIONS,
-    KERBIN_SYSTEM_BODY_NAMES,
     KSC_BIOME_NAMES,
     KERBIN_LOCATION_NAMES,
     MISSION_LOCATION_NAMES,
@@ -146,7 +148,7 @@ def set_all_rules(world: KSP1World) -> None:
     # Tech tree rules are now region entrance rules (see regions.py).
     _set_item_pacing_rules(world, player, difficulty)
     _set_early_bucket_item_bans(world, player, difficulty)
-    if world.goal_spec.is_kerbin_system_only:
+    if world.goal_spec.is_home_system_only(world.mission_builder.home):
         _set_interplanetary_item_rules(world, player)
 
 
@@ -366,11 +368,12 @@ def _set_item_pacing_rules(world: KSP1World, player: int, difficulty: int) -> No
         add_item_rule(world.get_location(name), early_ban_rule)
     for name in KERBIN_LOCATION_NAMES:
         add_item_rule(world.get_location(name), early_ban_rule)
-    # Early Kerbin mission events (everything except Flyby/SOI Leave which need escape)
+    # Early home-body mission events (everything except Flyby/SOI Leave which need escape)
+    home = world.mission_builder.home
     for event in (EventName.ORBIT, EventName.EVA_IN_ORBIT, EventName.LANDING,
                   EventName.CREWED_LANDING, EventName.FLAG_PLANT,
                   EventName.RETURN, EventName.SAMPLE_RETURN):
-        for loc in event_locations(BodyName.KERBIN, event):
+        for loc in event_locations(home, event):
             add_item_rule(world.get_location(str(loc)), early_ban_rule)
 
     # Band C: Early tech tree (tiers 1-3) — strict mode only
@@ -427,8 +430,9 @@ def _set_early_bucket_item_bans(world: KSP1World, player: int, difficulty: int) 
 
 def _set_interplanetary_item_rules(world: KSP1World, player: int) -> None:
     """
-    For Kerbin-system-only goals, prevent progression items from appearing
-    in interplanetary mission locations.
+    For home-system-only goals, prevent progression items from appearing
+    in interplanetary mission locations (locations outside the home
+    body's local neighbourhood).
 
     Uses item_rules (not exclude_locations) so that useful and filler items
     can still fill these slots — avoids FillError at higher difficulties.
@@ -436,11 +440,13 @@ def _set_interplanetary_item_rules(world: KSP1World, player: int) -> None:
     from worlds.generic.Rules import add_item_rule
     from .locations import MISSION_LOCATIONS
 
+    home_system = home_system_bodies(world.mission_builder.home)
+
     def no_advancement(item) -> bool:
         return item.player != player or not item.advancement
 
     for loc in MISSION_LOCATIONS:
-        if loc.body not in KERBIN_SYSTEM_BODY_NAMES:
+        if loc.body not in home_system:
             add_item_rule(world.get_location(str(loc)), no_advancement)
 
 
@@ -459,10 +465,13 @@ _ALL_PARTS_PROXY_BODIES: frozenset[BodyName] = frozenset(
     b.name for b in ALL_BODIES if b.all_parts_proxy
 )
 
-# Landable bodies with normal (non-proxy) return profiles, excluding Kerbin.
-_STANDARD_RETURN_BODIES: tuple[BodyName, ...] = tuple(
+# Landable bodies with normal (non-proxy) return profiles.  Includes
+# Kerbin; the home body is filtered out in ``resolve_goal_spec`` so the
+# "Standard Returns" preset doesn't ask the player to return from their
+# starting body.
+_STANDARD_RETURN_BODIES_ALL: tuple[BodyName, ...] = tuple(
     b.name for b in ALL_BODIES
-    if b.can_land and not b.all_parts_proxy and b.name != BodyName.KERBIN
+    if b.can_land and not b.all_parts_proxy
 )
 
 @dataclass(frozen=True)
@@ -476,9 +485,15 @@ class GoalSpec:
     flyby_bodies: tuple[BodyName, ...] = ()
     complete_tech_tree: bool = False
 
-    @property
-    def is_kerbin_system_only(self) -> bool:
-        """True when every goal body is in the Kerbin system (Kerbin/Mun/Minmus)."""
+    def is_home_system_only(self, home: BodyName) -> bool:
+        """True when every goal body is in ``home``'s local neighbourhood.
+
+        For Kerbin-home this is the historical "Kerbin/Mun/Minmus only"
+        check; for moon-homes it includes the parent planet and sibling
+        moons; for vacuum/atmo planet-homes it's the home plus its
+        moons.  Returns False if the goal requires the tech tree (which
+        is a separate progression axis from body reach).
+        """
         if self.complete_tech_tree:
             return False
         all_bodies = (
@@ -488,7 +503,7 @@ class GoalSpec:
             | set(self.orbit_bodies)
             | set(self.flyby_bodies)
         )
-        return bool(all_bodies) and all_bodies <= KERBIN_SYSTEM_BODY_NAMES
+        return bool(all_bodies) and all_bodies <= home_system_bodies(home)
 
 
 _PRESET_GOALS: dict[int, GoalSpec] = {
@@ -510,11 +525,11 @@ _PRESET_GOALS: dict[int, GoalSpec] = {
     ),
     Goal.option_standard_returns: GoalSpec(
         display_name="Standard Returns",
-        return_bodies=_STANDARD_RETURN_BODIES,
+        return_bodies=_STANDARD_RETURN_BODIES_ALL,
     ),
     Goal.option_standard_sample_returns: GoalSpec(
         display_name="Standard Sample Returns",
-        sample_return_bodies=_STANDARD_RETURN_BODIES,
+        sample_return_bodies=_STANDARD_RETURN_BODIES_ALL,
     ),
     Goal.option_complete_tech_tree: GoalSpec(
         display_name="Complete Tech Tree",
@@ -531,10 +546,14 @@ _PRESET_GOALS: dict[int, GoalSpec] = {
 }
 
 
-def resolve_goal_spec(options) -> GoalSpec:
+def resolve_goal_spec(options, home: BodyName) -> GoalSpec:
     """Build a GoalSpec from the player's option values.
 
     Raises if the configuration is ambiguous or incomplete.
+
+    ``home`` is filtered out of every body list — returning from / planting
+    a flag on your starting body would be free, so it doesn't make sense
+    as a goal regardless of preset.
     """
     goal_value = options.goal.value
     has_body_lists = bool(
@@ -574,7 +593,7 @@ def resolve_goal_spec(options) -> GoalSpec:
             parts.append("Flyby " + ", ".join(sorted(options.flyby_bodies.value)))
         display = "Custom: " + " + ".join(parts)
 
-        return GoalSpec(
+        spec = GoalSpec(
             display_name=display,
             flag_bodies=tuple(sorted(options.flag_bodies.value)),
             return_bodies=tuple(sorted(options.return_bodies.value)),
@@ -582,11 +601,28 @@ def resolve_goal_spec(options) -> GoalSpec:
             orbit_bodies=tuple(sorted(options.orbit_bodies.value)),
             flyby_bodies=tuple(sorted(options.flyby_bodies.value)),
         )
+    else:
+        spec = _PRESET_GOALS.get(goal_value)
+        if spec is None:
+            raise RuntimeError(f"Unknown goal value: {goal_value}")
 
-    spec = _PRESET_GOALS.get(goal_value)
-    if spec is None:
-        raise RuntimeError(f"Unknown goal value: {goal_value}")
-    return spec
+    return _filter_home_from_spec(spec, home)
+
+
+def _filter_home_from_spec(spec: GoalSpec, home: BodyName) -> GoalSpec:
+    """Drop ``home`` from every body list — a goal can't ask the player to
+    do a mission on their starting body (trivially achievable)."""
+    def _strip(bodies: tuple[BodyName, ...]) -> tuple[BodyName, ...]:
+        return tuple(b for b in bodies if b != home)
+    return GoalSpec(
+        display_name=spec.display_name,
+        flag_bodies=_strip(spec.flag_bodies),
+        return_bodies=_strip(spec.return_bodies),
+        sample_return_bodies=_strip(spec.sample_return_bodies),
+        orbit_bodies=_strip(spec.orbit_bodies),
+        flyby_bodies=_strip(spec.flyby_bodies),
+        complete_tech_tree=spec.complete_tech_tree,
+    )
 
 
 def goal_spec_location_names(spec: GoalSpec) -> list[str]:

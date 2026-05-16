@@ -548,11 +548,11 @@ def _parse_location(name: str) -> Optional[_LocationMissionInfo]:
     (tech tree, KSC biomes, starting inventory) — those need their own
     handling and are skipped by the greedy walk.
     """
-    # Kerbin event/altitude locations.
+    # Home-body event/altitude locations.
     for kloc in KERBIN_LOCATIONS:
         if kloc.name == name:
             return _LocationMissionInfo(
-                body=BodyName.KERBIN,
+                body=kloc.body,
                 mission_type=kloc.mission_type,
                 crewed=None,
                 threshold_km=kloc.threshold_km,
@@ -1089,10 +1089,12 @@ def _goal_relevant_bodies(world: "KSP1World") -> frozenset[str]:
     Prevents the bumper from being forced to over-spend on Relay / Heat
     Shield to clear off-path intermediates.
     """
-    from .bodies import ALL_BODIES, BODY_BY_NAME, BodyName
+    from .bodies import ALL_BODIES, BODY_BY_NAME, BodyName, home_system_bodies
     from .rules import goal_spec_location_names
 
-    relevant: set[str] = {str(BodyName.KERBIN), str(BodyName.MUN), str(BodyName.MINMUS)}
+    # Home-system bodies are always relevant — the player has to fly
+    # through them to leave home, so they're warmup territory.
+    relevant: set[str] = {str(b) for b in home_system_bodies(world.mission_builder.home)}
 
     goal_bodies: set[str] = set()
     for loc_name in goal_spec_location_names(world.goal_spec):
@@ -1144,11 +1146,13 @@ def _select_intermediates(
         goal_dv = float("inf")
 
     relevant_bodies = _goal_relevant_bodies(world)
+    home = str(world.mission_builder.home)
+    bootstrap_names = (f"{home} First Launch", f"{home} Orbit 1")
 
     pool_low: list[str] = []
     pool_mid: list[str] = []
     for name, sig in signatures.items():
-        if name in ("Kerbin First Launch", "Kerbin Orbit 1"):
+        if name in bootstrap_names:
             continue
         parsed = MissionLocation.parse(name)
         if parsed is None or parsed.body not in relevant_bodies:
@@ -1199,9 +1203,10 @@ def _predictable_spheres(world: "KSP1World") -> list[tuple[str, str]]:
         tech-tier post-pass.
     """
     from .rules import goal_spec_location_names
+    home = str(world.mission_builder.home)
     out: list[tuple[str, str]] = [
-        ("S_launch", "Kerbin First Launch"),
-        ("S_orbit", "Kerbin Orbit 1"),
+        ("S_launch", f"{home} First Launch"),
+        ("S_orbit", f"{home} Orbit 1"),
     ]
     goal_names = list(goal_spec_location_names(world.goal_spec))
     feasible_goals = [
@@ -1656,7 +1661,8 @@ def _install_bootstrap_local_rule(world: "KSP1World") -> None:
     def local_only(item, _p=player) -> bool:
         return item.player == _p
 
-    extra_names = set(KSC_BIOME_NAMES) | {"Kerbin First Launch"}
+    home = str(world.mission_builder.home)
+    extra_names = set(KSC_BIOME_NAMES) | {f"{home} First Launch"}
     for loc in world.multiworld.get_locations(player):
         if loc.name in extra_names:
             loc.item_rule = local_only
@@ -1690,8 +1696,9 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
     predictable_names = {name for _, name in predictable_labels}
 
     # Look up dv of the three anchors (defaults if missing).
-    launch_sig = ladder.location_signatures.get("Kerbin First Launch")
-    orbit_sig = ladder.location_signatures.get("Kerbin Orbit 1")
+    home = str(world.mission_builder.home)
+    launch_sig = ladder.location_signatures.get(f"{home} First Launch")
+    orbit_sig = ladder.location_signatures.get(f"{home} Orbit 1")
     launch_dv = launch_sig.dv if launch_sig else 0.0
     orbit_dv = orbit_sig.dv if orbit_sig else 3400.0
     goal_dv = 0.0
@@ -1850,7 +1857,7 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
     # First Launch.  Starting-inventory locations already carry this
     # rule via locations.py; we extend to KSC + First Launch here.
     _install_bootstrap_local_rule(world)
-    bootstrap_locations = set(KSC_BIOME_NAMES) | {"Kerbin First Launch"}
+    bootstrap_locations = set(KSC_BIOME_NAMES) | {f"{home} First Launch"}
     for loc in world.multiworld.get_locations(world.player):
         if loc.address is None:
             continue
@@ -1869,7 +1876,7 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
     # Sphere-1 boost: items needed to clear S_launch get placed at sphere-0
     # locations by AP's distribute_early_items.
     launch_sphere = next(
-        (s for s in ladder.spheres if s.location_name == "Kerbin First Launch"),
+        (s for s in ladder.spheres if s.location_name == f"{home} First Launch"),
         None,
     )
     if launch_sphere is not None:

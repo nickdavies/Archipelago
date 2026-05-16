@@ -9,8 +9,13 @@ from worlds.ksp1.rules import (
     goal_spec_location_names,
     _PRESET_GOALS,
     _ALL_LANDABLE_BODIES,
-    _STANDARD_RETURN_BODIES,
+    _STANDARD_RETURN_BODIES_ALL,
 )
+
+# All resolve_goal_spec calls in this file run for Kerbin home — that's the
+# only home Phase 3a supports anyway.  Centralised so future home-aware
+# preset tests are easy to add.
+_HOME = BodyName.KERBIN
 from worlds.ksp1.tech_tree import LEAF_TECH_NODES
 from worlds.ksp1.test.base import KSP1TestBase as _SharedKSP1TestBase
 
@@ -47,7 +52,7 @@ class TestResolveGoalSpec(unittest.TestCase):
 
     def test_preset_duna_return(self):
         opts = _FakeOptions(goal=Goal.option_duna_return)
-        spec = resolve_goal_spec(opts)
+        spec = resolve_goal_spec(opts, _HOME)
         self.assertEqual(spec.display_name, "Duna Return")
         self.assertEqual(spec.return_bodies, (BodyName.DUNA,))
         self.assertFalse(spec.flag_bodies)
@@ -56,47 +61,52 @@ class TestResolveGoalSpec(unittest.TestCase):
 
     def test_preset_mun_flag(self):
         opts = _FakeOptions(goal=Goal.option_mun_flag)
-        spec = resolve_goal_spec(opts)
+        spec = resolve_goal_spec(opts, _HOME)
         self.assertEqual(spec.display_name, "Mun Flag Plant")
         self.assertEqual(spec.flag_bodies, (BodyName.MUN,))
 
     def test_preset_mun_sample_return(self):
         opts = _FakeOptions(goal=Goal.option_mun_sample_return)
-        spec = resolve_goal_spec(opts)
+        spec = resolve_goal_spec(opts, _HOME)
         self.assertEqual(spec.display_name, "Mun Sample Return")
         self.assertEqual(spec.sample_return_bodies, (BodyName.MUN,))
 
     def test_preset_complete_tech_tree(self):
         opts = _FakeOptions(goal=Goal.option_complete_tech_tree)
-        spec = resolve_goal_spec(opts)
+        spec = resolve_goal_spec(opts, _HOME)
         self.assertTrue(spec.complete_tech_tree)
 
     def test_preset_flag_every_body(self):
         opts = _FakeOptions(goal=Goal.option_flag_every_body)
-        spec = resolve_goal_spec(opts)
-        self.assertEqual(set(spec.flag_bodies), set(_ALL_LANDABLE_BODIES))
+        spec = resolve_goal_spec(opts, _HOME)
+        # resolve_goal_spec strips the home body — flag-every-body for a
+        # Kerbin home becomes flag-every-body-except-Kerbin.
+        self.assertEqual(
+            set(spec.flag_bodies),
+            set(_ALL_LANDABLE_BODIES) - {_HOME},
+        )
 
     def test_custom_flag_bodies(self):
         opts = _FakeOptions(goal=Goal.option_custom, flag=[BodyName.MUN, BodyName.MINMUS])
-        spec = resolve_goal_spec(opts)
+        spec = resolve_goal_spec(opts, _HOME)
         self.assertEqual(spec.flag_bodies, (BodyName.MINMUS, BodyName.MUN))
         self.assertIn("Custom:", spec.display_name)
 
     def test_custom_return_bodies(self):
         opts = _FakeOptions(goal=Goal.option_custom, ret=[BodyName.DUNA, BodyName.EVE])
-        spec = resolve_goal_spec(opts)
+        spec = resolve_goal_spec(opts, _HOME)
         self.assertEqual(set(spec.return_bodies), {BodyName.DUNA, BodyName.EVE})
 
     def test_custom_mixed(self):
         opts = _FakeOptions(goal=Goal.option_custom, flag=[BodyName.MUN], ret=[BodyName.DUNA], sample=[BodyName.EELOO])
-        spec = resolve_goal_spec(opts)
+        spec = resolve_goal_spec(opts, _HOME)
         self.assertEqual(spec.flag_bodies, (BodyName.MUN,))
         self.assertEqual(spec.return_bodies, (BodyName.DUNA,))
         self.assertEqual(spec.sample_return_bodies, (BodyName.EELOO,))
 
     def test_custom_orbit_bodies(self):
         opts = _FakeOptions(goal=Goal.option_custom, orbit=[BodyName.DUNA, BodyName.MUN])
-        spec = resolve_goal_spec(opts)
+        spec = resolve_goal_spec(opts, _HOME)
         self.assertEqual(set(spec.orbit_bodies), {BodyName.DUNA, BodyName.MUN})
         self.assertFalse(spec.flyby_bodies)
         self.assertIn("Custom:", spec.display_name)
@@ -104,7 +114,7 @@ class TestResolveGoalSpec(unittest.TestCase):
 
     def test_custom_flyby_bodies(self):
         opts = _FakeOptions(goal=Goal.option_custom, flyby=[BodyName.JOOL])
-        spec = resolve_goal_spec(opts)
+        spec = resolve_goal_spec(opts, _HOME)
         self.assertEqual(spec.flyby_bodies, (BodyName.JOOL,))
         self.assertFalse(spec.orbit_bodies)
         self.assertIn("Flyby", spec.display_name)
@@ -112,22 +122,22 @@ class TestResolveGoalSpec(unittest.TestCase):
     def test_custom_orbit_only_raises_without_goal_custom(self):
         opts = _FakeOptions(goal=Goal.option_duna_return, orbit=[BodyName.MUN])
         with self.assertRaises(RuntimeError):
-            resolve_goal_spec(opts)
+            resolve_goal_spec(opts, _HOME)
 
     def test_body_lists_with_non_custom_raises(self):
         opts = _FakeOptions(goal=Goal.option_duna_return, flag=[BodyName.MUN])
         with self.assertRaises(RuntimeError):
-            resolve_goal_spec(opts)
+            resolve_goal_spec(opts, _HOME)
 
     def test_custom_empty_lists_raises(self):
         opts = _FakeOptions(goal=Goal.option_custom)
         with self.assertRaises(RuntimeError):
-            resolve_goal_spec(opts)
+            resolve_goal_spec(opts, _HOME)
 
     def test_all_presets_resolve(self):
         for goal_value in _PRESET_GOALS:
             opts = _FakeOptions(goal=goal_value)
-            spec = resolve_goal_spec(opts)
+            spec = resolve_goal_spec(opts, _HOME)
             self.assertIsInstance(spec, GoalSpec)
             self.assertTrue(spec.display_name)
 
@@ -167,9 +177,15 @@ class TestGoalSpecLocationNames(unittest.TestCase):
         self.assertEqual(len(names), len(_ALL_LANDABLE_BODIES))
 
     def test_standard_returns_count(self):
-        spec = _PRESET_GOALS[Goal.option_standard_returns]
+        # _PRESET_GOALS now stores the unfiltered set (all landable
+        # non-proxy bodies including Kerbin); resolve_goal_spec strips
+        # the home body at lookup time.  Resolve here so the count
+        # reflects what an actual seed sees.
+        opts = _FakeOptions(goal=Goal.option_standard_returns)
+        spec = resolve_goal_spec(opts, _HOME)
         names = goal_spec_location_names(spec)
-        self.assertEqual(len(names), len(_STANDARD_RETURN_BODIES))
+        self.assertEqual(len(names), len(_STANDARD_RETURN_BODIES_ALL) - 1)
+        self.assertNotIn(BodyName.KERBIN, spec.return_bodies)
 
     def test_mixed_custom(self):
         spec = GoalSpec(
@@ -273,35 +289,35 @@ class TestIsKerbinSystemOnly(unittest.TestCase):
 
     def test_mun_flag_is_kerbin_system(self):
         spec = _PRESET_GOALS[Goal.option_mun_flag]
-        self.assertTrue(spec.is_kerbin_system_only)
+        self.assertTrue(spec.is_home_system_only(_HOME))
 
     def test_mun_sample_return_is_kerbin_system(self):
         spec = _PRESET_GOALS[Goal.option_mun_sample_return]
-        self.assertTrue(spec.is_kerbin_system_only)
+        self.assertTrue(spec.is_home_system_only(_HOME))
 
     def test_custom_kerbin_system_bodies(self):
         spec = GoalSpec(display_name="test", flag_bodies=(BodyName.MUN, BodyName.MINMUS))
-        self.assertTrue(spec.is_kerbin_system_only)
+        self.assertTrue(spec.is_home_system_only(_HOME))
 
     def test_duna_return_is_not_kerbin_system(self):
         spec = _PRESET_GOALS[Goal.option_duna_return]
-        self.assertFalse(spec.is_kerbin_system_only)
+        self.assertFalse(spec.is_home_system_only(_HOME))
 
     def test_standard_returns_is_not_kerbin_system(self):
         spec = _PRESET_GOALS[Goal.option_standard_returns]
-        self.assertFalse(spec.is_kerbin_system_only)
+        self.assertFalse(spec.is_home_system_only(_HOME))
 
     def test_complete_tech_tree_is_not_kerbin_system(self):
         spec = _PRESET_GOALS[Goal.option_complete_tech_tree]
-        self.assertFalse(spec.is_kerbin_system_only)
+        self.assertFalse(spec.is_home_system_only(_HOME))
 
     def test_mixed_custom_with_interplanetary_is_not(self):
         spec = GoalSpec(display_name="test", flag_bodies=(BodyName.MUN,), return_bodies=(BodyName.DUNA,))
-        self.assertFalse(spec.is_kerbin_system_only)
+        self.assertFalse(spec.is_home_system_only(_HOME))
 
     def test_empty_spec_is_not_kerbin_system(self):
         spec = GoalSpec(display_name="test")
-        self.assertFalse(spec.is_kerbin_system_only)
+        self.assertFalse(spec.is_home_system_only(_HOME))
 
 
 # ---------------------------------------------------------------------------
