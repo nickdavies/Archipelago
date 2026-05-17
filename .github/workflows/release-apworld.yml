@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "v*"
+      - "experimental"
 
 permissions:
   contents: write
@@ -33,3 +34,6 @@ jobs:
         with:
           files: ksp1.apworld
           generate_release_notes: true
+          prerelease: ${{ github.ref == 'refs/tags/experimental' }}
+          make_latest: ${{ github.ref == 'refs/tags/experimental' && 'false' || 'true' }}
+          name: ${{ github.ref == 'refs/tags/experimental' && 'Experimental Release latest features with the most bugs' || '' }}
