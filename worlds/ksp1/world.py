@@ -262,10 +262,14 @@ class KSP1World(World):
         # Authoritative data for C# client — eliminates hardcoded dicts.
         d["event_scales"] = {e.name: e.scale for e in ALL_EVENTS}
         d["tech_display_names"] = {n.node_id: n.display_name for n in TECH_NODES}
-        # Full biome_key -> AP location name map.  The client populates its
-        # detection table directly from this; it has no hardcoded copy.
+        # Per-home biome_key -> AP location name map.  The client populates
+        # its detection table directly from this; it has no hardcoded copy.
+        # ``location_builder.ksc_biomes`` filters out the ``KSC`` catchall
+        # entry on non-Kerbin homes (the surrounding terrain doesn't
+        # report as that biome off Kerbin).
         d["ksc_biome_locations"] = {
-            key: KSC_LOCATION_PREFIX + name for key, name in KSC_BIOMES
+            key: KSC_LOCATION_PREFIX + name
+            for key, name in self.location_builder.ksc_biomes
         }
         home_altitude_thresholds = [
             int(loc.threshold_km * 1000)
