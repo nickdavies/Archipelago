@@ -219,7 +219,7 @@ def _set_ksc_biome_rules(world: KSP1World, player: int) -> None:
     def rule(state: CollectionState) -> bool:
         return _can_do_ksc_science(state, player)
 
-    for name in KSC_BIOME_NAMES:
+    for name in world.location_builder.ksc_biome_names:
         world.get_location(name).access_rule = rule
 
 
@@ -434,7 +434,7 @@ def _set_item_pacing_rules(world: KSP1World, player: int, difficulty: int) -> No
         add_item_rule(world.get_location(name), early_ban_rule)
 
     # Band B: KSC biomes + home-body specials + early home events
-    for name in KSC_BIOME_NAMES:
+    for name in world.location_builder.ksc_biome_names:
         add_item_rule(world.get_location(name), early_ban_rule)
     home = world.mission_builder.home
     for name in world.location_builder.names:

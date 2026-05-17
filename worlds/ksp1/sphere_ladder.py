@@ -2141,7 +2141,7 @@ def _install_bootstrap_local_rule(world: "KSP1World") -> None:
         return item.player == _p
 
     home = str(world.mission_builder.home)
-    extra_names = set(KSC_BIOME_NAMES) | {f"{home} First Launch"}
+    extra_names = set(world.location_builder.ksc_biome_names) | {f"{home} First Launch"}
     for loc in world.multiworld.get_locations(player):
         if loc.name in extra_names:
             loc.item_rule = local_only
@@ -2348,7 +2348,7 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
     # First Launch.  Starting-inventory locations already carry this
     # rule via locations.py; we extend to KSC + First Launch here.
     _install_bootstrap_local_rule(world)
-    bootstrap_locations = set(KSC_BIOME_NAMES) | {f"{home} First Launch"}
+    bootstrap_locations = set(world.location_builder.ksc_biome_names) | {f"{home} First Launch"}
     for loc in world.multiworld.get_locations(world.player):
         if loc.address is None:
             continue
