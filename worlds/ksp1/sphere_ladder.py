@@ -307,13 +307,16 @@ def _relevant_narrow_chains(
     atmo-landing-aero).  Parachute is relevant iff some profile edge is
     an atmospheric descent that can use one (ATMO_LANDING_AERO or
     AEROBRAKE_CAPTURE).  Landing Leg is relevant iff some edge needs
-    legs.  Ladder is relevant iff some edge needs a ladder (low-gravity
-    body EVAs).
+    legs.  Ladder is relevant iff some edge needs a ladder, OR the
+    mission is a SAMPLE_RETURN to a body with insufficient EVA jetpack
+    TWR (capability's ``_inject_ladder`` injects the requirement at eval
+    time, so it doesn't show up on the static profile edges).
 
     Narrow chains NOT in the returned set should be filtered out of the
     bumper's candidate pool for this mission.
     """
-    from .bodies import EdgeType
+    from .bodies import EdgeType, BODY_BY_NAME
+    from .capability import _MIN_EVA_JETPACK_TWR
     profiles = mission_builder.profiles_for(body_name, mission_type)
     if not profiles:
         # No physics profile (e.g., first-launch / sounding pseudo-events).
@@ -332,6 +335,13 @@ def _relevant_narrow_chains(
             if edge.edge_type in (EdgeType.ATMO_LANDING_AERO,
                                   EdgeType.AEROBRAKE_CAPTURE):
                 relevant.add("Progressive Parachute")
+    # Mirror capability._inject_ladder: a high-gravity sample-return
+    # target needs a Kerbal to climb back into the craft, so a ladder
+    # is required even when no static edge carries the flag.
+    if mission_type == MissionType.SAMPLE_RETURN:
+        body = BODY_BY_NAME.get(body_name)
+        if body is not None and body.eva_jetpack_twr < _MIN_EVA_JETPACK_TWR:
+            relevant.add("Progressive Ladder")
     return frozenset(relevant)
 
 
