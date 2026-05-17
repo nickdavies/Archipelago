@@ -45,6 +45,48 @@ class KSP1WebWorld(WebWorld):
     ]
 
 
+def _validate_goal_not_excluded(
+    spec: GoalSpec, exclude_locations: frozenset[str],
+) -> None:
+    """Raise ``OptionError`` if any mission-event goal location is in
+    ``exclude_locations``.
+
+    Excluding a mission-event goal location (e.g. ``Tylo Return 1`` for a
+    Laythe-home ``jool_moons_return`` seed) is always a user mistake: the
+    location holds no progression, but the goal still requires reaching
+    it, and the sphere ladder treats excluded goals as unreachable and
+    blows up at fill time.
+
+    Tech-tree goal locations (Complete Tech Tree preset) are
+    *intentionally* compatible with ``exclude_late_tech_tree`` — the
+    player "completes" them by spending science, not by AP placing
+    progression there.  Skipped here.
+    """
+    from .rules import goal_spec_location_names
+    goal_names = set(goal_spec_location_names(spec))
+    # Tech-tree slot names contain " - " (e.g. ``General Rocketry 1``)
+    # vs mission-event names (``Tylo Return 1``).  Strip tech-tree goals
+    # by name prefix membership instead — every node display name is in
+    # ``TECH_NODES``.
+    from .tech_tree import TECH_NODES
+    tech_prefixes = {n.display_name + " " for n in TECH_NODES}
+    mission_goal_names = {
+        n for n in goal_names
+        if not any(n.startswith(p) for p in tech_prefixes)
+    }
+    conflict = mission_goal_names & exclude_locations
+    if not conflict:
+        return
+    sorted_conflict = sorted(conflict)
+    raise OptionError(
+        f"KSP1: exclude_locations covers goal location(s) "
+        f"{sorted_conflict!r} for goal {spec.display_name!r}.  Remove "
+        "these names from exclude_locations (or pick a different goal). "
+        "Default exclude_locations is empty as of v0.4 — if these came "
+        "from an older yaml, delete the stale entries."
+    )
+
+
 class KSP1World(World):
     """
     Kerbal Space Program is a space flight simulation game where you design and
@@ -134,6 +176,14 @@ class KSP1World(World):
                 for slot in range(1, MAX_TECH_SLOTS + 1)
             }
             self.options.exclude_locations.value |= late_tier_locs
+
+        # Final exclude_locations is resolved (yaml + late-tech-tree).  Now
+        # verify no goal location ended up excluded — that combination is
+        # always unsolvable, so fail at gen time with a clear message
+        # rather than letting fill produce an opaque error hours later.
+        _validate_goal_not_excluded(
+            self.goal_spec, frozenset(self.options.exclude_locations.value),
+        )
 
     def create_regions(self) -> None:
         regions.create_all_regions(self)

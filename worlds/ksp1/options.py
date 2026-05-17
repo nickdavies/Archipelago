@@ -183,21 +183,22 @@ class KSP1ExcludeLocations(ExcludeLocations):
     """
     Locations that are excluded from containing progression items by default.
 
-    The default set excludes return missions from Eve, Tylo, and Laythe.
-    Eve returns require all progression parts (surface ascent is extremely demanding).
-    Tylo and Laythe returns are gated normally through the capability system.
+    Empty by default: missions the dv model can't verify from the active
+    home (Eve returns from any home, plus Tylo/Laythe returns from a
+    Kerbin home, etc.) are gated via the "all progression items
+    collected" proxy rule (see ``MODEL_INFEASIBLE_LOCATIONS`` in
+    ``data/feasibility.py``).  That mechanism already prevents fill
+    failures without taking the locations out of the progression pool.
+
+    The previous Kerbin-shaped hardcoded default (Eve / Tylo / Laythe
+    returns) made non-Kerbin home configs trip over their own goal — a
+    Laythe-home ``jool_moons_return`` seed needs Tylo Return as a goal
+    target, but the default excluded it.  Failing early at gen time on
+    that mismatch (see ``_validate_goal_not_excluded`` in ``world.py``)
+    catches user errors more clearly than the previous fill-failure
+    symptom.
     """
-    default = frozenset({
-        # Eve returns (3 checks each); requires all progression parts
-        "Eve Return 1", "Eve Return 2", "Eve Return 3",
-        "Eve Sample Return 1", "Eve Sample Return 2", "Eve Sample Return 3",
-        # Tylo returns (3 checks each)
-        "Tylo Return 1", "Tylo Return 2", "Tylo Return 3",
-        "Tylo Sample Return 1", "Tylo Sample Return 2", "Tylo Sample Return 3",
-        # Laythe returns (3 checks each)
-        "Laythe Return 1", "Laythe Return 2", "Laythe Return 3",
-        "Laythe Sample Return 1", "Laythe Sample Return 2", "Laythe Sample Return 3",
-    })
+    default = frozenset()
 
 
 class ItemPacing(Choice):
