@@ -3,14 +3,34 @@ import unittest
 
 from worlds.ksp1.bodies import BodyName
 from worlds.ksp1.options import Goal
+from worlds.ksp1.data.feasibility import MODEL_INFEASIBLE_LOCATIONS
+from worlds.ksp1.locations import EVENT_BY_NAME, EventName, MissionLocation
 from worlds.ksp1.rules import (
     GoalSpec,
     resolve_goal_spec,
     goal_spec_location_names,
     _PRESET_GOALS,
     _ALL_LANDABLE_BODIES,
-    _STANDARD_RETURN_BODIES_ALL,
 )
+
+# Tests pull the infeasible-locations set straight from the checked-in
+# feasibility table — same source the world uses at generate-early.
+# Regenerated via ``worlds/ksp1/scripts/generate_feasibility.py``.
+_KERBIN_INFEASIBLE_LOCATIONS = MODEL_INFEASIBLE_LOCATIONS[BodyName.KERBIN]
+
+
+def _kerbin_proxy_bodies_for(event: EventName) -> frozenset[BodyName]:
+    """Body subset whose every (body, event) AP-location slot is in the
+    Kerbin-home infeasible set — i.e. the bodies the Standard Returns /
+    Sample Returns presets will exclude.
+    """
+    out: set[BodyName] = set()
+    for b in _ALL_LANDABLE_BODIES:
+        scale = EVENT_BY_NAME[event].scale
+        names = {str(MissionLocation(b, event, slot)) for slot in range(1, scale + 1)}
+        if names and names <= _KERBIN_INFEASIBLE_LOCATIONS:
+            out.add(b)
+    return frozenset(out)
 
 # All resolve_goal_spec calls in this file run for Kerbin home — that's the
 # only home Phase 3a supports anyway.  Centralised so future home-aware
@@ -52,7 +72,7 @@ class TestResolveGoalSpec(unittest.TestCase):
 
     def test_preset_duna_return(self):
         opts = _FakeOptions(goal=Goal.option_duna_return)
-        spec = resolve_goal_spec(opts, _HOME)
+        spec = resolve_goal_spec(opts, _HOME, _KERBIN_INFEASIBLE_LOCATIONS)
         self.assertEqual(spec.display_name, "Duna Return")
         self.assertEqual(spec.return_bodies, (BodyName.DUNA,))
         self.assertFalse(spec.flag_bodies)
@@ -61,24 +81,24 @@ class TestResolveGoalSpec(unittest.TestCase):
 
     def test_preset_mun_flag(self):
         opts = _FakeOptions(goal=Goal.option_mun_flag)
-        spec = resolve_goal_spec(opts, _HOME)
+        spec = resolve_goal_spec(opts, _HOME, _KERBIN_INFEASIBLE_LOCATIONS)
         self.assertEqual(spec.display_name, "Mun Flag Plant")
         self.assertEqual(spec.flag_bodies, (BodyName.MUN,))
 
     def test_preset_mun_sample_return(self):
         opts = _FakeOptions(goal=Goal.option_mun_sample_return)
-        spec = resolve_goal_spec(opts, _HOME)
+        spec = resolve_goal_spec(opts, _HOME, _KERBIN_INFEASIBLE_LOCATIONS)
         self.assertEqual(spec.display_name, "Mun Sample Return")
         self.assertEqual(spec.sample_return_bodies, (BodyName.MUN,))
 
     def test_preset_complete_tech_tree(self):
         opts = _FakeOptions(goal=Goal.option_complete_tech_tree)
-        spec = resolve_goal_spec(opts, _HOME)
+        spec = resolve_goal_spec(opts, _HOME, _KERBIN_INFEASIBLE_LOCATIONS)
         self.assertTrue(spec.complete_tech_tree)
 
     def test_preset_flag_every_body(self):
         opts = _FakeOptions(goal=Goal.option_flag_every_body)
-        spec = resolve_goal_spec(opts, _HOME)
+        spec = resolve_goal_spec(opts, _HOME, _KERBIN_INFEASIBLE_LOCATIONS)
         # resolve_goal_spec strips the home body — flag-every-body for a
         # Kerbin home becomes flag-every-body-except-Kerbin.
         self.assertEqual(
@@ -88,25 +108,25 @@ class TestResolveGoalSpec(unittest.TestCase):
 
     def test_custom_flag_bodies(self):
         opts = _FakeOptions(goal=Goal.option_custom, flag=[BodyName.MUN, BodyName.MINMUS])
-        spec = resolve_goal_spec(opts, _HOME)
+        spec = resolve_goal_spec(opts, _HOME, _KERBIN_INFEASIBLE_LOCATIONS)
         self.assertEqual(spec.flag_bodies, (BodyName.MINMUS, BodyName.MUN))
         self.assertIn("Custom:", spec.display_name)
 
     def test_custom_return_bodies(self):
         opts = _FakeOptions(goal=Goal.option_custom, ret=[BodyName.DUNA, BodyName.EVE])
-        spec = resolve_goal_spec(opts, _HOME)
+        spec = resolve_goal_spec(opts, _HOME, _KERBIN_INFEASIBLE_LOCATIONS)
         self.assertEqual(set(spec.return_bodies), {BodyName.DUNA, BodyName.EVE})
 
     def test_custom_mixed(self):
         opts = _FakeOptions(goal=Goal.option_custom, flag=[BodyName.MUN], ret=[BodyName.DUNA], sample=[BodyName.EELOO])
-        spec = resolve_goal_spec(opts, _HOME)
+        spec = resolve_goal_spec(opts, _HOME, _KERBIN_INFEASIBLE_LOCATIONS)
         self.assertEqual(spec.flag_bodies, (BodyName.MUN,))
         self.assertEqual(spec.return_bodies, (BodyName.DUNA,))
         self.assertEqual(spec.sample_return_bodies, (BodyName.EELOO,))
 
     def test_custom_orbit_bodies(self):
         opts = _FakeOptions(goal=Goal.option_custom, orbit=[BodyName.DUNA, BodyName.MUN])
-        spec = resolve_goal_spec(opts, _HOME)
+        spec = resolve_goal_spec(opts, _HOME, _KERBIN_INFEASIBLE_LOCATIONS)
         self.assertEqual(set(spec.orbit_bodies), {BodyName.DUNA, BodyName.MUN})
         self.assertFalse(spec.flyby_bodies)
         self.assertIn("Custom:", spec.display_name)
@@ -114,7 +134,7 @@ class TestResolveGoalSpec(unittest.TestCase):
 
     def test_custom_flyby_bodies(self):
         opts = _FakeOptions(goal=Goal.option_custom, flyby=[BodyName.JOOL])
-        spec = resolve_goal_spec(opts, _HOME)
+        spec = resolve_goal_spec(opts, _HOME, _KERBIN_INFEASIBLE_LOCATIONS)
         self.assertEqual(spec.flyby_bodies, (BodyName.JOOL,))
         self.assertFalse(spec.orbit_bodies)
         self.assertIn("Flyby", spec.display_name)
@@ -122,24 +142,33 @@ class TestResolveGoalSpec(unittest.TestCase):
     def test_custom_orbit_only_raises_without_goal_custom(self):
         opts = _FakeOptions(goal=Goal.option_duna_return, orbit=[BodyName.MUN])
         with self.assertRaises(RuntimeError):
-            resolve_goal_spec(opts, _HOME)
+            resolve_goal_spec(opts, _HOME, _KERBIN_INFEASIBLE_LOCATIONS)
 
     def test_body_lists_with_non_custom_raises(self):
         opts = _FakeOptions(goal=Goal.option_duna_return, flag=[BodyName.MUN])
         with self.assertRaises(RuntimeError):
-            resolve_goal_spec(opts, _HOME)
+            resolve_goal_spec(opts, _HOME, _KERBIN_INFEASIBLE_LOCATIONS)
 
     def test_custom_empty_lists_raises(self):
         opts = _FakeOptions(goal=Goal.option_custom)
         with self.assertRaises(RuntimeError):
-            resolve_goal_spec(opts, _HOME)
+            resolve_goal_spec(opts, _HOME, _KERBIN_INFEASIBLE_LOCATIONS)
 
     def test_all_presets_resolve(self):
-        for goal_value in _PRESET_GOALS:
+        # Some presets are home-system-local and only resolve against a
+        # compatible home (e.g. ``jool_moons_return`` needs a Jool moon).
+        # Pick the home per preset; default to Kerbin otherwise.
+        preset_home = {
+            Goal.option_jool_moons_return: BodyName.LAYTHE,
+        }
+        for goal_value, preset in _PRESET_GOALS.items():
+            home = preset_home.get(goal_value, _HOME)
+            infeasible = MODEL_INFEASIBLE_LOCATIONS.get(home, frozenset())
             opts = _FakeOptions(goal=goal_value)
-            spec = resolve_goal_spec(opts, _HOME)
+            spec = resolve_goal_spec(opts, home, infeasible)
             self.assertIsInstance(spec, GoalSpec)
             self.assertTrue(spec.display_name)
+            self.assertEqual(spec.home, home)
 
 
 # ---------------------------------------------------------------------------
@@ -176,16 +205,21 @@ class TestGoalSpecLocationNames(unittest.TestCase):
         names = goal_spec_location_names(spec)
         self.assertEqual(len(names), len(_ALL_LANDABLE_BODIES))
 
-    def test_standard_returns_count(self):
-        # _PRESET_GOALS now stores the unfiltered set (all landable
-        # non-proxy bodies including Kerbin); resolve_goal_spec strips
-        # the home body at lookup time.  Resolve here so the count
-        # reflects what an actual seed sees.
+    def test_standard_returns_excludes_home_and_proxy_bodies(self):
+        # Standard Returns is built per-world from "all landable bodies
+        # minus the home minus bodies whose every RETURN slot is in the
+        # model-infeasible set".  For Kerbin home that proxy set comes
+        # from the capability system — whichever bodies the dv model
+        # can't reach even with max kit are excluded automatically.
         opts = _FakeOptions(goal=Goal.option_standard_returns)
-        spec = resolve_goal_spec(opts, _HOME)
-        names = goal_spec_location_names(spec)
-        self.assertEqual(len(names), len(_STANDARD_RETURN_BODIES_ALL) - 1)
-        self.assertNotIn(BodyName.KERBIN, spec.return_bodies)
+        spec = resolve_goal_spec(opts, _HOME, _KERBIN_INFEASIBLE_LOCATIONS)
+        proxy = _kerbin_proxy_bodies_for(EventName.RETURN)
+        self.assertNotIn(_HOME, spec.return_bodies)
+        for proxy_body in proxy:
+            self.assertNotIn(proxy_body, spec.return_bodies,
+                             f"{proxy_body} is in proxy set but appeared in standard returns")
+        expected_count = len(_ALL_LANDABLE_BODIES) - 1 - len(proxy & set(_ALL_LANDABLE_BODIES))
+        self.assertEqual(len(goal_spec_location_names(spec)), expected_count)
 
     def test_mixed_custom(self):
         spec = GoalSpec(
@@ -304,7 +338,8 @@ class TestIsKerbinSystemOnly(unittest.TestCase):
         self.assertFalse(spec.is_home_system_only(_HOME))
 
     def test_standard_returns_is_not_kerbin_system(self):
-        spec = _PRESET_GOALS[Goal.option_standard_returns]
+        opts = _FakeOptions(goal=Goal.option_standard_returns)
+        spec = resolve_goal_spec(opts, _HOME, _KERBIN_INFEASIBLE_LOCATIONS)
         self.assertFalse(spec.is_home_system_only(_HOME))
 
     def test_complete_tech_tree_is_not_kerbin_system(self):

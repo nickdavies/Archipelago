@@ -13,14 +13,14 @@ from typing import Optional
 
 from worlds.ksp1.bodies import (
     ALL_BODIES, BODY_BY_NAME, BodyName, MissionType, DIFFICULTY_PROFILES, EdgeType,
-    MissionBuilder, MissionEdge,
+    MissionBuilder, MissionEdge, min_relay_tier,
 )
 from worlds.ksp1.capability import (
     EquipmentFlags, ProfileResult,
     compute_capability_from_items, evaluate_mission_detailed,
     event_mission_info,
 )
-from worlds.ksp1.locations import KERBIN_LOCATIONS, event_locations, get_body_events
+from worlds.ksp1.locations import LocationBuilder, event_locations, get_body_events
 from worlds.ksp1.parts import PART_REGISTRY
 
 
@@ -36,9 +36,9 @@ class CheckInfo:
 def _build_check_map() -> dict[str, CheckInfo]:
     """Build mapping from location name -> mission parameters.
 
-    Includes per-body mission events AND Kerbin-specific locations.
-    Kerbin locations are driven by KERBIN_LOCATIONS (locations.py) — the
-    single source of truth for names, mission types, and thresholds.
+    Includes per-body mission events AND home-body specials for every
+    landable body.  The CLI/tracker layer renders any of these locations
+    even when the current seed isn't pinned to that home.
     """
     result: dict[str, CheckInfo] = {}
     # Per-body mission events
@@ -48,10 +48,10 @@ def _build_check_map() -> dict[str, CheckInfo]:
             for loc in event_locations(body.name, event):
                 result[str(loc)] = CheckInfo(body.name, event, mission_type, crewed)
 
-    # Kerbin-specific locations (sounding, first_launch, etc.)
-    for loc in KERBIN_LOCATIONS:
+    # Home-body specials (sounding, first_launch, …) across all landable bodies.
+    for loc in LocationBuilder.all_home_locations().values():
         result[loc.name] = CheckInfo(
-            BodyName.KERBIN, loc.name, loc.mission_type, None,
+            loc.body, loc.name, loc.mission_type, None,
             threshold_km=loc.threshold_km,
         )
 
@@ -115,8 +115,12 @@ def to_json_serializable(obj):
 # Profile pre-check summary
 # ---------------------------------------------------------------------------
 
-def _profile_prereqs(profile: list[MissionEdge]) -> list[str]:
-    """Extract the equipment pre-checks a profile demands (no delta-v)."""
+def _profile_prereqs(profile: list[MissionEdge],
+                     home: BodyName) -> list[str]:
+    """Extract the equipment pre-checks a profile demands (no delta-v).
+
+    ``home`` is needed for the heliocentric-distance relay-tier formula.
+    """
     reqs: list[str] = []
 
     if any(e.requires_attitude_control for e in profile):
@@ -140,7 +144,7 @@ def _profile_prereqs(profile: list[MissionEdge]) -> list[str]:
     if power_bodies:
         reqs.append(f"power({','.join(power_bodies)})")
 
-    relay_tiers = {BODY_BY_NAME[e.body].min_relay_tier for e in profile}
+    relay_tiers = {min_relay_tier(BODY_BY_NAME[e.body].name, home) for e in profile}
     max_relay = max(relay_tiers, default=0)
     if max_relay > 0:
         reqs.append(f"relay(tier>={max_relay})")
@@ -214,7 +218,7 @@ def _format_profile_summary(info: CheckInfo, mission_builder: MissionBuilder) ->
         return lines
 
     for i, profile in enumerate(profiles):
-        prereqs = _profile_prereqs(profile)
+        prereqs = _profile_prereqs(profile, home=mission_builder.home)
         edge_summary = " -> ".join(
             f"{e.source}->{e.destination}({e.edge_type.name},{e.base_dv:.0f}m/s)"
             for e in profile

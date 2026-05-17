@@ -278,14 +278,18 @@ class TestStableIdRanges(unittest.TestCase):
 
     def test_location_offsets_in_range(self) -> None:
         from worlds.ksp1.locations import LOCATION_TABLE
+        # Location offsets occupy two bands: 2000-3999 for the original four
+        # buckets (starting inventory, KSC biomes, Kerbin home specials,
+        # mission events, tech tree) and 4000-4167 for the 14 non-Kerbin
+        # home location sets added when starting body became selectable.
         for name, offset in LOCATION_TABLE.items():
             self.assertGreaterEqual(
                 offset, 2000,
                 f"Location {name!r} offset {offset} < 2000",
             )
             self.assertLess(
-                offset, 4000,
-                f"Location {name!r} offset {offset} >= 4000",
+                offset, 4200,
+                f"Location {name!r} offset {offset} >= 4200",
             )
 
     def test_no_location_offset_collisions(self) -> None:

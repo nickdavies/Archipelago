@@ -23,7 +23,7 @@ from typing import Callable, TYPE_CHECKING, Optional
 from Options import OptionError
 
 from .bodies import (
-    BODY_BY_NAME, BodyName, DIFFICULTY_PROFILES, DifficultyProfile,
+    ALL_BODIES, BODY_BY_NAME, BodyName, DIFFICULTY_PROFILES, DifficultyProfile,
     MissionBuilder, MissionType,
 )
 from .capability import (
@@ -35,7 +35,7 @@ from .capability_reasons import (
 )
 from .bodies import BodyName as _BN
 from .locations import (
-    EVENT_BY_NAME, EventName, KERBIN_LOCATIONS, MissionLocation,
+    EVENT_BY_NAME, EventName, LocationBuilder, MissionLocation,
     KSC_BIOME_NAMES, KSC_LOCATION_PREFIX,
 )
 
@@ -548,15 +548,16 @@ def _parse_location(name: str) -> Optional[_LocationMissionInfo]:
     (tech tree, KSC biomes, starting inventory) — those need their own
     handling and are skipped by the greedy walk.
     """
-    # Home-body event/altitude locations.
-    for kloc in KERBIN_LOCATIONS:
-        if kloc.name == name:
-            return _LocationMissionInfo(
-                body=kloc.body,
-                mission_type=kloc.mission_type,
-                crewed=None,
-                threshold_km=kloc.threshold_km,
-            )
+    # Home-body event/altitude locations — flat lookup spans all 15 home
+    # bodies; the prefix in the location name uniquely identifies the body.
+    hloc = LocationBuilder.all_home_locations().get(name)
+    if hloc is not None:
+        return _LocationMissionInfo(
+            body=hloc.body,
+            mission_type=hloc.mission_type,
+            crewed=None,
+            threshold_km=hloc.threshold_km,
+        )
     # Per-body mission locations.
     parsed = MissionLocation.parse(name)
     if parsed is not None:
@@ -904,6 +905,7 @@ def minimal_rocket_for(
             start_with_clamps=start_with_clamps,
             rep_names=rep_names,
             progressive_launch_pad=progressive_launch_pad,
+            launch_pad_caps=mission_builder.launch_pad_caps,
         )
         trial_result = _evaluate(trial_flags, info, diff, mission_builder)
         # When infeasible, `launch_mass` carries the optimizer's partial-
@@ -938,6 +940,7 @@ def minimal_rocket_for(
             start_with_clamps=start_with_clamps,
             rep_names=rep_names,
             progressive_launch_pad=progressive_launch_pad,
+            launch_pad_caps=mission_builder.launch_pad_caps,
         )
         trial_result = _evaluate(trial_flags, info, diff, mission_builder)
         # When infeasible, `launch_mass` carries the optimizer's partial-
@@ -969,6 +972,7 @@ def minimal_rocket_for(
             start_with_clamps=start_with_clamps,
             rep_names=rep_names,
             progressive_launch_pad=progressive_launch_pad,
+            launch_pad_caps=mission_builder.launch_pad_caps,
         )
         result = _evaluate(flags, info, diff, mission_builder)
         if result.feasible:
@@ -1218,15 +1222,52 @@ def _predictable_spheres(world: "KSP1World") -> list[tuple[str, str]]:
     return out
 
 
-def _body_chain_depth(body_name: str) -> int:
-    """SOI parent-chain depth from Kerbin. Kerbol=0; Kerbin=1; Mun/Jool=2;
-    Pol/Bop/Vall/Laythe/Tylo=3."""
-    body = BODY_BY_NAME.get(body_name)
-    depth = 0
-    while body is not None and body.parent is not None:
-        depth += 1
-        body = BODY_BY_NAME.get(body.parent)
-    return depth
+def _path_to_root(body_name: str) -> list[str]:
+    """SOI parent chain from ``body_name`` up to (and including) Kerbol.
+
+    The raw ``Body.parent`` field is ``None`` for both Kerbol itself and for
+    every heliocentric planet (Kerbin, Eve, …).  We treat Kerbol as the
+    implicit root for any planet whose parent is None, so all bodies share
+    a single rooted tree useful for SOI-graph distance.
+    """
+    path: list[str] = []
+    cur = BODY_BY_NAME.get(body_name)
+    while cur is not None:
+        path.append(cur.name)
+        cur = BODY_BY_NAME.get(cur.parent) if cur.parent else None
+    # Force Kerbol as the rooted ancestor for non-Kerbol bodies; the raw
+    # data leaves the star and heliocentric planets at parent=None.
+    if path and path[-1] != BodyName.KERBOL:
+        path.append(BodyName.KERBOL)
+    return path
+
+
+def _body_chain_depth(body_name: str, home_name: str) -> int:
+    """SOI graph distance from ``home_name`` to ``body_name``.
+
+    Counts hops along the SOI tree (each moon is one hop from its parent;
+    heliocentric planets are one hop from Kerbol).  Used as a tiebreaker
+    when ordering location signatures.  Examples for Laythe-home:
+
+        Laythe          -> 0
+        Vall/Tylo/Bop   -> 2  (sibling: Laythe → Jool → Tylo)
+        Jool            -> 1
+        Kerbol          -> 2  (Laythe → Jool → Kerbol)
+        Kerbin          -> 3
+        Mun             -> 4
+        Eve             -> 3
+        Gilly           -> 4
+    """
+    if body_name == home_name:
+        return 0
+    body_path = _path_to_root(body_name)
+    home_path = _path_to_root(home_name)
+    body_idx = {name: i for i, name in enumerate(body_path)}
+    for i, ancestor in enumerate(home_path):
+        if ancestor in body_idx:
+            return i + body_idx[ancestor]
+    # Disjoint trees shouldn't happen with Kerbol as the forced root.
+    return len(body_path) + len(home_path)
 
 
 def _compute_location_signatures(
@@ -1286,7 +1327,7 @@ def _compute_location_signatures(
         sigs[loc.name] = LocationSignature(
             dv=intrinsic_dv,
             requirements=rocket.requirements,
-            body_chain_depth=_body_chain_depth(info.body),
+            body_chain_depth=_body_chain_depth(info.body, world.mission_builder.home),
         )
         min_kits[loc.name] = dict(rocket.delta)
     return sigs, min_kits

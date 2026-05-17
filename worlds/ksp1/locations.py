@@ -11,7 +11,7 @@ Four location sources (total ~524 max, filtered by difficulty):
      Requires EVA (capsule) or rover (probe + wheels + power + instrument).
 
   3. Mission Event Locations  (256 total)
-     12 Kerbin-specific + 244 per-body event-scaled checks.
+     12 home-body-specific + 244 per-body event-scaled checks.
      Kerbol excluded (root body — can't escape/flyby, orbit infeasible).
      Eve Return/Sample Return exist but require all progression parts.
      Scale is by event difficulty, not body distance:
@@ -49,12 +49,13 @@ if TYPE_CHECKING:
 
 KSP1_BASE_ID = 7_700_000
 
-# Offset ranges (items use 0–1999, locations use 2000–3999)
+# Offset ranges (items use 0–1999, locations use 2000–3999, alt-home extends to 4xxx)
 _STARTING_INV_OFFSET_START = 2000  # Starting inventory: 2000-2019
 _KSC_BIOME_OFFSET_START = 2080     # KSC biomes: 2080-2099
-_KERBIN_OFFSET_START = 2100        # Kerbin special: 2100-2199
+_HOME_OFFSET_START = 2100          # Kerbin home specials: 2100-2199 (12 used, rest reserved for backward compat)
 _MISSION_OFFSET_START = 2200       # Per-body mission events: 2200-2999
 _TECH_OFFSET_START = 3000          # Tech tree: 3000-3999
+_ALT_HOME_OFFSET_START = 4000      # Non-Kerbin home specials: 4000-4167 (14 bodies × 12 = 168)
 
 
 class KSP1Location(Location):
@@ -235,19 +236,17 @@ KSC_BIOMES: list[tuple[str, str]] = [
 KSC_BIOME_NAMES: list[str] = [KSC_LOCATION_PREFIX + name for _, name in KSC_BIOMES]
 
 # ---------------------------------------------------------------------------
-# Kerbin-specific mission locations (12 total, fixed)
+# Home-body-specific mission locations (12 total, fixed)
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
-class KerbinLocationDef:
+class HomeLocationDef:
     """Metadata for a home-body-specific mission location.
 
     Single source of truth for the home-body location names, mission types,
     altitude thresholds, and the body itself — used by rules.py (access
     rules), sphere_ladder.py (parsing), and capability_format.py
-    (CLI/tracker display).  The "Kerbin" prefix on the name is for the
-    current home (Phase 3a pins it to Kerbin); ``body`` carries the
-    actual home BodyName so callers don't have to re-derive it.
+    (CLI/tracker display).
     """
     name: str
     mission_type: MissionType
@@ -255,40 +254,85 @@ class KerbinLocationDef:
     body: BodyName = BodyName.KERBIN
 
 
-# Phase 3a: the altitude-record milestones are generated from the home
-# body's ``safe_altitude_km`` via ``home_altitude_milestones`` (bodies.py).
-# Phase 3a pins home to Kerbin, so the milestone count is still 7 and the
-# top value is still 70 km — but the inner values are now denser at the
-# low end (5/10/16/20/30/45/70 vs the old 5/15/25/35/45/55/70).  This is
-# the only intentional behaviour change in §E.
-_HOME_BODY: BodyName = BodyName.KERBIN
-
-_altitude_milestones = home_altitude_milestones(BODY_BY_NAME[_HOME_BODY], n=7)
+# Number of altitude milestones generated per home body.  Held constant
+# across all 15 landable bodies so each body contributes exactly 12 home
+# locations and IDs stay regular.
+_HOME_ALTITUDE_MILESTONE_COUNT = 7
 
 
-def _build_kerbin_locations() -> tuple[KerbinLocationDef, ...]:
-    name_prefix = str(_HOME_BODY)
-    home = _HOME_BODY
-    entries: list[KerbinLocationDef] = [
-        KerbinLocationDef(f"{name_prefix} First Launch", MissionType.FIRST_LAUNCH, body=home),
-        KerbinLocationDef(f"{name_prefix} First Landing", MissionType.FIRST_LANDING, body=home),
-        KerbinLocationDef(f"{name_prefix} First Crash", MissionType.SOUNDING, 0.1, body=home),
-    ]
-    entries.extend(
-        KerbinLocationDef(f"{name_prefix} {km}km Altitude", MissionType.SOUNDING, float(km), body=home)
-        for km in _altitude_milestones
+class LocationBuilder:
+    """Owns the per-home location set for a single world.
+
+    Mirrors the ``MissionBuilder`` pattern: instantiated once per world
+    with the chosen home body, eagerly computes the 12 home-body specials
+    (first launch / landing / crash, altitude milestones, splashdown,
+    first staging) for that home, and exposes them as instance
+    attributes.  Callers that need the active home's location set hold a
+    reference to the builder rather than reading module-level constants.
+
+    The class also owns the static name → def lookup across **all** 15
+    landable bodies, used by sphere-ladder parsing and the CLI's check
+    map without needing to know the current home.
+    """
+
+    # Landable bodies in the canonical BodyName enum order.  Class-level
+    # so it can be reused as the iteration order for the static lookup.
+    _LANDABLE_BODIES: tuple[BodyName, ...] = tuple(
+        BodyName(b.name) for b in ALL_BODIES if b.can_land
     )
-    entries.append(KerbinLocationDef(f"{name_prefix} Splashdown", MissionType.SPLASHDOWN, 1.0, body=home))
-    entries.append(KerbinLocationDef(f"{name_prefix} First Staging", MissionType.FIRST_STAGING, body=home))
-    return tuple(entries)
+
+    # Static {name → def} table covering every landable body's home set.
+    # Body prefixes are unique so there are no collisions.  Populated
+    # lazily on first access (see ``all_home_locations``).
+    _all_locations: dict[str, "HomeLocationDef"] | None = None
+
+    def __init__(self, home: BodyName) -> None:
+        self.home: BodyName = home
+        self.locations: tuple[HomeLocationDef, ...] = self._build_for(home)
+        self.names: list[str] = [loc.name for loc in self.locations]
+        assert len(self.locations) == 5 + _HOME_ALTITUDE_MILESTONE_COUNT
+
+    @staticmethod
+    def _build_for(home: BodyName) -> tuple[HomeLocationDef, ...]:
+        prefix = str(home)
+        milestones = home_altitude_milestones(
+            BODY_BY_NAME[home], n=_HOME_ALTITUDE_MILESTONE_COUNT
+        )
+        entries: list[HomeLocationDef] = [
+            HomeLocationDef(f"{prefix} First Launch", MissionType.FIRST_LAUNCH, body=home),
+            HomeLocationDef(f"{prefix} First Landing", MissionType.FIRST_LANDING, body=home),
+            HomeLocationDef(f"{prefix} First Crash", MissionType.SOUNDING, 0.1, body=home),
+        ]
+        entries.extend(
+            HomeLocationDef(f"{prefix} {km}km Altitude", MissionType.SOUNDING, float(km), body=home)
+            for km in milestones
+        )
+        entries.append(HomeLocationDef(f"{prefix} Splashdown", MissionType.SPLASHDOWN, 1.0, body=home))
+        entries.append(HomeLocationDef(f"{prefix} First Staging", MissionType.FIRST_STAGING, body=home))
+        return tuple(entries)
+
+    @classmethod
+    def all_home_locations(cls) -> dict[str, HomeLocationDef]:
+        """Flat ``name → HomeLocationDef`` map across all 15 landable bodies.
+
+        Used by the data-package builder (every possible home location
+        gets an AP location id) and by sphere-ladder / CLI lookups that
+        need to resolve a location name without knowing the home.
+        """
+        if cls._all_locations is None:
+            cls._all_locations = {
+                loc.name: loc
+                for body in cls._LANDABLE_BODIES
+                for loc in cls._build_for(body)
+            }
+        return cls._all_locations
 
 
-KERBIN_LOCATIONS: tuple[KerbinLocationDef, ...] = _build_kerbin_locations()
-
-KERBIN_LOCATION_NAMES: list[str] = [loc.name for loc in KERBIN_LOCATIONS]
-
-# 3 firsts + N altitude milestones + Splashdown + First Staging
-assert len(KERBIN_LOCATION_NAMES) == 5 + len(_altitude_milestones)
+# Kerbin's home set is built eagerly here purely so the AP data package's
+# location id table can keep Kerbin's legacy id range (2100-2111).  The
+# id table is module-level static (see ``_build_location_table``); the
+# per-world ``LocationBuilder`` instance is the runtime API.
+_KERBIN_HOME_LOCATIONS: tuple[HomeLocationDef, ...] = LocationBuilder._build_for(BodyName.KERBIN)
 
 # ---------------------------------------------------------------------------
 # Per-body mission location names (217 total, generated from body data)
@@ -340,9 +384,10 @@ def _build_location_table() -> dict[str, int]:
         table[name] = offset
         offset += 1
 
-    offset = _KERBIN_OFFSET_START
-    for name in KERBIN_LOCATION_NAMES:
-        table[name] = offset
+    # Kerbin home specials use the legacy 2100-block for backward compat.
+    offset = _HOME_OFFSET_START
+    for loc in _KERBIN_HOME_LOCATIONS:
+        table[loc.name] = offset
         offset += 1
 
     offset = _MISSION_OFFSET_START
@@ -354,6 +399,17 @@ def _build_location_table() -> dict[str, int]:
     for name in TECH_TREE_LOCATION_NAMES:
         table[name] = offset
         offset += 1
+
+    # Other landable bodies' home specials get fresh IDs from 4000 up so the
+    # data package can advertise every possible (body, home-location) pair
+    # without disturbing Kerbin's existing IDs.
+    offset = _ALT_HOME_OFFSET_START
+    for body in LocationBuilder._LANDABLE_BODIES:
+        if body == BodyName.KERBIN:
+            continue
+        for loc in LocationBuilder._build_for(body):
+            table[loc.name] = offset
+            offset += 1
 
     return table
 
@@ -410,9 +466,12 @@ def create_all_locations(world: KSP1World) -> None:
     biome_locs = {name: LOCATION_NAME_TO_ID[name] for name in KSC_BIOME_NAMES}
     menu.add_locations(biome_locs, KSP1Location)
 
-    # Kerbin-specific events
-    kerbin_locs = {name: LOCATION_NAME_TO_ID[name] for name in KERBIN_LOCATION_NAMES}
-    menu.add_locations(kerbin_locs, KSP1Location)
+    # Home-body specials (first launch / first staging / altitude milestones /
+    # splashdown / first crash / first landing) — only for the home body the
+    # world is actually pinned to; the other 14 sets exist only in the data
+    # package so AP can render them on the universal tracker.
+    home_locs = {name: LOCATION_NAME_TO_ID[name] for name in world.location_builder.names}
+    menu.add_locations(home_locs, KSP1Location)
 
     # Per-body mission events
     mission_locs = {name: LOCATION_NAME_TO_ID[name] for name in MISSION_LOCATION_NAMES}

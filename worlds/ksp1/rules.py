@@ -31,9 +31,7 @@ from .items import ITEM_TABLE, PROGRESSIVE_RD_NAME, PROGRESSIVE_PART_ITEM_NAMES,
 from .locations import (
     EVENT_BY_NAME,
     EventName,
-    KERBIN_LOCATIONS,
     KSC_BIOME_NAMES,
-    KERBIN_LOCATION_NAMES,
     MISSION_LOCATION_NAMES,
     MissionLocation,
     STARTING_INV_COUNTS,
@@ -145,6 +143,7 @@ def set_all_rules(world: KSP1World) -> None:
     _set_ksc_biome_rules(world, player)
     _set_kerbin_rules(world, player)
     _set_mission_rules(world, player)
+    _apply_home_system_local_exclusions(world)
     # Tech tree rules are now region entrance rules (see regions.py).
     _set_item_pacing_rules(world, player, difficulty)
     _set_early_bucket_item_bans(world, player, difficulty)
@@ -192,8 +191,9 @@ def _set_ksc_biome_rules(world: KSP1World, player: int) -> None:
 # ---------------------------------------------------------------------------
 # Kerbin-specific location rules
 #
-# Mission types and thresholds are defined in locations.KERBIN_LOCATIONS
-# (single source of truth).  This module maps mission_type → access rule.
+# Mission types and thresholds are owned by ``LocationBuilder`` in
+# locations.py (single source of truth).  This module maps mission_type →
+# access rule.
 # ---------------------------------------------------------------------------
 
 def _make_altitude_rule(player: int, threshold_km: float) -> Callable[[CollectionState], bool]:
@@ -244,15 +244,17 @@ _KERBIN_RULE_FACTORIES = {
 
 
 def _set_kerbin_rules(world: KSP1World, player: int) -> None:
-    """Apply access rules to all Kerbin-specific locations.
+    """Apply access rules to the home-body specials.
 
-    Iterates KERBIN_LOCATIONS and dispatches to the appropriate rule factory
-    based on mission_type.
+    Iterates the active home's location set and dispatches to the appropriate
+    rule factory based on mission_type.  Rule semantics are body-agnostic;
+    the rules already operate against ``world.mission_builder.home`` via the
+    capability system.
     """
-    for loc in KERBIN_LOCATIONS:
+    for loc in world.location_builder.locations:
         factory = _KERBIN_RULE_FACTORIES.get(loc.mission_type)
         if factory is None:
-            raise ValueError(f"Unknown Kerbin mission type: {loc.mission_type!r}")
+            raise ValueError(f"Unknown home mission type: {loc.mission_type!r}")
         world.get_location(loc.name).access_rule = factory(player, loc)
 
 
@@ -264,17 +266,13 @@ def _mission_rule_for_event(
     player: int, body_name: str, event: str
 ) -> Callable[[CollectionState], bool]:
     """
-    Return the access rule for a given body + event combination.
+    Return the capability-based access rule for a given body + event combination.
 
-    All check-slots for one event share this single rule (they fire together).
+    All check-slots for one event share this rule (they fire together).
+    Used when the model can verify the mission; the all-parts proxy is
+    applied per-location by ``_set_mission_rules`` for locations the model
+    can't verify from this home.
     """
-    # Eve surface ascent is beyond the capability model.
-    # Tylo/Laythe returns cascade too much payload mass for the optimizer.
-    if body_name == BodyName.EVE and event in (EventName.RETURN, EventName.SAMPLE_RETURN):
-        return _make_all_parts_rule(player)
-    if body_name in (BodyName.TYLO, BodyName.LAYTHE) and event in (EventName.RETURN, EventName.SAMPLE_RETURN):
-        return _make_all_parts_rule(player)
-
     EVENT_BY_NAME[event]  # validate event exists; crash on typo
 
     def rule(state: CollectionState) -> bool:
@@ -286,17 +284,54 @@ def _set_mission_rules(world: KSP1World, player: int) -> None:
     """
     Apply access rules to all per-body mission event locations.
 
-    All slots of the same event (e.g. "Eve Orbit 1" and "Eve Orbit 2") share
-    the same rule — they check simultaneously when the player performs the event.
+    Per location: if it's listed in ``world.model_infeasible_locations``
+    (the home-specific set the dv model can't verify), fall back to the
+    "all progression items collected" proxy.  Otherwise the location
+    shares the capability-based rule for its (body, event) pair.  This
+    keeps location reachability aligned with the victory rule
+    (``_make_goal_spec_rule``), which routes the same way per body/event.
     """
     from .bodies import ALL_BODIES
     from .locations import get_body_events
 
+    infeasible = world.model_infeasible_locations
+    proxy_rule = _make_all_parts_rule(player)
+
     for body in ALL_BODIES:
         for event in get_body_events(body):
-            rule = _mission_rule_for_event(player, body.name, event)
+            cap_rule = _mission_rule_for_event(player, body.name, event)
             for loc in event_locations(body.name, event):
-                world.get_location(str(loc)).access_rule = rule
+                name = str(loc)
+                world.get_location(name).access_rule = (
+                    proxy_rule if name in infeasible else cap_rule
+                )
+
+
+def _apply_home_system_local_exclusions(world: KSP1World) -> None:
+    """For ``home_system_local`` goals, mark every per-body mission location
+    outside the home's SOI neighbourhood as ``EXCLUDED`` for progression.
+
+    AP fill won't drop advancement or useful items at EXCLUDED locations,
+    so progression items can't land at side-quest missions the player
+    would have to detour into Kerbol heliocentric space to reach.  Goal
+    bodies are guaranteed in-system by ``_validate_home_system_local``,
+    so the goal path is never affected.  Filler can still place there.
+    """
+    from BaseClasses import LocationProgressType
+    from .bodies import ALL_BODIES, home_system_bodies
+    from .locations import get_body_events
+
+    spec = world.goal_spec
+    if not spec.home_system_local:
+        return
+    assert spec.home is not None
+    in_system = home_system_bodies(spec.home)
+    for body in ALL_BODIES:
+        if body.name in in_system:
+            continue
+        for event in get_body_events(body):
+            for loc in event_locations(body.name, event):
+                world.get_location(str(loc)).progress_type = LocationProgressType.EXCLUDED
 
 
 # ---------------------------------------------------------------------------
@@ -363,13 +398,13 @@ def _set_item_pacing_rules(world: KSP1World, player: int, difficulty: int) -> No
     for name in STARTING_INV_NAMES[:num_starting]:
         add_item_rule(world.get_location(name), early_ban_rule)
 
-    # Band B: KSC biomes + Kerbin specials + early Kerbin events
+    # Band B: KSC biomes + home-body specials + early home events
     for name in KSC_BIOME_NAMES:
         add_item_rule(world.get_location(name), early_ban_rule)
-    for name in KERBIN_LOCATION_NAMES:
+    home = world.mission_builder.home
+    for name in world.location_builder.names:
         add_item_rule(world.get_location(name), early_ban_rule)
     # Early home-body mission events (everything except Flyby/SOI Leave which need escape)
-    home = world.mission_builder.home
     for event in (EventName.ORBIT, EventName.EVA_IN_ORBIT, EventName.LANDING,
                   EventName.CREWED_LANDING, EventName.FLAG_PLANT,
                   EventName.RETURN, EventName.SAMPLE_RETURN):
@@ -459,24 +494,28 @@ _ALL_LANDABLE_BODIES: tuple[BodyName, ...] = tuple(
     b.name for b in ALL_BODIES if b.can_land
 )
 
-# Bodies whose return/sample-return rules use the all-parts proxy
-# (capability system can't model their ascent profiles).
-_ALL_PARTS_PROXY_BODIES: frozenset[BodyName] = frozenset(
-    b.name for b in ALL_BODIES if b.all_parts_proxy
-)
-
-# Landable bodies with normal (non-proxy) return profiles.  Includes
-# Kerbin; the home body is filtered out in ``resolve_goal_spec`` so the
-# "Standard Returns" preset doesn't ask the player to return from their
-# starting body.
-_STANDARD_RETURN_BODIES_ALL: tuple[BodyName, ...] = tuple(
-    b.name for b in ALL_BODIES
-    if b.can_land and not b.all_parts_proxy
-)
-
 @dataclass(frozen=True)
 class GoalSpec:
-    """Decomposed goal: every goal (preset or custom) becomes one of these."""
+    """Decomposed goal: every goal (preset or custom) becomes one of these.
+
+    Carries the fully-materialized settings the world resolved at
+    ``generate_early`` time: which bodies satisfy each victory event,
+    the home body the player launches from (after any future
+    randomization), and the home-system-local flag.
+
+    ``home_system_local=True`` means the goal stays within the home
+    body's local SOI neighbourhood (planet+moons or moon+parent+siblings).
+    The world setup then forces non-home-system mission locations out
+    of logic so AP fill places no progression items where the player
+    would otherwise have to detour into Kerbol heliocentric space to
+    collect them.  See ``home_system_bodies`` in bodies.py for the set.
+
+    ``home`` is None on the raw ``_PRESET_GOALS`` templates; populated
+    on every instance returned by ``resolve_goal_spec``.  Treat
+    ``spec.home`` as authoritative inside the world (callers that still
+    accept ``home`` separately are legacy; new code should read from the
+    spec).
+    """
     display_name: str
     flag_bodies: tuple[BodyName, ...] = ()
     return_bodies: tuple[BodyName, ...] = ()
@@ -484,6 +523,8 @@ class GoalSpec:
     orbit_bodies: tuple[BodyName, ...] = ()
     flyby_bodies: tuple[BodyName, ...] = ()
     complete_tech_tree: bool = False
+    home_system_local: bool = False
+    home: BodyName | None = None
 
     def is_home_system_only(self, home: BodyName) -> bool:
         """True when every goal body is in ``home``'s local neighbourhood.
@@ -523,14 +564,9 @@ _PRESET_GOALS: dict[int, GoalSpec] = {
         display_name="Flag Every Body",
         flag_bodies=_ALL_LANDABLE_BODIES,
     ),
-    Goal.option_standard_returns: GoalSpec(
-        display_name="Standard Returns",
-        return_bodies=_STANDARD_RETURN_BODIES_ALL,
-    ),
-    Goal.option_standard_sample_returns: GoalSpec(
-        display_name="Standard Sample Returns",
-        sample_return_bodies=_STANDARD_RETURN_BODIES_ALL,
-    ),
+    # Standard return / sample-return body lists are built per-world in
+    # ``resolve_goal_spec`` once the proxy set is known (it depends on the
+    # home body's reachable-with-full-kit mission graph).
     Goal.option_complete_tech_tree: GoalSpec(
         display_name="Complete Tech Tree",
         complete_tech_tree=True,
@@ -543,10 +579,19 @@ _PRESET_GOALS: dict[int, GoalSpec] = {
         display_name="Mun Sample Return",
         sample_return_bodies=(BodyName.MUN,),
     ),
+    Goal.option_jool_moons_return: GoalSpec(
+        display_name="Jool Moons Return",
+        return_bodies=(
+            BodyName.LAYTHE, BodyName.VALL, BodyName.TYLO,
+            BodyName.BOP, BodyName.POL,
+        ),
+        home_system_local=True,
+    ),
 }
 
 
-def resolve_goal_spec(options, home: BodyName) -> GoalSpec:
+def resolve_goal_spec(options, home: BodyName,
+                      model_infeasible_locations: frozenset[str]) -> GoalSpec:
     """Build a GoalSpec from the player's option values.
 
     Raises if the configuration is ambiguous or incomplete.
@@ -554,6 +599,14 @@ def resolve_goal_spec(options, home: BodyName) -> GoalSpec:
     ``home`` is filtered out of every body list — returning from / planting
     a flag on your starting body would be free, so it doesn't make sense
     as a goal regardless of preset.
+
+    ``model_infeasible_locations`` is the per-world set of AP location
+    names whose mission the dv model can't verify even with full kit
+    (see ``scripts/generate_feasibility.py``).  Bodies whose RETURN /
+    SAMPLE_RETURN are entirely in this set are excluded from the
+    dynamically-built Standard Returns / Sample Returns body lists; if
+    the player insists via custom presets, the completion rule falls
+    back to the "all-parts collected" proxy.
     """
     goal_value = options.goal.value
     has_body_lists = bool(
@@ -601,17 +654,41 @@ def resolve_goal_spec(options, home: BodyName) -> GoalSpec:
             orbit_bodies=tuple(sorted(options.orbit_bodies.value)),
             flyby_bodies=tuple(sorted(options.flyby_bodies.value)),
         )
+    elif goal_value == Goal.option_standard_returns:
+        standard_bodies = tuple(
+            b for b in _ALL_LANDABLE_BODIES
+            if not _all_locations_infeasible(b, EventName.RETURN,
+                                              model_infeasible_locations)
+        )
+        spec = GoalSpec(
+            display_name="Standard Returns",
+            return_bodies=standard_bodies,
+        )
+    elif goal_value == Goal.option_standard_sample_returns:
+        standard_bodies = tuple(
+            b for b in _ALL_LANDABLE_BODIES
+            if not _all_locations_infeasible(b, EventName.SAMPLE_RETURN,
+                                              model_infeasible_locations)
+        )
+        spec = GoalSpec(
+            display_name="Standard Sample Returns",
+            sample_return_bodies=standard_bodies,
+        )
     else:
         spec = _PRESET_GOALS.get(goal_value)
         if spec is None:
             raise RuntimeError(f"Unknown goal value: {goal_value}")
 
-    return _filter_home_from_spec(spec, home)
+    materialized = _filter_home_from_spec(spec, home)
+    _validate_home_system_local(materialized)
+    return materialized
 
 
 def _filter_home_from_spec(spec: GoalSpec, home: BodyName) -> GoalSpec:
-    """Drop ``home`` from every body list — a goal can't ask the player to
-    do a mission on their starting body (trivially achievable)."""
+    """Drop ``home`` from every body list (a goal can't ask the player to do
+    a mission on their starting body — trivially achievable), and stamp
+    ``home`` onto the returned spec so the spec is fully materialized.
+    """
     def _strip(bodies: tuple[BodyName, ...]) -> tuple[BodyName, ...]:
         return tuple(b for b in bodies if b != home)
     return GoalSpec(
@@ -622,7 +699,35 @@ def _filter_home_from_spec(spec: GoalSpec, home: BodyName) -> GoalSpec:
         orbit_bodies=_strip(spec.orbit_bodies),
         flyby_bodies=_strip(spec.flyby_bodies),
         complete_tech_tree=spec.complete_tech_tree,
+        home_system_local=spec.home_system_local,
+        home=home,
     )
+
+
+def _validate_home_system_local(spec: GoalSpec) -> None:
+    """If ``home_system_local`` is on, every goal body must sit in the home
+    system.  Raised here so misconfigured presets / customs fail at
+    ``generate_early`` time instead of producing an unsolvable seed.
+    """
+    if not spec.home_system_local:
+        return
+    assert spec.home is not None, "home must be set before validating home_system_local"
+    valid = home_system_bodies(spec.home)
+    all_bodies = (
+        set(spec.flag_bodies)
+        | set(spec.return_bodies)
+        | set(spec.sample_return_bodies)
+        | set(spec.orbit_bodies)
+        | set(spec.flyby_bodies)
+    )
+    extras = all_bodies - valid
+    if extras:
+        from Options import OptionError
+        raise OptionError(
+            f"Goal '{spec.display_name}' is home_system_local but includes "
+            f"bodies outside {sorted(valid)}: {sorted(extras)}.  Either pick "
+            f"a compatible home or drop those bodies from the goal."
+        )
 
 
 def goal_spec_location_names(spec: GoalSpec) -> list[str]:
@@ -658,12 +763,26 @@ def create_victory_location(world: KSP1World) -> None:
     victory_location.place_locked_item(create_item(world, "Victory"))
 
 
+def _all_locations_infeasible(
+    body: BodyName, event: EventName,
+    model_infeasible_locations: frozenset[str],
+) -> bool:
+    """True iff every AP-location slot for ``(body, event)`` is in the
+    model-infeasible set.  Used by goal building to filter bodies whose
+    entire mission class is unverifiable from the current home."""
+    locs = event_locations(body, event)
+    return bool(locs) and all(str(loc) in model_infeasible_locations
+                              for loc in locs)
+
+
 def _set_victory_rules(
     world: KSP1World, player: int, spec: GoalSpec, difficulty: int
 ) -> None:
     """Set the access rule and completion condition on the Victory event."""
     victory_location = world.get_location("Victory")
-    victory_location.access_rule = _make_goal_spec_rule(player, spec, difficulty)
+    victory_location.access_rule = _make_goal_spec_rule(
+        player, spec, difficulty, world.model_infeasible_locations,
+    )
 
     world.multiworld.completion_condition[player] = (
         lambda state: state.can_reach("Victory", "Location", player)
@@ -671,9 +790,17 @@ def _set_victory_rules(
 
 
 def _make_goal_spec_rule(
-    player: int, spec: GoalSpec, difficulty: int
+    player: int, spec: GoalSpec, difficulty: int,
+    model_infeasible_locations: frozenset[str],
 ) -> Callable[[CollectionState], bool]:
-    """Build a composite access rule from a GoalSpec."""
+    """Build a composite access rule from a GoalSpec.
+
+    ``model_infeasible_locations`` is the per-world set of AP location
+    names whose mission the dv model can't verify.  Mission classes
+    where *every* slot for a body falls in this set route through the
+    "all-parts collected" proxy rule instead of the dv-based access
+    check.
+    """
     sub_rules: list[Callable[[CollectionState], bool]] = []
 
     # Flag bodies
@@ -688,8 +815,10 @@ def _make_goal_spec_rule(
         sub_rules.append(flag_rule)
 
     # Return bodies
-    proxy_return = [b for b in spec.return_bodies if b in _ALL_PARTS_PROXY_BODIES]
-    normal_return = [b for b in spec.return_bodies if b not in _ALL_PARTS_PROXY_BODIES]
+    proxy_return = [b for b in spec.return_bodies
+                    if _all_locations_infeasible(b, EventName.RETURN,
+                                                   model_infeasible_locations)]
+    normal_return = [b for b in spec.return_bodies if b not in proxy_return]
     if normal_return:
         nr = tuple(normal_return)
         def return_rule(state: CollectionState) -> bool:
@@ -703,8 +832,10 @@ def _make_goal_spec_rule(
         sub_rules.append(_make_all_parts_rule(player))
 
     # Sample return bodies
-    proxy_sample = [b for b in spec.sample_return_bodies if b in _ALL_PARTS_PROXY_BODIES]
-    normal_sample = [b for b in spec.sample_return_bodies if b not in _ALL_PARTS_PROXY_BODIES]
+    proxy_sample = [b for b in spec.sample_return_bodies
+                    if _all_locations_infeasible(b, EventName.SAMPLE_RETURN,
+                                                   model_infeasible_locations)]
+    normal_sample = [b for b in spec.sample_return_bodies if b not in proxy_sample]
     if normal_sample:
         ns = tuple(normal_sample)
         def sample_rule(state: CollectionState) -> bool:

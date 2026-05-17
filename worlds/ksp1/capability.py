@@ -190,6 +190,11 @@ class EquipmentFlags:
     available_tanks: list[FuelTank] = field(default_factory=list)
     available_heat_shields: list[HeatShield] = field(default_factory=list)
     available_parachutes: list[Parachute] = field(default_factory=list)
+    # Asymptote-best non-drogue parachute (lowest mass-per-drag-area)
+    # picked once at ``_pre_pass`` time so ``_required_chute_count``
+    # doesn't ``min(...)`` per call.  ``None`` when the player has no
+    # non-drogue chutes.
+    best_chute: Optional[Parachute] = None
     available_landing_legs: list[LandingLeg] = field(default_factory=list)
 
     # Multi-mount adapters/plates available to the player
@@ -357,7 +362,8 @@ def explain_body_unreachable(state: CollectionState, player: int, body_name: str
 def _pre_pass(item_count_fn: Callable[[str], int],
               start_with_clamps: bool,
               rep_names: frozenset[str] = frozenset(),
-              progressive_launch_pad: bool = False) -> EquipmentFlags:
+              progressive_launch_pad: bool = False,
+              launch_pad_caps: tuple[float, ...] | None = None) -> EquipmentFlags:
     """
     Iterate every item the player has collected and build EquipmentFlags.
 
@@ -392,10 +398,11 @@ def _pre_pass(item_count_fn: Callable[[str], int],
     # copy raises the cap. Only active when the option is enabled
     # (otherwise the default inf applies).
     if progressive_launch_pad:
-        from .items import PROGRESSIVE_LAUNCH_PAD_NAME, PROGRESSIVE_LAUNCH_PAD_CAPS
+        from .items import PROGRESSIVE_LAUNCH_PAD_NAME, PROGRESSIVE_LAUNCH_PAD_CAPS_KERBIN
+        caps = launch_pad_caps or PROGRESSIVE_LAUNCH_PAD_CAPS_KERBIN
         pad_count = item_count_fn(PROGRESSIVE_LAUNCH_PAD_NAME)
-        idx = min(pad_count, len(PROGRESSIVE_LAUNCH_PAD_CAPS) - 1)
-        flags.launch_pad_mass_cap = PROGRESSIVE_LAUNCH_PAD_CAPS[idx]
+        idx = min(pad_count, len(caps) - 1)
+        flags.launch_pad_mass_cap = caps[idx]
 
     # Process parts: both progressive-unlocked and individual non-absorbed items
     for item_name, parts in PART_DB.items():
@@ -429,6 +436,14 @@ def _pre_pass(item_count_fn: Callable[[str], int],
 
     # Derive relay tier from available relays
     flags.relay_tier = _compute_relay_tier(flags)
+
+    # Pick the asymptote-best non-drogue parachute once.  Lowest
+    # mass-per-drag-area wins (see ``_required_chute_count`` doc).
+    # ``None`` if the player has none — landing checks handle that.
+    non_drogue = [p for p in flags.available_parachutes if not p.is_drogue]
+    if non_drogue:
+        flags.best_chute = min(non_drogue,
+                                key=lambda p: p.mass / max(p.drag_area, 1e-3))
 
     # (lightest_probe=None when no probe found — gate blocks before use)
 
@@ -838,12 +853,17 @@ def _evaluate_profile(
     diff: DifficultyProfile,
     mission_type: MissionType,
     is_crewed: bool,
+    home: BodyName,
 ) -> ProfileResult:
     """
     Run the two-pass evaluation on a single mission profile alternative.
 
     Forward pass:  check broad category gates; compute effective dv per edge.
     Backward pass: walk in reverse, run optimizer per stage group, propagate mass.
+
+    ``home`` is the player's starting body; used by the relay-tier gate
+    (heliocentric distance to each edge body).  Test callers can rely on
+    the Kerbin default.
     """
     # ------------------------------------------------------------------
     # Forward pass — broad gate checks
@@ -931,14 +951,17 @@ def _evaluate_profile(
                 solar_helps=solar_helps,
             ))
 
-    # Relay tier
+    # Relay tier — baked into ``MissionEdge.relay_tier`` at
+    # MissionBuilder construction (the tier is a function of edge body
+    # and the world's home, both fixed at that point).  The hot loop
+    # reads a struct field — no dict lookup, no function call.
     for edge in profile:
-        body = BODY_BY_NAME[edge.body]
-        if flags.relay_tier < body.min_relay_tier:
+        required = edge.relay_tier
+        if flags.relay_tier < required:
             blocking.append(BlockingInfo(
                 reason=BlockingReason.RELAY_TIER_TOO_LOW,
-                body=body.name,
-                relay_needed=body.min_relay_tier,
+                body=edge.body,
+                relay_needed=required,
                 relay_available=flags.relay_tier,
             ))
             break  # one relay failure is sufficient
@@ -1018,7 +1041,7 @@ def _evaluate_profile(
 
     # Add equipment mass for the terminal stage
     # (legs, ladder, heat shield on the last edge in the profile)
-    terminal_equip = _terminal_equipment_mass(profile, flags)
+    terminal_equip = _terminal_equipment_mass(profile, flags, home=home)
     payload = terminal_mass + terminal_equip
 
     # Global attitude strategy. One reaction wheel or RCS bundle covers
@@ -1269,7 +1292,7 @@ def _evaluate_profile(
         terminal_parts.append((1, flags.lightest_capsule.name))
     elif not is_crewed and flags.lightest_probe:
         terminal_parts.append((1, flags.lightest_probe.name))
-    support_mass, support_parts = _support_equipment_mass(flags, profile)
+    support_mass, support_parts = _support_equipment_mass(flags, profile, home=home)
     terminal_parts.extend(support_parts)
 
     if payload > flags.launch_pad_mass_cap:
@@ -1397,6 +1420,7 @@ def _group_edges(profile: list[MissionEdge], staging_tier: int) -> list[list[Mis
 
 def _support_equipment_mass(
     flags: EquipmentFlags, profile: list[MissionEdge],
+    home: BodyName,
 ) -> tuple[float, list[tuple[int, str]]]:
     """
     Return (mass, parts) for required support equipment (antenna, power)
@@ -1414,8 +1438,8 @@ def _support_equipment_mass(
         body = BODY_BY_NAME.get(edge.body)
         if body is None:
             continue
-        if body.min_relay_tier > max_relay:
-            max_relay = body.min_relay_tier
+        if edge.relay_tier > max_relay:
+            max_relay = edge.relay_tier
         # Power: rtg > solar_marginal > solar > none
         prio = {"none": 0, "solar": 1, "solar_marginal": 2, "rtg": 3}
         if prio.get(body.power_requirement, 0) > prio.get(power_req, 0):
@@ -1457,7 +1481,8 @@ def _support_equipment_mass(
 
 
 def _terminal_equipment_mass(profile: list[MissionEdge],
-                              flags: EquipmentFlags) -> float:
+                              flags: EquipmentFlags,
+                              home: BodyName) -> float:
     """
     Equipment mass carried all the way to the terminal destination.
 
@@ -1478,7 +1503,7 @@ def _terminal_equipment_mass(profile: list[MissionEdge],
     if profile and profile[-1].needs_ladder and flags.lightest_ladder:
         mass += flags.lightest_ladder.mass
     # Support equipment (antenna + power source)
-    support_mass, _ = _support_equipment_mass(flags, profile)
+    support_mass, _ = _support_equipment_mass(flags, profile, home=home)
     mass += support_mass
     return mass
 
@@ -1506,14 +1531,26 @@ def _required_chute_count(
     flags: EquipmentFlags,
     diff: DifficultyProfile,
 ) -> int:
-    """
-    Return the number of Mk16 parachutes needed to achieve terminal velocity
-    <= _MAX_SAFE_LANDING_SPEED.
+    """Return the number of parachutes (of ``flags.best_chute``) needed
+    to achieve terminal velocity ≤ ``_MAX_SAFE_LANDING_SPEED``.
 
-    Uses pessimistic mass estimate (landing_mass + all chutes) to avoid
-    under-counting (golden rule).
+    ``flags.best_chute`` is precomputed in ``_pre_pass`` to be the
+    asymptote-best non-drogue chute (lowest mass-per-drag-area).  Two
+    chutes with identical drag but different masses
+    (``parachuteLarge``=0.3t vs ``parachuteRadial``=0.1t, both 500 m²)
+    give very different terminal-velocity asymptotes: the heavier
+    chute carries too much of its own weight and stalls above 6 m/s
+    on Duna no matter how many you stack, so the lighter one is the
+    only chute that can ever beat the safety threshold there.
 
-    Returns -1 if no configuration of available chutes achieves the threshold.
+    Workaround for the structural limitation that aero landings are
+    modelled as parachute-only OR engine-only — the real fix is a
+    mixed-strategy landing edge.  See
+    ``bugs/084-no-mixed-parachute-and-engine-landing.md``.
+
+    Uses pessimistic mass estimate (landing_mass + all chutes) to
+    avoid under-counting (golden rule).  Returns ``-1`` if no count
+    of the chosen chute beats the threshold.
     """
     if not body.has_atmosphere or body.atm_density_kg_m3 <= 0:
         return 0  # vacuum body — no chutes needed
@@ -1522,11 +1559,9 @@ def _required_chute_count(
     if not flags.available_parachutes:
         return -1
 
-    non_drogue = [p for p in flags.available_parachutes if not p.is_drogue]
-    if not non_drogue:
+    chute = flags.best_chute
+    if chute is None:
         return -1
-
-    chute = non_drogue[0]  # use the first available (all Mk16s in dummy DB)
     # The AP item represents the parachute *type* being unlocked, not a single
     # physical part.  Once unlocked, the player can attach as many as needed.
     # Use a generous per-mission budget (50) so the physics check can succeed.
@@ -1551,10 +1586,9 @@ def _best_chute_for_body(
     diff: DifficultyProfile,
 ) -> tuple[int, str]:
     """Return (count, part_id) for the chute used in aero landing, or (0, "")."""
-    non_drogue = [p for p in flags.available_parachutes if not p.is_drogue]
-    if not non_drogue:
+    chute = flags.best_chute
+    if chute is None:
         return 0, ""
-    chute = non_drogue[0]
     count = _required_chute_count(landing_mass, body, flags, diff)
     return (max(1, count), chute.name) if count != 0 else (0, "")
 
@@ -1644,7 +1678,10 @@ def _assess_one_body(
         if event.mission_type == MissionType.SAMPLE_RETURN and body.eva_jetpack_twr < _MIN_EVA_JETPACK_TWR:
             profiles = _inject_ladder(profiles)
 
-        ok, sub_blocking = _try_profiles_reason(profiles, flags, diff, event.mission_type, crewed=event.crewed)
+        ok, sub_blocking = _try_profiles_reason(
+            profiles, flags, diff, event.mission_type,
+            crewed=event.crewed, home=mission_builder.home,
+        )
         prof.access[event.name] = ok
         if not ok and not prof.blocking:
             prof.set_blocking(BlockingInfo(
@@ -1700,11 +1737,17 @@ def _try_profiles(
     diff: DifficultyProfile,
     mission_type: MissionType,
     crewed: bool | None,
+    home: BodyName,
 ) -> bool:
-    """Return True if any profile alternative is feasible."""
+    """Return True if any profile alternative is feasible.
+
+    ``home`` is needed by the relay-tier gate (heliocentric-distance
+    based); test callers can rely on the Kerbin default.
+    """
     for is_crewed in _crewed_options(crewed, flags):
         for profile in profiles:
-            result = _evaluate_profile(profile, flags, diff, mission_type, is_crewed=is_crewed)
+            result = _evaluate_profile(profile, flags, diff, mission_type,
+                                       is_crewed=is_crewed, home=home)
             if result.feasible:
                 return True
     return False
@@ -1716,6 +1759,7 @@ def _try_profiles_reason(
     diff: DifficultyProfile,
     mission_type: MissionType,
     crewed: bool | None,
+    home: BodyName,
 ) -> tuple[bool, list[BlockingInfo]]:
     """
     Like _try_profiles but also returns deduplicated blocking entries
@@ -1728,7 +1772,8 @@ def _try_profiles_reason(
                                      mission_type=str(mission_type))]
     for is_crewed in _crewed_options(crewed, flags):
         for profile in profiles:
-            result = _evaluate_profile(profile, flags, diff, mission_type, is_crewed=is_crewed)
+            result = _evaluate_profile(profile, flags, diff, mission_type,
+                                       is_crewed=is_crewed, home=home)
             if result.feasible:
                 return True, []
             for b in result.blocking:
@@ -1848,7 +1893,9 @@ def evaluate_mission_detailed(
     seen: set[str] = set()
     for is_crewed in _crewed_options(crewed, flags):
         for profile in profiles:
-            result = _evaluate_profile(profile, flags, diff, mission_type, is_crewed=is_crewed)
+            result = _evaluate_profile(profile, flags, diff, mission_type,
+                                       is_crewed=is_crewed,
+                                       home=mission_builder.home)
             if result.feasible:
                 return result
             for b in result.blocking:
@@ -1993,7 +2040,9 @@ def compute_capability_from_items(
 ) -> tuple[RocketCapability, EquipmentFlags]:
     """Compute capability without a CollectionState. For CLI/external tools."""
     diff = DIFFICULTY_PROFILES[difficulty_name]
-    flags = _pre_pass(item_count_fn, start_with_clamps, rep_names, progressive_launch_pad)
+    flags = _pre_pass(item_count_fn, start_with_clamps, rep_names,
+                      progressive_launch_pad,
+                      launch_pad_caps=mission_builder.launch_pad_caps)
     body_profiles = _assess_bodies(flags, diff, mission_builder)
     sounding_km = _compute_sounding_altitude(flags, mission_builder.home_body)
 

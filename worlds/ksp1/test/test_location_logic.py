@@ -29,7 +29,7 @@ from unittest.mock import patch, MagicMock
 
 from worlds.ksp1.locations import (
     MISSION_LOCATION_NAMES,
-    KERBIN_LOCATIONS,
+    LocationBuilder,
     KSC_BIOME_NAMES,
     EventName,
     MissionType,
@@ -114,16 +114,16 @@ class TestLocationSetStructure(unittest.TestCase):
         )
 
     def test_kerbin_special_section_has_no_return_events(self):
-        """KERBIN_LOCATIONS must not contain RETURN or SAMPLE_RETURN mission types.
+        """Home location sets must not contain RETURN or SAMPLE_RETURN mission types.
 
-        Those event types for Kerbin go through the per-body system
-        (MissionLocation), not the Kerbin special section (KerbinLocationDef).
+        Those event types go through the per-body system (MissionLocation),
+        not the home-body specials.
         """
-        for loc in KERBIN_LOCATIONS:
+        for loc in LocationBuilder(BodyName.KERBIN).locations:
             self.assertNotIn(
                 loc.mission_type,
                 (MissionType.RETURN, MissionType.SAMPLE_RETURN),
-                f"KERBIN_LOCATIONS entry {loc.name!r} has mission_type "
+                f"Home location entry {loc.name!r} has mission_type "
                 f"{loc.mission_type!r}; return events belong in the per-body system.",
             )
 
@@ -184,10 +184,11 @@ class TestLocationSetStructure(unittest.TestCase):
                     )
 
     def test_kerbin_special_location_count(self):
-        """KERBIN_LOCATIONS must have exactly 12 entries."""
+        """Kerbin home location set must have exactly 12 entries."""
+        kerbin = LocationBuilder(BodyName.KERBIN).locations
         self.assertEqual(
-            len(KERBIN_LOCATIONS), 12,
-            f"Expected 12 KERBIN_LOCATIONS, got {len(KERBIN_LOCATIONS)}.",
+            len(kerbin), 12,
+            f"Expected 12 Kerbin home locations, got {len(kerbin)}.",
         )
 
 
@@ -385,14 +386,13 @@ class TestKerbinEarlyLocations(KSP1TestBase):
         """Altitude check locations require strictly increasing sounding thresholds.
 
         Uses mocked capability to avoid depending on the SRB physics model.
-        Altitudes are read from ``KERBIN_LOCATIONS`` so this stays correct
-        if the milestone schedule shifts (Phase 3a moved from 5/15/25/…/70
-        to 5/10/16/20/30/45/70).
+        Altitudes are read from the Kerbin home location set so this stays
+        correct if the milestone schedule shifts (Phase 3a moved from
+        5/15/25/…/70 to 5/10/16/20/30/45/70).
         """
-        from worlds.ksp1.locations import KERBIN_LOCATIONS
         altitudes = sorted(
             int(loc.threshold_km)
-            for loc in KERBIN_LOCATIONS
+            for loc in LocationBuilder(BodyName.KERBIN).locations
             if loc.mission_type == MissionType.SOUNDING
             and loc.threshold_km is not None
             and loc.threshold_km >= 1.0  # exclude First Crash (0.1 km)

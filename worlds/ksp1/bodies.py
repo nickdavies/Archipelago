@@ -32,6 +32,7 @@ import math
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum, StrEnum, auto
+from functools import lru_cache
 from typing import Optional
 
 
@@ -150,7 +151,6 @@ class Body:
     low_orbit_alt_km: float         # defines "low orbit" for location checks
     solar_distance_au: float        # Kerbin = 1.0, used for ION/solar logic
     landing_leg_tier: int           # minimum leg tier required for landing
-    min_relay_tier: int             # 0=none, 1=local, 2=inner, 3=mid, 4=outer
     power_requirement: str          # "solar" | "solar_marginal" | "rtg"
     eva_jetpack_twr: float          # precomputed: 0.5/(0.09375*surface_gravity)
     dv: BodyDeltaV
@@ -174,7 +174,6 @@ class Body:
     fly_high_mult: float = 0.0      # FlyingHigh multiplier (0 = no atmosphere)
     landed_mult: float = 0.0        # Landed multiplier (0 = can't land)
     splashed_mult: float = 0.0      # Splashed multiplier (0 = no ocean)
-    all_parts_proxy: bool = False    # True = return rules use all-parts proxy (can't model ascent)
 
     # ------------------------------------------------------------------
     # Orbital constants
@@ -269,6 +268,13 @@ class MissionEdge:
     edge_type: EdgeType
     base_dv: float                      # m/s, nominal delta-v
     body: BodyName                      # body name for physics lookups
+    # Baked-in by ``MissionBuilder._edge`` at construction.  ``home`` is
+    # fixed per world, so ``min_relay_tier(body, home)`` is a constant
+    # for the life of the MissionBuilder.  The per-edge attribute lets
+    # the capability hot loop ``flags.relay_tier < edge.relay_tier``
+    # read directly instead of doing ``relay_table[edge.body]`` (or the
+    # older ``BODY_BY_NAME[edge.body].name`` + lru-cache function call).
+    relay_tier: int = 0
     plane_change_dv: float = 0.0        # worst-case plane change
     min_twr: float = 0.0                # 0.0 = no TWR requirement
     requires_throttleable: bool = False
@@ -288,7 +294,7 @@ KERBIN = Body(
     atm_pressure_kpa=101.325, atm_density_kg_m3=1.225,
     can_land=True, low_orbit_alt_km=80,
     solar_distance_au=1.0,
-    landing_leg_tier=2, min_relay_tier=0,
+    landing_leg_tier=2,
     power_requirement="solar",
     eva_jetpack_twr=_jetpack_twr(9.81),
     dv=BodyDeltaV(
@@ -309,7 +315,7 @@ MUN = Body(
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=14,
     solar_distance_au=1.0,
-    landing_leg_tier=2, min_relay_tier=0,
+    landing_leg_tier=2,
     power_requirement="solar",
     eva_jetpack_twr=_jetpack_twr(1.63),
     dv=BodyDeltaV(
@@ -329,7 +335,7 @@ MINMUS = Body(
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=10,
     solar_distance_au=1.0,
-    landing_leg_tier=1, min_relay_tier=0,
+    landing_leg_tier=1,
     power_requirement="solar",
     eva_jetpack_twr=_jetpack_twr(0.491),
     dv=BodyDeltaV(
@@ -349,7 +355,7 @@ MOHO = Body(
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=20,
     solar_distance_au=0.34,
-    landing_leg_tier=2, min_relay_tier=2,
+    landing_leg_tier=2,
     power_requirement="solar",
     eva_jetpack_twr=_jetpack_twr(2.70),
     dv=BodyDeltaV(
@@ -369,7 +375,7 @@ EVE = Body(
     atm_pressure_kpa=506.625, atm_density_kg_m3=5.0,
     can_land=True, low_orbit_alt_km=90,
     solar_distance_au=0.72,
-    landing_leg_tier=2, min_relay_tier=3,
+    landing_leg_tier=2,
     power_requirement="solar",
     eva_jetpack_twr=_jetpack_twr(16.7),
     dv=BodyDeltaV(
@@ -382,7 +388,6 @@ EVE = Body(
     space_low_mult=8.0, space_high_mult=4.0,
     fly_low_mult=2.0, fly_high_mult=1.5,
     landed_mult=8.0, splashed_mult=8.0,
-    all_parts_proxy=True,
 )
 
 GILLY = Body(
@@ -391,7 +396,7 @@ GILLY = Body(
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=6,
     solar_distance_au=0.72,
-    landing_leg_tier=1, min_relay_tier=3,
+    landing_leg_tier=1,
     power_requirement="solar",
     eva_jetpack_twr=_jetpack_twr(0.049),
     dv=BodyDeltaV(
@@ -411,7 +416,7 @@ DUNA = Body(
     atm_pressure_kpa=6.755, atm_density_kg_m3=0.096,
     can_land=True, low_orbit_alt_km=50,
     solar_distance_au=1.52,
-    landing_leg_tier=2, min_relay_tier=3,
+    landing_leg_tier=2,
     power_requirement="solar_marginal",
     eva_jetpack_twr=_jetpack_twr(2.94),
     dv=BodyDeltaV(
@@ -432,7 +437,7 @@ IKE = Body(
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=10,
     solar_distance_au=1.52,
-    landing_leg_tier=2, min_relay_tier=3,
+    landing_leg_tier=2,
     power_requirement="solar_marginal",
     eva_jetpack_twr=_jetpack_twr(1.10),
     dv=BodyDeltaV(
@@ -452,7 +457,7 @@ DRES = Body(
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=25,
     solar_distance_au=2.65,
-    landing_leg_tier=2, min_relay_tier=3,
+    landing_leg_tier=2,
     power_requirement="solar_marginal",
     eva_jetpack_twr=_jetpack_twr(2.94),
     dv=BodyDeltaV(
@@ -472,7 +477,7 @@ JOOL = Body(
     atm_pressure_kpa=1519.88, atm_density_kg_m3=10.0,
     can_land=False, low_orbit_alt_km=210,
     solar_distance_au=5.20,
-    landing_leg_tier=0, min_relay_tier=4,
+    landing_leg_tier=0,
     power_requirement="rtg",
     eva_jetpack_twr=_jetpack_twr(7.85),
     dv=BodyDeltaV(
@@ -492,7 +497,7 @@ LAYTHE = Body(
     atm_pressure_kpa=60.795, atm_density_kg_m3=0.73,
     can_land=True, low_orbit_alt_km=60,
     solar_distance_au=5.20,
-    landing_leg_tier=2, min_relay_tier=4,
+    landing_leg_tier=2,
     power_requirement="rtg",
     eva_jetpack_twr=_jetpack_twr(7.85),
     dv=BodyDeltaV(
@@ -505,7 +510,6 @@ LAYTHE = Body(
     space_low_mult=12.0, space_high_mult=6.0,
     fly_low_mult=4.0, fly_high_mult=3.0,
     landed_mult=14.0, splashed_mult=10.0,
-    all_parts_proxy=True,
 )
 
 VALL = Body(
@@ -514,7 +518,7 @@ VALL = Body(
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=15,
     solar_distance_au=5.20,
-    landing_leg_tier=2, min_relay_tier=4,
+    landing_leg_tier=2,
     power_requirement="rtg",
     eva_jetpack_twr=_jetpack_twr(2.31),
     dv=BodyDeltaV(
@@ -534,7 +538,7 @@ TYLO = Body(
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=30,
     solar_distance_au=5.20,
-    landing_leg_tier=2, min_relay_tier=4,
+    landing_leg_tier=2,
     power_requirement="rtg",
     eva_jetpack_twr=_jetpack_twr(7.85),
     dv=BodyDeltaV(
@@ -546,7 +550,6 @@ TYLO = Body(
     num_biomes=6,
     space_low_mult=12.0, space_high_mult=6.0,
     landed_mult=12.0,
-    all_parts_proxy=True,
 )
 
 BOP = Body(
@@ -555,7 +558,7 @@ BOP = Body(
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=10,
     solar_distance_au=5.20,
-    landing_leg_tier=1, min_relay_tier=4,
+    landing_leg_tier=1,
     power_requirement="rtg",
     eva_jetpack_twr=_jetpack_twr(0.589),
     dv=BodyDeltaV(
@@ -575,7 +578,7 @@ POL = Body(
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=6,
     solar_distance_au=5.20,
-    landing_leg_tier=1, min_relay_tier=4,
+    landing_leg_tier=1,
     power_requirement="rtg",
     eva_jetpack_twr=_jetpack_twr(0.373),
     dv=BodyDeltaV(
@@ -595,7 +598,7 @@ EELOO = Body(
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=10,
     solar_distance_au=6.0,
-    landing_leg_tier=2, min_relay_tier=4,
+    landing_leg_tier=2,
     power_requirement="rtg",
     eva_jetpack_twr=_jetpack_twr(1.72),
     dv=BodyDeltaV(
@@ -615,7 +618,7 @@ KERBOL = Body(
     atm_pressure_kpa=16200.0, atm_density_kg_m3=350.0,
     can_land=False, low_orbit_alt_km=1000,
     solar_distance_au=0.0,
-    landing_leg_tier=0, min_relay_tier=0,
+    landing_leg_tier=0,
     power_requirement="solar",
     eva_jetpack_twr=_jetpack_twr(17.1),
     dv=BodyDeltaV(
@@ -700,6 +703,45 @@ MissionProfiles = dict[tuple[BodyName, MissionType], list[list[MissionEdge]]]
 
 
 # ---------------------------------------------------------------------------
+# Progressive Launch Pad: per-home cap scaling
+# ---------------------------------------------------------------------------
+
+# Kerbin baseline tonnage caps by collected count of "Progressive Launch
+# Pad" (index = number of copies received).  Other homes scale these by
+# their surface→low-orbit dv ratio.  Index 0 (no copies) is the starting
+# cap; index N is "unlimited" so the player isn't blocked at the goal.
+_PROGRESSIVE_LAUNCH_PAD_CAPS_KERBIN: tuple[float, ...] = (100.0, 200.0, 500.0, float("inf"))
+
+# Reference Isp used in the rocket-equation scaling (m/s).  Roughly an
+# LV-909 vacuum engine — a mid-tier optimization point that matches
+# typical mission designs.  Higher Isp → smaller cap ratio swing across
+# homes (because the mass penalty per Δdv is exponential in 1/Isp).
+_PROGRESSIVE_LAUNCH_PAD_ISP_REF: float = 3000.0
+
+
+def progressive_launch_pad_caps_for(home: BodyName) -> tuple[float, ...]:
+    """Per-home tonnage caps for the Progressive Launch Pad item.
+
+    Scales the Kerbin baseline by ``exp((home.dvGL - kerbin.dvGL) / Isp_ref)``.
+    This matches the rocket equation's ``payload * exp(Δdv / Isp_eff)``
+    mass scaling so each cap tier opens up a similar "effective span of
+    missions" regardless of home gravity well.
+
+    The infinity entry stays as infinity — that final cap removes the
+    constraint entirely so heavy goal missions stay feasible after the
+    player collects all copies.
+    """
+    import math
+    kerbin_dv = BODY_BY_NAME[BodyName.KERBIN].dv.dvGL or 3400.0
+    home_dv = BODY_BY_NAME[home].dv.dvGL or kerbin_dv
+    ratio = math.exp((home_dv - kerbin_dv) / _PROGRESSIVE_LAUNCH_PAD_ISP_REF)
+    return tuple(
+        cap * ratio if cap != float("inf") else cap
+        for cap in _PROGRESSIVE_LAUNCH_PAD_CAPS_KERBIN
+    )
+
+
+# ---------------------------------------------------------------------------
 # MissionBuilder
 # ---------------------------------------------------------------------------
 
@@ -748,10 +790,28 @@ class MissionBuilder:
     # destinations naturally produce 2 (aero + prop schemes); the cap
     # guards against accidental combinatorial blow-ups from future graph
     # additions.
-    _MAX_PROFILE_ALTS = 4
+    # Cap on profile alternatives kept per ``(body, mission_type)``.  Two is
+    # enough to cover the aero/prop scheme choice at a destination — the
+    # path enumerator can produce more (e.g. moon-SOI vs combined-escape
+    # routing variants) but anything past the two cheapest is dominated
+    # by them and just inflates capability-evaluation work in the sphere
+    # ladder's hot loop.
+    _MAX_PROFILE_ALTS = 2
 
     def __init__(self, home: BodyName):
         self.home: BodyName = home
+        # Precomputed relay-tier table keyed by destination BodyName.
+        # Built before edge construction so ``_edge`` can stamp the
+        # value onto every ``MissionEdge.relay_tier`` directly — the
+        # capability hot loop then reads a struct field instead of
+        # doing any lookup.  Public so callers (capability_format etc.)
+        # can read tiers without re-computing.
+        self.relay_tier_by_body: dict[BodyName, int] = relay_tier_table_for(home)
+        # Per-home Progressive Launch Pad tonnage caps.  Scales with the
+        # home body's surface→low-orbit dv so the same number of copies
+        # opens up roughly the same span of mission difficulty across
+        # homes.  See ``progressive_launch_pad_caps_for``.
+        self.launch_pad_caps: tuple[float, ...] = progressive_launch_pad_caps_for(home)
         # Per-node edge lists, tagged with ("", "aero", or "prop"):
         self._outbound: dict[str, list[tuple[str, MissionEdge]]] = defaultdict(list)
         self._return: dict[str, list[tuple[str, MissionEdge]]] = defaultdict(list)
@@ -796,8 +856,8 @@ class MissionBuilder:
     # Edge construction helpers (private)
     # ------------------------------------------------------------------
 
-    @staticmethod
     def _edge(
+        self,
         src: str, dst: str, et: EdgeType, dv: float, body: BodyName,
         pc: float = 0.0, min_twr: float = 0.0,
         throttle: bool = False, attitude: bool = False,
@@ -805,7 +865,9 @@ class MissionBuilder:
     ) -> MissionEdge:
         return MissionEdge(
             source=src, destination=dst, edge_type=et,
-            base_dv=dv, body=body, plane_change_dv=pc,
+            base_dv=dv, body=body,
+            relay_tier=self.relay_tier_by_body[body],
+            plane_change_dv=pc,
             min_twr=min_twr, requires_throttleable=throttle,
             requires_attitude_control=attitude,
             needs_heat_shield=heat, needs_landing_legs=legs,
@@ -1369,6 +1431,7 @@ def science_budget(
 # Home-system bodies
 # ---------------------------------------------------------------------------
 
+@lru_cache(maxsize=None)
 def home_system_bodies(home: BodyName) -> frozenset[BodyName]:
     """Bodies that share the home's "local neighbourhood" — no interplanetary
     transfer needed to reach them.
@@ -1379,6 +1442,10 @@ def home_system_bodies(home: BodyName) -> frozenset[BodyName]:
     The home-system set gates the "launch clamps required for interplanetary"
     rule in capability and the item-pacing sphere-0 split in rules.  For
     home=Kerbin this returns ``{Kerbin, Mun, Minmus}``.
+
+    Cached because ``min_relay_tier`` calls this once per edge during
+    profile evaluation (~millions of times per fill) and the inputs only
+    range over the 17 ``BodyName`` values.
     """
     home_body = BODY_BY_NAME[home]
     if home_body.parent is None:
@@ -1472,3 +1539,78 @@ def parent_chain(body: Body) -> list[str]:
         chain.append(current.name)
         current = BODY_BY_NAME.get(current.parent) if current.parent else None
     return chain
+
+
+# ---------------------------------------------------------------------------
+# Relay tier requirement
+# ---------------------------------------------------------------------------
+
+# Heliocentric-separation thresholds for relay-tier requirements.
+#
+# The antenna must hold the link for the whole stay at the target, so
+# the relevant distance is the *worst-case* heliocentric separation:
+# when target and home are at opposition the signal travels
+# ``r_target + r_home`` (across the solar system with the sun in
+# between).  Conjunction would be ``|r_target - r_home|`` but that's
+# the fleeting best case — sizing the antenna for it leaves the player
+# stranded for half the synodic period.
+#
+# Thresholds chosen so Kerbin-home reproduces the original hand-tuned
+# per-body tiers byte-identical (Moho 2, Eve / Duna / Dres 3, Jool /
+# Eeloo 4) while keeping the formula homogeneous for any starting body.
+_RELAY_TIER_AU_THRESHOLDS: tuple[tuple[float, int], ...] = (
+    (0.5, 0),   # negligible separation (unused — home_system bypass)
+    (1.3, 1),   # innermost band — unused under stock home distances
+    (1.5, 2),   # Moho (max sep 1.34 AU from Kerbin)
+    (4.0, 3),   # Eve / Gilly (1.72), Duna / Ike (2.52), Dres (3.65)
+)
+
+
+def min_relay_tier(body: BodyName, home: BodyName) -> int:
+    """Minimum relay tier required to keep a link between ``body`` and
+    ``home``.
+
+    Bodies in the home's local neighbourhood (the home itself, plus
+    moons-of-home for planet homes, or parent-and-siblings for moon
+    homes) return tier 0 — comms inside a parent SOI don't need an
+    interplanetary antenna.  Everything else is gated by the worst-case
+    heliocentric separation (``r_target + r_home``), which is what the
+    antenna must hold for the half-synodic period when the bodies sit
+    on opposite sides of the sun.
+
+    Returns 0..4.  See ``_RELAY_TIER_AU_THRESHOLDS``.
+
+    Hot-path callers should not invoke this directly — they should
+    fetch a precomputed dict via ``relay_tier_table_for(home)`` (a flat
+    dict lookup is faster than the function-call + branch path here,
+    and the result depends only on ``home`` which is fixed per world).
+    """
+    if body == home or body in home_system_bodies(home):
+        return 0
+    max_sep_au = (BODY_BY_NAME[body].solar_distance_au
+                  + BODY_BY_NAME[home].solar_distance_au)
+    for threshold, tier in _RELAY_TIER_AU_THRESHOLDS:
+        if max_sep_au < threshold:
+            return tier
+    return 4
+
+
+# Per-home precomputed relay-tier tables.  The inner dict is keyed by
+# destination ``BodyName`` and built once on first request for a given
+# home, then reused — flat dict lookup is significantly faster than the
+# ``min_relay_tier`` function path on the per-edge hot loop in
+# ``_evaluate_profile`` (called millions of times during fill).
+_RELAY_TIER_TABLES: dict[BodyName, dict[BodyName, int]] = {}
+
+
+def relay_tier_table_for(home: BodyName) -> dict[BodyName, int]:
+    """Return ``{body: min_relay_tier}`` for every BodyName, computed
+    once per ``home`` and cached.  Use this in any tight loop instead
+    of calling ``min_relay_tier`` per edge — a flat dict lookup is
+    measurably faster than the function-call + branch path.
+    """
+    table = _RELAY_TIER_TABLES.get(home)
+    if table is None:
+        table = {b.name: min_relay_tier(b.name, home) for b in ALL_BODIES}
+        _RELAY_TIER_TABLES[home] = table
+    return table

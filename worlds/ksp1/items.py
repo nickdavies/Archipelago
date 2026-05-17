@@ -246,13 +246,26 @@ PROGRESSIVE_LAUNCH_PAD_NAME: str = "Progressive Launch Pad"
 PROGRESSIVE_SAS_NAME: str = "Progressive SAS"
 PROGRESSIVE_XENON_TANK_NAME: str = "Progressive Xenon Tank"
 
-# Tonnage caps by collected count (index = number of copies received).
-# Index 0 = no copies = starting cap. Starting at 100t lets sphere-0 do
-# basic Kerbin / Mun / Minmus orbit + landing without any Launch Pad item,
-# which breaks the bootstrap deadlock when the item is banned from the
-# early bucket.
-PROGRESSIVE_LAUNCH_PAD_CAPS: tuple[float, ...] = (100.0, 200.0, 500.0, float("inf"))
-PROGRESSIVE_LAUNCH_PAD_COUNT: int = len(PROGRESSIVE_LAUNCH_PAD_CAPS) - 1  # 3 copies
+# Kerbin baseline tonnage caps by collected count (index = number of copies
+# received).  Index 0 = no copies = starting cap.  Starting at 100t lets
+# sphere-0 do basic Kerbin / Mun / Minmus orbit + landing without any
+# Launch Pad item, which breaks the bootstrap deadlock when the item is
+# banned from the early bucket.  Non-Kerbin homes scale these by their
+# surface→low-orbit dv ratio (see ``progressive_launch_pad_caps_for``).
+PROGRESSIVE_LAUNCH_PAD_CAPS_KERBIN: tuple[float, ...] = (100.0, 200.0, 500.0, float("inf"))
+
+# Count of copies in the item pool — fixed regardless of home.  Only the
+# tonnage caps scale; the player always collects the same number of items.
+PROGRESSIVE_LAUNCH_PAD_COUNT: int = len(PROGRESSIVE_LAUNCH_PAD_CAPS_KERBIN) - 1  # 3 copies
+
+# Backward-compat alias used by callers that haven't been updated yet to
+# ``progressive_launch_pad_caps_for``.  Removed when no consumers remain.
+PROGRESSIVE_LAUNCH_PAD_CAPS: tuple[float, ...] = PROGRESSIVE_LAUNCH_PAD_CAPS_KERBIN
+
+
+# See ``bodies.progressive_launch_pad_caps_for`` for the per-home cap
+# function.  Kept defined there to keep items.py free of body-dynamics
+# math; this module just owns the Kerbin baseline tuple.
 
 # Progressive items: offsets 50–99 (special range, not physical parts)
 _PROGRESSIVE_ITEMS: dict[str, tuple[int, ItemClassification]] = {
