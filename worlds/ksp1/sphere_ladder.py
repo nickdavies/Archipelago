@@ -33,35 +33,10 @@ from .capability import (
 from .capability_reasons import (
     BlockingInfo, BlockingReason, StageDiagnostic, StageFailure,
 )
-from .bodies import BodyName as _BN
 from .locations import (
     EVENT_BY_NAME, EventName, LocationBuilder, MissionLocation,
     KSC_BIOME_NAMES, KSC_LOCATION_PREFIX,
 )
-
-
-# Body/event combinations whose access rule is a proxy (state.has_all
-# progression items) rather than physics-based capability. The capability
-# system can't compute Eve ascent / Tylo aerobrake, so the rule short-
-# circuits to "have everything". Sphere ladder cannot honor these via
-# `minimal_rocket_for` (it bottoms out on NO_VIABLE_STAGE no matter
-# what); we skip them and let the proxy rule + main fill handle them.
-# Keep in sync with rules.py:271-274.
-_PROXY_GOALS: frozenset[tuple[str, str]] = frozenset({
-    (_BN.EVE, EventName.RETURN),
-    (_BN.EVE, EventName.SAMPLE_RETURN),
-    (_BN.TYLO, EventName.RETURN),
-    (_BN.TYLO, EventName.SAMPLE_RETURN),
-    (_BN.LAYTHE, EventName.RETURN),
-    (_BN.LAYTHE, EventName.SAMPLE_RETURN),
-})
-
-
-def _is_proxy_goal(location_name: str) -> bool:
-    parsed = MissionLocation.parse(location_name)
-    if parsed is None:
-        return False
-    return (parsed.body, parsed.event) in _PROXY_GOALS
 from .items import (
     PROGRESSIVE_LAUNCH_PAD_COUNT, PROGRESSIVE_LAUNCH_PAD_NAME,
     PROGRESSIVE_RD_COUNT, PROGRESSIVE_RD_NAME,
@@ -1210,9 +1185,10 @@ def _predictable_spheres(world: "KSP1World") -> list[tuple[str, str]]:
     first, so the cumulative grows gradually through the goal band.
 
     Skip goals not physics-gated by capability:
-      - Proxy goals (Eve/Tylo/Laythe Return/SR): rule is state.has_all
-        progression items; capability can't model them.  They become
-        reachable when the chain's cumulative covers every chain item.
+      - Proxy goals (listed in ``world.model_infeasible_locations`` for
+        the active home): rule is state.has_all progression items;
+        capability can't model them.  They become reachable when the
+        chain's cumulative covers every chain item.
       - Tech tree goals: gate on accumulated science.  Handled by the
         tech-tier post-pass.
     """
@@ -1223,9 +1199,10 @@ def _predictable_spheres(world: "KSP1World") -> list[tuple[str, str]]:
         ("S_orbit", f"{home} Orbit 1"),
     ]
     goal_names = list(goal_spec_location_names(world.goal_spec))
+    infeasible = world.model_infeasible_locations
     feasible_goals = [
         n for n in goal_names
-        if not _is_proxy_goal(n) and _parse_location(n) is not None
+        if n not in infeasible and _parse_location(n) is not None
     ]
     for goal_name in feasible_goals:
         out.append((f"S_goal[{goal_name}]", goal_name))
@@ -1309,13 +1286,14 @@ def _compute_location_signatures(
     ]
     pad_on = bool(world.options.progressive_launch_pad)
     clamps = bool(world.options.start_with_launch_clamps)
+    infeasible = world.model_infeasible_locations
 
     sigs: dict[str, LocationSignature] = {}
     min_kits: dict[str, dict[str, int]] = {}
     for loc in world.multiworld.get_locations(world.player):
         if loc.address is None:
             continue
-        if _is_proxy_goal(loc.name):
+        if loc.name in infeasible:
             continue
         info = _parse_location(loc.name)
         if info is None:
