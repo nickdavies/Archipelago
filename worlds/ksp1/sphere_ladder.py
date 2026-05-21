@@ -843,17 +843,84 @@ _MINIMAL_ROCKET_CACHE_STATS: dict[str, int] = {
     "bypassed_no_canonical": 0,  # _parse_location returned None
 }
 
+# Cross-call ``_pre_pass`` cache.  The bumper repeatedly evaluates kits that
+# differ by a single bump, and many of those kits recur across different
+# ``minimal_rocket_for`` calls (especially during ``_compute_location_signatures``
+# where every call starts from ``prior_kit={}`` and bumps the same small set
+# of candidates).  Caching by canonical (kit, options) avoids re-running
+# ``_pre_pass`` for kits we've already seen.
+#
+# Lives next to the minimal_rocket_for cache; cleared together at the top
+# of ``apply_sphere_ladder``.  Cached ``EquipmentFlags`` objects are shared
+# between callers; downstream evaluators (``evaluate_mission_detailed`` and
+# friends) treat ``flags`` as read-only.
+_PRE_PASS_CACHE: dict[tuple, EquipmentFlags] = {}
+_PRE_PASS_CACHE_STATS: dict[str, int] = {"hits": 0, "misses": 0}
+
 
 def clear_minimal_rocket_cache() -> None:
-    """Reset the per-call cache and its hit/miss counters."""
+    """Reset the per-call caches and their hit/miss counters."""
     _MINIMAL_ROCKET_CACHE.clear()
     for k in _MINIMAL_ROCKET_CACHE_STATS:
         _MINIMAL_ROCKET_CACHE_STATS[k] = 0
+    _PRE_PASS_CACHE.clear()
+    for k in _PRE_PASS_CACHE_STATS:
+        _PRE_PASS_CACHE_STATS[k] = 0
 
 
 def get_minimal_rocket_cache_stats() -> dict[str, int]:
     """Snapshot the cache hit/miss/bypass counters."""
     return dict(_MINIMAL_ROCKET_CACHE_STATS)
+
+
+def get_pre_pass_cache_stats() -> dict[str, int]:
+    """Snapshot the _pre_pass cache hit/miss counters."""
+    return dict(_PRE_PASS_CACHE_STATS)
+
+
+def _pre_pass_cached(
+    kit: dict[str, int],
+    *,
+    start_with_clamps: bool,
+    rep_names: frozenset[str],
+    progressive_launch_pad: bool,
+    launch_pad_caps: tuple,
+    precollected_names: frozenset[str],
+) -> EquipmentFlags:
+    """Cache-wrapped ``_pre_pass``.  Takes the kit dict directly rather than
+    a closure so the cache key is hashable; builds the closure internally.
+    Callers must treat the returned ``EquipmentFlags`` as read-only.
+    """
+    key = (
+        tuple(sorted(kit.items())),
+        start_with_clamps,
+        rep_names,
+        progressive_launch_pad,
+        launch_pad_caps,
+        precollected_names,
+    )
+    cached = _PRE_PASS_CACHE.get(key)
+    if cached is not None:
+        _PRE_PASS_CACHE_STATS["hits"] += 1
+        return cached
+    _PRE_PASS_CACHE_STATS["misses"] += 1
+
+    def cf(name, _k=kit, _pre=precollected_names):
+        if name in PROGRESSIVE_CAPS:
+            return _k.get(name, 0)
+        if name in _pre:
+            return 1
+        return 0
+
+    flags = _pre_pass(
+        cf,
+        start_with_clamps=start_with_clamps,
+        rep_names=rep_names,
+        progressive_launch_pad=progressive_launch_pad,
+        launch_pad_caps=launch_pad_caps,
+    )
+    _PRE_PASS_CACHE[key] = flags
+    return flags
 
 
 def minimal_rocket_for(
@@ -943,13 +1010,6 @@ def _minimal_rocket_for_uncached(
     # use them is a wasted iteration; the bumper filters them out.
     narrow_relevant = _relevant_narrow_chains(info.body, info.mission_type, info.crewed, mission_builder)
 
-    def _count_fn(name: str, _k: dict[str, int] = kit) -> int:
-        if name in PROGRESSIVE_CAPS:
-            return _k.get(name, 0)
-        if name in precollected_names:
-            return 1
-        return 0
-
     def _evaluate_with_bump(cand: str) -> tuple[bool, float, int]:
         """Score a hypothetical bump of ``cand`` by running pre_pass +
         evaluate on a kit with that candidate incremented by one.
@@ -958,20 +1018,13 @@ def _minimal_rocket_for_uncached(
         """
         trial_kit = dict(kit)
         trial_kit[cand] = trial_kit.get(cand, 0) + 1
-
-        def _trial_count_fn(name: str, _tk: dict[str, int] = trial_kit) -> int:
-            if name in PROGRESSIVE_CAPS:
-                return _tk.get(name, 0)
-            if name in precollected_names:
-                return 1
-            return 0
-
-        trial_flags = _pre_pass(
-            _trial_count_fn,
+        trial_flags = _pre_pass_cached(
+            trial_kit,
             start_with_clamps=start_with_clamps,
             rep_names=rep_names,
             progressive_launch_pad=progressive_launch_pad,
             launch_pad_caps=mission_builder.launch_pad_caps,
+            precollected_names=precollected_names,
         )
         trial_result = _evaluate(trial_flags, info, diff, mission_builder)
         # When infeasible, `launch_mass` carries the optimizer's partial-
@@ -995,18 +1048,13 @@ def _minimal_rocket_for_uncached(
         """Score an arbitrary kit (not just a single bump from current).
         Used by pair-lookahead in ``_pick_bump``.
         """
-        def _trial_count_fn(name: str, _tk: dict[str, int] = trial_kit) -> int:
-            if name in PROGRESSIVE_CAPS:
-                return _tk.get(name, 0)
-            if name in precollected_names:
-                return 1
-            return 0
-        trial_flags = _pre_pass(
-            _trial_count_fn,
+        trial_flags = _pre_pass_cached(
+            trial_kit,
             start_with_clamps=start_with_clamps,
             rep_names=rep_names,
             progressive_launch_pad=progressive_launch_pad,
             launch_pad_caps=mission_builder.launch_pad_caps,
+            precollected_names=precollected_names,
         )
         trial_result = _evaluate(trial_flags, info, diff, mission_builder)
         # When infeasible, `launch_mass` carries the optimizer's partial-
@@ -1033,12 +1081,13 @@ def _minimal_rocket_for_uncached(
     stuck_iters = 0   # consecutive iters where blocker count didn't drop
     prev_blocker_count = -1
     for _ in range(200):
-        flags = _pre_pass(
-            _count_fn,
+        flags = _pre_pass_cached(
+            kit,
             start_with_clamps=start_with_clamps,
             rep_names=rep_names,
             progressive_launch_pad=progressive_launch_pad,
             launch_pad_caps=mission_builder.launch_pad_caps,
+            precollected_names=precollected_names,
         )
         result = _evaluate(flags, info, diff, mission_builder)
         if result.feasible:
