@@ -474,5 +474,48 @@ class TestSymmetricEngineCounts(unittest.TestCase):
         self.assertGreaterEqual(result.engine_count, 1)
 
 
+class TestFindOptimalStageCacheStructuralGuard(unittest.TestCase):
+    """The find_optimal_stage cache builds its key from every signature
+    parameter except those in ``_FOS_EXCLUDED_PARAMS``.  These tests
+    confirm the module-load assertion catches the two ways the guard
+    could silently break: a typo'd exclude entry, or a typo'd normalizer
+    entry.  If this assertion ever stops working, a new signature
+    parameter could silently miss the cache key — a correctness bug.
+    """
+
+    def test_unknown_exclude_param_raises_import_error(self):
+        from worlds.ksp1 import rocket_math
+        original = rocket_math._FOS_EXCLUDED_PARAMS
+        try:
+            rocket_math._FOS_EXCLUDED_PARAMS = frozenset({"not_a_real_param"})
+            with self.assertRaises(ImportError) as ctx:
+                rocket_math._build_fos_key_spec()
+            self.assertIn("not_a_real_param", str(ctx.exception))
+        finally:
+            rocket_math._FOS_EXCLUDED_PARAMS = original
+
+    def test_unknown_normalizer_param_raises_import_error(self):
+        from worlds.ksp1 import rocket_math
+        original = rocket_math._FOS_NORMALIZERS
+        try:
+            rocket_math._FOS_NORMALIZERS = {"not_a_real_param": lambda x: x}
+            with self.assertRaises(ImportError) as ctx:
+                rocket_math._build_fos_key_spec()
+            self.assertIn("not_a_real_param", str(ctx.exception))
+        finally:
+            rocket_math._FOS_NORMALIZERS = original
+
+    def test_cache_key_covers_every_signature_param(self):
+        """Every parameter in the signature is either in the key spec or
+        in the excluded set — no parameter goes unaccounted for."""
+        import inspect
+        from worlds.ksp1 import rocket_math
+        sig = inspect.signature(rocket_math._find_optimal_stage_uncached)
+        sig_names = set(sig.parameters.keys())
+        keyed = {entry[1] for entry in rocket_math._FOS_KEY_SPEC}
+        excluded = rocket_math._FOS_EXCLUDED_PARAMS
+        self.assertEqual(sig_names, keyed | excluded)
+
+
 if __name__ == "__main__":
     unittest.main()

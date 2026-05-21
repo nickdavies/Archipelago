@@ -1846,6 +1846,8 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
       - Register ``S_launch.delta`` as ``local_early_items``.
     """
     clear_minimal_rocket_cache()
+    from .rocket_math import clear_find_optimal_stage_cache
+    clear_find_optimal_stage_cache()
     ladder = SphereLadder()
     # Compute signatures + min-kits up front (intrinsic; don't depend
     # on the chain).

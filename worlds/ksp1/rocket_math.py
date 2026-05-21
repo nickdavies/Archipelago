@@ -242,7 +242,7 @@ def _adapter_max_engines(e_size: float, t_size: float,
 # Stage optimizer
 # ---------------------------------------------------------------------------
 
-def find_optimal_stage(
+def _find_optimal_stage_uncached(
     available_engines: list[Engine],
     available_srbs: list[SolidBooster],
     available_tanks: list[FuelTank],
@@ -653,6 +653,186 @@ def find_optimal_stage(
         ))
 
     return best
+
+
+# ---------------------------------------------------------------------------
+# find_optimal_stage cache
+# ---------------------------------------------------------------------------
+# Profile alternatives for the same body often share an early-stage edge
+# (e.g. two Mun-orbit profiles both start with "Kerbin ascent to LKO" at
+# the same payload).  Each shared edge invokes ``find_optimal_stage`` with
+# identical arguments.  Caching dedupes those calls.
+#
+# Structural safety: the cache key is built from every signature parameter
+# except those in ``_FOS_EXCLUDED_PARAMS``.  At module load
+# ``_build_fos_key_spec`` validates that ``_FOS_EXCLUDED_PARAMS`` and
+# ``_FOS_NORMALIZERS`` only reference names that exist in the function's
+# signature.  Adding a new parameter to ``_find_optimal_stage_uncached``
+# without updating either set causes the new parameter to enter the cache
+# key automatically — correct by default.  Adding a parameter with an
+# unhashable type produces a ``TypeError`` on the first call.
+
+import inspect as _inspect
+
+
+_FOS_CACHE: dict[tuple, "tuple[Optional[StageResult], tuple]"] = {}
+_FOS_CACHE_STATS: dict[str, int] = {"hits": 0, "misses": 0}
+_FOS_SENTINEL = object()
+
+
+def _fos_norm_part_list(parts):
+    """Normalize a list of Engine/SolidBooster/FuelTank to a tuple of names."""
+    return tuple(p.name for p in parts)
+
+
+def _fos_norm_tanks_by_fuel_type(d):
+    if d is None:
+        return None
+    return tuple(sorted(
+        (k, tuple(t.name for t in v)) for k, v in d.items()
+    ))
+
+
+def _fos_norm_multi_mounts(mounts):
+    # MultiMount has no .name field (instances live in MULTI_MOUNT_TABLE
+    # keyed by string, but the field isn't carried).  Canonicalize by
+    # the identity-defining content.  Order is preserved because the
+    # underlying function iterates the list and order can affect tie-
+    # breaking in candidate engine-mounting decisions.
+    if mounts is None:
+        return None
+    return tuple(
+        (m.min_tank_size, tuple(sorted(m.engine_counts.items())))
+        for m in mounts
+    )
+
+
+# Parameters that aren't part of the input (output/identity-only).
+# ``diagnostic_out`` is a mutable output channel; the wrapper captures
+# and replays its content.
+_FOS_EXCLUDED_PARAMS: frozenset[str] = frozenset({"diagnostic_out"})
+
+# Normalizers convert non-hashable parameter values into a hashable form
+# that preserves identity-relevant content.
+_FOS_NORMALIZERS: dict = {
+    "available_engines": _fos_norm_part_list,
+    "available_srbs": _fos_norm_part_list,
+    "available_tanks": _fos_norm_part_list,
+    "tanks_by_fuel_type": _fos_norm_tanks_by_fuel_type,
+    "available_multi_mounts": _fos_norm_multi_mounts,
+}
+
+
+def _build_fos_key_spec():
+    """Validate ``_FOS_EXCLUDED_PARAMS`` and ``_FOS_NORMALIZERS`` against
+    the signature of ``_find_optimal_stage_uncached``, then precompute a
+    per-cacheable-parameter dispatch tuple (positional_index, name,
+    normalizer_or_None, default).
+
+    Raises ``ImportError`` at module load if either set names a parameter
+    that no longer exists.  This is the structural check that catches a
+    signature change that would otherwise silently drift the cache key.
+    """
+    sig = _inspect.signature(_find_optimal_stage_uncached)
+    sig_names = set(sig.parameters.keys())
+    unknown_excl = _FOS_EXCLUDED_PARAMS - sig_names
+    if unknown_excl:
+        raise ImportError(
+            f"_FOS_EXCLUDED_PARAMS has names not in "
+            f"_find_optimal_stage_uncached signature: {sorted(unknown_excl)}"
+        )
+    unknown_norm = set(_FOS_NORMALIZERS) - sig_names
+    if unknown_norm:
+        raise ImportError(
+            f"_FOS_NORMALIZERS has names not in "
+            f"_find_optimal_stage_uncached signature: {sorted(unknown_norm)}"
+        )
+    spec = []
+    diag_index = -1
+    diag_default = None
+    for i, (name, p) in enumerate(sig.parameters.items()):
+        if name == "diagnostic_out":
+            diag_index = i
+            diag_default = p.default if p.default is not _inspect.Parameter.empty else None
+        if name in _FOS_EXCLUDED_PARAMS:
+            continue
+        default = (
+            p.default if p.default is not _inspect.Parameter.empty else _FOS_SENTINEL
+        )
+        spec.append((i, name, _FOS_NORMALIZERS.get(name), default))
+    return spec, diag_index, diag_default
+
+
+_FOS_KEY_SPEC, _FOS_DIAG_INDEX, _FOS_DIAG_DEFAULT = _build_fos_key_spec()
+
+
+def clear_find_optimal_stage_cache() -> None:
+    """Reset the find_optimal_stage cache and its hit/miss counters."""
+    _FOS_CACHE.clear()
+    for k in _FOS_CACHE_STATS:
+        _FOS_CACHE_STATS[k] = 0
+
+
+def get_find_optimal_stage_cache_stats() -> dict[str, int]:
+    """Snapshot the cache hit/miss counters."""
+    return dict(_FOS_CACHE_STATS)
+
+
+def find_optimal_stage(*args, **kwargs):
+    """Cache wrapper around ``_find_optimal_stage_uncached``.  See that
+    function for the underlying behavior.
+
+    ``diagnostic_out`` is excluded from the cache key but its content is
+    captured and replayed: the inner function is always invoked with our
+    own internal list, and any diagnostics it appends are both stored in
+    the cache and forwarded to the caller's ``diagnostic_out`` (if any).
+    """
+    # Build cache key from every cacheable parameter.
+    key_parts = []
+    for idx, name, norm, default in _FOS_KEY_SPEC:
+        if idx < len(args):
+            v = args[idx]
+        elif name in kwargs:
+            v = kwargs[name]
+        else:
+            v = default
+        key_parts.append(norm(v) if norm is not None else v)
+    key = tuple(key_parts)
+
+    # Locate the caller's diagnostic_out (may be positional, kwarg, or absent).
+    if _FOS_DIAG_INDEX != -1 and _FOS_DIAG_INDEX < len(args):
+        caller_diag = args[_FOS_DIAG_INDEX]
+    else:
+        caller_diag = kwargs.get("diagnostic_out", _FOS_DIAG_DEFAULT)
+
+    cached = _FOS_CACHE.get(key, _FOS_SENTINEL)
+    if cached is not _FOS_SENTINEL:
+        _FOS_CACHE_STATS["hits"] += 1
+        result, cached_diag = cached
+        if caller_diag is not None and cached_diag:
+            caller_diag.extend(cached_diag)
+        return result
+
+    _FOS_CACHE_STATS["misses"] += 1
+    # Always run with our own internal diagnostic_out so we can capture
+    # any appends.  This means the inner function always treats
+    # diagnostic_out as non-None — synthesis cost on infeasibility is
+    # ~3μs and only runs on the failure path, so this is fine.
+    internal_diag: list = []
+    if _FOS_DIAG_INDEX != -1 and _FOS_DIAG_INDEX < len(args):
+        new_args = list(args)
+        new_args[_FOS_DIAG_INDEX] = internal_diag
+        result = _find_optimal_stage_uncached(*new_args, **kwargs)
+    else:
+        new_kwargs = dict(kwargs)
+        new_kwargs["diagnostic_out"] = internal_diag
+        result = _find_optimal_stage_uncached(*args, **new_kwargs)
+
+    cached_diag = tuple(internal_diag)
+    _FOS_CACHE[key] = (result, cached_diag)
+    if caller_diag is not None and internal_diag:
+        caller_diag.extend(internal_diag)
+    return result
 
 
 def _synthesize_diagnostic(
