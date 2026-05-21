@@ -343,26 +343,18 @@ def get_filler_item_name(world: KSP1World) -> str:
     return world.random.choice(_FILLER_NAMES_WEIGHTED)
 
 
-def create_all_items(world: KSP1World) -> None:
+def select_progressive_representatives(world: KSP1World) -> None:
     """
-    Add part items and progressive items to the multiworld item pool.
+    Pick one part per progressive tier as that tier's "representative" — the
+    real item the AP progressive item resolves to.  Deterministic via
+    ``world.random``; UT regen restores the prior pick from slot_data.
 
-    Per progressive tier, one part is randomly selected as the "representative"
-    and removed from the pool — it IS the progressive item (a rename).
-    Remaining tier parts stay in pool as useful items with power-tier pacing.
+    Must run in ``generate_early`` because other worlds' ``create_regions``
+    can evaluate KSP1 entrance rules via cross-player reachability sweeps
+    (e.g. pokemon_rb door_shuffle) before any world's ``create_items`` runs.
     """
-    precollected: set[str] = set(ALWAYS_PRECOLLECTED)
-    if world.options.start_with_launch_clamps:
-        precollected.update(CLAMP_PRECOLLECTED)
-
-    for name in precollected:
-        world.multiworld.push_precollected(create_item(world, name))
-
-    # Select one representative per progressive tier (deterministic via world.random).
-    # During UT regen, use the pre-assigned reps from slot_data instead.
     ut_reps = getattr(world, "_ut_progressive_representatives", None)
     representatives: dict[str, dict[int, str]] = {}
-    all_representatives: set[str] = set()
     for prog_name, tiers in PROGRESSIVE_PART_TIERS.items():
         representatives[prog_name] = {}
         for tier_num, parts in sorted(tiers.items()):
@@ -371,9 +363,28 @@ def create_all_items(world: KSP1World) -> None:
             else:
                 rep = world.random.choice(parts)
             representatives[prog_name][tier_num] = rep
-            all_representatives.add(rep)
-
     world.progressive_representatives = representatives
+
+
+def create_all_items(world: KSP1World) -> None:
+    """
+    Add part items and progressive items to the multiworld item pool.
+
+    Representatives are picked earlier in ``generate_early`` (see
+    ``select_progressive_representatives``); this consumes them.
+    """
+    precollected: set[str] = set(ALWAYS_PRECOLLECTED)
+    if world.options.start_with_launch_clamps:
+        precollected.update(CLAMP_PRECOLLECTED)
+
+    for name in precollected:
+        world.multiworld.push_precollected(create_item(world, name))
+
+    all_representatives: set[str] = {
+        rep
+        for tiers in world.progressive_representatives.values()
+        for rep in tiers.values()
+    }
 
     # Build pool: skip precollected and representatives (they ARE the progressive items).
     pool: list[KSP1Item] = [

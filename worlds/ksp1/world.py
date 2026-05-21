@@ -84,6 +84,11 @@ class KSP1World(World):
         if isinstance(passthrough, dict) and self.game in passthrough:
             self._apply_slot_data(passthrough[self.game])
 
+        # Pick representatives now — cross-player rule evaluation during
+        # other worlds' create_regions (e.g. pokemon_rb door_shuffle) can
+        # call get_capability before any create_items has run.
+        items.select_progressive_representatives(self)
+
         self.goal_spec = resolve_goal_spec(self.options)
         if self.options.exclude_late_tech_tree:
             late_tier_locs: set[str] = {
