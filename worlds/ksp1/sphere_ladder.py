@@ -823,7 +823,88 @@ def _pick_bump(
 # Core primitive
 # ---------------------------------------------------------------------------
 
+# Canonical-key cache for ``minimal_rocket_for``.  Many location names map
+# to the same ``_LocationMissionInfo`` (e.g. ``Mun Landing 1``..``Mun Landing N``
+# are all the same mission), and within one ``apply_sphere_ladder`` call the
+# same (canonical_info, prior_kit) tuple is queried repeatedly.  Caching
+# at this layer dedupes those calls before any oracle work runs.
+#
+# Cache is module-level; cleared at the top of ``apply_sphere_ladder`` so it
+# never crosses worlds.  Key includes everything that affects the result
+# (rep_names, difficulty, pad/clamps, precollected, mission_builder identity,
+# prior_kit) and excludes ``rng`` — the cached MinimalRocket is the same
+# regardless of which RNG would have been used for greedy tiebreakers,
+# since the canonical mission only has one minimal-kit answer.
+_CACHE_SENTINEL = object()
+_MINIMAL_ROCKET_CACHE: dict[tuple, Optional["MinimalRocket"]] = {}
+_MINIMAL_ROCKET_CACHE_STATS: dict[str, int] = {
+    "hits": 0,
+    "misses": 0,
+    "bypassed_no_canonical": 0,  # _parse_location returned None
+}
+
+
+def clear_minimal_rocket_cache() -> None:
+    """Reset the per-call cache and its hit/miss counters."""
+    _MINIMAL_ROCKET_CACHE.clear()
+    for k in _MINIMAL_ROCKET_CACHE_STATS:
+        _MINIMAL_ROCKET_CACHE_STATS[k] = 0
+
+
+def get_minimal_rocket_cache_stats() -> dict[str, int]:
+    """Snapshot the cache hit/miss/bypass counters."""
+    return dict(_MINIMAL_ROCKET_CACHE_STATS)
+
+
 def minimal_rocket_for(
+    location_name: str,
+    prior_kit: dict[str, int],
+    rep_names: frozenset[str],
+    difficulty: str,
+    progressive_launch_pad: bool,
+    start_with_clamps: bool,
+    rng: Random,
+    mission_builder: MissionBuilder,
+    precollected_names: frozenset[str] = frozenset(),
+) -> Optional[MinimalRocket]:
+    """Cache wrapper around ``_minimal_rocket_for_uncached``.  See that
+    function's docstring for the underlying contract."""
+    info = _parse_location(location_name)
+    if info is None:
+        _MINIMAL_ROCKET_CACHE_STATS["bypassed_no_canonical"] += 1
+        return None
+
+    key = (
+        info.body, info.mission_type, info.crewed, info.threshold_km,
+        rep_names,
+        difficulty,
+        progressive_launch_pad,
+        start_with_clamps,
+        precollected_names,
+        id(mission_builder),
+        tuple(sorted(prior_kit.items())),
+    )
+    cached = _MINIMAL_ROCKET_CACHE.get(key, _CACHE_SENTINEL)
+    if cached is not _CACHE_SENTINEL:
+        _MINIMAL_ROCKET_CACHE_STATS["hits"] += 1
+        return cached
+    _MINIMAL_ROCKET_CACHE_STATS["misses"] += 1
+    result = _minimal_rocket_for_uncached(
+        location_name=location_name,
+        prior_kit=prior_kit,
+        rep_names=rep_names,
+        difficulty=difficulty,
+        progressive_launch_pad=progressive_launch_pad,
+        start_with_clamps=start_with_clamps,
+        rng=rng,
+        mission_builder=mission_builder,
+        precollected_names=precollected_names,
+    )
+    _MINIMAL_ROCKET_CACHE[key] = result
+    return result
+
+
+def _minimal_rocket_for_uncached(
     location_name: str,
     prior_kit: dict[str, int],
     rep_names: frozenset[str],
@@ -1715,6 +1796,7 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
         capability-gated location.
       - Register ``S_launch.delta`` as ``local_early_items``.
     """
+    clear_minimal_rocket_cache()
     ladder = SphereLadder()
     # Compute signatures + min-kits up front (intrinsic; don't depend
     # on the chain).
