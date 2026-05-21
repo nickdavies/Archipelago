@@ -16,6 +16,7 @@ post-pass yet — those come in Phases 2/3.
 """
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from random import Random
 from typing import Callable, TYPE_CHECKING, Optional
@@ -836,6 +837,39 @@ def _pick_bump(
 # regardless of which RNG would have been used for greedy tiebreakers,
 # since the canonical mission only has one minimal-kit answer.
 _CACHE_SENTINEL = object()
+
+
+def _derive_local_bumper_rng(
+    info,
+    prior_kit: dict[str, int],
+    rep_names: frozenset[str],
+    difficulty: str,
+    progressive_launch_pad: bool,
+    start_with_clamps: bool,
+    precollected_names: frozenset[str],
+) -> Random:
+    """Build a ``Random`` whose seed is a stable hash of every input that
+    distinguishes one ``minimal_rocket_for`` invocation from another.
+
+    Stable means: same seed across process reboots (uses ``hashlib.sha256``
+    rather than Python's randomized ``hash()``).  All event-slot
+    duplicates ("Mun Landing 1" / "Mun Landing 2" / ...) share a
+    canonical key, so they get an identical local RNG and therefore an
+    identical bumper trajectory — making the canonical-key cache a pure
+    perf optimization with no behavior shift.
+    """
+    h = hashlib.sha256()
+    h.update(repr((
+        info.body, str(info.mission_type), info.crewed, info.threshold_km,
+        difficulty,
+        progressive_launch_pad,
+        start_with_clamps,
+        tuple(sorted(prior_kit.items())),
+        tuple(sorted(rep_names)),
+        tuple(sorted(precollected_names)),
+    )).encode("utf-8"))
+    seed_int = int.from_bytes(h.digest()[:8], "big")
+    return Random(seed_int)
 _MINIMAL_ROCKET_CACHE: dict[tuple, Optional["MinimalRocket"]] = {}
 _MINIMAL_ROCKET_CACHE_STATS: dict[str, int] = {
     "hits": 0,
@@ -1002,6 +1036,26 @@ def _minimal_rocket_for_uncached(
     info = _parse_location(location_name)
     if info is None:
         return None
+
+    # Derive a deterministic per-canonical-key RNG.  The bumper's only
+    # RNG use is the ``rng.random()`` tiebreaker in ``_pick_bump``'s score
+    # tuple — same-priority candidates pick a random one to break ties.
+    # When the canonical-key cache is enabled, every event-slot duplicate
+    # (e.g. "Mun Landing 1" / "Mun Landing 2") shares one cache entry, so
+    # without this derivation only the first call's RNG state would be
+    # captured and the cached ``min_kit`` would depend on call order.
+    # Deriving locally from (canonical_key, prior_kit, rep_names) makes
+    # the result independent of whatever order the caller iterates
+    # locations in, while still varying per-seed (rep_names is part of
+    # the seed identity) and per-canonical-key.
+    #
+    # ``hashlib.sha256`` is used instead of Python's ``hash()`` because
+    # the latter is randomized per process (PYTHONHASHSEED) and would
+    # produce different RNGs across reruns of the same seed.
+    rng = _derive_local_bumper_rng(
+        info, prior_kit, rep_names, difficulty,
+        progressive_launch_pad, start_with_clamps, precollected_names,
+    )
 
     diff = DIFFICULTY_PROFILES[difficulty]
     kit: dict[str, int] = dict(prior_kit)
