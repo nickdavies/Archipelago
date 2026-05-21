@@ -45,6 +45,7 @@ from .items import (
 from .parts import (
     PROGRESSIVE_PART_COUNTS as _BASE_PROGRESSIVE_PART_COUNTS,
     PROGRESSIVE_PART_NAMES,
+    PROGRESSIVE_PART_TIERS,
 )
 
 
@@ -60,6 +61,19 @@ PROGRESSIVE_CAPS: dict[str, int] = {
 
 if TYPE_CHECKING:
     from .world import KSP1World
+
+
+# Inverse map for warm-start construction: part_name -> [(chain, min_tier)].
+# Used by ``_construct_warm_start_kit`` to translate the max-kit oracle's
+# chosen parts into a starting kit for the bumper.  Built once at module
+# load from PROGRESSIVE_PART_TIERS.
+_PART_TO_PROGRESSIVE: dict[str, list[tuple[str, int]]] = {}
+for _chain, _tiers in PROGRESSIVE_PART_TIERS.items():
+    for _tier, _parts in _tiers.items():
+        for _part in _parts:
+            _PART_TO_PROGRESSIVE.setdefault(_part, []).append((_chain, _tier))
+# Single-part chains not in PROGRESSIVE_PART_TIERS (just one item, no tier ladder).
+_PART_TO_PROGRESSIVE.setdefault("rtg", []).append(("rtg", 1))
 
 
 # ---------------------------------------------------------------------------
@@ -838,6 +852,86 @@ def _pick_bump(
 # since the canonical mission only has one minimal-kit answer.
 _CACHE_SENTINEL = object()
 
+# DIAGNOSTIC ONLY — disabled in normal runs.  When enabled (set to a list
+# instance), every _minimal_rocket_for_uncached call appends one
+# (final_iter, returned_feasible) tuple.  Used by scratchpad/profile/
+# bumper_iter_stats.py to evaluate whether raising the 200-iter cap
+# would help.  Leave None in production.
+_BUMPER_ITER_TRACE: Optional[list] = None
+
+
+def _construct_warm_start_kit(
+    info,
+    rep_names: frozenset[str],
+    difficulty: str,
+    progressive_launch_pad: bool,
+    start_with_clamps: bool,
+    precollected_names: frozenset[str],
+    mission_builder: MissionBuilder,
+) -> dict[str, int]:
+    """Run the capability oracle with a maxed-out progressive kit, then
+    translate the parts it chose into the smallest kit that grants those
+    same parts.  Returns a kit dict suitable for merging with ``prior_kit``
+    as a warm start for the greedy bumper.
+
+    Coverage gap: this only captures chains directly tied to a part
+    (engine, tank, equipment, terminal command/support).  Gating chains
+    that affect *configuration* without producing a named part — Engine
+    Plate (multi-mount), Radial Decoupler (parallel staging), Launch Pad
+    (mass cap) — are NOT captured here; the bumper fills those in on
+    top of the warm start.
+    """
+    diff = DIFFICULTY_PROFILES[difficulty]
+
+    def max_count_fn(name: str, _caps=PROGRESSIVE_CAPS,
+                     _pre=precollected_names) -> int:
+        if name in _caps:
+            return _caps[name]
+        if name in _pre:
+            return 1
+        return 0
+
+    max_flags = _pre_pass_cached(
+        # Build a kit dict at caps; _pre_pass_cached caches by kit_tuple.
+        {chain: cap for chain, cap in PROGRESSIVE_CAPS.items()},
+        start_with_clamps=start_with_clamps,
+        rep_names=rep_names,
+        progressive_launch_pad=progressive_launch_pad,
+        launch_pad_caps=mission_builder.launch_pad_caps,
+        precollected_names=precollected_names,
+    )
+    result = evaluate_mission_detailed(
+        max_flags, diff, info.body, info.mission_type, info.crewed,
+        mission_builder, threshold_km=info.threshold_km or 0.0,
+    )
+    if not result.feasible:
+        # Max kit can't reach this location at all — no warm start to give.
+        return {}
+
+    # Collect every part name referenced by the oracle's chosen build.
+    used: set[str] = set()
+    for sr in result.stage_results:
+        if sr.engine_name and sr.engine_name != "(SRB integral)":
+            used.add(sr.engine_name)
+        if sr.tank_name and sr.tank_name != "(SRB integral)":
+            used.add(sr.tank_name)
+        for _count, pname in sr.equipment:
+            used.add(pname)
+    for _count, pname in result.terminal_parts:
+        used.add(pname)
+
+    # Reverse-map each part to the cheapest (lowest-tier) chain that grants
+    # it.  Take max across all uses — if Engine X is in chain "Launch Engine"
+    # tier 2, the warm start sets Launch Engine = 2.
+    kit: dict[str, int] = {}
+    for part in used:
+        entries = _PART_TO_PROGRESSIVE.get(part)
+        if not entries:
+            continue  # non-progressive part (always granted, no kit cost)
+        chain, tier = min(entries, key=lambda x: x[1])
+        kit[chain] = max(kit.get(chain, 0), tier)
+    return kit
+
 
 def _derive_local_bumper_rng(
     info,
@@ -1037,6 +1131,23 @@ def _minimal_rocket_for_uncached(
     if info is None:
         return None
 
+    # Warm-start: ask the max-kit oracle which parts it would use, translate
+    # those into the smallest progressive kit that grants them, and merge
+    # with prior_kit (element-wise max, capped).  The bumper starts from
+    # this merged kit and fills in any gating chains the oracle output
+    # doesn't expose (Engine Plate, Radial Decoupler, Launch Pad).
+    #
+    # Doesn't displace the greedy loop — if the warm start is already
+    # feasible, the loop exits at iter 0; if not, it bumps a handful of
+    # remaining chains.  The win is fewer bumps total and (typically) a
+    # smaller, structurally different kit that gives the AP fill solver
+    # different Rule B bans to work with.
+    _warm = _construct_warm_start_kit(
+        info, rep_names, difficulty,
+        progressive_launch_pad, start_with_clamps,
+        precollected_names, mission_builder,
+    )
+
     # Derive a deterministic per-canonical-key RNG.  The bumper's only
     # RNG use is the ``rng.random()`` tiebreaker in ``_pick_bump``'s score
     # tuple — same-priority candidates pick a random one to break ties.
@@ -1058,7 +1169,13 @@ def _minimal_rocket_for_uncached(
     )
 
     diff = DIFFICULTY_PROFILES[difficulty]
+    # Start from prior_kit, then layer in the warm-start kit element-wise.
+    # Cap to PROGRESSIVE_CAPS so we never start above legal kit size.
     kit: dict[str, int] = dict(prior_kit)
+    for chain, tier in _warm.items():
+        new_tier = max(kit.get(chain, 0), tier)
+        cap = PROGRESSIVE_CAPS.get(chain, new_tier)
+        kit[chain] = min(new_tier, cap)
     # Pre-compute which narrow chains (HS / Parachute / Legs / Ladder) the
     # mission actually exercises.  Bumping these for missions that don't
     # use them is a wasted iteration; the bumper filters them out.
@@ -1134,7 +1251,9 @@ def _minimal_rocket_for_uncached(
     # blocking.
     stuck_iters = 0   # consecutive iters where blocker count didn't drop
     prev_blocker_count = -1
-    for _ in range(200):
+    _final_iter = -1
+    for _iter in range(200):
+        _final_iter = _iter
         flags = _pre_pass_cached(
             kit,
             start_with_clamps=start_with_clamps,
@@ -1150,6 +1269,8 @@ def _minimal_rocket_for_uncached(
                 for k, v in kit.items()
                 if v - prior_kit.get(k, 0) > 0
             }
+            if _BUMPER_ITER_TRACE is not None:
+                _BUMPER_ITER_TRACE.append((_iter, True, location_name))
             return MinimalRocket(
                 delta=delta,
                 cumulative=dict(kit),
@@ -1175,9 +1296,13 @@ def _minimal_rocket_for_uncached(
             narrow_relevant=narrow_relevant,
         )
         if item is None:
+            if _BUMPER_ITER_TRACE is not None:
+                _BUMPER_ITER_TRACE.append((_iter, False, location_name))
             return None
         kit[item] = kit.get(item, 0) + 1
 
+    if _BUMPER_ITER_TRACE is not None:
+        _BUMPER_ITER_TRACE.append((_final_iter, False, location_name))
     return None
 
 
