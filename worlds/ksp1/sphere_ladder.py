@@ -146,6 +146,20 @@ _BUMP_TABLE: dict[BlockingReason, frozenset[str]] = {
         # Mass-cap failures sometimes surface as "no viable stage" when
         # the optimizer rejects every candidate over the cap.
         "Progressive Launch Pad",
+        # Payload-reducing chains: heavier terminal/support equipment
+        # propagates to a heavier launch stage, which can flip an
+        # otherwise-feasible ascent infeasible. F4 multi-stage's tighter
+        # margins exposed cases where bumping these chains unlocks a
+        # lighter terminal that the launch stage can lift.  Listed last
+        # in the priority sense (ranked-bump puts engines/tanks first).
+        "Progressive Capsule",
+        "Progressive Probe Core",
+        "Progressive Solar Panel",
+        "Progressive Relay",
+        "rtg",
+        "Progressive Parachute",
+        "Progressive Landing Leg",
+        "Progressive Heat Shield",
     }),
     BlockingReason.NO_ENGINE: frozenset({
         "Progressive Vacuum Engine",

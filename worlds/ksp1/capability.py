@@ -40,7 +40,8 @@ from .locations import (
     get_body_events,
 )
 from .rocket_math import (
-    StageResult, find_optimal_stage, terminal_velocity,
+    StageResult, find_optimal_stage, find_optimal_multistage_ascent,
+    terminal_velocity,
     FILL_LEVELS, merge_edge_groups,
 )
 
@@ -1013,6 +1014,16 @@ def _evaluate_profile(
 
     groups = _group_edges(profile, flags.staging_tier)
 
+    # Lightest stack decoupler from the player's kit — enables multi-stage
+    # atmospheric ascent (F4) when present. K-1 interstages are needed for
+    # K-stage; absence forces K=1 (single-stage ascent).
+    _stack_decouplers = [d for d in flags.available_decouplers
+                         if d.kind == "stack"]
+    stack_decoupler_for_ascent = (
+        min(_stack_decouplers, key=lambda d: d.mass)
+        if _stack_decouplers else None
+    )
+
     # Staging feasibility: if merging couldn't reduce groups to what the
     # player's decouplers allow, the profile is physically impossible.
     max_stages = 1 if flags.staging_tier == 0 else len(groups)
@@ -1239,7 +1250,69 @@ def _evaluate_profile(
             diagnostic_out=diagnostic_out,
             body_name=body.name,
             launch_pad_mass_cap=flags.launch_pad_mass_cap,
+            atm_scale_height_m=body.atm_scale_height_m,
+            atm_top_m=body.safe_altitude_km * 1000.0 if body.has_atmosphere else 0.0,
         )
+
+        # F4 multi-stage ascent: detect any ascent group (atmospheric or
+        # vacuum-body). Tsiolkovsky benefit applies to both — vacuum-body
+        # ascents like Moho/Mun still benefit from multi-stage even with
+        # no atm Isp transition.
+        is_ascent_group = any(
+            e.edge_type in (ET.ATMOSPHERIC_ASCENT, ET.VACUUM_ASCENT)
+            for e in group
+        )
+        if is_ascent_group:
+            multistage = find_optimal_multistage_ascent(
+                required_dv=req_dv,
+                payload_mass=stage_payload,
+                gravity=body.surface_gravity,
+                in_atmosphere=in_atmo,
+                min_twr_liftoff=min_twr,
+                available_engines=eligible_engines,
+                available_tanks=flags.available_tanks,
+                available_srbs=flags.available_srbs,
+                tanks_by_fuel_type=flags.tanks_by_fuel_type,
+                available_multi_mounts=flags.available_multi_mounts,
+                stack_decoupler=stack_decoupler_for_ascent,
+                staging_tier=flags.staging_tier,
+                needs_heat_shield=needs_hs,
+                max_heat_shield_size=flags.best_heat_shield.size_class if flags.best_heat_shield else None,
+                heat_shield_mass=equip_mass if needs_hs else 0.0,
+                requires_throttleable=req_throttle,
+                require_gimbal=needs_gimbal_engine,
+                srb_needs_rcs=diff.srb_needs_rcs,
+                player_has_rcs=flags.has_rcs,
+                attitude_module_mass=(
+                    global_attitude_bundle.mass
+                    if (global_attitude_bundle is not None
+                        and flight_idx == global_attitude_stage_idx)
+                    else 0.0
+                ),
+                body_name=body.name,
+                launch_pad_mass_cap=flags.launch_pad_mass_cap,
+                atm_scale_height_m=body.atm_scale_height_m,
+                atm_top_m=body.safe_altitude_km * 1000.0 if body.has_atmosphere else 0.0,
+                parallel_mode=parallel_mode,
+            )
+            if multistage is None:
+                return ProfileResult(False, launch_mass=payload, blocking=[BlockingInfo(
+                    reason=BlockingReason.NO_VIABLE_STAGE,
+                    body=body.name,
+                    dv_needed=req_dv,
+                )])
+            # Bottom stage carries the group-level equipment (aero surfaces,
+            # ladder, etc.) for the multi-stage ascent.
+            multistage[0].equipment = stage_equipment + multistage[0].equipment
+            # Append top-to-bottom so the outer loop's reverse-chronological
+            # ordering produces bottom-first launch-to-orbit after final
+            # reversal at the ProfileResult assembly.
+            for sr in reversed(multistage):
+                stage_results_list.append(sr)
+            # The bottom stage's wet mass is the launch mass (running total
+            # for the outer loop's next-back-up iteration).
+            payload = multistage[0].stage_mass_wet
+            continue
 
         result = find_optimal_stage(parallel_mode=parallel_mode, **stage_kwargs)
 

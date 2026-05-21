@@ -163,6 +163,9 @@ class Body:
     # buffer below low orbit).  Used by ``home_altitude_milestones`` to
     # generate the per-home suborbital location set.
     safe_altitude_km: float = 0.0
+    # Atmospheric pressure scale height (m).  KSP atmospheres decay as
+    # p(h) ≈ exp(-h / scale_height).  0 = vacuum body, no Isp weighting.
+    atm_scale_height_m: float = 0.0
 
     # --- Science budget (for tech-tree access rules) ---
     has_ocean: bool = False         # body has splashable liquid surface
@@ -303,6 +306,7 @@ KERBIN = Body(
     ),
     radius_km=600,
     safe_altitude_km=70.0,  # Kármán line; atmosphere edge
+    atm_scale_height_m=5000.0,
     has_ocean=True, num_biomes=9, num_splash_biomes=2,
     space_low_mult=1.5, space_high_mult=1.0,
     fly_low_mult=1.0, fly_high_mult=0.7,
@@ -384,6 +388,7 @@ EVE = Body(
     ),
     radius_km=700,
     safe_altitude_km=90.0,  # Kármán line; atmosphere edge
+    atm_scale_height_m=7000.0,
     has_ocean=True, num_biomes=8, num_splash_biomes=3,
     space_low_mult=8.0, space_high_mult=4.0,
     fly_low_mult=2.0, fly_high_mult=1.5,
@@ -425,6 +430,7 @@ DUNA = Body(
     ),
     radius_km=320,
     safe_altitude_km=50.0,  # Kármán line; atmosphere edge
+    atm_scale_height_m=3000.0,
     num_biomes=5,
     space_low_mult=8.0, space_high_mult=4.0,
     fly_low_mult=1.5, fly_high_mult=1.2,
@@ -486,6 +492,7 @@ JOOL = Body(
     ),
     radius_km=6000,
     safe_altitude_km=200.0,  # Kármán line; atmosphere edge (gas giant)
+    atm_scale_height_m=10000.0,
     num_biomes=0,
     space_low_mult=12.0, space_high_mult=6.0,
     fly_low_mult=6.0, fly_high_mult=4.0,
@@ -506,6 +513,7 @@ LAYTHE = Body(
     ),
     radius_km=500,
     safe_altitude_km=50.0,  # Kármán line; atmosphere edge
+    atm_scale_height_m=4000.0,
     has_ocean=True, num_biomes=9, num_splash_biomes=4,
     space_low_mult=12.0, space_high_mult=6.0,
     fly_low_mult=4.0, fly_high_mult=3.0,

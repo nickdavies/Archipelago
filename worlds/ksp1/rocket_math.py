@@ -21,6 +21,34 @@ from .capability_reasons import StageDiagnostic, StageFailure
 
 G0: float = 9.80665  # standard gravity, m/s²
 
+def _isp_for_ascent(
+    atm_isp: float,
+    vac_isp: float,
+    in_atmosphere: bool,
+    atm_scale_height_m: float,
+    atm_top_m: float,
+) -> float:
+    """Effective Isp for an ascent stage.
+
+    KSP Isp is near-linear in atmospheric pressure: p(h) ≈ exp(-h/H) for
+    scale height H, so Isp climbs from atm_isp at sea level to vac_isp
+    near the top of the atmosphere.
+
+    Vacuum bodies (or any call with ``in_atmosphere=False``) get ``vac_isp``
+    directly.  Atmospheric bodies get a pressure-weighted average over
+    the [0, atm_top_m] column.  All atmospheric parameters come from the
+    Body — nothing here is Kerbin-specific.
+    """
+    if not in_atmosphere:
+        return vac_isp
+    if atm_scale_height_m <= 0.0 or atm_top_m <= 0.0:
+        return atm_isp  # body has no atmospheric model — be conservative
+    avg_p = (atm_scale_height_m
+             * (1.0 - math.exp(-atm_top_m / atm_scale_height_m))
+             / atm_top_m)
+    return atm_isp * avg_p + vac_isp * (1.0 - avg_p)
+
+
 # Stock-system constants — Kerbol's μ and Kerbin's solar orbital radius
 # (KSP wiki values).  Used by ``hohmann_v_inf`` for interplanetary transfer
 # math; ``bodies.planet_transfer_dv`` wraps it with per-Body lookups.
@@ -265,6 +293,8 @@ def _find_optimal_stage_uncached(
     diagnostic_out: Optional[list[StageDiagnostic]] = None,
     body_name: str = "",                  # for diagnostic reporting only
     launch_pad_mass_cap: float = float("inf"),  # for MASS_CAP_EXCEEDED diagnostic
+    atm_scale_height_m: float = 0.0,    # body atmosphere model (0 = no atm)
+    atm_top_m: float = 0.0,             # body atmosphere top in metres
 ) -> Optional[StageResult]:
     """
     Find the minimum-mass engine+tank configuration that meets *required_dv*
@@ -386,7 +416,11 @@ def _find_optimal_stage_uncached(
 
         # Compute mass ratio R once per engine (the key optimisation: avoids
         # redundant math.exp inside the tank/fill/engine-count loops).
-        isp = engine.atm_isp if in_atmosphere else engine.vac_isp
+        # For atmospheric ascent, use pressure-weighted Isp across the
+        # atmospheric column rather than flat atm_isp — the burn spans
+        # both regimes and Isp climbs to vacuum near the top of the column.
+        isp = _isp_for_ascent(engine.atm_isp, engine.vac_isp, in_atmosphere,
+                              atm_scale_height_m, atm_top_m)
         if isp <= 0:
             _diag_engines_isp_blocked += 1
             continue
@@ -576,7 +610,9 @@ def _find_optimal_stage_uncached(
         else:
             max_srb = 1
 
-        srb_isp = srb.atm_isp if in_atmosphere else srb.vac_isp
+        # Same pressure-weighted Isp treatment as the engine loop.
+        srb_isp = _isp_for_ascent(srb.atm_isp, srb.vac_isp, in_atmosphere,
+                                  atm_scale_height_m, atm_top_m)
         if srb_isp <= 0:
             continue
         srb_thrust = (srb.atm_thrust if in_atmosphere else srb.vac_thrust)
@@ -833,6 +869,195 @@ def find_optimal_stage(*args, **kwargs):
     if caller_diag is not None and internal_diag:
         caller_diag.extend(internal_diag)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Multi-stage atmospheric ascent (F4)
+# ---------------------------------------------------------------------------
+# Replaces the single-stage ascent assumption for atmospheric groups.
+# Real KSP launches use 2-3 stages from launchpad to LKO; the Tsiolkovsky
+# product-of-mass-ratios across K stages beats a single-stage mass ratio
+# by 30-50% on heavy missions.
+#
+# Per-stage role and floors (planet-agnostic; same shape for any
+# atmospheric body — Kerbin, Eve, Laythe, Duna):
+#   Stage 1 (bottom, in atmosphere): atm TWR floor 1.2, weighted Isp.
+#   Middle stages (vacuum, sustainer): TWR floor 1.0, vac Isp.
+#   Top stage (circularisation): TWR floor 0.8 (horizontal burn near
+#     apoapsis, gravity drag cosine; not zero because still suborbital).
+#
+# K is gated by the number of stack decouplers the player has unlocked:
+# K-1 interstages are needed, each charged at the lightest stack
+# decoupler's real mass.
+
+# Δv split fractions to grid-search per K.  Bottom stage first; each row
+# sums to 1.0.  Hand-picked spread covering equal-mass-ratio (high
+# fraction on low-Isp stages) through vacuum-heavy splits.
+_F4_DV_SPLITS: dict[int, tuple[tuple[float, ...], ...]] = {
+    1: ((1.0,),),
+    2: (
+        (0.3, 0.7),
+        (0.4, 0.6),
+        (0.5, 0.5),
+        (0.6, 0.4),
+        (0.7, 0.3),
+    ),
+    3: (
+        (0.5, 0.3, 0.2),
+        (0.4, 0.4, 0.2),
+        (0.4, 0.3, 0.3),
+        (0.5, 0.25, 0.25),
+        (0.6, 0.2, 0.2),
+        (0.3, 0.4, 0.3),
+    ),
+}
+
+# Per-stage TWR floor.  Stage 1 (liftoff) uses whatever the caller passes
+# in ``min_twr_liftoff`` — atmospheric ascent on Kerbin is ~1.2, vacuum
+# ascent on Mun is ~1.2 (different body but same numeric floor in normal
+# difficulty), Moho ascent is similar.  Middle and top stages are
+# hardcoded universal values per role.
+_F4_TWR_MIDDLE: float = 1.0          # sustainer (vacuum, already moving)
+_F4_TWR_TOP_CIRCULARIZE: float = 0.8 # circularisation (near-orbital, horizontal burn)
+
+# Max K supported in MVP. Diminishing returns past 3; K=4 adds extra
+# decoupler mass that rarely beats K=3.
+_F4_MAX_K: int = 3
+
+
+def find_optimal_multistage_ascent(
+    required_dv: float,
+    payload_mass: float,
+    gravity: float,
+    *,
+    in_atmosphere: bool,         # stage 1 in atm? (False for vacuum-body ascent)
+    min_twr_liftoff: float,      # TWR floor for stage 1 (caller's body+difficulty)
+    available_engines: list[Engine],
+    available_tanks: list[FuelTank],
+    available_srbs: list[SolidBooster],
+    tanks_by_fuel_type: Optional[dict[str, list[FuelTank]]] = None,
+    available_multi_mounts: Optional[list[MultiMount]] = None,
+    stack_decoupler: Optional[Decoupler],
+    staging_tier: int,
+    needs_heat_shield: bool = False,
+    max_heat_shield_size: Optional[float] = None,
+    heat_shield_mass: float = 0.0,
+    requires_throttleable: bool = False,
+    require_gimbal: bool = False,
+    srb_needs_rcs: bool = True,
+    player_has_rcs: bool = False,
+    attitude_module_mass: float = 0.0,
+    body_name: str = "",
+    launch_pad_mass_cap: float = float("inf"),
+    atm_scale_height_m: float = 0.0,
+    atm_top_m: float = 0.0,
+    parallel_mode: str = "none",  # asparagus/onion — applied at K=1 only
+) -> Optional[list[StageResult]]:
+    """Find lowest-total-wet K-stage ascent architecture for an atmospheric
+    body.  Returns a list of StageResults from BOTTOM (launch) to TOP
+    (circularisation), or None if no architecture is feasible.
+
+    Each stage is independently optimised by ``find_optimal_stage``;
+    payloads chain top-down, decoupler mass charged on every interstage.
+
+    ``parallel_mode`` (asparagus/onion) only applies to K=1 — at K≥2 the
+    explicit staging supersedes parallel-staging's constant-factor model
+    (mixing them would double-count the dry-mass discount).
+    """
+    if required_dv <= 0:
+        return None
+    # K cap from kit: no stack decoupler ⇒ K=1; otherwise up to _F4_MAX_K.
+    if stack_decoupler is None:
+        max_K = 1
+    else:
+        max_K = min(_F4_MAX_K, max(1, staging_tier + 1))
+    deco_mass = stack_decoupler.mass if stack_decoupler else 0.0
+
+    best: Optional[list[StageResult]] = None
+    best_launch_wet = float("inf")
+
+    for K in range(1, max_K + 1):
+        for split in _F4_DV_SPLITS[K]:
+            # Build top-down: top stage first (carries mission payload),
+            # lower stages carry wet of stages above + decoupler.
+            stages_top_to_bot: list[StageResult] = []
+            current_payload = payload_mass
+            ok = True
+            for i in range(K - 1, -1, -1):  # K-1 (top) ... 0 (bottom)
+                stage_dv = required_dv * split[i]
+                # Stage 1 (i==0): launch (uses the caller's body-aware
+                # in_atmosphere flag — True for atm bodies, False for vac).
+                # Stages above: always vacuum (post-stage-1 altitude reached).
+                stage_in_atm = in_atmosphere and (i == 0)
+                # TWR floor by role.  Stage 1 uses caller's body+difficulty
+                # floor; middle/top use universal sustainer/circularisation.
+                if i == 0:
+                    twr_floor = min_twr_liftoff
+                elif i == K - 1:
+                    twr_floor = _F4_TWR_TOP_CIRCULARIZE
+                else:
+                    twr_floor = _F4_TWR_MIDDLE
+                # Heat shield mass charge only on the bottom stage (it
+                # carries the shield up through atmosphere).  Upper stages
+                # see it propagated via current_payload (no double-charge).
+                stage_heat_shield_mass = heat_shield_mass if i == 0 else 0.0
+                stage_needs_heat_shield = needs_heat_shield if i == 0 else False
+                stage = find_optimal_stage(
+                    available_engines=available_engines,
+                    available_srbs=available_srbs if stage_in_atm else [],
+                    available_tanks=available_tanks,
+                    required_dv=stage_dv,
+                    payload_mass=current_payload,
+                    gravity=gravity,
+                    min_twr=twr_floor,
+                    requires_throttleable=requires_throttleable,
+                    needs_heat_shield=stage_needs_heat_shield,
+                    max_heat_shield_size=max_heat_shield_size,
+                    heat_shield_mass=stage_heat_shield_mass,
+                    in_atmosphere=stage_in_atm,
+                    # K=1 reuses single-stage behaviour (incl. asparagus
+                    # dry-mass discount when player has fuel lines).
+                    # K≥2 has explicit staging which supersedes parallel.
+                    parallel_mode=parallel_mode if K == 1 else "none",
+                    srb_needs_rcs=srb_needs_rcs,
+                    player_has_rcs=player_has_rcs,
+                    tanks_by_fuel_type=tanks_by_fuel_type,
+                    available_multi_mounts=available_multi_mounts,
+                    require_gimbal=require_gimbal and stage_in_atm,
+                    attitude_module_mass=attitude_module_mass if i == K - 1 else 0.0,
+                    body_name=body_name,
+                    launch_pad_mass_cap=launch_pad_mass_cap,
+                    atm_scale_height_m=atm_scale_height_m if stage_in_atm else 0.0,
+                    atm_top_m=atm_top_m if stage_in_atm else 0.0,
+                )
+                if stage is None:
+                    ok = False
+                    break
+                stages_top_to_bot.append(stage)
+                if i > 0:
+                    current_payload = stage.stage_mass_wet + deco_mass
+                else:
+                    current_payload = stage.stage_mass_wet  # launch mass
+            if not ok:
+                continue
+            launch_wet = stages_top_to_bot[-1].stage_mass_wet
+            if launch_wet < best_launch_wet:
+                best_launch_wet = launch_wet
+                # Store bottom-to-top: reverse so the caller iterates
+                # launch first, ending at circularisation.
+                best = list(reversed(stages_top_to_bot))
+                # Annotate each stage's equipment with the interstage
+                # decoupler that drops it (bottom of stage K-1 carries
+                # the decoupler that releases stage K, etc.). Bottom
+                # stage carries no decoupler below it (it sits on the pad).
+                if K > 1 and stack_decoupler is not None:
+                    for stage_idx in range(K - 1):
+                        # Stage at index stage_idx carries the decoupler
+                        # that drops the stage above (stage_idx + 1).
+                        best[stage_idx].equipment.append(
+                            (1, stack_decoupler.name)
+                        )
+    return best
 
 
 def _synthesize_diagnostic(
