@@ -217,6 +217,12 @@ class KSP1World(World):
             self.goal_spec, frozenset(self.options.exclude_locations.value),
         )
 
+        # Select progressive-tier representatives now (consumes only
+        # world.random / UT slot_data).  Region entrance rules read these via
+        # capability computation, and another player's create_regions sweep can
+        # reach ksp1's rules before ksp1's own create_items runs.
+        items.select_progressive_representatives(self)
+
     def create_regions(self) -> None:
         regions.create_all_regions(self)
         locations.create_all_locations(self)

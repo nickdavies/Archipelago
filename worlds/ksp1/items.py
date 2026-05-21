@@ -356,6 +356,30 @@ def get_filler_item_name(world: KSP1World) -> str:
     return world.random.choice(_FILLER_NAMES_WEIGHTED)
 
 
+def select_progressive_representatives(world: KSP1World) -> None:
+    """
+    Pick one representative part per progressive tier and store it on the world.
+
+    Must run before any region entrance rule is evaluated: capability
+    computation reads ``world.progressive_representatives``, and another
+    player's ``create_regions`` sweep can reach ksp1's rules before ksp1's
+    own ``create_items`` runs.  Selection only consumes ``world.random``
+    (or the pre-assigned reps from slot_data during UT regen), so it is
+    safe to run as early as ``generate_early``.
+    """
+    ut_reps = getattr(world, "_ut_progressive_representatives", None)
+    representatives: dict[str, dict[int, str]] = {}
+    for prog_name, tiers in PROGRESSIVE_PART_TIERS.items():
+        representatives[prog_name] = {}
+        for tier_num, parts in sorted(tiers.items()):
+            if ut_reps and prog_name in ut_reps and tier_num in ut_reps[prog_name]:
+                rep = ut_reps[prog_name][tier_num]
+            else:
+                rep = world.random.choice(parts)
+            representatives[prog_name][tier_num] = rep
+    world.progressive_representatives = representatives
+
+
 def create_all_items(world: KSP1World) -> None:
     """
     Add part items and progressive items to the multiworld item pool.
@@ -371,22 +395,13 @@ def create_all_items(world: KSP1World) -> None:
     for name in precollected:
         world.multiworld.push_precollected(create_item(world, name))
 
-    # Select one representative per progressive tier (deterministic via world.random).
-    # During UT regen, use the pre-assigned reps from slot_data instead.
-    ut_reps = getattr(world, "_ut_progressive_representatives", None)
-    representatives: dict[str, dict[int, str]] = {}
-    all_representatives: set[str] = set()
-    for prog_name, tiers in PROGRESSIVE_PART_TIERS.items():
-        representatives[prog_name] = {}
-        for tier_num, parts in sorted(tiers.items()):
-            if ut_reps and prog_name in ut_reps and tier_num in ut_reps[prog_name]:
-                rep = ut_reps[prog_name][tier_num]
-            else:
-                rep = world.random.choice(parts)
-            representatives[prog_name][tier_num] = rep
-            all_representatives.add(rep)
-
-    world.progressive_representatives = representatives
+    # Representatives were selected in generate_early (they ARE the progressive
+    # items, so they are excluded from the part pool below).
+    all_representatives: set[str] = {
+        rep
+        for tiers in world.progressive_representatives.values()
+        for rep in tiers.values()
+    }
 
     # Build pool: skip precollected and representatives (they ARE the progressive items).
     pool: list[KSP1Item] = [
