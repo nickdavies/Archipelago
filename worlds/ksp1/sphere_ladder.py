@@ -1338,6 +1338,31 @@ def _kit_merge(a: dict[str, int], b: dict[str, int]) -> dict[str, int]:
     return out
 
 
+def _inject_into_rocket(
+    rocket: "MinimalRocket",
+    inject: dict[str, int],
+    prior_cumulative: dict[str, int],
+) -> "MinimalRocket":
+    """Return a copy of ``rocket`` with bookkeeping items merged in.
+
+    Bookkeeping items (Progressive R&D, Progressive Science Instrument) are
+    not bumped by the physics-driven bumper but must be chain-tracked.  This
+    helper updates ``cumulative`` (element-wise max with the injection) and
+    ``delta`` (the increase relative to ``prior_cumulative``) so Rule B and
+    chain_required see the items naturally.
+    """
+    import dataclasses
+    new_cum = dict(rocket.cumulative)
+    new_delta = dict(rocket.delta)
+    for name, count in inject.items():
+        merged = max(new_cum.get(name, 0), count)
+        new_cum[name] = merged
+        new_in_delta = max(0, merged - prior_cumulative.get(name, 0))
+        if new_in_delta > 0:
+            new_delta[name] = max(new_delta.get(name, 0), new_in_delta)
+    return dataclasses.replace(rocket, delta=new_delta, cumulative=new_cum)
+
+
 def _build_rocket_or_raise(
     world: "KSP1World",
     location_name: str,
@@ -1518,8 +1543,10 @@ def _predictable_spheres(world: "KSP1World") -> list[tuple[str, str]]:
         the active home): rule is state.has_all progression items;
         capability can't model them.  They become reachable when the
         chain's cumulative covers every chain item.
-      - Tech tree goals: gate on accumulated science.  Handled by the
-        tech-tier post-pass.
+      - Tech tree goals: gate on accumulated science.  The greedy body
+        selection in ``_pick_tech_tree_anchors`` adds body-orbit
+        S_tier_anchor spheres until their combined science (with
+        PSI=3 injected) covers ``cumulative_tier_cost(MAX_TIER)``.
     """
     from .rules import goal_spec_location_names
     home = str(world.mission_builder.home)
@@ -1535,7 +1562,103 @@ def _predictable_spheres(world: "KSP1World") -> list[tuple[str, str]]:
     ]
     for goal_name in feasible_goals:
         out.append((f"S_goal[{goal_name}]", goal_name))
+    # Tech-tree anchors (only for complete_tech_tree).  These are body-orbit
+    # locations the chain extends through so cumulative science covers
+    # cumulative_tier_cost(MAX_TIER).  Builder validates feasibility.
+    out.extend(_pick_tech_tree_anchors(world))
     return out
+
+
+# Items injected into the cumulative kit of tech-tree anchor spheres.
+# These are bookkeeping items (gate tech-tree access, not rocket physics);
+# the chain walker merges them into the rocket's delta+cumulative after
+# ``minimal_rocket_for`` builds the physics part.  Result: chain_required
+# carries them through, Rule B distributes copies by sphere ordering.
+_TECH_ANCHOR_INJECT = {
+    PROGRESSIVE_RD_NAME: 3,                   # = MAX_RD_BAND
+    "Progressive Science Instrument": 3,
+}
+
+
+def _pick_tech_tree_anchors(
+    world: "KSP1World",
+) -> list[tuple[str, str]]:
+    """Return (label, location_name) anchor spheres for complete_tech_tree.
+
+    Greedy body-orbit selection: starting from home-system science (with
+    PSI=3 + full crew/instrument kit), add interplanetary body orbits one
+    at a time, cheapest-dv first, until the running total covers
+    ``cumulative_tier_cost(MAX_TIER) / safety`` — the science the player
+    needs to buy every tech node.
+
+    The validation invariant: when this function returns, the chain's
+    accumulated science across home-system + selected anchors must satisfy
+    the whole-tree threshold.  If no body set covers it, raises
+    ``OptionError`` at ``pre_fill`` time — loud failure beats silent
+    unsolvable seed.
+
+    Returns ``[]`` for non-tech-tree goals.
+    """
+    if not world.goal_spec.complete_tech_tree:
+        return []
+
+    from .bodies import (
+        ALL_BODIES, BODY_BY_NAME, BodyName,
+        home_system_bodies, science_budget,
+    )
+    from .rules import effective_science_safety
+    from .tech_tree import cumulative_tier_cost, MAX_TIER
+
+    safety = effective_science_safety(world.options, world.options.difficulty.value)
+    target_raw = cumulative_tier_cost(MAX_TIER) / safety
+
+    home = world.mission_builder.home
+    home_set = home_system_bodies(home)
+
+    # Per-body upper-bound yield: assume the player has a full kit
+    # (thermometer + barometer + capsule + crew-land + PSI=3).  The
+    # post-pass uses the same conservative PSI=3 reading once the kit
+    # is injected, so this matches the cumulative-side accounting.
+    def body_max_yield(body) -> float:
+        return science_budget(
+            body,
+            has_thermometer=True,
+            has_barometer=True,
+            has_capsule=True,
+            can_land_crewed=body.can_land,
+            psi_tier=3,
+        )
+
+    accumulated = sum(body_max_yield(BODY_BY_NAME[bn]) for bn in home_set)
+
+    # Interplanetary candidates: exclude home-system + Kerbol (no profiles).
+    # Sort by cheapest dv-to-orbit, cheapest first.
+    interp_bodies = [
+        b for b in ALL_BODIES
+        if b.name not in home_set and b.name != BodyName.KERBOL
+    ]
+    interp_bodies.sort(
+        key=lambda b: _goal_dv(f"{b.name} Orbit 1", world.mission_builder)
+    )
+
+    anchors: list[tuple[str, str]] = []
+    for body in interp_bodies:
+        if accumulated >= target_raw:
+            break
+        accumulated += body_max_yield(body)
+        anchors.append((f"S_tier_anchor[{body.name}]", f"{body.name} Orbit 1"))
+
+    if accumulated < target_raw:
+        from Options import OptionError
+        raise OptionError(
+            f"KSP1 complete_tech_tree: cumulative science with every "
+            f"reachable body orbit at PSI=3 ({accumulated:.0f}) is below the "
+            f"tier-{MAX_TIER} threshold ({target_raw:.0f} raw / "
+            f"{cumulative_tier_cost(MAX_TIER)} after safety={safety:.2f}). "
+            f"The seed is unsolvable. Try a lower difficulty (looser safety) "
+            f"or report this if it appears with default options."
+        )
+    return anchors
 
 
 def _path_to_root(body_name: str) -> list[str]:
@@ -2141,6 +2264,15 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
             )
             if rocket is None:
                 continue  # intermediate: skip silently if infeasible
+
+        # Tech-tree anchor spheres carry bookkeeping injection (R&D + PSI)
+        # that minimal_rocket_for doesn't know about — they don't affect
+        # physics but they DO need to be chain-tracked so Rule B distributes
+        # the progressive copies sphere-by-sphere.  Merge into the rocket's
+        # delta and cumulative before recording the sphere boundary.
+        if label.startswith("S_tier_anchor["):
+            rocket = _inject_into_rocket(rocket, _TECH_ANCHOR_INJECT, cumulative)
+
         ladder.spheres.append(SphereBoundary(
             name=label,
             location_name=location_name,

@@ -286,9 +286,11 @@ _PROGRESSIVE_ITEMS: dict[str, tuple[int, ItemClassification]] = {
     PROGRESSIVE_PARACHUTE_NAME:         (63, ItemClassification.progression),
     PROGRESSIVE_LADDER_NAME:            (64, ItemClassification.progression),
     PROGRESSIVE_LANDING_LEG_NAME:       (65, ItemClassification.progression),
-    # Science instruments are useful, not progression: they affect science
-    # earnings but not capability gating (post bug-074 redesign).
-    PROGRESSIVE_SCIENCE_INSTRUMENT_NAME: (66, ItemClassification.useful),
+    # Science instruments scale the science_budget formula (tier 1: Goo;
+    # tier 2: Atmospheric Spec; tier 3: Accelerometer + Gravimeter — Sci Jr
+    # excluded for payload-mass reasons).  Chain-tracked via injection at
+    # complete_tech_tree's tier-anchor sphere.
+    PROGRESSIVE_SCIENCE_INSTRUMENT_NAME: (66, ItemClassification.progression),
     PROGRESSIVE_RADIAL_ENGINE_NAME:     (67, ItemClassification.progression),
     PROGRESSIVE_LAUNCH_PAD_NAME:        (68, ItemClassification.progression),
     PROGRESSIVE_SAS_NAME:               (69, ItemClassification.progression),
