@@ -1,17 +1,19 @@
 from typing import Any
 
 from BaseClasses import CollectionState, Item, MultiWorld, Tutorial
+from Options import OptionError
 from worlds.AutoWorld import LogicMixin, WebWorld, World
 
 from . import items, locations, regions, rules
 from .rules import GoalSpec, resolve_goal_spec, goal_spec_location_names
 from .capability import CAPABILITY_ITEMS, RocketCapability
+from .data.feasibility import MODEL_INFEASIBLE_LOCATIONS
 from .bodies import ALL_BODIES, BodyName, MissionBuilder, MissionType
 from .items import ITEM_NAME_TO_ID, PROGRESSIVE_LAUNCH_PAD_CAPS, _FILLER_ITEMS
 from .parts import PROGRESSIVE_PART_TIERS
 from .locations import (
     ALL_EVENTS, EventName, KSC_BIOMES, KSC_LOCATION_PREFIX,
-    KERBIN_LOCATIONS, LOCATION_NAME_TO_ID, MAX_TECH_SLOTS, MissionLocation,
+    LOCATION_NAME_TO_ID, LocationBuilder, MAX_TECH_SLOTS, MissionLocation,
     TechTreeLocation,
     effective_starting_inv_count, effective_tech_slots_per_node,
 )
@@ -75,16 +77,32 @@ class KSP1World(World):
     # Resolved goal specification (preset or custom).
     goal_spec: GoalSpec
 
-    # Mission graph builder for this world.  Phase 3a pins the home body to
-    # KERBIN here — Phase 4 lifts this pin behind the player-facing
-    # StartingBody option.  Owned by the world so its data lifetime matches
-    # the future option's lifetime.
+    # Mission graph builder for this world.  Pinned to Kerbin here; owned
+    # by the world so its data lifetime matches the rest of the per-world
+    # state.
     mission_builder: MissionBuilder
+
+    # Per-world home-body location set (12 specials: first launch / landing /
+    # crash, altitude milestones, splashdown, first staging).  Owned alongside
+    # ``mission_builder`` so the two stay in sync on the same home.
+    location_builder: LocationBuilder
+
+    # AP location names whose mission the dv model can't verify from this
+    # world's home, even given a full progressive kit + every part.
+    # Looked up at world-init time from the checked-in
+    # ``MODEL_INFEASIBLE_LOCATIONS`` table (regenerated offline by
+    # ``scripts/generate_feasibility.py``).  Completion-condition rules
+    # for these locations fall back to the "all-parts collected" proxy
+    # because the dv model can't model their ascents (Eve's 8 km/s,
+    # Laythe's atmospheric Jool-system return, etc.).
+    model_infeasible_locations: frozenset[str]
 
     def generate_early(self) -> None:
         """Resolve goal spec and apply ExcludeLateTechTree."""
         self.capability_cache = {}
-        self.mission_builder = MissionBuilder(home=BodyName.KERBIN)
+        home = BodyName.KERBIN
+        self.mission_builder = MissionBuilder(home=home)
+        self.location_builder = LocationBuilder(home=home)
 
         # UT regen: restore options from original generation's slot_data.
         passthrough = getattr(self.multiworld, "re_gen_passthrough", {})
@@ -96,7 +114,19 @@ class KSP1World(World):
         # call get_capability before any create_items has run.
         items.select_progressive_representatives(self)
 
-        self.goal_spec = resolve_goal_spec(self.options, self.mission_builder.home)
+        # Model-infeasible-locations set is a checked-in static lookup
+        # keyed by home body — generated offline by
+        # ``scripts/generate_feasibility.py`` so the banned-location set
+        # is deterministic per commit hash and never drifts between
+        # seeds.  An empty fallback covers homes not yet in the table
+        # (unreachable today; defensive).
+        self.model_infeasible_locations = MODEL_INFEASIBLE_LOCATIONS.get(
+            self.mission_builder.home, frozenset(),
+        )
+        self.goal_spec = resolve_goal_spec(
+            self.options, self.mission_builder.home,
+            self.model_infeasible_locations,
+        )
         if self.options.exclude_late_tech_tree:
             late_tier_locs: set[str] = {
                 str(TechTreeLocation(node.display_name, slot))
@@ -155,7 +185,7 @@ class KSP1World(World):
         }
         d["kerbin_altitude_thresholds"] = [
             int(loc.threshold_km * 1000)
-            for loc in KERBIN_LOCATIONS
+            for loc in self.location_builder.locations
             if loc.mission_type == MissionType.SOUNDING and loc.threshold_km is not None
             and loc.threshold_km >= 1.0  # exclude "First Crash" (0.1 km)
         ]
@@ -171,7 +201,8 @@ class KSP1World(World):
         # (0..N). The sentinel -1.0 marks "unlimited" so JSON can carry it.
         if self.options.progressive_launch_pad:
             d["progressive_launch_pad_caps"] = [
-                cap if cap != float("inf") else -1.0 for cap in PROGRESSIVE_LAUNCH_PAD_CAPS
+                cap if cap != float("inf") else -1.0
+                for cap in self.mission_builder.launch_pad_caps
             ]
         return d
 

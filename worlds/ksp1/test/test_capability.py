@@ -141,6 +141,12 @@ def _make_flags(
             flags.available_parachutes.append(p)
             flags.parachute_count += 1
             flags.total_chute_drag_area += p.drag_area
+    # Mirror _pre_pass: pick asymptote-best non-drogue chute up front
+    # so _required_chute_count can read it directly.
+    _non_drogue = [p for p in flags.available_parachutes if not p.is_drogue]
+    if _non_drogue:
+        flags.best_chute = min(_non_drogue,
+                                key=lambda p: p.mass / max(p.drag_area, 1e-3))
 
     legs = legs or []
     for leg in legs:
@@ -214,13 +220,13 @@ class TestMinimumKit(unittest.TestCase):
         flags = self._min_flags()
         profiles = MISSION_PROFILES.get((BodyName.MUN, MissionType.ORBIT), [])
         self.assertTrue(len(profiles) > 0, "No Mun orbit profiles defined")
-        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.ORBIT, crewed=False)
+        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.ORBIT, crewed=False, home=BodyName.KERBIN)
         self.assertTrue(ok, "Minimum kit should reach Mun orbit")
 
     def test_minmus_orbit_achievable(self) -> None:
         flags = self._min_flags()
         profiles = MISSION_PROFILES.get((BodyName.MINMUS, MissionType.ORBIT), [])
-        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.ORBIT, crewed=False)
+        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.ORBIT, crewed=False, home=BodyName.KERBIN)
         self.assertTrue(ok, "Minimum kit should reach Minmus orbit")
 
 
@@ -238,7 +244,7 @@ class TestLandingLegs(unittest.TestCase):
     def test_mun_land_fails_without_legs(self) -> None:
         flags = self._orbit_flags()
         profiles = MISSION_PROFILES.get((BodyName.MUN, MissionType.LAND), [])
-        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.LAND, crewed=False)
+        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.LAND, crewed=False, home=BodyName.KERBIN)
         self.assertFalse(ok, "Should not land on Mun without landing legs")
 
     def test_mun_land_succeeds_with_legs(self) -> None:
@@ -246,7 +252,7 @@ class TestLandingLegs(unittest.TestCase):
         flags.available_landing_legs = [_LT2]
         flags.landing_leg_tier = 2
         profiles = MISSION_PROFILES.get((BodyName.MUN, MissionType.LAND), [])
-        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.LAND, crewed=False)
+        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.LAND, crewed=False, home=BodyName.KERBIN)
         self.assertTrue(ok, "Should land on Mun with tier-2 legs + Swivel + enough tanks")
 
 
@@ -270,7 +276,7 @@ class TestHeatShieldGate(unittest.TestCase):
         aero_profiles = [p for p in profiles
                          if any(e.needs_heat_shield for e in p)]
         self.assertTrue(len(aero_profiles) > 0)
-        ok = _try_profiles(aero_profiles, flags, _normal_diff(), MissionType.LAND, crewed=False)
+        ok = _try_profiles(aero_profiles, flags, _normal_diff(), MissionType.LAND, crewed=False, home=BodyName.KERBIN)
         self.assertFalse(ok, "Aero landing should fail without heat shield")
 
     def test_propulsive_profile_does_not_require_shield(self) -> None:
@@ -282,7 +288,7 @@ class TestHeatShieldGate(unittest.TestCase):
             self.skipTest("No propulsive-only Duna landing profiles found")
         # With a powerful engine and no heat shield, propulsive should work
         # (Duna has thin atmo so propulsive landing is possible)
-        ok = _try_profiles(prop_profiles, flags, _normal_diff(), MissionType.LAND, crewed=False)
+        ok = _try_profiles(prop_profiles, flags, _normal_diff(), MissionType.LAND, crewed=False, home=BodyName.KERBIN)
         # This may or may not succeed depending on staging/engines; just assert no exception
         self.assertIsInstance(ok, bool)
 
@@ -294,7 +300,7 @@ class TestHeatShieldGate(unittest.TestCase):
         profiles = MISSION_PROFILES.get((BodyName.DUNA, MissionType.LAND), [])
         aero_profiles = [p for p in profiles
                          if any(e.needs_heat_shield for e in p)]
-        ok = _try_profiles(aero_profiles, flags, _normal_diff(), MissionType.LAND, crewed=False)
+        ok = _try_profiles(aero_profiles, flags, _normal_diff(), MissionType.LAND, crewed=False, home=BodyName.KERBIN)
         # With a 1.25m shield + Mainsail (2.5m) filtered, should fail;
         # but Swivel (1.25m) would pass — this tests the filter logic.
         # The key assertion is "no exception thrown" — the boolean result
@@ -382,13 +388,14 @@ class TestParachuteGate(unittest.TestCase):
         flags.available_parachutes = [_MK16, _MK16, _MK16]
         flags.parachute_count = 3
         flags.total_chute_drag_area = _MK16.drag_area * 3
+        flags.best_chute = _MK16  # set explicitly since we bypassed _make_flags's parachutes= path
         return flags
 
     def test_mun_return_fails_without_parachutes(self) -> None:
         # No parachutes: fails at the broad gate check (ATMO_LANDING_AERO present)
         flags = self._return_flags_no_chutes()
         profiles = MISSION_PROFILES.get((BodyName.MUN, MissionType.RETURN), [])
-        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.RETURN, crewed=False)
+        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.RETURN, crewed=False, home=BodyName.KERBIN)
         self.assertFalse(ok, "Mun return should fail without parachutes")
 
     def test_mun_return_succeeds_with_parachutes(self) -> None:
@@ -399,7 +406,7 @@ class TestParachuteGate(unittest.TestCase):
         flags = self._return_flags_with_chutes()
         profiles = MISSION_PROFILES.get((BodyName.MUN, MissionType.RETURN), [])
         diff = DIFFICULTY_PROFILES["insane"]
-        ok = _try_profiles(profiles, flags, diff, MissionType.RETURN, crewed=False)
+        ok = _try_profiles(profiles, flags, diff, MissionType.RETURN, crewed=False, home=BodyName.KERBIN)
         self.assertTrue(ok, "Mun return should succeed with parachutes at insane difficulty")
 
 
@@ -442,7 +449,7 @@ class TestCrewedVsUnmanned(unittest.TestCase):
         flags = self._base_flags()
         flags.has_probe_core = False
         profiles = MISSION_PROFILES.get((BodyName.MUN, MissionType.ORBIT), [])
-        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.ORBIT, crewed=False)
+        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.ORBIT, crewed=False, home=BodyName.KERBIN)
         self.assertFalse(ok, "Unmanned should fail without probe core")
 
     def test_unmanned_with_probe_core(self) -> None:
@@ -450,14 +457,14 @@ class TestCrewedVsUnmanned(unittest.TestCase):
         flags.has_probe_core = True
         flags.lightest_probe = _PROBE_CORE
         profiles = MISSION_PROFILES.get((BodyName.MUN, MissionType.ORBIT), [])
-        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.ORBIT, crewed=False)
+        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.ORBIT, crewed=False, home=BodyName.KERBIN)
         self.assertTrue(ok)
 
     def test_crewed_requires_capsule(self) -> None:
         flags = self._base_flags()
         flags.has_capsule = False
         profiles = MISSION_PROFILES.get((BodyName.MUN, MissionType.ORBIT), [])
-        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.ORBIT, crewed=True)
+        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.ORBIT, crewed=True, home=BodyName.KERBIN)
         self.assertFalse(ok, "Crewed should fail without capsule")
 
 
@@ -511,7 +518,7 @@ class TestStagingTier(unittest.TestCase):
             launch_clamp=True, staging_tier=0,
         )
         profiles = MISSION_PROFILES.get((BodyName.MUN, MissionType.ORBIT), [])
-        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.ORBIT, crewed=False)
+        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.ORBIT, crewed=False, home=BodyName.KERBIN)
         self.assertIsInstance(ok, bool)
 
     def test_staging_tier_1_enables_two_stages(self) -> None:
@@ -522,7 +529,7 @@ class TestStagingTier(unittest.TestCase):
             launch_clamp=True, decoupler_stack=True, staging_tier=1,
         )
         profiles = MISSION_PROFILES.get((BodyName.MUN, MissionType.ORBIT), [])
-        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.ORBIT, crewed=False)
+        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.ORBIT, crewed=False, home=BodyName.KERBIN)
         self.assertTrue(ok, "Mun orbit should be achievable with 2-stage rocket")
 
 
@@ -619,7 +626,7 @@ class TestNoEngines(unittest.TestCase):
     def test_kerbin_orbit_false_without_engines(self) -> None:
         flags = self._no_engine_flags()
         profiles = MISSION_PROFILES.get((BodyName.KERBIN, MissionType.ORBIT), [])
-        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.ORBIT, crewed=False)
+        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.ORBIT, crewed=False, home=BodyName.KERBIN)
         self.assertFalse(ok, "Kerbin orbit should require engines")
 
     def test_mun_orbit_false_without_engines(self) -> None:
@@ -656,7 +663,7 @@ class TestKerbinOrbit(unittest.TestCase):
             staging_tier=0,
         )
         profiles = MISSION_PROFILES.get((BodyName.KERBIN, MissionType.ORBIT), [])
-        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.ORBIT, crewed=False)
+        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.ORBIT, crewed=False, home=BodyName.KERBIN)
         self.assertTrue(ok, "Mainsail + X200-32 single stage should reach Kerbin orbit")
 
     def test_nerv_x200_32_fails_kerbin_orbit_normal(self) -> None:
@@ -668,7 +675,7 @@ class TestKerbinOrbit(unittest.TestCase):
             launch_clamp=True,
         )
         profiles = MISSION_PROFILES.get((BodyName.KERBIN, MissionType.ORBIT), [])
-        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.ORBIT, crewed=False)
+        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.ORBIT, crewed=False, home=BodyName.KERBIN)
         self.assertFalse(
             ok,
             "Nerv Engine has insufficient atmospheric TWR for Kerbin ascent at normal difficulty",
@@ -700,7 +707,7 @@ class TestAtmosphericAscentControl(unittest.TestCase):
             launch_clamp=True, staging_tier=1,
         )
         profiles = MISSION_PROFILES.get((BodyName.KERBIN, MissionType.ORBIT), [])
-        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.ORBIT, crewed=False)
+        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.ORBIT, crewed=False, home=BodyName.KERBIN)
         self.assertFalse(
             ok,
             "Dart + reaction wheels (no fins) must not claim Kerbin orbit",
@@ -716,7 +723,7 @@ class TestAtmosphericAscentControl(unittest.TestCase):
             launch_clamp=True, staging_tier=1,
         )
         profiles = MISSION_PROFILES.get((BodyName.KERBIN, MissionType.ORBIT), [])
-        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.ORBIT, crewed=False)
+        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.ORBIT, crewed=False, home=BodyName.KERBIN)
         self.assertTrue(
             ok,
             "LV-T45 has gimbal — Kerbin orbit must be feasible",
@@ -733,7 +740,7 @@ class TestAtmosphericAscentControl(unittest.TestCase):
         )
         self._add_aero_control(flags, _BASIC_FIN)
         profiles = MISSION_PROFILES.get((BodyName.KERBIN, MissionType.ORBIT), [])
-        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.ORBIT, crewed=False)
+        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.ORBIT, crewed=False, home=BodyName.KERBIN)
         self.assertTrue(
             ok,
             "Dart + Basic Fin should reach Kerbin orbit (fins provide control)",
@@ -829,7 +836,7 @@ class TestDunaReturn(unittest.TestCase):
             launch_clamp=True, decoupler_radial=True,
         )
         return_profiles = MISSION_PROFILES.get((BodyName.DUNA, MissionType.RETURN), [])
-        ok = _try_profiles(return_profiles, flags, _normal_diff(), MissionType.RETURN, crewed=False)
+        ok = _try_profiles(return_profiles, flags, _normal_diff(), MissionType.RETURN, crewed=False, home=BodyName.KERBIN)
         self.assertFalse(ok, "Duna return should fail without a heat shield (Kerbin reentry blocked)")
 
 
@@ -844,13 +851,13 @@ class TestInterplanetaryBodies(unittest.TestCase):
     the Kerbin ascent stage from the interplanetary transfer stages.
     """
 
-    def _full_kit_flags(self) -> EquipmentFlags:
+    def _full_kit_flags(self, relay_tier: int = 3) -> EquipmentFlags:
         return _make_flags(
             engines=[_MAINSAIL, _SWIVEL, _TERRIER],
             tanks=[_JUMBO_64, _S3_3600, _X200_32, _FL_T800, _FL_T400],
             probe_core=True, reaction_wheels=True,
             solar=True, solar_retractable=True, rtg=True,
-            relay_tier=3,
+            relay_tier=relay_tier,
             heat_shields=[_SHIELD_25],
             parachutes=[_MK16, _MK16, _MK16],
             legs=[_LT2],
@@ -869,7 +876,8 @@ class TestInterplanetaryBodies(unittest.TestCase):
             )
 
     def test_outer_bodies_blocked_at_relay_tier_3(self) -> None:
-        # Jool and Eeloo require min_relay_tier=4.  Tier 3 should block them.
+        # Jool (max sep 6.2 AU) and Eeloo (7.0 AU) both fall in the
+        # tier-4 band under the opposition-distance relay formula.
         flags = self._full_kit_flags()
         self.assertEqual(flags.relay_tier, 3)
         results = _assess_bodies(flags, _normal_diff(), MISSION_BUILDER)
@@ -903,7 +911,7 @@ class TestKerbinOrbitIsEarlyGame(unittest.TestCase):
         )
         profiles = MISSION_PROFILES.get((BodyName.KERBIN, MissionType.ORBIT), [])
         self.assertTrue(len(profiles) > 0, "Kerbin orbit profiles must exist")
-        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.ORBIT, crewed=False)
+        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.ORBIT, crewed=False, home=BodyName.KERBIN)
         self.assertFalse(
             ok,
             "Reliant + X200-32 should NOT reach Kerbin orbit without an adapter",
@@ -925,7 +933,7 @@ class TestKerbinOrbitIsEarlyGame(unittest.TestCase):
         flags.available_aero_controls.append(_BASIC_FIN)
         flags.lightest_aero_control = _BASIC_FIN
         profiles = MISSION_PROFILES.get((BodyName.KERBIN, MissionType.ORBIT), [])
-        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.ORBIT, crewed=False)
+        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.ORBIT, crewed=False, home=BodyName.KERBIN)
         self.assertTrue(
             ok,
             "Reliant + X200-32 + quad coupler + fin should reach Kerbin orbit",
@@ -1284,7 +1292,7 @@ class TestAeroLandingPassiveStage(unittest.TestCase):
 
         # Find a feasible profile and inspect its last stage
         for profile in profiles:
-            result = _evaluate_profile(profile, flags, _normal_diff(), MissionType.RETURN, is_crewed=False)
+            result = _evaluate_profile(profile, flags, _normal_diff(), MissionType.RETURN, is_crewed=False, home=BodyName.KERBIN)
             if result.feasible:
                 last_stage = result.stage_results[-1]
                 self.assertEqual(last_stage.engine_count, 0,
@@ -1303,7 +1311,7 @@ class TestAeroLandingPassiveStage(unittest.TestCase):
         profiles = MISSION_PROFILES.get((BodyName.MUN, MissionType.RETURN), [])
 
         for profile in profiles:
-            result = _evaluate_profile(profile, flags, _normal_diff(), MissionType.RETURN, is_crewed=False)
+            result = _evaluate_profile(profile, flags, _normal_diff(), MissionType.RETURN, is_crewed=False, home=BodyName.KERBIN)
             if result.feasible:
                 last_stage = result.stage_results[-1]
                 self.assertEqual(last_stage.stage_mass_wet, last_stage.stage_mass_dry,
@@ -1332,7 +1340,7 @@ class TestAeroLandingPassiveStage(unittest.TestCase):
         self.assertTrue(len(profiles) > 0)
 
         for profile in profiles:
-            result = _evaluate_profile(profile, flags, _normal_diff(), MissionType.RETURN, is_crewed=False)
+            result = _evaluate_profile(profile, flags, _normal_diff(), MissionType.RETURN, is_crewed=False, home=BodyName.KERBIN)
             if result.feasible:
                 last_stage = result.stage_results[-1]
                 self.assertEqual(last_stage.engine_count, 0,
@@ -1367,21 +1375,24 @@ class TestEscapeRelayGate(unittest.TestCase):
         self.assertTrue(profiles, f"{body} should have an ESCAPE profile defined")
         for profile in profiles:
             r = _evaluate_profile(profile, flags, _normal_diff(),
-                                  MissionType.ESCAPE, is_crewed=False)
+                                  MissionType.ESCAPE, is_crewed=False, home=BodyName.KERBIN)
             if r.feasible:
                 return True
         return False
 
     def test_dres_escape_requires_relay_tier_3(self) -> None:
-        # Dres has min_relay_tier=3 — flyby must enforce it.
+        # Dres max-separation = 3.65 AU from Kerbin → tier 3 under the
+        # opposition-distance relay formula.
         self.assertFalse(self._escape_feasible(BodyName.DRES, relay_tier=2))
         self.assertTrue(self._escape_feasible(BodyName.DRES, relay_tier=3))
 
     def test_moho_escape_requires_relay_tier_2(self) -> None:
+        # Moho max-separation = 1.34 AU from Kerbin → tier 2.
         self.assertFalse(self._escape_feasible(BodyName.MOHO, relay_tier=1))
         self.assertTrue(self._escape_feasible(BodyName.MOHO, relay_tier=2))
 
     def test_eeloo_escape_requires_relay_tier_4(self) -> None:
+        # Eeloo max-separation = 7.0 AU from Kerbin → tier 4.
         self.assertFalse(self._escape_feasible(BodyName.EELOO, relay_tier=3))
         self.assertTrue(self._escape_feasible(BodyName.EELOO, relay_tier=4))
 
@@ -1534,7 +1545,7 @@ class TestStructuredBlockingReasons(unittest.TestCase):
         self.assertTrue(aero_profiles, "Test fixture: no aero profiles found")
         result = _evaluate_profile(
             aero_profiles[0], flags, _normal_diff(),
-            MissionType.LAND, is_crewed=False,
+            MissionType.LAND, is_crewed=False, home=BodyName.KERBIN,
         )
         self.assertFalse(result.feasible)
         self.assertIn(BlockingReason.NO_HEAT_SHIELD,
@@ -1572,7 +1583,7 @@ class TestStructuredBlockingReasons(unittest.TestCase):
         profiles = MISSION_PROFILES.get((BodyName.DUNA, MissionType.ORBIT), [])
         result = _evaluate_profile(
             profiles[0], flags, _normal_diff(),
-            MissionType.ORBIT, is_crewed=False,
+            MissionType.ORBIT, is_crewed=False, home=BodyName.KERBIN,
         )
         self.assertFalse(result.feasible)
         relay_blockings = [b for b in result.blocking
