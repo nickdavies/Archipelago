@@ -129,6 +129,7 @@ _BUMP_TABLE: dict[BlockingReason, frozenset[str]] = {
     BlockingReason.NO_VIABLE_STAGE: frozenset({
         "Progressive LFO Tank",
         "Progressive Xenon Tank",
+        "Progressive LF Tank",
         "Progressive Launch Engine",
         "Progressive Vacuum Engine",
         "Progressive Stack Decoupler",
@@ -169,6 +170,7 @@ _BUMP_TABLE: dict[BlockingReason, frozenset[str]] = {
     BlockingReason.NO_FUEL: frozenset({
         "Progressive LFO Tank",
         "Progressive Xenon Tank",
+        "Progressive LF Tank",
     }),
     BlockingReason.NO_PROPULSION: frozenset({
         "Progressive Launch Engine",
@@ -652,6 +654,10 @@ _CONDITIONAL_CHAINS: dict[str, Callable[[frozenset[str]], bool]] = {
     # nuclear, xenon tanks never serve a purpose — including them in the
     # bump candidate set wastes iterations to no effect.
     "Progressive Xenon Tank": lambda reps: "ionEngine" in reps,
+    # LF Tank only fuels nuclear engines (with full fuel mass — vs LFO
+    # tanks which Nerv can drain of LF only, at half the original fuel
+    # mass).  If the seed didn't roll nuclear, LF tanks never help.
+    "Progressive LF Tank": lambda reps: "nuclearEngine" in reps,
 }
 
 

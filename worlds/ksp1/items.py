@@ -245,6 +245,7 @@ PROGRESSIVE_RADIAL_ENGINE_NAME: str = "Progressive Radial Engine"
 PROGRESSIVE_LAUNCH_PAD_NAME: str = "Progressive Launch Pad"
 PROGRESSIVE_SAS_NAME: str = "Progressive SAS"
 PROGRESSIVE_XENON_TANK_NAME: str = "Progressive Xenon Tank"
+PROGRESSIVE_LF_TANK_NAME: str = "Progressive LF Tank"
 
 # Kerbin baseline tonnage caps by collected count (index = number of copies
 # received).  Index 0 = no copies = starting cap.  Starting at 100t lets
@@ -292,6 +293,7 @@ _PROGRESSIVE_ITEMS: dict[str, tuple[int, ItemClassification]] = {
     PROGRESSIVE_LAUNCH_PAD_NAME:        (68, ItemClassification.progression),
     PROGRESSIVE_SAS_NAME:               (69, ItemClassification.progression),
     PROGRESSIVE_XENON_TANK_NAME:        (70, ItemClassification.progression),
+    PROGRESSIVE_LF_TANK_NAME:           (71, ItemClassification.progression),
 }
 
 PROGRESSIVE_RD_COUNT: int = 3

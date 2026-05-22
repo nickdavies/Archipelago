@@ -1572,6 +1572,29 @@ PROGRESSIVE_PART_TIERS: dict[str, dict[int, list[str]]] = {
             "xenonTankLarge",            # PB-X750 (0.57t fuel, 1.25m)
         ],
     },
+    # --- LF Tanks (pure-LF fuselages for nuclear engine) ---
+    # nuclearEngine consumes only LF; it can use LFO tanks via the LFO→LF
+    # synthetic view (oxidizer emptied, half fuel mass) but pure-LF tanks
+    # have ~2× the fuel-to-dry ratio, giving ~10% lighter Nerv stages.
+    # Single tier with mixed pool — matches the Progressive Xenon Tank
+    # pattern: ONE item per seed, picks a rep from any size class.  The
+    # synthetic LFO-as-LF fallback covers cases where the rep happens to
+    # be small.  Single-item count keeps AP fill pressure low (multi-tier
+    # was observed to push other progression items into unreachable
+    # spheres on some seeds).  Gated in the bumper by
+    # ``"nuclearEngine" in rep_names`` — ion-only seeds never bump it.
+    "Progressive LF Tank": {
+        1: [
+            "miniFuselage",              # 0.25t fuel, 0.025t dry, 0.625m
+            "noseConeAdapter",           # 0.4t fuel, 0.1t dry, 0.625m
+            "MK1Fuselage",               # 2.0t fuel, 0.25t dry, 1.25m
+            "mk2FuselageShortLiquid",    # 2.0t fuel, 0.29t dry, 2.5m
+            "mk2Fuselage",               # 4.0t fuel, 0.57t dry, 2.5m
+            "mk3FuselageLF.25",          # 12.5t fuel, 1.79t dry, 3.75m
+            "mk3FuselageLF.50",          # 25.0t fuel, 3.57t dry, 3.75m
+            "mk3FuselageLF.100",         # 50.0t fuel, 7.14t dry, 3.75m
+        ],
+    },
 }
 
 # Max tier count per progressive item (number of copies in the AP pool)
