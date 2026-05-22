@@ -378,6 +378,24 @@ def select_progressive_representatives(world: KSP1World) -> None:
             else:
                 rep = world.random.choice(parts)
             representatives[prog_name][tier_num] = rep
+
+    # Progressive Vacuum Engine T4/T5 pair: every seed gets BOTH
+    # nuclearEngine and ionEngine, but the unlock order is randomised
+    # 50/50.  Default assignment (from PROGRESSIVE_PART_TIERS) is
+    # T4=Nerv, T5=Dawn; a coin flip here swaps that half the time.
+    # The final reps land in world.progressive_representatives below,
+    # so UT regen reads the post-swap state directly — no additional
+    # randomisation on regen.
+    PVE = "Progressive Vacuum Engine"
+    if (ut_reps is None
+            and PVE in representatives
+            and 4 in representatives[PVE]
+            and 5 in representatives[PVE]):
+        if world.random.random() < 0.5:
+            representatives[PVE][4], representatives[PVE][5] = (
+                representatives[PVE][5], representatives[PVE][4]
+            )
+
     world.progressive_representatives = representatives
 
 

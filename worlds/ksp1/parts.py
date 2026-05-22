@@ -1240,11 +1240,17 @@ PROGRESSIVE_PART_TIERS: dict[str, dict[int, list[str]]] = {
             "Size3AdvancedEngine",       # KR-2L+ Rhino (2000kN, 340s vac, 9t)
         ],
         4: [
-            # Advanced specialty propulsion — both require specific fuel types
-            # (Nerv = LF-only tanks, Ion = xenon) and have niche thrust profiles.
-            # Bumped one tier above the LFO workhorse so they read as a deeper
-            # progression unlock.
+            # Specialty propulsion is split across T4 and T5: every seed
+            # gets BOTH nuclearEngine and ionEngine.  The default
+            # assignment is T4=Nerv, T5=Dawn but items.py applies a
+            # 50/50 random swap per seed so the unlock order varies.
+            # This closes the Moho-failing pattern where the T4 coin
+            # flip used to leave some seeds with nuclear-only and the
+            # transfer-stage Δv requirement exceeded what nuclear alone
+            # could provide on a Moho mission stack.
             "nuclearEngine",             # LV-N Nerv (60kN, 800s vac, uses LF)
+        ],
+        5: [
             "ionEngine",                 # IX-6315 Dawn (2kN, 4200s vac, uses xenon)
         ],
     },
