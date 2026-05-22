@@ -34,6 +34,31 @@ class TestFillStandardSampleReturns(KSP1TestBase):
     needs_real_pre_fill = True
 
 
+class TestFillCompleteTechTree(KSP1TestBase):
+    """Fill smoke test for complete_tech_tree on expert difficulty.
+
+    Regression for two bugs that made this goal ungenerable:
+
+    1. The sphere ladder only built a Kerbin-system chain for this goal
+       (it has no goal *body*), so the interplanetary science needed to
+       fund tiers 7-8 was unreachable and Victory was unfillable.
+    2. With ``start_with_launch_clamps`` off, the ladder ignored the
+       launch-clamp SOI gate the rules enforce, so its interplanetary
+       kits/science silently disagreed with reachability.
+
+    Uses the exact option combination from the bug report.
+    """
+    options = {
+        "goal": "complete_tech_tree",
+        "difficulty": "expert",
+        "progressive_launch_pad": True,
+        "exclude_late_tech_tree": False,
+        "start_with_launch_clamps": False,
+    }
+    run_default_tests = True
+    needs_real_pre_fill = True
+
+
 class TestItemLocationBalance(KSP1TestBase):
     """Item pool must exactly match non-event location count."""
 

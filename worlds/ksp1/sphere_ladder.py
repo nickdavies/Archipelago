@@ -63,6 +63,7 @@ def _is_proxy_goal(location_name: str) -> bool:
         return False
     return (parsed.body, parsed.event) in _PROXY_GOALS
 from .items import (
+    CLAMP_PRECOLLECTED,
     PROGRESSIVE_LAUNCH_PAD_COUNT, PROGRESSIVE_LAUNCH_PAD_NAME,
     PROGRESSIVE_RD_COUNT, PROGRESSIVE_RD_NAME,
 )
@@ -84,6 +85,25 @@ PROGRESSIVE_CAPS: dict[str, int] = {
 
 if TYPE_CHECKING:
     from .world import KSP1World
+
+
+def _ladder_precollected(world: "KSP1World") -> frozenset[str]:
+    """Items the ladder may treat as already in hand when building kits and
+    scoring science.
+
+    Beyond the multiworld's precollected items, this always includes the
+    launch clamp.  The clamp is the single SOI-leave gate the rules enforce
+    (``_assess_one_body``), but the mission optimizer the ladder builds kits
+    with (``evaluate_mission_detailed``) does not model it — so without this
+    the ladder's interplanetary kits and science would silently disagree
+    with the rules whenever ``start_with_launch_clamps`` is off.  The clamp
+    isn't needed for any Kerbin-system bootstrap location, so it can always
+    be collected before leaving SOI; ``apply_sphere_ladder`` additionally
+    forces it into the early-item set so this assumption holds.
+    """
+    names = {it.name for it in world.multiworld.precollected_items[world.player]}
+    names.update(CLAMP_PRECOLLECTED)
+    return frozenset(names)
 
 
 # ---------------------------------------------------------------------------
@@ -1029,9 +1049,7 @@ def _build_rocket_or_raise(
         for tiers in world.progressive_representatives.values()
         for rep in tiers.values()
     )
-    precollected_names = frozenset(
-        it.name for it in world.multiworld.precollected_items[world.player]
-    )
+    precollected_names = _ladder_precollected(world)
     difficulty = ["casual", "normal", "expert", "insane"][
         world.options.difficulty.value
     ]
@@ -1082,9 +1100,19 @@ def _goal_relevant_bodies(world: "KSP1World") -> frozenset[str]:
     intermediates.  For a Duna goal: adds Sun-SOI planets + Duna's moons.
     Prevents the bumper from being forced to over-spend on Relay / Heat
     Shield to clear off-path intermediates.
+
+    Complete-tech-tree is the exception: it has no goal *body* (its goal
+    locations are tech-tree nodes), but completing the tree requires
+    enough science that the chain must reach well beyond the Kerbin
+    system.  For that goal every body is relevant, so the intermediate
+    picker can drive the chain — and the tech-tier post-pass's science
+    accounting — out to the interplanetary bodies.
     """
     from .bodies import ALL_BODIES, BODY_BY_NAME, BodyName
     from .rules import goal_spec_location_names
+
+    if world.goal_spec.complete_tech_tree:
+        return frozenset(b.name for b in ALL_BODIES)
 
     relevant: set[str] = {str(BodyName.KERBIN), str(BodyName.MUN), str(BodyName.MINMUS)}
 
@@ -1189,14 +1217,40 @@ def _predictable_spheres(world: "KSP1World") -> list[tuple[str, str]]:
       - Proxy goals (Eve/Tylo/Laythe Return/SR): rule is state.has_all
         progression items; capability can't model them.  They become
         reachable when the chain's cumulative covers every chain item.
-      - Tech tree goals: gate on accumulated science.  Handled by the
-        tech-tier post-pass.
+
+    Complete tech tree gates on accumulated science rather than on any
+    single goal body, so it has no capability-gated goal location of its
+    own.  The science needed to buy the whole tree (tier 8) far exceeds
+    what the Kerbin system alone can produce, so the chain must reach the
+    interplanetary bodies.  Crucially, *orbit* of a body yields almost no
+    science (a probe in orbit earns ~nothing) — the science budget comes
+    from crewed surface science, so the chain must reach crewed landings,
+    not just orbits.  We make a crewed landing of every standard
+    (non-proxy) landable body its own predictable sphere; the combined
+    crewed-landing science of those bodies covers ``cumulative_tier_cost``
+    for every tier at all difficulties (see ``_compute_tech_tier_signatures``),
+    and the chain walker grows the cumulative kit / surfaces unreachable
+    reps loudly the same way it does for ``standard_returns``.  Proxy
+    bodies (Eve/Tylo/Laythe) are skipped: their ascent profiles aren't
+    capability-modelled, and the standard bodies already fund the tree.
     """
+    from .bodies import ALL_BODIES
     from .rules import goal_spec_location_names
     out: list[tuple[str, str]] = [
         ("S_launch", "Kerbin First Launch"),
         ("S_orbit", "Kerbin Orbit 1"),
     ]
+
+    if world.goal_spec.complete_tech_tree:
+        for body in ALL_BODIES:
+            if not body.can_land or body.all_parts_proxy:
+                continue
+            if body.name == BodyName.KERBIN:
+                continue  # Kerbin crewed landing earns negligible science.
+            loc_name = str(MissionLocation(body.name, EventName.CREWED_LANDING, 1))
+            out.append((f"S_goal[{loc_name}]", loc_name))
+        return out
+
     goal_names = list(goal_spec_location_names(world.goal_spec))
     feasible_goals = [
         n for n in goal_names
@@ -1239,9 +1293,7 @@ def _compute_location_signatures(
         for tiers in world.progressive_representatives.values()
         for rep in tiers.values()
     )
-    precollected_names = frozenset(
-        it.name for it in world.multiworld.precollected_items[world.player]
-    )
+    precollected_names = _ladder_precollected(world)
     difficulty = ["casual", "normal", "expert", "insane"][
         world.options.difficulty.value
     ]
@@ -1450,9 +1502,7 @@ def _compute_tech_tier_signatures(
         for tiers in world.progressive_representatives.values()
         for rep in tiers.values()
     )
-    precollected_names = frozenset(
-        it.name for it in world.multiworld.precollected_items[world.player]
-    )
+    precollected_names = _ladder_precollected(world)
 
     # Step 1: compute science accumulated at each sphere in the chain.
     # Same conservative _count_fn as minimal_rocket_for: only progressives
@@ -1746,9 +1796,7 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
                 for tiers in world.progressive_representatives.values()
                 for rep in tiers.values()
             )
-            precollected_names = frozenset(
-                it.name for it in world.multiworld.precollected_items[world.player]
-            )
+            precollected_names = _ladder_precollected(world)
             difficulty = ["casual", "normal", "expert", "insane"][
                 world.options.difficulty.value
             ]
@@ -1868,3 +1916,14 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
         local_early = world.multiworld.local_early_items[world.player]
         for name, count in launch_delta.items():
             local_early[name] = max(local_early.get(name, 0), count)
+
+    # The launch clamp gates leaving Kerbin's SOI.  When it isn't already
+    # precollected, force it into the early-item set so it lands at a
+    # sphere-0 (Kerbin-system) location.  This makes the ladder's
+    # "clamp available" assumption (see ``_ladder_precollected``) hold:
+    # the player obtains it before any interplanetary sphere, so the
+    # science accounting that funds the higher tech tiers is sound.
+    if not world.options.start_with_launch_clamps:
+        local_early = world.multiworld.local_early_items[world.player]
+        for name in CLAMP_PRECOLLECTED:
+            local_early[name] = max(local_early.get(name, 0), 1)
