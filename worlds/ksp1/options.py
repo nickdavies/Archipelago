@@ -25,6 +25,9 @@ class Goal(Choice):
     eve_return             -- Return a vessel (or crew) from Eve (challenge).
     mun_flag               -- Plant a flag on the Mun.
     mun_sample_return      -- Crewed sample return from the Mun.
+    jool_moons_return      -- Return from each Jool moon (Laythe, Vall, Tylo,
+                              Bop, Pol).  Home is filtered out, so a Laythe
+                              start gives a tight 4-target Jool-system goal.
     custom                 -- Build a goal from the body-list options below.
     """
     display_name = "Goal"
@@ -38,6 +41,7 @@ class Goal(Choice):
     option_eve_return = 6
     option_mun_flag = 7
     option_mun_sample_return = 8
+    option_jool_moons_return = 9
     option_custom = 99
 
     default = option_duna_return
@@ -71,6 +75,45 @@ class FlybyBodies(OptionSet):
     """Bodies to perform a flyby of (custom goal). Leave empty for preset goals."""
     display_name = "Flyby Bodies"
     valid_keys = ALL_BODY_NAMES
+
+
+class StartingBody(Choice):
+    """
+    The celestial body whose surface the player launches from.  Mun /
+    Minmus / Laythe / etc. are landable bodies that the Selector mod
+    can spawn KSC at.  Jool and Kerbol are excluded — gas giant and
+    star, no surface.
+
+    Most existing goals still work from non-Kerbin homes (returns,
+    flag plants, sample returns are filtered for the new home).
+    Goals whose only target *is* the home body become unwinnable and
+    generation aborts with OptionError — e.g. ``mun_flag`` with
+    ``home = mun`` is rejected at gen time.
+
+    Default ``kerbin`` preserves the existing single-home behaviour.
+    """
+    display_name = "Starting Body"
+
+    # Integer values are stable and alphabetised by body name so adding
+    # a body later (a mod, an outer-planets pack) doesn't shift the
+    # ones already in player yaml files.
+    option_bop     = 0
+    option_dres    = 1
+    option_duna    = 2
+    option_eeloo   = 3
+    option_eve     = 4
+    option_gilly   = 5
+    option_ike     = 6
+    option_kerbin  = 7
+    option_laythe  = 8
+    option_minmus  = 9
+    option_moho    = 10
+    option_mun     = 11
+    option_pol     = 12
+    option_tylo    = 13
+    option_vall    = 14
+
+    default = option_kerbin
 
 
 class Difficulty(Choice):
@@ -273,6 +316,7 @@ class ProgressiveLaunchPad(Toggle):
 @dataclass
 class KSP1Options(PerGameCommonOptions):
     goal: Goal
+    starting_body: StartingBody
     difficulty: Difficulty
     tech_slots_per_node: TechSlotsPerNode
     starting_inventory_count: StartingInventoryCount

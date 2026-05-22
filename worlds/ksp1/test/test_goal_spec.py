@@ -155,12 +155,20 @@ class TestResolveGoalSpec(unittest.TestCase):
             resolve_goal_spec(opts, _HOME, _KERBIN_INFEASIBLE_LOCATIONS)
 
     def test_all_presets_resolve(self):
+        # Some presets are home-system-local and only resolve against a
+        # compatible home (e.g. ``jool_moons_return`` needs a Jool moon).
+        # Pick the home per preset; default to Kerbin otherwise.
+        preset_home = {
+            Goal.option_jool_moons_return: BodyName.LAYTHE,
+        }
         for goal_value, preset in _PRESET_GOALS.items():
+            home = preset_home.get(goal_value, _HOME)
+            infeasible = MODEL_INFEASIBLE_LOCATIONS.get(home, frozenset())
             opts = _FakeOptions(goal=goal_value)
-            spec = resolve_goal_spec(opts, _HOME, _KERBIN_INFEASIBLE_LOCATIONS)
+            spec = resolve_goal_spec(opts, home, infeasible)
             self.assertIsInstance(spec, GoalSpec)
             self.assertTrue(spec.display_name)
-            self.assertEqual(spec.home, _HOME)
+            self.assertEqual(spec.home, home)
 
 
 # ---------------------------------------------------------------------------

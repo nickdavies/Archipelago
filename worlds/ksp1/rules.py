@@ -614,6 +614,14 @@ _PRESET_GOALS: dict[int, GoalSpec] = {
         display_name="Mun Sample Return",
         sample_return_bodies=(BodyName.MUN,),
     ),
+    Goal.option_jool_moons_return: GoalSpec(
+        display_name="Jool Moons Return",
+        return_bodies=(
+            BodyName.LAYTHE, BodyName.VALL, BodyName.TYLO,
+            BodyName.BOP, BodyName.POL,
+        ),
+        home_system_local=True,
+    ),
 }
 
 
