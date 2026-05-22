@@ -96,6 +96,7 @@ def _accessible_science(state: CollectionState, player: int, safety: float) -> f
     Multiplied by the safety factor before returning.
     """
     cap = get_capability(state, player)
+    psi_tier = state.count("Progressive Science Instrument", player)
 
     total = 0.0
     for body in ALL_BODIES:
@@ -105,6 +106,7 @@ def _accessible_science(state: CollectionState, player: int, safety: float) -> f
         total += science_budget(
             body, cap.has_thermometer, cap.has_barometer,
             cap.has_capsule, body_cap.access[EventName.CREWED_LANDING],
+            psi_tier=psi_tier,
         )
 
     return total * safety
@@ -125,6 +127,7 @@ def _make_science_threshold_rule(
     """Return a rule that passes when accessible science * safety >= threshold."""
     def rule(state: CollectionState) -> bool:
         cap = get_capability(state, player)
+        psi_tier = state.count("Progressive Science Instrument", player)
         total = 0.0
         for body in ALL_BODIES:
             body_cap = cap.bodies[body.name]
@@ -133,6 +136,7 @@ def _make_science_threshold_rule(
             total += science_budget(
                 body, cap.has_thermometer, cap.has_barometer,
                 cap.has_capsule, body_cap.access[EventName.CREWED_LANDING],
+                psi_tier=psi_tier,
             )
         return total * safety >= threshold
     return rule

@@ -1382,6 +1382,7 @@ def science_budget(
     has_barometer: bool,
     has_capsule: bool,
     can_land_crewed: bool,
+    psi_tier: int = 0,
 ) -> float:
     """
     Estimate the total science collectible from *body* given the player's
@@ -1398,29 +1399,54 @@ def science_budget(
     The recovery_factor (0.25 for transmit) is NOT applied here — we assume
     the player physically recovers the data, giving full science value.
     This is the upper bound; safety factors in can_afford_tier() discount it.
+
+    ``psi_tier`` is the player's Progressive Science Instrument level (0–3).
+    Each tier unlocks LIGHT (≤50 kg) experiment modules whose payload cost
+    is negligible — Goo, Atmospheric Fluid Spectro-Variometer, Accelerometer,
+    Gravimeter.  ``mobileMaterialsLab`` (Sci Jr., 200 kg) is intentionally
+    NOT counted — its payload cost isn't modelled by the capability system,
+    so counting its yield as free would over-estimate accessible science.
     """
-    instrument_val: float = 0.0
+    base_instr: float = 0.0
     if has_thermometer:
-        instrument_val += 8.0
+        base_instr += 8.0
     if has_barometer:
-        instrument_val += 12.0
+        base_instr += 12.0
+
+    # Progressive Science Instrument contributions, segmented by situation.
+    # Tier 1 (light): Goo — works in every situation.
+    # Tier 2 (light only): Atmospheric Spec — Landed/Flying on atmospheric
+    #   bodies only.  Sci Jr. is skipped (too heavy to count for free).
+    # Tier 3 (light): Accelerometer (Landed) + Gravimeter (Landed/Splashed/Space).
+    psi_space = (10.0 if psi_tier >= 1 else 0.0) + (20.0 if psi_tier >= 3 else 0.0)
+    psi_fly = (10.0 if psi_tier >= 1 else 0.0) + (20.0 if psi_tier >= 2 else 0.0)
+    psi_landed = (
+        (10.0 if psi_tier >= 1 else 0.0)
+        + (20.0 if psi_tier >= 2 and body.has_atmosphere else 0.0)
+        + (40.0 if psi_tier >= 3 else 0.0)
+    )
+    psi_splashed = (10.0 if psi_tier >= 1 else 0.0) + (20.0 if psi_tier >= 3 else 0.0)
 
     crew_orbital_val: float = (5.0 + 8.0) if has_capsule else 0.0
     crew_surface_val: float = (5.0 + 8.0 + 30.0) if (has_capsule and can_land_crewed) else 0.0
 
     # Orbital science (global, not per-biome)
-    orbital = (instrument_val + crew_orbital_val) * (body.space_low_mult + body.space_high_mult)
+    orbital = (base_instr + psi_space + crew_orbital_val) * (
+        body.space_low_mult + body.space_high_mult
+    )
 
     # Flying science (atmosphere only; use min to underestimate)
     flying = 0.0
     if body.has_atmosphere and body.fly_low_mult > 0 and body.fly_high_mult > 0:
-        flying = (instrument_val + crew_orbital_val) * min(body.fly_low_mult, body.fly_high_mult)
+        flying = (base_instr + psi_fly + crew_orbital_val) * min(
+            body.fly_low_mult, body.fly_high_mult
+        )
 
     # Landed science (scales with biome count)
     landed = 0.0
     if body.can_land and body.num_biomes > 0:
         landed = (
-            instrument_val * body.landed_mult
+            (base_instr + psi_landed) * body.landed_mult
             + crew_surface_val * body.landed_mult
         ) * body.num_biomes
 
@@ -1428,7 +1454,7 @@ def science_budget(
     splashed = 0.0
     if body.has_ocean and body.num_splash_biomes > 0:
         splashed = (
-            instrument_val * body.splashed_mult
+            (base_instr + psi_splashed) * body.splashed_mult
             + crew_surface_val * body.splashed_mult
         ) * body.num_splash_biomes
 

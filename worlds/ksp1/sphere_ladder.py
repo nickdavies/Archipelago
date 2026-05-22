@@ -1848,6 +1848,7 @@ def _compute_tech_tier_signatures(
             rep_names=rep_names,
             progressive_launch_pad=pad_on,
         )
+        psi_tier = kit.get("Progressive Science Instrument", 0)
         total = 0.0
         for body in ALL_BODIES:
             body_cap = cap.bodies[body.name]
@@ -1856,6 +1857,7 @@ def _compute_tech_tier_signatures(
             total += science_budget(
                 body, cap.has_thermometer, cap.has_barometer,
                 cap.has_capsule, body_cap.access[EventName.CREWED_LANDING],
+                psi_tier=psi_tier,
             )
         sphere_science.append((sphere, total * safety))
 
