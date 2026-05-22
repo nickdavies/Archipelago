@@ -71,13 +71,14 @@ _PROBED_EVENTS: tuple[EventName, ...] = (EventName.RETURN, EventName.SAMPLE_RETU
 DEFAULT_DIFFICULTY: str = "casual"
 
 # Extra ``percent_margin`` on top of the chosen difficulty profile.
-# ``casual + 10%`` is the smallest perturbation that catches Tylo
-# (whose single-stage Kerbin TLI for return sits right at the edge of
-# what max-kit can deliver) while leaving the rest of the proxy set
-# matching the original hand-tuned ``all_parts_proxy = {EVE, LAYTHE,
-# TYLO}``.  Smaller overheads miss Tylo; larger overheads (≥50%) start
-# over-banning Bop/Duna/Pol/Vall that are genuinely reachable.
-DEFAULT_OVERHEAD: float = 0.10
+# ``casual + 25%`` matches the post-F4 banned set against the historical
+# hand-tuned list with only one residual difference: Tylo→Kerbin Sample
+# Return is now feasible (F4's multi-stage + LF Tank + ion guarantee
+# makes the Tylo→Kerbin→Tylo round trip genuinely buildable).  Lower
+# overheads under-ban Laythe Return from many homes; higher overheads
+# (≥30%) over-ban Tylo→Laythe Return as collateral.  Was 10% pre-F4
+# when single-stage modelling left more missions naturally infeasible.
+DEFAULT_OVERHEAD: float = 0.25
 
 
 def _max_kit_counts() -> dict[str, int]:
