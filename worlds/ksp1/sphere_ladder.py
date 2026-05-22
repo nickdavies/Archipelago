@@ -616,7 +616,7 @@ def _extract_requirements(flags: EquipmentFlags) -> tuple[tuple[str, int], ...]:
     bools = (
         "has_heat_shield", "has_parachutes", "has_probe_core", "has_capsule",
         "has_rtg", "has_solar", "has_solar_retractable", "has_isru",
-        "has_docking_port", "has_ladder", "has_launch_clamp",
+        "has_docking_port", "has_ladder",
         "has_throttleable_engine", "has_aero_control_surface",
         "has_reaction_wheels", "has_rcs",
     )

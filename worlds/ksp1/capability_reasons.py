@@ -58,7 +58,6 @@ class BlockingReason(str, Enum):
 
     # --- Mission graph / infrastructure ---------------------------------
     PARENT_BODY_UNREACHABLE = "parent_body_unreachable"
-    NO_LAUNCH_CLAMP = "no_launch_clamp"
     NO_PROFILES = "no_profiles"
     ORBIT_NOT_ACHIEVABLE = "orbit_not_achievable"
 
@@ -229,8 +228,6 @@ class BlockingInfo:
         # Mission graph ------------------------------------------------
         if r == BlockingReason.PARENT_BODY_UNREACHABLE:
             return f"parent {self.parent_body} orbit unreachable"
-        if r == BlockingReason.NO_LAUNCH_CLAMP:
-            return "no launch clamp for interplanetary mission"
         if r == BlockingReason.NO_PROFILES:
             return f"no profiles for ({self.body}, {self.mission_type})"
         if r == BlockingReason.ORBIT_NOT_ACHIEVABLE:

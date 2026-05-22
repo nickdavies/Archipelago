@@ -1720,14 +1720,6 @@ def _assess_one_body(
                 ))
                 return prof
 
-    # --- Launch clamp gate for interplanetary ---
-    if body.name not in home_system and not flags.has_launch_clamp:
-        prof.set_blocking(BlockingInfo(
-            reason=BlockingReason.NO_LAUNCH_CLAMP,
-            body=body.name,
-        ))
-        return prof
-
     # --- Evaluate the events that locations.py exposes for this body ---
     # Iterating get_body_events instead of ALL_EVENTS means "events that don't
     # exist for this body" naturally stay at their default False access value.

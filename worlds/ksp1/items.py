@@ -60,7 +60,6 @@ _PROGRESSION_PROVIDES: frozenset[CapabilityFlag] = frozenset({
     CapabilityFlag.RELAY_T2,
     CapabilityFlag.RELAY_T3,
     CapabilityFlag.RELAY_T4,
-    CapabilityFlag.LAUNCH_CLAMP,
     CapabilityFlag.DOCKING_PORT,
     CapabilityFlag.FUEL_LINE,
     CapabilityFlag.LADDER,
@@ -73,6 +72,7 @@ _USEFUL_PROVIDES: frozenset[CapabilityFlag] = frozenset({
     CapabilityFlag.RCS,
     CapabilityFlag.BATTERY_LARGE,
     CapabilityFlag.ISRU,
+    CapabilityFlag.LAUNCH_CLAMP,
 })
 
 # Parts reclassified from progression → useful.

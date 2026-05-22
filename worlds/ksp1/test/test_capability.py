@@ -308,51 +308,6 @@ class TestHeatShieldGate(unittest.TestCase):
         self.assertIsInstance(ok, bool)
 
 
-class TestLaunchClampGate(unittest.TestCase):
-    """Interplanetary missions require launch clamps."""
-
-    def _interplanetary_flags_no_clamp(self) -> EquipmentFlags:
-        return _make_flags(
-            engines=[_MAINSAIL, _SWIVEL],
-            tanks=[_FL_T400, _FL_T800, _X200_32],
-            probe_core=True, reaction_wheels=True,
-            solar=True, relay_tier=3,
-            launch_clamp=False,   # <-- no clamp
-            decoupler_stack=True,
-        )
-
-    def test_duna_blocked_without_clamp(self) -> None:
-        flags = self._interplanetary_flags_no_clamp()
-        body = BODY_BY_NAME[BodyName.DUNA]
-        result = _assess_one_body(body, flags, _normal_diff(), computed={}, mission_builder=MISSION_BUILDER)
-        self.assertFalse(result.access.get("Orbit", False),
-                         "Duna orbit should be blocked without launch clamp")
-        self.assertIn("launch clamp", (result.blocking_reason or "").lower())
-
-    def test_mun_not_blocked_without_clamp(self) -> None:
-        # Mun is a Kerbin moon — does not need interplanetary clamp
-        flags = self._interplanetary_flags_no_clamp()
-        flags.available_landing_legs = []
-        flags.landing_leg_tier = 0
-        body = BODY_BY_NAME[BodyName.MUN]
-        result = _assess_one_body(body, flags, _normal_diff(), computed={}, mission_builder=MISSION_BUILDER)
-        # Mun orbit should still be assessable (clamp not required)
-        # It may fail for other reasons (no landing legs for land check),
-        # but the orbit check itself should proceed
-        self.assertIsInstance(result.access.get("Orbit", False), bool)
-        # No launch clamp blocking reason for Mun
-        self.assertNotIn("launch clamp", (result.blocking_reason or "").lower())
-
-    def test_duna_unblocked_with_clamp(self) -> None:
-        flags = self._interplanetary_flags_no_clamp()
-        flags.has_launch_clamp = True
-        body = BODY_BY_NAME[BodyName.DUNA]
-        result = _assess_one_body(body, flags, _normal_diff(), computed={}, mission_builder=MISSION_BUILDER)
-        # The clamp gate is no longer blocking; the blocking_reason (if any)
-        # must NOT be about launch clamps.
-        self.assertNotIn("launch clamp", (result.blocking_reason or "").lower())
-
-
 class TestParachuteGate(unittest.TestCase):
     """
     Kerbin reentry / aero landings require parachutes.
@@ -1550,23 +1505,6 @@ class TestStructuredBlockingReasons(unittest.TestCase):
         self.assertFalse(result.feasible)
         self.assertIn(BlockingReason.NO_HEAT_SHIELD,
                       {b.reason for b in result.blocking})
-
-    def test_launch_clamp_blocking_carries_enum(self) -> None:
-        from worlds.ksp1.capability_reasons import BlockingReason
-        flags = _make_flags(
-            engines=[_MAINSAIL, _SWIVEL],
-            tanks=[_FL_T400, _FL_T800, _X200_32],
-            probe_core=True, reaction_wheels=True,
-            solar=True, relay_tier=3,
-            launch_clamp=False, decoupler_stack=True,
-        )
-        body = BODY_BY_NAME[BodyName.DUNA]
-        result = _assess_one_body(body, flags, _normal_diff(), computed={}, mission_builder=MISSION_BUILDER)
-        self.assertEqual(len(result.blocking), 1)
-        self.assertEqual(result.blocking[0].reason,
-                         BlockingReason.NO_LAUNCH_CLAMP)
-        # And the legacy string view still matches.
-        self.assertIn("launch clamp", (result.blocking_reason or "").lower())
 
     def test_relay_tier_too_low_carries_typed_fields(self) -> None:
         from worlds.ksp1.capability import _evaluate_profile

@@ -171,9 +171,10 @@ class StartWithLaunchClamps(Toggle):
     """
     Start the run with Launch Clamps already collected.
 
-    Launch Clamps are required to leave Kerbin's SOI.  Enabling this removes
-    that gate, allowing interplanetary missions from the very first item check.
-    Disable if you want the clamp to be a meaningful progression unlock.
+    Launch Clamps stabilize tall rockets on the pad.  They are not required
+    for any mission — the capability system never gates on them — but
+    enabling this gives the player access to one from the start of the run
+    instead of waiting for the part item.
     """
     display_name = "Start With Launch Clamps"
     default = 1
