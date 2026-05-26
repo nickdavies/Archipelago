@@ -16,6 +16,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Stamp world_version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          python -c "import json, pathlib; p = pathlib.Path('worlds/ksp1/archipelago.json'); m = json.loads(p.read_text()); m['world_version'] = '$version'; p.write_text(json.dumps(m, indent=4) + '\n')"
+          cat worlds/ksp1/archipelago.json
+
       - name: Build ksp1.apworld
         working-directory: worlds
         run: |
