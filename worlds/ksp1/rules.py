@@ -24,7 +24,7 @@ from BaseClasses import CollectionState, ItemClassification
 
 from .bodies import (
     ALL_BODIES, BODY_BY_NAME, BodyName, MissionType,
-    home_system_bodies, science_budget,
+    home_system_bodies, relay_tier_table_for, science_budget,
 )
 from .capability import get_capability
 from .items import ITEM_TABLE, PROGRESSIVE_RD_NAME, PROGRESSIVE_PART_ITEM_NAMES, SCIENCE_PACK_NAMES
@@ -65,6 +65,12 @@ def effective_science_safety(options, difficulty: int) -> float:
         return override.value / 100.0
     return _SCIENCE_SAFETY[difficulty]
 
+# Fraction of a body's science budget counted when the player can only
+# transmit (relay link) and can't physically return.  Tunable — stock KSP
+# applies a per-experiment transmission penalty; this discount approximates
+# the aggregate effect for budget-affordability purposes.
+_TRANSMIT_ONLY_DISCOUNT: float = 0.75
+
 # Science needed to declare the tech tree complete (buy all 62 nodes)
 _TECH_TREE_COMPLETE_SCIENCE = cumulative_tier_cost(MAX_TIER)
 
@@ -88,7 +94,39 @@ def _make_all_parts_rule(player: int) -> Callable[[CollectionState], bool]:
 # Science heuristic helpers
 # ---------------------------------------------------------------------------
 
-def _accessible_science(state: CollectionState, player: int, safety: float) -> float:
+def _sum_accessible_science(cap, psi_tier: int, home: BodyName) -> float:
+    """Per-body science contributions, gated on the player's ability to
+    actually extract science from each body.
+
+    A reachable body contributes 0 unless the player can either (a)
+    physically recover (RETURN path exists) or (b) transmit (relay tier
+    meets the body's heliocentric requirement).  Transmit-only paths
+    apply ``_TRANSMIT_ONLY_DISCOUNT``.
+    """
+    relay_table = relay_tier_table_for(home)
+    total = 0.0
+    for body in ALL_BODIES:
+        body_cap = cap.bodies[body.name]
+        if not body_cap.access[EventName.ORBIT]:
+            continue
+        can_recover = body_cap.access[EventName.RETURN]
+        can_transmit = cap.relay_tier >= relay_table[body.name]
+        if not (can_recover or can_transmit):
+            continue
+        contribution = science_budget(
+            body, cap.has_thermometer, cap.has_barometer,
+            cap.has_capsule, body_cap.access[EventName.CREWED_LANDING],
+            psi_tier=psi_tier,
+        )
+        if not can_recover:
+            contribution *= _TRANSMIT_ONLY_DISCOUNT
+        total += contribution
+    return total
+
+
+def _accessible_science(
+    state: CollectionState, player: int, safety: float, home: BodyName,
+) -> float:
     """
     Estimate the total science the player can earn from all bodies they can
     currently reach, given their current instrument and crew equipment.
@@ -97,24 +135,14 @@ def _accessible_science(state: CollectionState, player: int, safety: float) -> f
     """
     cap = get_capability(state, player)
     psi_tier = state.count("Progressive Science Instrument", player)
-
-    total = 0.0
-    for body in ALL_BODIES:
-        body_cap = cap.bodies[body.name]
-        if not body_cap.access[EventName.ORBIT]:
-            continue
-        total += science_budget(
-            body, cap.has_thermometer, cap.has_barometer,
-            cap.has_capsule, body_cap.access[EventName.CREWED_LANDING],
-            psi_tier=psi_tier,
-        )
-
-    return total * safety
+    return _sum_accessible_science(cap, psi_tier, home) * safety
 
 
-def _can_afford_tier(state: CollectionState, player: int, tier: int, safety: float) -> bool:
+def _can_afford_tier(
+    state: CollectionState, player: int, tier: int, safety: float, home: BodyName,
+) -> bool:
     """Return True if the player's accessible science budget can cover all nodes through *tier*."""
-    return _accessible_science(state, player, safety) >= cumulative_tier_cost(tier)
+    return _accessible_science(state, player, safety, home) >= cumulative_tier_cost(tier)
 
 
 # ---------------------------------------------------------------------------
@@ -122,23 +150,13 @@ def _can_afford_tier(state: CollectionState, player: int, tier: int, safety: flo
 # ---------------------------------------------------------------------------
 
 def _make_science_threshold_rule(
-    player: int, threshold: float, safety: float
+    player: int, threshold: float, safety: float, home: BodyName,
 ) -> Callable[[CollectionState], bool]:
     """Return a rule that passes when accessible science * safety >= threshold."""
     def rule(state: CollectionState) -> bool:
         cap = get_capability(state, player)
         psi_tier = state.count("Progressive Science Instrument", player)
-        total = 0.0
-        for body in ALL_BODIES:
-            body_cap = cap.bodies[body.name]
-            if not body_cap.access[EventName.ORBIT]:
-                continue
-            total += science_budget(
-                body, cap.has_thermometer, cap.has_barometer,
-                cap.has_capsule, body_cap.access[EventName.CREWED_LANDING],
-                psi_tier=psi_tier,
-            )
-        return total * safety >= threshold
+        return _sum_accessible_science(cap, psi_tier, home) * safety >= threshold
     return rule
 
 
@@ -785,6 +803,7 @@ def _set_victory_rules(
     victory_location = world.get_location("Victory")
     victory_location.access_rule = _make_goal_spec_rule(
         player, spec, safety, world.model_infeasible_locations,
+        world.mission_builder.home,
     )
 
     world.multiworld.completion_condition[player] = (
@@ -795,6 +814,7 @@ def _set_victory_rules(
 def _make_goal_spec_rule(
     player: int, spec: GoalSpec, safety: float,
     model_infeasible_locations: frozenset[str],
+    home: BodyName,
 ) -> Callable[[CollectionState], bool]:
     """Build a composite access rule from a GoalSpec.
 
@@ -875,7 +895,9 @@ def _make_goal_spec_rule(
 
     # Complete tech tree
     if spec.complete_tech_tree:
-        science_rule = _make_science_threshold_rule(player, _TECH_TREE_COMPLETE_SCIENCE, safety)
+        science_rule = _make_science_threshold_rule(
+            player, _TECH_TREE_COMPLETE_SCIENCE, safety, home,
+        )
         def tech_rule(state: CollectionState) -> bool:
             if not state.has(PROGRESSIVE_RD_NAME, player, MAX_RD_BAND):
                 return False

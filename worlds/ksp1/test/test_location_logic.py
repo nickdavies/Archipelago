@@ -80,6 +80,7 @@ def _make_zero_cap() -> MagicMock:
     cap.has_barometer = False
     cap.staging_tier = 0
     cap.sounding_altitude_km = 0.0
+    cap.relay_tier = 0
     return cap
 
 

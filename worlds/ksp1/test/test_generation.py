@@ -124,7 +124,9 @@ class TestScienceBudget(KSP1TestBase):
         max_tier = max(node.tier for node in TECH_NODES)
         for tier in range(1, max_tier + 1):
             cost = cumulative_tier_cost(tier)
-            science = _accessible_science(state, self.player, safety)
+            science = _accessible_science(
+                state, self.player, safety, self.world.mission_builder.home,
+            )
             self.assertGreaterEqual(
                 science, cost,
                 f"Full item state cannot afford tier {tier} "

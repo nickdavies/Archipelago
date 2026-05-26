@@ -956,16 +956,20 @@ def _evaluate_profile(
     # MissionBuilder construction (the tier is a function of edge body
     # and the world's home, both fixed at that point).  The hot loop
     # reads a struct field — no dict lookup, no function call.
-    for edge in profile:
-        required = edge.relay_tier
-        if flags.relay_tier < required:
-            blocking.append(BlockingInfo(
-                reason=BlockingReason.RELAY_TIER_TOO_LOW,
-                body=edge.body,
-                relay_needed=required,
-                relay_available=flags.relay_tier,
-            ))
-            break  # one relay failure is sufficient
+    #
+    # Crewed missions skip the gate: a pilot in a manned capsule provides
+    # control authority directly with no radio link to home.
+    if not is_crewed:
+        for edge in profile:
+            required = edge.relay_tier
+            if flags.relay_tier < required:
+                blocking.append(BlockingInfo(
+                    reason=BlockingReason.RELAY_TIER_TOO_LOW,
+                    body=edge.body,
+                    relay_needed=required,
+                    relay_available=flags.relay_tier,
+                ))
+                break  # one relay failure is sufficient
 
     # Propulsion gate: bail if the player has no engines or fuel at all.
     # Progressive flags are set by _pre_pass; also check actual part lists

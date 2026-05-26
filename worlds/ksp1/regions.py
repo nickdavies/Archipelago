@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Callable
 
 from BaseClasses import CollectionState, Region
 
+from .bodies import BodyName
 from .items import PROGRESSIVE_RD_NAME
 from .tech_tree import NODE_BY_ID, TECH_NODES, TechNode, TIER_TO_BAND
 
@@ -27,6 +28,7 @@ def create_all_regions(world: KSP1World) -> None:
     player = world.player
     difficulty = world.options.difficulty.value
     safety = effective_science_safety(world.options, difficulty)
+    home = world.mission_builder.home
 
     menu = Region("Menu", player, world.multiworld)
     world.multiworld.regions.append(menu)
@@ -35,7 +37,7 @@ def create_all_regions(world: KSP1World) -> None:
         region = Region(node.display_name, player, world.multiworld)
         world.multiworld.regions.append(region)
 
-        rule = _make_node_entrance_rule(node, player, safety, _can_afford_tier)
+        rule = _make_node_entrance_rule(node, player, safety, home, _can_afford_tier)
         menu.connect(region, rule=rule)
 
 
@@ -43,7 +45,8 @@ def _make_node_entrance_rule(
     node: TechNode,
     player: int,
     safety: float,
-    can_afford_tier: Callable[[CollectionState, int, int, float], bool],
+    home: BodyName,
+    can_afford_tier: Callable[[CollectionState, int, int, float, BodyName], bool],
 ) -> Callable[[CollectionState], bool]:
     """Build an entrance rule for a tech node region.
 
@@ -59,7 +62,7 @@ def _make_node_entrance_rule(
     def rule(state: CollectionState) -> bool:
         if band > 0 and not state.has(PROGRESSIVE_RD_NAME, player, band):
             return False
-        if not can_afford_tier(state, player, tier, safety):
+        if not can_afford_tier(state, player, tier, safety, home):
             return False
         if not parent_region_names:
             return True
