@@ -94,7 +94,7 @@ def _make_all_parts_rule(player: int) -> Callable[[CollectionState], bool]:
 # Science heuristic helpers
 # ---------------------------------------------------------------------------
 
-def _sum_accessible_science(cap, psi_tier: int, home: BodyName) -> float:
+def bankable_science(cap, psi_tier: int, home: BodyName) -> float:
     """Per-body science contributions, gated on the player's ability to
     actually extract science from each body.
 
@@ -102,6 +102,12 @@ def _sum_accessible_science(cap, psi_tier: int, home: BodyName) -> float:
     physically recover (RETURN path exists) or (b) transmit (relay tier
     meets the body's heliocentric requirement).  Transmit-only paths
     apply ``_TRANSMIT_ONLY_DISCOUNT``.
+
+    This is the canonical "what science can the player bank in this state"
+    function.  Both the tech-tree victory rule and the sphere-ladder
+    per-sphere tier-funding pass MUST use it — duplicating the loop with
+    a different gate produces a silent mismatch where the ladder thinks
+    the seed is solvable but the rule disagrees at fill time.
     """
     relay_table = relay_tier_table_for(home)
     total = 0.0
@@ -135,7 +141,7 @@ def _accessible_science(
     """
     cap = get_capability(state, player)
     psi_tier = state.count("Progressive Science Instrument", player)
-    return _sum_accessible_science(cap, psi_tier, home) * safety
+    return bankable_science(cap, psi_tier, home) * safety
 
 
 def _can_afford_tier(
@@ -156,7 +162,7 @@ def _make_science_threshold_rule(
     def rule(state: CollectionState) -> bool:
         cap = get_capability(state, player)
         psi_tier = state.count("Progressive Science Instrument", player)
-        return _sum_accessible_science(cap, psi_tier, home) * safety >= threshold
+        return bankable_science(cap, psi_tier, home) * safety >= threshold
     return rule
 
 

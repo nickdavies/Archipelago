@@ -1927,10 +1927,9 @@ def _compute_tech_tier_signatures(
     Tech-tree locations naturally inherit Rule B from these signatures
     via the existing ``_install_tier_ban_rule`` logic.
     """
-    from .bodies import ALL_BODIES, science_budget
     from .capability import compute_capability_from_items
-    from .locations import EventName, TechTreeLocation, effective_tech_slots_per_node
-    from .rules import effective_science_safety
+    from .locations import TechTreeLocation, effective_tech_slots_per_node
+    from .rules import bankable_science, effective_science_safety
     from .tech_tree import TECH_NODES, TIER_TO_BAND, cumulative_tier_cost
 
     difficulty_idx = world.options.difficulty.value
@@ -1952,6 +1951,13 @@ def _compute_tech_tier_signatures(
     # (which auto-grant reps via _pre_pass) and precollected items are
     # considered available.  Non-progressive parts that haven't been
     # placed by AP yet do not count toward the science budget.
+    #
+    # Uses ``bankable_science`` — the same gated computation the victory
+    # rule uses.  If the two diverged, the ladder could mark a tier as
+    # funded by a sphere where the rule sees zero science (e.g. a body
+    # in orbit but with no relay or recover path), producing seeds the
+    # rule rejects at fill time.
+    home = world.mission_builder.home
     sphere_science: list[tuple[SphereBoundary, float]] = []
     for sphere in ladder.spheres:
         kit = sphere.rocket.cumulative
@@ -1972,17 +1978,7 @@ def _compute_tech_tier_signatures(
             progressive_launch_pad=pad_on,
         )
         psi_tier = kit.get("Progressive Science Instrument", 0)
-        total = 0.0
-        for body in ALL_BODIES:
-            body_cap = cap.bodies[body.name]
-            if not body_cap.access[EventName.ORBIT]:
-                continue
-            total += science_budget(
-                body, cap.has_thermometer, cap.has_barometer,
-                cap.has_capsule, body_cap.access[EventName.CREWED_LANDING],
-                psi_tier=psi_tier,
-            )
-        sphere_science.append((sphere, total * safety))
+        sphere_science.append((sphere, bankable_science(cap, psi_tier, home) * safety))
 
     # Step 2: per-tier, find funding sphere and assemble signature/kit.
     sigs: dict[str, LocationSignature] = {}

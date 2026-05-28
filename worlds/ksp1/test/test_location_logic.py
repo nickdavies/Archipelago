@@ -696,5 +696,109 @@ class TestTechTreeBandGating(KSP1TestBase):
             )
 
 
+class TestBankableScienceGate(unittest.TestCase):
+    """Direct unit tests for the ``bankable_science`` gate.
+
+    The sphere-ladder's per-sphere tier-funding pass and the tech-tree
+    victory rule both depend on this function — if either side reverts
+    to summing ``science_budget`` without the relay/recover gate, seeds
+    that pass the ladder can fail at fill time.  These tests pin the
+    gate semantics so any drift is caught here, not in a 100-seed sweep.
+    """
+
+    @staticmethod
+    def _kerbin_only_cap(*, relay_tier: int = 0, return_access: bool = True):
+        """Cap where only Kerbin has orbit access (recover or not by flag)."""
+        cap = _make_zero_cap()
+        cap.has_capsule = True
+        cap.has_thermometer = True
+        cap.has_barometer = True
+        cap.relay_tier = relay_tier
+        events = {EventName.ORBIT}
+        if return_access:
+            events.add(EventName.RETURN)
+            events.add(EventName.CREWED_LANDING)
+        cap.bodies = _all_false_bodies()
+        cap.bodies[BodyName.KERBIN] = _make_body_cap(events)
+        return cap
+
+    def test_orbit_only_with_no_relay_contributes_zero(self):
+        """Body in orbit but no recover path and relay tier 0 vs body needing
+        relay 4 → contributes 0 (gate filters it out)."""
+        from worlds.ksp1.rules import bankable_science
+        # Eve sits at relay tier 4 from Kerbin home — relay 0 cannot transmit.
+        cap = _make_zero_cap()
+        cap.has_capsule = True
+        cap.bodies = _all_false_bodies()
+        cap.bodies[BodyName.EVE] = _make_body_cap({EventName.ORBIT})
+        cap.relay_tier = 0
+        self.assertEqual(
+            bankable_science(cap, psi_tier=0, home=BodyName.KERBIN),
+            0.0,
+            "Body with orbit access but no return and insufficient relay "
+            "tier must contribute zero — the player has no way to bank the data.",
+        )
+
+    def test_recover_path_gives_full_credit(self):
+        from worlds.ksp1.rules import bankable_science
+        cap = self._kerbin_only_cap(relay_tier=0, return_access=True)
+        full = bankable_science(cap, psi_tier=0, home=BodyName.KERBIN)
+        self.assertGreater(full, 0.0, "Recover path must produce nonzero science.")
+
+    def test_transmit_only_applies_discount(self):
+        """Same body, same instruments, same crewed-landing access, but
+        differing RETURN access: transmit-only contribution = full × discount.
+
+        Isolates the gate's recover-vs-transmit decision from the
+        downstream ``crew_surface_val`` term in ``science_budget`` (which
+        depends on CREWED_LANDING, not RETURN).
+        """
+        from worlds.ksp1.rules import bankable_science, _TRANSMIT_ONLY_DISCOUNT
+        # Recover: orbit + return + crewed-landing.
+        recover_cap = _make_zero_cap()
+        recover_cap.has_capsule = True
+        recover_cap.has_thermometer = True
+        recover_cap.has_barometer = True
+        recover_cap.relay_tier = 0
+        recover_cap.bodies = _all_false_bodies()
+        recover_cap.bodies[BodyName.KERBIN] = _make_body_cap(
+            {EventName.ORBIT, EventName.RETURN, EventName.CREWED_LANDING}
+        )
+        # Transmit-only: orbit + crewed-landing, but NO return path.  Relay 0
+        # is enough — Kerbin sits at tier 0 from Kerbin home.
+        transmit_cap = _make_zero_cap()
+        transmit_cap.has_capsule = True
+        transmit_cap.has_thermometer = True
+        transmit_cap.has_barometer = True
+        transmit_cap.relay_tier = 0
+        transmit_cap.bodies = _all_false_bodies()
+        transmit_cap.bodies[BodyName.KERBIN] = _make_body_cap(
+            {EventName.ORBIT, EventName.CREWED_LANDING}
+        )
+
+        recover_val = bankable_science(recover_cap, psi_tier=0, home=BodyName.KERBIN)
+        transmit_val = bankable_science(transmit_cap, psi_tier=0, home=BodyName.KERBIN)
+        self.assertAlmostEqual(
+            transmit_val, recover_val * _TRANSMIT_ONLY_DISCOUNT,
+            places=6,
+            msg=f"Transmit-only contribution ({transmit_val:.1f}) should equal "
+                f"recover ({recover_val:.1f}) × {_TRANSMIT_ONLY_DISCOUNT}.",
+        )
+
+    def test_no_orbit_contributes_zero(self):
+        """Body without orbit access never contributes regardless of other flags."""
+        from worlds.ksp1.rules import bankable_science
+        cap = _make_zero_cap()
+        cap.has_capsule = True
+        cap.has_thermometer = True
+        cap.bodies = _all_false_bodies()  # every body present, every event False
+        cap.relay_tier = 4  # max
+        self.assertEqual(
+            bankable_science(cap, psi_tier=3, home=BodyName.KERBIN),
+            0.0,
+            "Bodies without orbit access contribute zero even with max relay + PSI.",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
