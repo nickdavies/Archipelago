@@ -177,6 +177,20 @@ class Body:
     fly_high_mult: float = 0.0      # FlyingHigh multiplier (0 = no atmosphere)
     landed_mult: float = 0.0        # Landed multiplier (0 = can't land)
     splashed_mult: float = 0.0      # Splashed multiplier (0 = no ocean)
+    # Stock KSP CelestialBodyScienceParams.RecoveryValue.  The client writes
+    # ``recovery_mult * science_scalar(body, home)`` into the matching field
+    # of ``CelestialBody.scienceValues`` at runtime.  NaN sentinel + the
+    # ``__post_init__`` check below force every Body constructor to set
+    # this explicitly — no silent default to "0 = unrecoverable" or to
+    # Kerbin's value.
+    recovery_mult: float = float("nan")
+
+    def __post_init__(self) -> None:
+        if math.isnan(self.recovery_mult):
+            raise ValueError(
+                f"Body({self.name}): recovery_mult is required (got NaN). "
+                f"Add the stock KSP RecoveryValue to the Body() constructor."
+            )
 
     # ------------------------------------------------------------------
     # Orbital constants
@@ -307,10 +321,22 @@ KERBIN = Body(
     radius_km=600,
     safe_altitude_km=70.0,  # Kármán line; atmosphere edge
     atm_scale_height_m=5000.0,
-    has_ocean=True, num_biomes=9, num_splash_biomes=2,
-    space_low_mult=1.5, space_high_mult=1.0,
-    fly_low_mult=1.0, fly_high_mult=0.7,
+    # Biome counts from runtime BiomeMap + BiomeSplit dump (KSP.log
+    # search "STOCK BiomeSplit"): 7 land_only + 4 mixed.  Mixed biomes
+    # (Grasslands, Shores, Tundra, Water) support BOTH landed and
+    # splashed science, so they count toward num_biomes AND
+    # num_splash_biomes.  Same convention applies to all ocean bodies.
+    has_ocean=True, num_biomes=11, num_splash_biomes=4,
+    # Stock KSP CelestialBodyScienceParams — verified against runtime
+    # dump in KSP.log (search "STOCK ScienceValues").  See bodies.py
+    # comment block on home-relative science scaling for how these are
+    # consumed.  Note splashed/flying are 1.0 even on bodies that lack
+    # them — KSP uses 1.0 as the "n/a baseline" not 0.0; the
+    # has_atmosphere / has_ocean flags gate science_budget's branches.
+    space_low_mult=1.0, space_high_mult=1.5,
+    fly_low_mult=0.7, fly_high_mult=0.9,
     landed_mult=0.3, splashed_mult=0.4,
+    recovery_mult=1.0,
 )
 
 MUN = Body(
@@ -328,9 +354,11 @@ MUN = Body(
     ),
     radius_km=200,
     safe_altitude_km=19.0,  # low orbit 14 + 5 buffer (vacuum)
-    num_biomes=7,
-    space_low_mult=4.0, space_high_mult=2.0,
-    landed_mult=9.0,
+    num_biomes=17,
+    space_low_mult=3.0, space_high_mult=2.0,
+    fly_low_mult=1.0, fly_high_mult=1.0,
+    landed_mult=4.0, splashed_mult=1.0,
+    recovery_mult=2.0,
 )
 
 MINMUS = Body(
@@ -349,8 +377,10 @@ MINMUS = Body(
     radius_km=60,
     safe_altitude_km=15.0,  # low orbit 10 + 5 buffer (vacuum)
     num_biomes=9,
-    space_low_mult=5.0, space_high_mult=2.5,
-    landed_mult=12.0,
+    space_low_mult=4.0, space_high_mult=2.5,
+    fly_low_mult=1.0, fly_high_mult=1.0,
+    landed_mult=5.0, splashed_mult=1.0,
+    recovery_mult=2.5,
 )
 
 MOHO = Body(
@@ -368,9 +398,11 @@ MOHO = Body(
     ),
     radius_km=250,
     safe_altitude_km=25.0,  # low orbit 20 + 5 buffer (vacuum)
-    num_biomes=6,
-    space_low_mult=8.0, space_high_mult=4.0,
-    landed_mult=9.0,
+    num_biomes=12,
+    space_low_mult=8.0, space_high_mult=7.0,
+    fly_low_mult=1.0, fly_high_mult=1.0,
+    landed_mult=10.0, splashed_mult=1.0,
+    recovery_mult=7.0,
 )
 
 EVE = Body(
@@ -389,10 +421,14 @@ EVE = Body(
     radius_km=700,
     safe_altitude_km=90.0,  # Kármán line; atmosphere edge
     atm_scale_height_m=7000.0,
-    has_ocean=True, num_biomes=8, num_splash_biomes=3,
-    space_low_mult=8.0, space_high_mult=4.0,
-    fly_low_mult=2.0, fly_high_mult=1.5,
+    # 4 land_only + 1 water_only + 8 mixed per BiomeSplit dump.
+    # Two tiny biomes (Craters, Akatsuki Lake) weren't sampled by the
+    # 5° grid; conservatively excluded.
+    has_ocean=True, num_biomes=12, num_splash_biomes=9,
+    space_low_mult=7.0, space_high_mult=5.0,
+    fly_low_mult=6.0, fly_high_mult=6.0,
     landed_mult=8.0, splashed_mult=8.0,
+    recovery_mult=5.0,
 )
 
 GILLY = Body(
@@ -411,8 +447,10 @@ GILLY = Body(
     radius_km=13,
     safe_altitude_km=11.0,  # low orbit 6 + 5 buffer (tiny vacuum body)
     num_biomes=3,
-    space_low_mult=9.0, space_high_mult=4.5,
-    landed_mult=12.0,
+    space_low_mult=8.0, space_high_mult=6.0,
+    fly_low_mult=1.0, fly_high_mult=1.0,
+    landed_mult=9.0, splashed_mult=1.0,
+    recovery_mult=6.0,
 )
 
 DUNA = Body(
@@ -431,10 +469,11 @@ DUNA = Body(
     radius_km=320,
     safe_altitude_km=50.0,  # Kármán line; atmosphere edge
     atm_scale_height_m=3000.0,
-    num_biomes=5,
-    space_low_mult=8.0, space_high_mult=4.0,
-    fly_low_mult=1.5, fly_high_mult=1.2,
-    landed_mult=8.0,
+    num_biomes=14,
+    space_low_mult=7.0, space_high_mult=5.0,
+    fly_low_mult=5.0, fly_high_mult=5.0,
+    landed_mult=8.0, splashed_mult=1.0,
+    recovery_mult=5.0,
 )
 
 IKE = Body(
@@ -452,9 +491,11 @@ IKE = Body(
     ),
     radius_km=130,
     safe_altitude_km=15.0,  # low orbit 10 + 5 buffer (vacuum)
-    num_biomes=5,
-    space_low_mult=8.0, space_high_mult=4.0,
-    landed_mult=8.0,
+    num_biomes=8,
+    space_low_mult=7.0, space_high_mult=5.0,
+    fly_low_mult=1.0, fly_high_mult=1.0,
+    landed_mult=8.0, splashed_mult=1.0,
+    recovery_mult=5.0,
 )
 
 DRES = Body(
@@ -472,9 +513,11 @@ DRES = Body(
     ),
     radius_km=138,
     safe_altitude_km=30.0,  # low orbit 25 + 5 buffer (vacuum)
-    num_biomes=5,
-    space_low_mult=8.0, space_high_mult=4.0,
-    landed_mult=8.0,
+    num_biomes=8,
+    space_low_mult=7.0, space_high_mult=6.0,
+    fly_low_mult=1.0, fly_high_mult=1.0,
+    landed_mult=8.0, splashed_mult=1.0,
+    recovery_mult=6.0,
 )
 
 JOOL = Body(
@@ -494,8 +537,14 @@ JOOL = Body(
     safe_altitude_km=200.0,  # Kármán line; atmosphere edge (gas giant)
     atm_scale_height_m=10000.0,
     num_biomes=0,
-    space_low_mult=12.0, space_high_mult=6.0,
-    fly_low_mult=6.0, fly_high_mult=4.0,
+    # KSP stock has landed=30 for Jool, but can_land=False above gates
+    # the science_budget landed branch.  Storing the stock value so
+    # client-side slot_data matches what KSP uses if a player somehow
+    # triggers a landed experiment (no-op in practice).
+    space_low_mult=7.0, space_high_mult=6.0,
+    fly_low_mult=12.0, fly_high_mult=9.0,
+    landed_mult=30.0, splashed_mult=1.0,
+    recovery_mult=6.0,
 )
 
 LAYTHE = Body(
@@ -514,10 +563,12 @@ LAYTHE = Body(
     radius_km=500,
     safe_altitude_km=50.0,  # Kármán line; atmosphere edge
     atm_scale_height_m=4000.0,
-    has_ocean=True, num_biomes=9, num_splash_biomes=4,
-    space_low_mult=12.0, space_high_mult=6.0,
-    fly_low_mult=4.0, fly_high_mult=3.0,
-    landed_mult=14.0, splashed_mult=10.0,
+    # 2 land_only + 4 water_only + 3 mixed per BiomeSplit dump.
+    has_ocean=True, num_biomes=5, num_splash_biomes=7,
+    space_low_mult=9.0, space_high_mult=8.0,
+    fly_low_mult=11.0, fly_high_mult=10.0,
+    landed_mult=14.0, splashed_mult=12.0,
+    recovery_mult=8.0,
 )
 
 VALL = Body(
@@ -536,8 +587,10 @@ VALL = Body(
     radius_km=300,
     safe_altitude_km=20.0,  # low orbit 15 + 5 buffer (vacuum)
     num_biomes=9,
-    space_low_mult=12.0, space_high_mult=6.0,
-    landed_mult=12.0,
+    space_low_mult=9.0, space_high_mult=8.0,
+    fly_low_mult=1.0, fly_high_mult=1.0,
+    landed_mult=12.0, splashed_mult=1.0,
+    recovery_mult=8.0,
 )
 
 TYLO = Body(
@@ -555,9 +608,11 @@ TYLO = Body(
     ),
     radius_km=600,
     safe_altitude_km=35.0,  # low orbit 30 + 5 buffer (vacuum)
-    num_biomes=6,
-    space_low_mult=12.0, space_high_mult=6.0,
-    landed_mult=12.0,
+    num_biomes=9,
+    space_low_mult=10.0, space_high_mult=8.0,
+    fly_low_mult=1.0, fly_high_mult=1.0,
+    landed_mult=12.0, splashed_mult=1.0,
+    recovery_mult=8.0,
 )
 
 BOP = Body(
@@ -575,9 +630,11 @@ BOP = Body(
     ),
     radius_km=65,
     safe_altitude_km=15.0,  # low orbit 10 + 5 buffer (vacuum)
-    num_biomes=4,
-    space_low_mult=12.0, space_high_mult=6.0,
-    landed_mult=12.0,
+    num_biomes=5,
+    space_low_mult=9.0, space_high_mult=8.0,
+    fly_low_mult=1.0, fly_high_mult=1.0,
+    landed_mult=12.0, splashed_mult=1.0,
+    recovery_mult=8.0,
 )
 
 POL = Body(
@@ -596,8 +653,10 @@ POL = Body(
     radius_km=44,
     safe_altitude_km=11.0,  # low orbit 6 + 5 buffer (tiny vacuum body)
     num_biomes=4,
-    space_low_mult=12.0, space_high_mult=6.0,
-    landed_mult=12.0,
+    space_low_mult=9.0, space_high_mult=8.0,
+    fly_low_mult=1.0, fly_high_mult=1.0,
+    landed_mult=12.0, splashed_mult=1.0,
+    recovery_mult=8.0,
 )
 
 EELOO = Body(
@@ -615,9 +674,11 @@ EELOO = Body(
     ),
     radius_km=210,
     safe_altitude_km=15.0,  # low orbit 10 + 5 buffer (vacuum)
-    num_biomes=7,
-    space_low_mult=15.0, space_high_mult=7.5,
-    landed_mult=15.0,
+    num_biomes=11,
+    space_low_mult=12.0, space_high_mult=10.0,
+    fly_low_mult=1.0, fly_high_mult=1.0,
+    landed_mult=15.0, splashed_mult=1.0,
+    recovery_mult=10.0,
 )
 
 KERBOL = Body(
@@ -639,7 +700,10 @@ KERBOL = Body(
     # if anyone ever tries.  Atmosphere ends ~600 km on the wiki.
     safe_altitude_km=600.0,
     num_biomes=0,
-    space_low_mult=2.0, space_high_mult=1.0,
+    space_low_mult=11.0, space_high_mult=2.0,
+    fly_low_mult=1.0, fly_high_mult=1.0,
+    landed_mult=1.0, splashed_mult=1.0,
+    recovery_mult=4.0,
 )
 
 # Authoritative list of all bodies
