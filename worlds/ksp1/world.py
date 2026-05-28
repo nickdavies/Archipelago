@@ -8,7 +8,10 @@ from . import items, locations, regions, rules
 from .rules import GoalSpec, resolve_goal_spec, goal_spec_location_names
 from .capability import CAPABILITY_ITEMS, RocketCapability
 from .data.feasibility import MODEL_INFEASIBLE_LOCATIONS
-from .bodies import ALL_BODIES, BodyName, MissionBuilder, MissionType
+from .bodies import (
+    ALL_BODIES, BodyName, MissionBuilder, MissionType,
+    home_relative_science_values,
+)
 from .items import ITEM_NAME_TO_ID, PROGRESSIVE_LAUNCH_PAD_CAPS, _FILLER_ITEMS
 from .parts import PROGRESSIVE_PART_TIERS
 from .locations import (
@@ -294,6 +297,17 @@ class KSP1World(World):
             name: int(name.split()[-1])
             for name in _FILLER_ITEMS
         }
+        # Home-relative science scaling.  Server-side ``science_budget``
+        # (rules + sphere-ladder) and the client both consume the SAME
+        # ``science_scalar(body, home) * stock_mult`` math; the values
+        # below are the absolute CelestialBody.scienceValues the client
+        # writes.  Key omitted for Kerbin home; client treats absent
+        # key as "feature off, leave stock alone".  When present, the
+        # dict contains every body and every situation — the client
+        # hard-fails on a missing entry (no silent defaults).
+        sci_values = home_relative_science_values(self.mission_builder.home)
+        if sci_values:
+            d["science_values"] = sci_values
         d["starting_inv_count"] = effective_starting_inv_count(
             self.options, self.options.difficulty.value
         )

@@ -1626,6 +1626,7 @@ def _pick_tech_tree_anchors(
             has_barometer=True,
             has_capsule=True,
             can_land_crewed=body.can_land,
+            home=home,
             psi_tier=3,
         )
 

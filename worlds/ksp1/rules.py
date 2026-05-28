@@ -122,7 +122,7 @@ def bankable_science(cap, psi_tier: int, home: BodyName) -> float:
         contribution = science_budget(
             body, cap.has_thermometer, cap.has_barometer,
             cap.has_capsule, body_cap.access[EventName.CREWED_LANDING],
-            psi_tier=psi_tier,
+            home=home, psi_tier=psi_tier,
         )
         if not can_recover:
             contribution *= _TRANSMIT_ONLY_DISCOUNT
