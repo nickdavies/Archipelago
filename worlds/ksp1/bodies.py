@@ -73,7 +73,7 @@ class BodyName(StrEnum):
     BOP = "Bop"
     POL = "Pol"
     EELOO = "Eeloo"
-    KERBOL = "Kerbol"
+    KERBOL = "Sun"
 
 
 # ---------------------------------------------------------------------------
