@@ -142,6 +142,25 @@ as you receive items and complete checks.
 - `/explain <location>` — Shows a detailed rocket design for any location: which engines, tanks,
   and equipment logic thinks you need, and why a mission might not be in logic yet.
 - `/explain parts [filter]` — Lists all parts you've received, grouped by type. Optionally filter by name.
+- `/explain parts progressive [chain]` — Reveals the per-seed progressive part assignments: which
+  concrete part each tier of a progressive chain (e.g. `Progressive Launch Engine`) resolves to in
+  this run, and which tiers you have unlocked so far. Omit `[chain]` to list every progressive chain,
+  or pass a substring to filter (e.g. `launch`, `vacuum`, `decoupler`).
+
+Example output for `/explain parts progressive launch` after receiving two `Progressive Launch Engine`s:
+
+```
+=== Progressive Parts (this seed) ===
+
+  Progressive Launch Engine: 2/3 unlocked
+    tier 1: liquidEngine2.v2 (LV-T45 "Swivel" Liquid Fuel Engine)  [unlocked]
+    tier 2: LiquidEngineLV-TX87 (LV-TX87 "Bobcat" Liquid Fuel Engine)  [unlocked]
+    tier 3: liquidEngineMainsail.v2 (RE-M3 "Mainsail" Liquid Fuel Engine)  [locked]
+```
+
+The exact parts assigned to each tier are randomized per seed, so this command is the only way to
+see which concrete part the next `Progressive Launch Engine` (or any other progressive chain) will
+unlock for you.
 
 ## I am stuck!
 

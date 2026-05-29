@@ -91,8 +91,9 @@ for out-of-game location tracking. No YAML file is needed — UT reconstructs th
 from slot data when you connect.
 
 Install UT, connect to your AP server, and you'll see which unchecked locations are in logic, sorted by
-body order. Use `/explain <location>` to see a detailed rocket design breakdown for any mission, or
-`/explain parts` to list your received parts by type.
+body order. Use `/explain <location>` to see a detailed rocket design breakdown for any mission,
+`/explain parts` to list your received parts by type, or `/explain parts progressive [name]` to reveal
+which concrete part each tier of a progressive chain resolves to in this seed.
 
 ## Troubleshooting
 
