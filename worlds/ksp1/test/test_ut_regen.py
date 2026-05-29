@@ -116,6 +116,35 @@ class TestExplainRule(unittest.TestCase):
         self.assertIsInstance(result, list)
         self.assertIn("Received Parts", result[0]["text"])
 
+    def test_parts_progressive_reveals_chains(self):
+        result = self.world.explain_rule("parts progressive", self.state)
+        self.assertIsNotNone(result)
+        text = result[0]["text"]
+        self.assertIn("Progressive Parts (this seed)", text)
+        # Every chain in this seed's reps must appear in the output.
+        for chain_name in self.world.progressive_representatives:
+            if self.world.progressive_representatives[chain_name]:
+                self.assertIn(chain_name, text)
+
+    def test_parts_progressive_filtered_chain(self):
+        result = self.world.explain_rule("parts progressive launch", self.state)
+        self.assertIsNotNone(result)
+        text = result[0]["text"]
+        self.assertIn("Progressive Launch Engine", text)
+        # Vacuum-engine chain must NOT appear when filtering "launch".
+        self.assertNotIn("Progressive Vacuum Engine", text)
+
+    def test_parts_progressive_no_match(self):
+        result = self.world.explain_rule("parts progressive zzznoexist", self.state)
+        self.assertIsNotNone(result)
+        self.assertIn("No progressive chain matches", result[0]["text"])
+
+    def test_parts_filter_still_works(self):
+        """The 'progressive' sub-keyword must not break ordinary filters."""
+        result = self.world.explain_rule("parts engine", self.state)
+        self.assertIsNotNone(result)
+        self.assertIn("Received Parts", result[0]["text"])
+
 
 class TestCustomUTSort(unittest.TestCase):
     """Test the custom_ut_sort UT hook."""

@@ -393,11 +393,22 @@ class KSP1World(World):
         from .capability import compute_capability_from_items, evaluate_mission_detailed
         from .capability_format import (
             CHECK_MAP, format_rocket_output, format_parts_list,
+            format_progressive_chains,
         )
 
         # Sub-command: /explain parts [filter]
+        #   "progressive [chain]" reveals the per-seed progressive part
+        #   assignments instead of filtering received inventory.
         if target_name.startswith("parts"):
             filter_text = target_name[5:].strip()
+            if filter_text == "progressive" or filter_text.startswith("progressive "):
+                chain_filter = filter_text[len("progressive"):].strip()
+                lines = format_progressive_chains(
+                    self.progressive_representatives,
+                    lambda n: state.count(n, self.player),
+                    chain_filter,
+                )
+                return [{"type": "text", "text": "\n".join(lines)}]
             item_counts: dict[str, int] = {}
             for name in self.item_name_to_id:
                 count = state.count(name, self.player)
