@@ -1580,16 +1580,42 @@ _TECH_ANCHOR_INJECT = {
 }
 
 
+# Tie-band width for tech-tree anchor selection.  At each greedy step
+# the next pick is made by ``world.random.choice`` over bodies whose
+# return-Δv is within ``cheapest * (1 + _TIER_ANCHOR_DV_BAND_FRAC)``.
+# The band keeps every candidate in the same physical "tier" of mission
+# (interplanetary-vs-Sun, intra-Jool, ...) so the campaign stays
+# physically close to home, while giving seed-to-seed variety in *which*
+# bodies the player tours.
+_TIER_ANCHOR_DV_BAND_FRAC: float = 0.20
+
+
 def _pick_tech_tree_anchors(
     world: "KSP1World",
 ) -> list[tuple[str, str]]:
     """Return (label, location_name) anchor spheres for complete_tech_tree.
 
-    Greedy body-orbit selection: starting from home-system science (with
-    PSI=3 + full crew/instrument kit), add interplanetary body orbits one
-    at a time, cheapest-dv first, until the running total covers
-    ``cumulative_tier_cost(MAX_TIER) / safety`` — the science the player
-    needs to buy every tech node.
+    Greedy ``"X Return 1"`` selection: starting from home-system science
+    (with PSI=3 + full crew/instrument kit), add interplanetary body
+    returns one at a time, picking randomly from a Δv tie band around
+    the cheapest unpicked body (see ``_TIER_ANCHOR_DV_BAND_FRAC``).
+    Stops when the running total of ``body_max_yield`` covers
+    ``cumulative_tier_cost(MAX_TIER) / safety``.
+
+    The tie-band random pick uses ``world.random`` (seed-derived), so
+    the same seed always produces the same anchor list — different
+    seeds for the same home pick different bodies within physically
+    similar Δv neighbourhoods.
+
+    Anchors at ``"X Return 1"`` because ``bankable_science`` only counts
+    a body the player can recover from (RETURN access) or transmit from
+    (high relay tier).  Orbit anchors leave bankable at zero for that
+    body in the post-fill sphere walk.
+
+    Each anchor body also acts as fill scaffolding: explicitly
+    sphere-anchoring forces AP fill to thread the kit items (capsule,
+    parachute, heat-shield) into reachable spheres.  Transitive RETURN
+    capability across bodies does not survive without that scaffolding.
 
     The validation invariant: when this function returns, the chain's
     accumulated science across home-system + selected anchors must satisfy
@@ -1615,10 +1641,9 @@ def _pick_tech_tree_anchors(
     home = world.mission_builder.home
     home_set = home_system_bodies(home)
 
-    # Per-body upper-bound yield: assume the player has a full kit
-    # (thermometer + barometer + capsule + crew-land + PSI=3).  The
-    # post-pass uses the same conservative PSI=3 reading once the kit
-    # is injected, so this matches the cumulative-side accounting.
+    # Per-body upper-bound yield: full kit (thermometer + barometer +
+    # capsule + crew-land + PSI=3).  Matches the per-sphere tier-funding
+    # pass's accounting once the bumper has injected the kit.
     def body_max_yield(body) -> float:
         return science_budget(
             body,
@@ -1632,28 +1657,40 @@ def _pick_tech_tree_anchors(
 
     accumulated = sum(body_max_yield(BODY_BY_NAME[bn]) for bn in home_set)
 
-    # Interplanetary candidates: exclude home-system + Kerbol (no profiles).
-    # Sort by cheapest dv-to-orbit, cheapest first.
+    # Return-capable interplanetary candidates, cheapest-dv first.
+    # (Exclude home-system, Kerbol, and Jool — no RETURN profile.)
     interp_bodies = [
         b for b in ALL_BODIES
-        if b.name not in home_set and b.name != BodyName.KERBOL
+        if b.name not in home_set
+        and b.name != BodyName.KERBOL
+        and b.can_land
     ]
-    interp_bodies.sort(
-        key=lambda b: _goal_dv(f"{b.name} Orbit 1", world.mission_builder)
-    )
+    dv_for = {
+        b.name: _goal_dv(f"{b.name} Return 1", world.mission_builder)
+        for b in interp_bodies
+    }
+    interp_bodies.sort(key=lambda b: (dv_for[b.name], b.name.value))
 
+    # Greedy walk with a Δv tie-band: among bodies within
+    # ``cheapest * (1 + _TIER_ANCHOR_DV_BAND_FRAC)`` of the current
+    # cheapest unpicked, pick randomly via ``world.random`` (seed-derived,
+    # so the pick is deterministic per seed).
     anchors: list[tuple[str, str]] = []
-    for body in interp_bodies:
-        if accumulated >= target_raw:
-            break
-        accumulated += body_max_yield(body)
-        anchors.append((f"S_tier_anchor[{body.name}]", f"{body.name} Orbit 1"))
+    remaining = list(interp_bodies)
+    while accumulated < target_raw and remaining:
+        cheapest_dv = dv_for[remaining[0].name]
+        band_max = cheapest_dv * (1.0 + _TIER_ANCHOR_DV_BAND_FRAC)
+        band = [b for b in remaining if dv_for[b.name] <= band_max]
+        picked = world.random.choice(band)
+        remaining.remove(picked)
+        accumulated += body_max_yield(picked)
+        anchors.append((f"S_tier_anchor[{picked.name}]", f"{picked.name} Return 1"))
 
     if accumulated < target_raw:
         from Options import OptionError
         raise OptionError(
             f"KSP1 complete_tech_tree: cumulative science with every "
-            f"reachable body orbit at PSI=3 ({accumulated:.0f}) is below the "
+            f"reachable body return at PSI=3 ({accumulated:.0f}) is below the "
             f"tier-{MAX_TIER} threshold ({target_raw:.0f} raw / "
             f"{cumulative_tier_cost(MAX_TIER)} after safety={safety:.2f}). "
             f"The seed is unsolvable. Try a lower difficulty (looser safety) "
