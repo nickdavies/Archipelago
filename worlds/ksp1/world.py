@@ -158,9 +158,10 @@ class KSP1World(World):
     # state.
     mission_builder: MissionBuilder
 
-    # Per-world home-body location set (12 specials: first launch / landing /
-    # crash, altitude milestones, splashdown, first staging).  Owned alongside
-    # ``mission_builder`` so the two stay in sync on the same home.
+    # Per-world home-body location set (11 home specials: first launch /
+    # landing / crash, altitude milestones, first staging — plus the single
+    # body-agnostic "Splashdown" entry).  Owned alongside ``mission_builder``
+    # so the two stay in sync on the same home.
     location_builder: LocationBuilder
 
     # AP location names whose mission the dv model can't verify from this

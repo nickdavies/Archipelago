@@ -1928,21 +1928,43 @@ def evaluate_mission_detailed(
         )])
 
     if mission_type == MissionType.SPLASHDOWN:
-        sounding = _compute_sounding_altitude(flags, home)
-        blocking_list = []
         threshold = threshold_km or 1.0
-        if sounding < threshold:
-            blocking_list.append(BlockingInfo(
-                reason=BlockingReason.SOUNDING_ALTITUDE_TOO_LOW,
-                altitude_km=sounding,
-                threshold_km=threshold,
-            ))
-        if not flags.has_parachutes and not flags.has_throttleable_engine:
-            blocking_list.append(BlockingInfo(
-                reason=BlockingReason.NO_SAFE_DESCENT))
-        if blocking_list:
-            return ProfileResult(False, blocking=blocking_list)
-        return ProfileResult(True)
+        home_body_obj = BODY_BY_NAME[home]
+        blocking_list: list[BlockingInfo] = []
+
+        # Path 1: home has an ocean → sounding rocket + safe descent.
+        if home_body_obj.has_ocean:
+            sounding = _compute_sounding_altitude(flags, home)
+            descent_ok = flags.has_parachutes or flags.has_throttleable_engine
+            if sounding >= threshold and descent_ok:
+                return ProfileResult(True)
+            if sounding < threshold:
+                blocking_list.append(BlockingInfo(
+                    reason=BlockingReason.SOUNDING_ALTITUDE_TOO_LOW,
+                    altitude_km=sounding,
+                    threshold_km=threshold,
+                ))
+            if not descent_ok:
+                blocking_list.append(BlockingInfo(
+                    reason=BlockingReason.NO_SAFE_DESCENT))
+
+        # Path 2: any other ocean body's LAND profile succeeds.
+        for ocean in ALL_BODIES:
+            if not ocean.has_ocean or ocean.name == home:
+                continue
+            profiles = mission_builder.profiles_for(ocean.name, MissionType.LAND)
+            if not profiles:
+                continue
+            ok, sub_blocking = _try_profiles_reason(
+                profiles, flags, diff, MissionType.LAND,
+                crewed=None, home=home,
+            )
+            if ok:
+                return ProfileResult(True)
+            for b in sub_blocking:
+                blocking_list.append(b)
+
+        return ProfileResult(False, blocking=blocking_list)
 
     # --- Standard body mission profiles ---
     profiles = mission_builder.profiles_for(body_name, mission_type)

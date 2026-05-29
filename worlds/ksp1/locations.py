@@ -11,7 +11,8 @@ Four location sources (total ~524 max, filtered by difficulty):
      Requires EVA (capsule) or rover (probe + wheels + power + instrument).
 
   3. Mission Event Locations  (256 total)
-     12 home-body-specific + 244 per-body event-scaled checks.
+     11 home-body-specific + 1 body-agnostic (Splashdown) + 244 per-body
+     event-scaled checks.
      Kerbol excluded (root body — can't escape/flyby, orbit infeasible).
      Eve Return/Sample Return exist but require all progression parts.
      Scale is by event difficulty, not body distance:
@@ -51,11 +52,12 @@ KSP1_BASE_ID = 7_700_000
 
 # Offset ranges (items use 0–1999, locations use 2000–3999, alt-home extends to 4xxx)
 _STARTING_INV_OFFSET_START = 2000  # Starting inventory: 2000-2019
+_SPLASHDOWN_OFFSET = 2079          # Body-agnostic Splashdown (one ID, any ocean body)
 _KSC_BIOME_OFFSET_START = 2080     # KSC biomes: 2080-2099
-_HOME_OFFSET_START = 2100          # Kerbin home specials: 2100-2199 (12 used, rest reserved for backward compat)
+_HOME_OFFSET_START = 2100          # Kerbin home specials: 2100-2199 (11 used, rest reserved)
 _MISSION_OFFSET_START = 2200       # Per-body mission events: 2200-2999
 _TECH_OFFSET_START = 3000          # Tech tree: 3000-3999
-_ALT_HOME_OFFSET_START = 4000      # Non-Kerbin home specials: 4000-4167 (14 bodies × 12 = 168)
+_ALT_HOME_OFFSET_START = 4000      # Non-Kerbin home specials: 4000-4153 (14 bodies × 11 = 154)
 
 
 class KSP1Location(Location):
@@ -248,7 +250,7 @@ KSC_BIOMES: list[tuple[str, str]] = [
 KSC_BIOME_NAMES: list[str] = [KSC_LOCATION_PREFIX + name for _, name in KSC_BIOMES]
 
 # ---------------------------------------------------------------------------
-# Home-body-specific mission locations (12 total, fixed)
+# Home-body-specific mission locations (11 per home, + 1 body-agnostic Splashdown)
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -259,16 +261,27 @@ class HomeLocationDef:
     altitude thresholds, and the body itself — used by rules.py (access
     rules), sphere_ladder.py (parsing), and capability_format.py
     (CLI/tracker display).
+
+    ``body=None`` means the location is body-agnostic (e.g., "Splashdown"
+    can be achieved on any ocean body, not just the home).
     """
     name: str
     mission_type: MissionType
     threshold_km: float | None = None
-    body: BodyName = BodyName.KERBIN
+    body: BodyName | None = None
+
+
+# Single, body-agnostic Splashdown location: one AP check that fires when
+# the player splashes on any ocean body (Kerbin / Eve / Laythe).  Replaces
+# the legacy per-body "{body} Splashdown" entries (Mun/Duna/etc. had no
+# ocean and the location was unreachable).
+SPLASHDOWN_LOCATION_NAME: str = "Splashdown"
 
 
 # Number of altitude milestones generated per home body.  Held constant
-# across all 15 landable bodies so each body contributes exactly 12 home
-# locations and IDs stay regular.
+# across all 15 landable bodies so each body contributes exactly 11
+# home-body locations (4 fixed + 7 milestones) and IDs stay regular.
+# The body-agnostic "Splashdown" location is separate (a single ID).
 _HOME_ALTITUDE_MILESTONE_COUNT = 7
 
 
@@ -276,11 +289,12 @@ class LocationBuilder:
     """Owns the per-home location set for a single world.
 
     Mirrors the ``MissionBuilder`` pattern: instantiated once per world
-    with the chosen home body, eagerly computes the 12 home-body specials
-    (first launch / landing / crash, altitude milestones, splashdown,
-    first staging) for that home, and exposes them as instance
-    attributes.  Callers that need the active home's location set hold a
-    reference to the builder rather than reading module-level constants.
+    with the chosen home body, eagerly computes the home-body specials
+    (first launch / landing / crash, altitude milestones, first staging)
+    for that home, plus the body-agnostic "Splashdown" location, and
+    exposes them as instance attributes.  Callers that need the active
+    home's location set hold a reference to the builder rather than
+    reading module-level constants.
 
     The class also owns the static name → def lookup across **all** 15
     landable bodies, used by sphere-ladder parsing and the CLI's check
@@ -298,11 +312,20 @@ class LocationBuilder:
     # lazily on first access (see ``all_home_locations``).
     _all_locations: dict[str, "HomeLocationDef"] | None = None
 
+    # The one body-agnostic location in the home-style set.  Carried by
+    # every world regardless of whether the home itself has an ocean —
+    # on non-ocean homes the player has to reach Kerbin/Eve/Laythe.
+    _SPLASHDOWN_DEF: "HomeLocationDef" = HomeLocationDef(
+        SPLASHDOWN_LOCATION_NAME, MissionType.SPLASHDOWN, 1.0, body=None,
+    )
+
     def __init__(self, home: BodyName) -> None:
         self.home: BodyName = home
-        self.locations: tuple[HomeLocationDef, ...] = self._build_for(home)
+        self.locations: tuple[HomeLocationDef, ...] = (
+            self._build_for(home) + (self._SPLASHDOWN_DEF,)
+        )
         self.names: list[str] = [loc.name for loc in self.locations]
-        assert len(self.locations) == 5 + _HOME_ALTITUDE_MILESTONE_COUNT
+        assert len(self.locations) == 4 + _HOME_ALTITUDE_MILESTONE_COUNT + 1
         # Per-home KSC biome set.  The "KSC Grounds" entry (KSP's catchall
         # ``KSC`` biome key — the grass-and-water terrain around the
         # buildings) is Kerbin-only; Kerbal Konstructs places the named
@@ -334,7 +357,6 @@ class LocationBuilder:
             HomeLocationDef(f"{prefix} {km}km Altitude", MissionType.SOUNDING, float(km), body=home)
             for km in milestones
         )
-        entries.append(HomeLocationDef(f"{prefix} Splashdown", MissionType.SPLASHDOWN, 1.0, body=home))
         entries.append(HomeLocationDef(f"{prefix} First Staging", MissionType.FIRST_STAGING, body=home))
         return tuple(entries)
 
@@ -345,19 +367,23 @@ class LocationBuilder:
         Used by the data-package builder (every possible home location
         gets an AP location id) and by sphere-ladder / CLI lookups that
         need to resolve a location name without knowing the home.
+
+        Includes the body-agnostic Splashdown entry exactly once.
         """
         if cls._all_locations is None:
-            cls._all_locations = {
+            d: dict[str, HomeLocationDef] = {
                 loc.name: loc
                 for body in cls._LANDABLE_BODIES
                 for loc in cls._build_for(body)
             }
+            d[cls._SPLASHDOWN_DEF.name] = cls._SPLASHDOWN_DEF
+            cls._all_locations = d
         return cls._all_locations
 
 
 # Kerbin's home set is built eagerly here purely so the AP data package's
-# location id table can keep Kerbin's legacy id range (2100-2111).  The
-# id table is module-level static (see ``_build_location_table``); the
+# location id table can keep Kerbin's legacy id range (2100-2110, 11 entries).
+# The id table is module-level static (see ``_build_location_table``); the
 # per-world ``LocationBuilder`` instance is the runtime API.
 _KERBIN_HOME_LOCATIONS: tuple[HomeLocationDef, ...] = LocationBuilder._build_for(BodyName.KERBIN)
 
@@ -406,12 +432,15 @@ def _build_location_table() -> dict[str, int]:
         table[name] = offset
         offset += 1
 
+    # Body-agnostic Splashdown: single ID, shared across all worlds.
+    table[SPLASHDOWN_LOCATION_NAME] = _SPLASHDOWN_OFFSET
+
     offset = _KSC_BIOME_OFFSET_START
     for name in KSC_BIOME_NAMES:
         table[name] = offset
         offset += 1
 
-    # Kerbin home specials use the legacy 2100-block for backward compat.
+    # Kerbin home specials use the 2100-block (11 entries, no Splashdown).
     offset = _HOME_OFFSET_START
     for loc in _KERBIN_HOME_LOCATIONS:
         table[loc.name] = offset

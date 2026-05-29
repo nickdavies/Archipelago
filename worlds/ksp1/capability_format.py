@@ -26,7 +26,7 @@ from worlds.ksp1.parts import PART_REGISTRY
 
 @dataclass
 class CheckInfo:
-    body_name: BodyName
+    body_name: BodyName | None  # None = body-agnostic (e.g. Splashdown)
     event: str
     mission_type: MissionType
     crewed: bool | None  # True=crewed, False=unmanned, None=try both
@@ -267,7 +267,8 @@ def format_rocket_output(
 
     lines.append(f"\n{'=' * 60}")
     lines.append(f"  Mission: {check_name}")
-    lines.append(f"  Body: {body_name} | Difficulty: {difficulty_name}")
+    body_label = body_name if body_name is not None else "any ocean body"
+    lines.append(f"  Body: {body_label} | Difficulty: {difficulty_name}")
     lines.append(f"  In logic: {logic_str}")
     lines.extend(_format_profile_summary(info, mission_builder))
     if info.mission_type == MissionType.SOUNDING and info.threshold_km is not None:

@@ -561,13 +561,18 @@ class _LocationMissionInfo:
 def _parse_location(name: str) -> Optional[_LocationMissionInfo]:
     """Resolve a location name to a (body, mission_type, crewed, threshold)
     tuple.  Returns ``None`` for locations whose access isn't physics-gated
-    (tech tree, KSC biomes, starting inventory) — those need their own
-    handling and are skipped by the greedy walk.
+    (tech tree, KSC biomes, starting inventory, body-agnostic Splashdown)
+    — those need their own handling and are skipped by the greedy walk.
     """
     # Home-body event/altitude locations — flat lookup spans all 15 home
     # bodies; the prefix in the location name uniquely identifies the body.
     hloc = LocationBuilder.all_home_locations().get(name)
     if hloc is not None:
+        # Body-agnostic entries (Splashdown) have no single body to drive
+        # the bumper's mission-centric work; their requirements are
+        # dominated by per-body LAND missions the bumper already handles.
+        if hloc.body is None:
+            return None
         return _LocationMissionInfo(
             body=hloc.body,
             mission_type=hloc.mission_type,

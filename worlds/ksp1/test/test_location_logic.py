@@ -297,7 +297,7 @@ class TestKerbinEarlyLocations(KSP1TestBase):
         """Capsule alone (sounding = 0): Splashdown rule requires sounding ≥ 1.0 km."""
         self.collect_by_name("Progressive Capsule")
         self.assertFalse(
-            self.can_reach_location("Kerbin Splashdown"),
+            self.can_reach_location("Splashdown"),
             "Splashdown needs sounding ≥ 1 km; capsule alone gives sounding = 0",
         )
 
@@ -307,7 +307,7 @@ class TestKerbinEarlyLocations(KSP1TestBase):
         self.collect_by_name("Progressive Probe Core")
         self.collect_by_name("Progressive Parachute")
         self.assertTrue(
-            self.can_reach_location("Kerbin Splashdown"),
+            self.can_reach_location("Splashdown"),
             "Splashdown: sounding ≥ 1 km + parachutes must pass (tier-1 SRBs easily reach 1 km)",
         )
 

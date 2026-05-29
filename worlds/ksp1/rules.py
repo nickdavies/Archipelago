@@ -31,6 +31,7 @@ from .items import ITEM_TABLE, PROGRESSIVE_RD_NAME, PROGRESSIVE_PART_ITEM_NAMES,
 from .locations import (
     EVENT_BY_NAME,
     EventName,
+    HomeLocationDef,
     KSC_BIOME_NAMES,
     MISSION_LOCATION_NAMES,
     MissionLocation,
@@ -175,7 +176,7 @@ def set_all_rules(world: KSP1World) -> None:
     difficulty = world.options.difficulty.value
 
     _set_ksc_biome_rules(world, player)
-    _set_kerbin_rules(world, player)
+    _set_home_rules(world, player)
     _set_mission_rules(world, player)
     _apply_home_system_local_exclusions(world)
     # Tech tree rules are now region entrance rules (see regions.py).
@@ -261,36 +262,60 @@ def _make_staging_rule(player: int) -> Callable[[CollectionState], bool]:
     return rule
 
 
-def _make_splashdown_rule(player: int, threshold_km: float) -> Callable[[CollectionState], bool]:
+def _make_splashdown_rule(
+    player: int, threshold_km: float, home: BodyName,
+) -> Callable[[CollectionState], bool]:
+    """Splashdown is achievable if either:
+
+    * the home body has an ocean and the player has a sounding rocket
+      above ``threshold_km`` with safe descent (parachute or throttleable
+      engine), or
+    * any other ocean body (Kerbin / Eve / Laythe) is fully reachable for
+      a Landing mission — in which case the player can ditch into water.
+
+    Reuses the precomputed per-body LANDING access dict; no extra profile
+    evaluation on the rule hot path.
+    """
+    home_body = BODY_BY_NAME[home]
+    home_has_ocean = home_body.has_ocean
+    other_ocean_bodies: tuple[BodyName, ...] = tuple(
+        BodyName(b.name) for b in ALL_BODIES if b.has_ocean and b.name != home
+    )
+
     def rule(state: CollectionState) -> bool:
         cap = get_capability(state, player)
-        return (cap.sounding_altitude_km >= threshold_km
-                and (cap.has_parachutes or cap.has_throttleable_engine))
+        if home_has_ocean:
+            if (cap.sounding_altitude_km >= threshold_km
+                    and (cap.has_parachutes or cap.has_throttleable_engine)):
+                return True
+        for body_name in other_ocean_bodies:
+            bp = cap.bodies.get(body_name)
+            if bp is not None and bp.access[EventName.LANDING]:
+                return True
+        return False
     return rule
 
 
-_KERBIN_RULE_FACTORIES = {
-    MissionType.SOUNDING: lambda player, loc: _make_altitude_rule(player, loc.threshold_km or 0.0),
-    MissionType.FIRST_LAUNCH: lambda player, loc: _make_first_launch_rule(player),
-    MissionType.FIRST_LANDING: lambda player, loc: _make_first_landing_rule(player),
-    MissionType.FIRST_STAGING: lambda player, loc: _make_staging_rule(player),
-    MissionType.SPLASHDOWN: lambda player, loc: _make_splashdown_rule(player, loc.threshold_km or 1.0),
+_HOME_RULE_FACTORIES: dict[MissionType, Callable[[int, "HomeLocationDef", BodyName],
+                                                 Callable[[CollectionState], bool]]] = {
+    MissionType.SOUNDING:       lambda player, loc, home: _make_altitude_rule(player, loc.threshold_km or 0.0),
+    MissionType.FIRST_LAUNCH:   lambda player, loc, home: _make_first_launch_rule(player),
+    MissionType.FIRST_LANDING:  lambda player, loc, home: _make_first_landing_rule(player),
+    MissionType.FIRST_STAGING:  lambda player, loc, home: _make_staging_rule(player),
+    MissionType.SPLASHDOWN:     lambda player, loc, home: _make_splashdown_rule(player, loc.threshold_km or 1.0, home),
 }
 
 
-def _set_kerbin_rules(world: KSP1World, player: int) -> None:
-    """Apply access rules to the home-body specials.
-
-    Iterates the active home's location set and dispatches to the appropriate
-    rule factory based on mission_type.  Rule semantics are body-agnostic;
-    the rules already operate against ``world.mission_builder.home`` via the
-    capability system.
+def _set_home_rules(world: KSP1World, player: int) -> None:
+    """Apply access rules to the home-body specials and to the single
+    body-agnostic Splashdown location.  Dispatches by ``mission_type``.
     """
+    home = world.location_builder.home
     for loc in world.location_builder.locations:
-        factory = _KERBIN_RULE_FACTORIES.get(loc.mission_type)
+        factory = _HOME_RULE_FACTORIES.get(loc.mission_type)
         if factory is None:
             raise ValueError(f"Unknown home mission type: {loc.mission_type!r}")
-        world.get_location(loc.name).access_rule = factory(player, loc)
+        world.get_location(loc.name).access_rule = factory(player, loc, home)
 
 
 # ---------------------------------------------------------------------------
