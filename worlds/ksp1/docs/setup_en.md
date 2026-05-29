@@ -13,8 +13,12 @@ your `.apsave` file, and a screenshot if possible.
 - The Mod today **REQUIRES Making History DLC!!**. If you wish to play without this please send me an Issue and I can look into supporting enabling/disabling it has an option
 - The KSP Archipelago `.apworld` file from the
   [Archipelago releases page](https://github.com/nickdavies/Archipelago/releases)
-- The KSP Archipelago client mod from the
+- The KSP Archipelago client mod (`KSPArchipelago`) — install via CKAN (recommended) or from the
   [client releases page](https://github.com/nickdavies/KSP1-Archipelago-client/releases)
+- [Kerbal-Konstructs](https://forum.kerbalspaceprogram.com/topic/151954-kerbal-konstructs/) — **required
+  only if you set `starting_body` to anything other than Kerbin.** It provides the off-world launch sites the
+  client mod uses to place you on the chosen body. CKAN auto-recommend support for this is in progress; for
+  now you must install it manually when using a non-Kerbin start.
 
 ## Installing the Archipelago World
 
@@ -23,10 +27,23 @@ your `.apsave` file, and a screenshot if possible.
 2. Install the `.apworld` from the Achipelago launcher or you can place the `.apworld` file in your Archipelago `custom_worlds` folder
 ## Installing the KSP Client Mod
 
+The mod is published on CKAN as **`KSPArchipelago`**, and CKAN is the **strongly recommended** install method —
+it handles dependencies and updates for you.
+
+### Option 1: CKAN (recommended)
+
+1. Install [CKAN](https://github.com/KSP-CKAN/CKAN/releases) if you don't already have it.
+2. Point CKAN at your KSP install, refresh the mod list, and search for **`KSPArchipelago`**.
+3. Install it and let CKAN pull in any dependencies.
+4. If you intend to use a non-Kerbin `starting_body`, also install **`Kerbal-Konstructs`** from CKAN
+   (auto-recommend support is in progress).
+
+### Option 2: Manual install
+
 1. Download the latest client mod release from the
    [client releases page](https://github.com/nickdavies/KSP1-Archipelago-client/releases).
-2. Install it like any other KSP mod: extract the contents into your KSP `GameData` folder.
-   - CKAN is **not supported** at this time.
+2. Extract the contents into your KSP `GameData` folder.
+3. If using a non-Kerbin `starting_body`, also install Kerbal-Konstructs into `GameData`.
 
 ## Create a Config (.yaml) File
 
