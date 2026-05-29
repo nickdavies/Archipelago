@@ -20,7 +20,7 @@ from .locations import (
     TechTreeLocation,
     effective_starting_inv_count, effective_tech_slots_per_node,
 )
-from .options import KSP1Options
+from .options import KSP1Options, STARTING_BODY_POOLS, StartingBody
 from .tech_tree import MAX_TIER, NODES_BY_TIER, TECH_NODES, TIER_TO_BAND
 
 
@@ -176,6 +176,17 @@ class KSP1World(World):
     def generate_early(self) -> None:
         """Resolve goal spec and apply ExcludeLateTechTree."""
         self.capability_cache = {}
+        # Pool keys (atmospheric/standard/planets/all) resolve to a
+        # concrete body via the seed RNG, then overwrite the option so
+        # downstream code (and slot_data) sees a single body just like
+        # if the player had typed it explicitly.  sorted() before
+        # choice() keeps the pick deterministic for a given seed.
+        key = self.options.starting_body.current_key
+        if key in STARTING_BODY_POOLS:
+            picked = self.random.choice(sorted(STARTING_BODY_POOLS[key]))
+            self.options.starting_body.value = getattr(
+                StartingBody, f"option_{picked.value.lower()}"
+            )
         # ``starting_body`` option keys are lowercase BodyName values
         # (``option_mun`` → key ``"mun"`` → ``BodyName.MUN``).  The
         # title-case round-trip rebuilds the canonical ``StrEnum`` value.

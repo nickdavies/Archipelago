@@ -29,13 +29,15 @@ from worlds.ksp1.bodies import (
     home_relative_science_values,
     science_budget,
 )
-from worlds.ksp1.options import StartingBody
+from worlds.ksp1.options import STARTING_BODY_POOLS, StartingBody
 
 
 _NON_KERBIN_HOMES: tuple[BodyName, ...] = tuple(
     BodyName(name.replace("option_", "").title())
     for name in vars(StartingBody)
-    if name.startswith("option_") and name != "option_kerbin"
+    if name.startswith("option_")
+    and name != "option_kerbin"
+    and name.replace("option_", "") not in STARTING_BODY_POOLS
 )
 
 

@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 from Options import Choice, ExcludeLocations, ItemsAccessibility, NamedRange, OptionSet, PerGameCommonOptions, Range, Toggle
 
-from .bodies import ALL_BODIES
+from .bodies import ALL_BODIES, BodyName
 
 # All landable body names, derived from bodies.py (single source of truth).
 LANDABLE_BODY_NAMES: frozenset[str] = frozenset(
@@ -10,6 +10,32 @@ LANDABLE_BODY_NAMES: frozenset[str] = frozenset(
 )
 
 ALL_BODY_NAMES: frozenset[str] = frozenset(b.name for b in ALL_BODIES)
+
+# Pre-canned random pools for StartingBody.  Each key is the lowercase
+# option_<name> stem; the value is the pool the option resolves to.
+# Resolution happens once in world.generate_early via world.random.choice
+# (deterministic from seed) and overwrites the option with the picked
+# concrete body, so all downstream code sees a normal single-body value.
+#
+# AP's standard YAML weighted-random over Choice options also works on
+# any of these keys (and on the concrete body keys), so users can write
+# e.g. ``kerbin: 40, duna: 20, laythe: 40`` directly with no help from
+# us — pools just expose curated subsets as quick picks.
+STARTING_BODY_POOLS: dict[str, frozenset[BodyName]] = {
+    "atmospheric": frozenset({BodyName.KERBIN, BodyName.DUNA, BodyName.LAYTHE}),
+    "standard": frozenset({
+        BodyName.KERBIN, BodyName.DUNA, BodyName.LAYTHE,
+        BodyName.MOHO, BodyName.EELOO,
+    }),
+    "planets": frozenset({
+        BodyName.MOHO, BodyName.KERBIN, BodyName.DUNA,
+        BodyName.DRES, BodyName.EELOO,
+    }),
+    "all": frozenset(
+        BodyName(b.name) for b in ALL_BODIES
+        if b.can_land and b.name != BodyName.EVE
+    ),
+}
 
 
 class Goal(Choice):
@@ -91,6 +117,19 @@ class StartingBody(Choice):
     ``home = mun`` is rejected at gen time.
 
     Default ``kerbin`` preserves the existing single-home behaviour.
+
+    Pool keys (resolved to a concrete body at generation time using the
+    seed RNG) are quick picks for randomized starts:
+
+    atmospheric -- Kerbin, Duna, Laythe.
+    standard    -- Kerbin, Duna, Laythe, Moho, Eeloo.
+    planets     -- Moho, Kerbin, Duna, Dres, Eeloo (planets only).
+    all         -- Every landable body except Eve.  Includes Tylo and
+                   Laythe; expect punishing seeds.
+
+    For custom weights, use the standard AP weighted-random YAML form
+    over the concrete body keys, e.g. ``kerbin: 40, duna: 20,
+    laythe: 40``.  Pool keys can be weighted the same way.
     """
     display_name = "Starting Body"
 
@@ -112,6 +151,14 @@ class StartingBody(Choice):
     option_pol     = 12
     option_tylo    = 13
     option_vall    = 14
+
+    # Pool options — keep IDs well above the concrete-body range so a
+    # future body addition can slot in without colliding.  Keys must
+    # match STARTING_BODY_POOLS above.
+    option_atmospheric = 100
+    option_standard    = 101
+    option_planets     = 102
+    option_all         = 103
 
     default = option_kerbin
 
