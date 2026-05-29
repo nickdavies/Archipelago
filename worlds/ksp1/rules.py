@@ -122,7 +122,7 @@ def bankable_science(cap, psi_tier: int, home: BodyName) -> float:
         contribution = science_budget(
             body, cap.has_thermometer, cap.has_barometer,
             cap.has_capsule, body_cap.access[EventName.CREWED_LANDING],
-            psi_tier=psi_tier,
+            home=home, psi_tier=psi_tier,
         )
         if not can_recover:
             contribution *= _TRANSMIT_ONLY_DISCOUNT
@@ -219,7 +219,7 @@ def _set_ksc_biome_rules(world: KSP1World, player: int) -> None:
     def rule(state: CollectionState) -> bool:
         return _can_do_ksc_science(state, player)
 
-    for name in KSC_BIOME_NAMES:
+    for name in world.location_builder.ksc_biome_names:
         world.get_location(name).access_rule = rule
 
 
@@ -434,7 +434,7 @@ def _set_item_pacing_rules(world: KSP1World, player: int, difficulty: int) -> No
         add_item_rule(world.get_location(name), early_ban_rule)
 
     # Band B: KSC biomes + home-body specials + early home events
-    for name in KSC_BIOME_NAMES:
+    for name in world.location_builder.ksc_biome_names:
         add_item_rule(world.get_location(name), early_ban_rule)
     home = world.mission_builder.home
     for name in world.location_builder.names:
@@ -613,6 +613,14 @@ _PRESET_GOALS: dict[int, GoalSpec] = {
     Goal.option_mun_sample_return: GoalSpec(
         display_name="Mun Sample Return",
         sample_return_bodies=(BodyName.MUN,),
+    ),
+    Goal.option_jool_moons_return: GoalSpec(
+        display_name="Jool Moons Return",
+        return_bodies=(
+            BodyName.LAYTHE, BodyName.VALL, BodyName.TYLO,
+            BodyName.BOP, BodyName.POL,
+        ),
+        home_system_local=True,
     ),
 }
 

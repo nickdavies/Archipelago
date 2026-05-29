@@ -303,6 +303,21 @@ class LocationBuilder:
         self.locations: tuple[HomeLocationDef, ...] = self._build_for(home)
         self.names: list[str] = [loc.name for loc in self.locations]
         assert len(self.locations) == 5 + _HOME_ALTITUDE_MILESTONE_COUNT
+        # Per-home KSC biome set.  The "KSC Grounds" entry (KSP's catchall
+        # ``KSC`` biome key — the grass-and-water terrain around the
+        # buildings) is Kerbin-only; Kerbal Konstructs places the named
+        # buildings on alien homes but the surrounding terrain doesn't
+        # report as ``KSC`` there.  Drop it from the active set for
+        # non-Kerbin homes so AP doesn't ship a location the mod can't
+        # check.  Building-named biomes (LaunchPad, VAB, …) stay because
+        # those are placed assets the client can detect anywhere.
+        self.ksc_biomes: list[tuple[str, str]] = [
+            (key, name) for (key, name) in KSC_BIOMES
+            if home == BodyName.KERBIN or key != "KSC"
+        ]
+        self.ksc_biome_names: list[str] = [
+            KSC_LOCATION_PREFIX + name for _, name in self.ksc_biomes
+        ]
 
     @staticmethod
     def _build_for(home: BodyName) -> tuple[HomeLocationDef, ...]:
@@ -474,8 +489,13 @@ def create_all_locations(world: KSP1World) -> None:
         if loc.name in starting_locs:
             loc.item_rule = local_only
 
-    # KSC biome locations (earned by doing science at KSC buildings)
-    biome_locs = {name: LOCATION_NAME_TO_ID[name] for name in KSC_BIOME_NAMES}
+    # KSC biome locations (earned by doing science at KSC buildings) — the
+    # active set comes from ``world.location_builder`` so the catchall
+    # ``KSC Grounds`` (Kerbin-only terrain biome) is skipped on alien homes.
+    biome_locs = {
+        name: LOCATION_NAME_TO_ID[name]
+        for name in world.location_builder.ksc_biome_names
+    }
     menu.add_locations(biome_locs, KSP1Location)
 
     # Home-body specials (first launch / first staging / altitude milestones /

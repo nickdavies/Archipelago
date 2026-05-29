@@ -8,7 +8,10 @@ from . import items, locations, regions, rules
 from .rules import GoalSpec, resolve_goal_spec, goal_spec_location_names
 from .capability import CAPABILITY_ITEMS, RocketCapability
 from .data.feasibility import MODEL_INFEASIBLE_LOCATIONS
-from .bodies import ALL_BODIES, BodyName, MissionBuilder, MissionType
+from .bodies import (
+    ALL_BODIES, BodyName, MissionBuilder, MissionType,
+    home_relative_science_values,
+)
 from .items import ITEM_NAME_TO_ID, PROGRESSIVE_LAUNCH_PAD_CAPS, _FILLER_ITEMS
 from .parts import PROGRESSIVE_PART_TIERS
 from .locations import (
@@ -17,7 +20,7 @@ from .locations import (
     TechTreeLocation,
     effective_starting_inv_count, effective_tech_slots_per_node,
 )
-from .options import KSP1Options
+from .options import KSP1Options, STARTING_BODY_POOLS, StartingBody
 from .tech_tree import MAX_TIER, NODES_BY_TIER, TECH_NODES, TIER_TO_BAND
 
 
@@ -43,6 +46,37 @@ class KSP1WebWorld(WebWorld):
             ["nickdavies"],
         )
     ]
+
+
+def _validate_goal_spec_has_targets(
+    spec: GoalSpec, options: KSP1Options, home: BodyName,
+) -> None:
+    """Raise ``OptionError`` if the resolved goal has nothing to achieve.
+
+    Happens when every body in the chosen preset is the player's home —
+    e.g. ``goal=mun_flag`` with ``starting_body=mun``, or
+    ``goal=duna_return`` with ``starting_body=duna``.  ``resolve_goal_spec``
+    strips home from every body list, so a preset whose only target was
+    home becomes empty.  We fail loudly at gen time instead of letting
+    fill produce a trivially-winnable seed.
+    """
+    has_targets = (
+        spec.complete_tech_tree
+        or spec.flag_bodies
+        or spec.return_bodies
+        or spec.sample_return_bodies
+        or spec.orbit_bodies
+        or spec.flyby_bodies
+    )
+    if has_targets:
+        return
+    raise OptionError(
+        f"KSP1: starting_body={home.value!r} is incompatible with "
+        f"goal={options.goal.current_key!r} — every body in the preset is "
+        "the home body, so the goal would be trivially complete at launch. "
+        "Pick a different starting body, a different goal, or use a "
+        "custom goal that targets a non-home body."
+    )
 
 
 def _validate_goal_not_excluded(
@@ -142,7 +176,21 @@ class KSP1World(World):
     def generate_early(self) -> None:
         """Resolve goal spec and apply ExcludeLateTechTree."""
         self.capability_cache = {}
-        home = BodyName.KERBIN
+        # Pool keys (atmospheric/standard/planets/all) resolve to a
+        # concrete body via the seed RNG, then overwrite the option so
+        # downstream code (and slot_data) sees a single body just like
+        # if the player had typed it explicitly.  sorted() before
+        # choice() keeps the pick deterministic for a given seed.
+        key = self.options.starting_body.current_key
+        if key in STARTING_BODY_POOLS:
+            picked = self.random.choice(sorted(STARTING_BODY_POOLS[key]))
+            self.options.starting_body.value = getattr(
+                StartingBody, f"option_{picked.value.lower()}"
+            )
+        # ``starting_body`` option keys are lowercase BodyName values
+        # (``option_mun`` → key ``"mun"`` → ``BodyName.MUN``).  The
+        # title-case round-trip rebuilds the canonical ``StrEnum`` value.
+        home = BodyName(self.options.starting_body.current_key.title())
         self.mission_builder = MissionBuilder(home=home)
         self.location_builder = LocationBuilder(home=home)
 
@@ -168,6 +216,9 @@ class KSP1World(World):
         self.goal_spec = resolve_goal_spec(
             self.options, self.mission_builder.home,
             self.model_infeasible_locations,
+        )
+        _validate_goal_spec_has_targets(
+            self.goal_spec, self.options, self.mission_builder.home,
         )
         if self.options.exclude_late_tech_tree:
             late_tier_locs: set[str] = {
@@ -209,6 +260,10 @@ class KSP1World(World):
 
     def fill_slot_data(self) -> dict[str, Any]:
         d = self.options.as_dict("goal", "difficulty", "start_with_launch_clamps", "item_pacing")
+        # Home body — used by the client mod to drive every per-body
+        # comparison (KSC biome prefixes, altitude polling guard, splashdown
+        # detection, first-launch / first-landing / first-crash events).
+        d["starting_body"] = self.mission_builder.home.value
         d["tech_slots_per_node"] = effective_tech_slots_per_node(
             self.options, self.options.difficulty.value
         )
@@ -228,21 +283,42 @@ class KSP1World(World):
         # Authoritative data for C# client — eliminates hardcoded dicts.
         d["event_scales"] = {e.name: e.scale for e in ALL_EVENTS}
         d["tech_display_names"] = {n.node_id: n.display_name for n in TECH_NODES}
-        # Full biome_key -> AP location name map.  The client populates its
-        # detection table directly from this; it has no hardcoded copy.
+        # Per-home biome_key -> AP location name map.  The client populates
+        # its detection table directly from this; it has no hardcoded copy.
+        # ``location_builder.ksc_biomes`` filters out the ``KSC`` catchall
+        # entry on non-Kerbin homes (the surrounding terrain doesn't
+        # report as that biome off Kerbin).
         d["ksc_biome_locations"] = {
-            key: KSC_LOCATION_PREFIX + name for key, name in KSC_BIOMES
+            key: KSC_LOCATION_PREFIX + name
+            for key, name in self.location_builder.ksc_biomes
         }
-        d["kerbin_altitude_thresholds"] = [
+        home_altitude_thresholds = [
             int(loc.threshold_km * 1000)
             for loc in self.location_builder.locations
             if loc.mission_type == MissionType.SOUNDING and loc.threshold_km is not None
             and loc.threshold_km >= 1.0  # exclude "First Crash" (0.1 km)
         ]
+        d["home_altitude_thresholds"] = home_altitude_thresholds
+        # Backwards-compat alias for client v0.3.x.  The renamed
+        # ``home_altitude_thresholds`` key is the canonical form going
+        # forward; the legacy ``kerbin_altitude_thresholds`` key will be
+        # retired in a future breaking release.
+        d["kerbin_altitude_thresholds"] = home_altitude_thresholds
         d["science_packs"] = {
             name: int(name.split()[-1])
             for name in _FILLER_ITEMS
         }
+        # Home-relative science scaling.  Server-side ``science_budget``
+        # (rules + sphere-ladder) and the client both consume the SAME
+        # ``science_scalar(body, home) * stock_mult`` math; the values
+        # below are the absolute CelestialBody.scienceValues the client
+        # writes.  Key omitted for Kerbin home; client treats absent
+        # key as "feature off, leave stock alone".  When present, the
+        # dict contains every body and every situation — the client
+        # hard-fails on a missing entry (no silent defaults).
+        sci_values = home_relative_science_values(self.mission_builder.home)
+        if sci_values:
+            d["science_values"] = sci_values
         d["starting_inv_count"] = effective_starting_inv_count(
             self.options, self.options.difficulty.value
         )
@@ -270,6 +346,22 @@ class KSP1World(World):
         self.options.goal.value = slot_data["goal"]
         self.options.difficulty.value = slot_data["difficulty"]
         self.options.start_with_launch_clamps.value = slot_data["start_with_launch_clamps"]
+        # Restore the chosen home body.  ``starting_body`` in slot_data
+        # is the canonical ``BodyName`` string (``"Kerbin"`` / ``"Mun"``
+        # / ...) — the same value the client mod reads.  Reverse-map to
+        # the option integer so any downstream consumer that reads
+        # ``self.options.starting_body`` sees a consistent value, then
+        # rebuild the MissionBuilder if the home actually changed.
+        starting_body = slot_data.get("starting_body")
+        if starting_body:
+            from .options import StartingBody as _SB
+            self.options.starting_body.value = getattr(
+                _SB, f"option_{starting_body.lower()}"
+            )
+            if starting_body != self.mission_builder.home.value:
+                new_home = BodyName(starting_body)
+                self.mission_builder = MissionBuilder(home=new_home)
+                self.location_builder = LocationBuilder(home=new_home)
 
         if slot_data["goal"] == 99:  # Goal.option_custom
             flag_bodies: set[str] = set()

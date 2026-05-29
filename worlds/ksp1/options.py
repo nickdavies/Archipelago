@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 from Options import Choice, ExcludeLocations, ItemsAccessibility, NamedRange, OptionSet, PerGameCommonOptions, Range, Toggle
 
-from .bodies import ALL_BODIES
+from .bodies import ALL_BODIES, BodyName
 
 # All landable body names, derived from bodies.py (single source of truth).
 LANDABLE_BODY_NAMES: frozenset[str] = frozenset(
@@ -10,6 +10,32 @@ LANDABLE_BODY_NAMES: frozenset[str] = frozenset(
 )
 
 ALL_BODY_NAMES: frozenset[str] = frozenset(b.name for b in ALL_BODIES)
+
+# Pre-canned random pools for StartingBody.  Each key is the lowercase
+# option_<name> stem; the value is the pool the option resolves to.
+# Resolution happens once in world.generate_early via world.random.choice
+# (deterministic from seed) and overwrites the option with the picked
+# concrete body, so all downstream code sees a normal single-body value.
+#
+# AP's standard YAML weighted-random over Choice options also works on
+# any of these keys (and on the concrete body keys), so users can write
+# e.g. ``kerbin: 40, duna: 20, laythe: 40`` directly with no help from
+# us — pools just expose curated subsets as quick picks.
+STARTING_BODY_POOLS: dict[str, frozenset[BodyName]] = {
+    "atmospheric": frozenset({BodyName.KERBIN, BodyName.DUNA, BodyName.LAYTHE}),
+    "standard": frozenset({
+        BodyName.KERBIN, BodyName.DUNA, BodyName.LAYTHE,
+        BodyName.MOHO, BodyName.EELOO,
+    }),
+    "planets": frozenset({
+        BodyName.MOHO, BodyName.KERBIN, BodyName.DUNA,
+        BodyName.DRES, BodyName.EELOO,
+    }),
+    "all": frozenset(
+        BodyName(b.name) for b in ALL_BODIES
+        if b.can_land and b.name != BodyName.EVE
+    ),
+}
 
 
 class Goal(Choice):
@@ -25,6 +51,9 @@ class Goal(Choice):
     eve_return             -- Return a vessel (or crew) from Eve (challenge).
     mun_flag               -- Plant a flag on the Mun.
     mun_sample_return      -- Crewed sample return from the Mun.
+    jool_moons_return      -- Return from each Jool moon (Laythe, Vall, Tylo,
+                              Bop, Pol).  Home is filtered out, so a Laythe
+                              start gives a tight 4-target Jool-system goal.
     custom                 -- Build a goal from the body-list options below.
     """
     display_name = "Goal"
@@ -38,6 +67,7 @@ class Goal(Choice):
     option_eve_return = 6
     option_mun_flag = 7
     option_mun_sample_return = 8
+    option_jool_moons_return = 9
     option_custom = 99
 
     default = option_duna_return
@@ -71,6 +101,66 @@ class FlybyBodies(OptionSet):
     """Bodies to perform a flyby of (custom goal). Leave empty for preset goals."""
     display_name = "Flyby Bodies"
     valid_keys = ALL_BODY_NAMES
+
+
+class StartingBody(Choice):
+    """
+    The celestial body whose surface the player launches from.  Mun /
+    Minmus / Laythe / etc. are landable bodies that the Selector mod
+    can spawn KSC at.  Jool and Kerbol are excluded — gas giant and
+    star, no surface.
+
+    Most existing goals still work from non-Kerbin homes (returns,
+    flag plants, sample returns are filtered for the new home).
+    Goals whose only target *is* the home body become unwinnable and
+    generation aborts with OptionError — e.g. ``mun_flag`` with
+    ``home = mun`` is rejected at gen time.
+
+    Default ``kerbin`` preserves the existing single-home behaviour.
+
+    Pool keys (resolved to a concrete body at generation time using the
+    seed RNG) are quick picks for randomized starts:
+
+    atmospheric -- Kerbin, Duna, Laythe.
+    standard    -- Kerbin, Duna, Laythe, Moho, Eeloo.
+    planets     -- Moho, Kerbin, Duna, Dres, Eeloo (planets only).
+    all         -- Every landable body except Eve.  Includes Tylo and
+                   Laythe; expect punishing seeds.
+
+    For custom weights, use the standard AP weighted-random YAML form
+    over the concrete body keys, e.g. ``kerbin: 40, duna: 20,
+    laythe: 40``.  Pool keys can be weighted the same way.
+    """
+    display_name = "Starting Body"
+
+    # Integer values are stable and alphabetised by body name so adding
+    # a body later (a mod, an outer-planets pack) doesn't shift the
+    # ones already in player yaml files.
+    option_bop     = 0
+    option_dres    = 1
+    option_duna    = 2
+    option_eeloo   = 3
+    option_eve     = 4
+    option_gilly   = 5
+    option_ike     = 6
+    option_kerbin  = 7
+    option_laythe  = 8
+    option_minmus  = 9
+    option_moho    = 10
+    option_mun     = 11
+    option_pol     = 12
+    option_tylo    = 13
+    option_vall    = 14
+
+    # Pool options — keep IDs well above the concrete-body range so a
+    # future body addition can slot in without colliding.  Keys must
+    # match STARTING_BODY_POOLS above.
+    option_atmospheric = 100
+    option_standard    = 101
+    option_planets     = 102
+    option_all         = 103
+
+    default = option_kerbin
 
 
 class Difficulty(Choice):
@@ -273,6 +363,7 @@ class ProgressiveLaunchPad(Toggle):
 @dataclass
 class KSP1Options(PerGameCommonOptions):
     goal: Goal
+    starting_body: StartingBody
     difficulty: Difficulty
     tech_slots_per_node: TechSlotsPerNode
     starting_inventory_count: StartingInventoryCount

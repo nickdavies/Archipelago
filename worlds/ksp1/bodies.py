@@ -73,7 +73,7 @@ class BodyName(StrEnum):
     BOP = "Bop"
     POL = "Pol"
     EELOO = "Eeloo"
-    KERBOL = "Kerbol"
+    KERBOL = "Sun"
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +177,20 @@ class Body:
     fly_high_mult: float = 0.0      # FlyingHigh multiplier (0 = no atmosphere)
     landed_mult: float = 0.0        # Landed multiplier (0 = can't land)
     splashed_mult: float = 0.0      # Splashed multiplier (0 = no ocean)
+    # Stock KSP CelestialBodyScienceParams.RecoveryValue.  The client writes
+    # ``recovery_mult * science_scalar(body, home)`` into the matching field
+    # of ``CelestialBody.scienceValues`` at runtime.  NaN sentinel + the
+    # ``__post_init__`` check below force every Body constructor to set
+    # this explicitly — no silent default to "0 = unrecoverable" or to
+    # Kerbin's value.
+    recovery_mult: float = float("nan")
+
+    def __post_init__(self) -> None:
+        if math.isnan(self.recovery_mult):
+            raise ValueError(
+                f"Body({self.name}): recovery_mult is required (got NaN). "
+                f"Add the stock KSP RecoveryValue to the Body() constructor."
+            )
 
     # ------------------------------------------------------------------
     # Orbital constants
@@ -307,10 +321,22 @@ KERBIN = Body(
     radius_km=600,
     safe_altitude_km=70.0,  # Kármán line; atmosphere edge
     atm_scale_height_m=5000.0,
-    has_ocean=True, num_biomes=9, num_splash_biomes=2,
-    space_low_mult=1.5, space_high_mult=1.0,
-    fly_low_mult=1.0, fly_high_mult=0.7,
+    # Biome counts from runtime BiomeMap + BiomeSplit dump (KSP.log
+    # search "STOCK BiomeSplit"): 7 land_only + 4 mixed.  Mixed biomes
+    # (Grasslands, Shores, Tundra, Water) support BOTH landed and
+    # splashed science, so they count toward num_biomes AND
+    # num_splash_biomes.  Same convention applies to all ocean bodies.
+    has_ocean=True, num_biomes=11, num_splash_biomes=4,
+    # Stock KSP CelestialBodyScienceParams — verified against runtime
+    # dump in KSP.log (search "STOCK ScienceValues").  See bodies.py
+    # comment block on home-relative science scaling for how these are
+    # consumed.  Note splashed/flying are 1.0 even on bodies that lack
+    # them — KSP uses 1.0 as the "n/a baseline" not 0.0; the
+    # has_atmosphere / has_ocean flags gate science_budget's branches.
+    space_low_mult=1.0, space_high_mult=1.5,
+    fly_low_mult=0.7, fly_high_mult=0.9,
     landed_mult=0.3, splashed_mult=0.4,
+    recovery_mult=1.0,
 )
 
 MUN = Body(
@@ -328,9 +354,11 @@ MUN = Body(
     ),
     radius_km=200,
     safe_altitude_km=19.0,  # low orbit 14 + 5 buffer (vacuum)
-    num_biomes=7,
-    space_low_mult=4.0, space_high_mult=2.0,
-    landed_mult=9.0,
+    num_biomes=17,
+    space_low_mult=3.0, space_high_mult=2.0,
+    fly_low_mult=1.0, fly_high_mult=1.0,
+    landed_mult=4.0, splashed_mult=1.0,
+    recovery_mult=2.0,
 )
 
 MINMUS = Body(
@@ -349,8 +377,10 @@ MINMUS = Body(
     radius_km=60,
     safe_altitude_km=15.0,  # low orbit 10 + 5 buffer (vacuum)
     num_biomes=9,
-    space_low_mult=5.0, space_high_mult=2.5,
-    landed_mult=12.0,
+    space_low_mult=4.0, space_high_mult=2.5,
+    fly_low_mult=1.0, fly_high_mult=1.0,
+    landed_mult=5.0, splashed_mult=1.0,
+    recovery_mult=2.5,
 )
 
 MOHO = Body(
@@ -368,9 +398,11 @@ MOHO = Body(
     ),
     radius_km=250,
     safe_altitude_km=25.0,  # low orbit 20 + 5 buffer (vacuum)
-    num_biomes=6,
-    space_low_mult=8.0, space_high_mult=4.0,
-    landed_mult=9.0,
+    num_biomes=12,
+    space_low_mult=8.0, space_high_mult=7.0,
+    fly_low_mult=1.0, fly_high_mult=1.0,
+    landed_mult=10.0, splashed_mult=1.0,
+    recovery_mult=7.0,
 )
 
 EVE = Body(
@@ -389,10 +421,14 @@ EVE = Body(
     radius_km=700,
     safe_altitude_km=90.0,  # Kármán line; atmosphere edge
     atm_scale_height_m=7000.0,
-    has_ocean=True, num_biomes=8, num_splash_biomes=3,
-    space_low_mult=8.0, space_high_mult=4.0,
-    fly_low_mult=2.0, fly_high_mult=1.5,
+    # 4 land_only + 1 water_only + 8 mixed per BiomeSplit dump.
+    # Two tiny biomes (Craters, Akatsuki Lake) weren't sampled by the
+    # 5° grid; conservatively excluded.
+    has_ocean=True, num_biomes=12, num_splash_biomes=9,
+    space_low_mult=7.0, space_high_mult=5.0,
+    fly_low_mult=6.0, fly_high_mult=6.0,
     landed_mult=8.0, splashed_mult=8.0,
+    recovery_mult=5.0,
 )
 
 GILLY = Body(
@@ -411,8 +447,10 @@ GILLY = Body(
     radius_km=13,
     safe_altitude_km=11.0,  # low orbit 6 + 5 buffer (tiny vacuum body)
     num_biomes=3,
-    space_low_mult=9.0, space_high_mult=4.5,
-    landed_mult=12.0,
+    space_low_mult=8.0, space_high_mult=6.0,
+    fly_low_mult=1.0, fly_high_mult=1.0,
+    landed_mult=9.0, splashed_mult=1.0,
+    recovery_mult=6.0,
 )
 
 DUNA = Body(
@@ -431,10 +469,11 @@ DUNA = Body(
     radius_km=320,
     safe_altitude_km=50.0,  # Kármán line; atmosphere edge
     atm_scale_height_m=3000.0,
-    num_biomes=5,
-    space_low_mult=8.0, space_high_mult=4.0,
-    fly_low_mult=1.5, fly_high_mult=1.2,
-    landed_mult=8.0,
+    num_biomes=14,
+    space_low_mult=7.0, space_high_mult=5.0,
+    fly_low_mult=5.0, fly_high_mult=5.0,
+    landed_mult=8.0, splashed_mult=1.0,
+    recovery_mult=5.0,
 )
 
 IKE = Body(
@@ -452,9 +491,11 @@ IKE = Body(
     ),
     radius_km=130,
     safe_altitude_km=15.0,  # low orbit 10 + 5 buffer (vacuum)
-    num_biomes=5,
-    space_low_mult=8.0, space_high_mult=4.0,
-    landed_mult=8.0,
+    num_biomes=8,
+    space_low_mult=7.0, space_high_mult=5.0,
+    fly_low_mult=1.0, fly_high_mult=1.0,
+    landed_mult=8.0, splashed_mult=1.0,
+    recovery_mult=5.0,
 )
 
 DRES = Body(
@@ -472,9 +513,11 @@ DRES = Body(
     ),
     radius_km=138,
     safe_altitude_km=30.0,  # low orbit 25 + 5 buffer (vacuum)
-    num_biomes=5,
-    space_low_mult=8.0, space_high_mult=4.0,
-    landed_mult=8.0,
+    num_biomes=8,
+    space_low_mult=7.0, space_high_mult=6.0,
+    fly_low_mult=1.0, fly_high_mult=1.0,
+    landed_mult=8.0, splashed_mult=1.0,
+    recovery_mult=6.0,
 )
 
 JOOL = Body(
@@ -494,8 +537,14 @@ JOOL = Body(
     safe_altitude_km=200.0,  # Kármán line; atmosphere edge (gas giant)
     atm_scale_height_m=10000.0,
     num_biomes=0,
-    space_low_mult=12.0, space_high_mult=6.0,
-    fly_low_mult=6.0, fly_high_mult=4.0,
+    # KSP stock has landed=30 for Jool, but can_land=False above gates
+    # the science_budget landed branch.  Storing the stock value so
+    # client-side slot_data matches what KSP uses if a player somehow
+    # triggers a landed experiment (no-op in practice).
+    space_low_mult=7.0, space_high_mult=6.0,
+    fly_low_mult=12.0, fly_high_mult=9.0,
+    landed_mult=30.0, splashed_mult=1.0,
+    recovery_mult=6.0,
 )
 
 LAYTHE = Body(
@@ -514,10 +563,12 @@ LAYTHE = Body(
     radius_km=500,
     safe_altitude_km=50.0,  # Kármán line; atmosphere edge
     atm_scale_height_m=4000.0,
-    has_ocean=True, num_biomes=9, num_splash_biomes=4,
-    space_low_mult=12.0, space_high_mult=6.0,
-    fly_low_mult=4.0, fly_high_mult=3.0,
-    landed_mult=14.0, splashed_mult=10.0,
+    # 2 land_only + 4 water_only + 3 mixed per BiomeSplit dump.
+    has_ocean=True, num_biomes=5, num_splash_biomes=7,
+    space_low_mult=9.0, space_high_mult=8.0,
+    fly_low_mult=11.0, fly_high_mult=10.0,
+    landed_mult=14.0, splashed_mult=12.0,
+    recovery_mult=8.0,
 )
 
 VALL = Body(
@@ -536,8 +587,10 @@ VALL = Body(
     radius_km=300,
     safe_altitude_km=20.0,  # low orbit 15 + 5 buffer (vacuum)
     num_biomes=9,
-    space_low_mult=12.0, space_high_mult=6.0,
-    landed_mult=12.0,
+    space_low_mult=9.0, space_high_mult=8.0,
+    fly_low_mult=1.0, fly_high_mult=1.0,
+    landed_mult=12.0, splashed_mult=1.0,
+    recovery_mult=8.0,
 )
 
 TYLO = Body(
@@ -555,9 +608,11 @@ TYLO = Body(
     ),
     radius_km=600,
     safe_altitude_km=35.0,  # low orbit 30 + 5 buffer (vacuum)
-    num_biomes=6,
-    space_low_mult=12.0, space_high_mult=6.0,
-    landed_mult=12.0,
+    num_biomes=9,
+    space_low_mult=10.0, space_high_mult=8.0,
+    fly_low_mult=1.0, fly_high_mult=1.0,
+    landed_mult=12.0, splashed_mult=1.0,
+    recovery_mult=8.0,
 )
 
 BOP = Body(
@@ -575,9 +630,11 @@ BOP = Body(
     ),
     radius_km=65,
     safe_altitude_km=15.0,  # low orbit 10 + 5 buffer (vacuum)
-    num_biomes=4,
-    space_low_mult=12.0, space_high_mult=6.0,
-    landed_mult=12.0,
+    num_biomes=5,
+    space_low_mult=9.0, space_high_mult=8.0,
+    fly_low_mult=1.0, fly_high_mult=1.0,
+    landed_mult=12.0, splashed_mult=1.0,
+    recovery_mult=8.0,
 )
 
 POL = Body(
@@ -596,8 +653,10 @@ POL = Body(
     radius_km=44,
     safe_altitude_km=11.0,  # low orbit 6 + 5 buffer (tiny vacuum body)
     num_biomes=4,
-    space_low_mult=12.0, space_high_mult=6.0,
-    landed_mult=12.0,
+    space_low_mult=9.0, space_high_mult=8.0,
+    fly_low_mult=1.0, fly_high_mult=1.0,
+    landed_mult=12.0, splashed_mult=1.0,
+    recovery_mult=8.0,
 )
 
 EELOO = Body(
@@ -615,9 +674,11 @@ EELOO = Body(
     ),
     radius_km=210,
     safe_altitude_km=15.0,  # low orbit 10 + 5 buffer (vacuum)
-    num_biomes=7,
-    space_low_mult=15.0, space_high_mult=7.5,
-    landed_mult=15.0,
+    num_biomes=11,
+    space_low_mult=12.0, space_high_mult=10.0,
+    fly_low_mult=1.0, fly_high_mult=1.0,
+    landed_mult=15.0, splashed_mult=1.0,
+    recovery_mult=10.0,
 )
 
 KERBOL = Body(
@@ -639,7 +700,10 @@ KERBOL = Body(
     # if anyone ever tries.  Atmosphere ends ~600 km on the wiki.
     safe_altitude_km=600.0,
     num_biomes=0,
-    space_low_mult=2.0, space_high_mult=1.0,
+    space_low_mult=11.0, space_high_mult=2.0,
+    fly_low_mult=1.0, fly_high_mult=1.0,
+    landed_mult=1.0, splashed_mult=1.0,
+    recovery_mult=4.0,
 )
 
 # Authoritative list of all bodies
@@ -1373,6 +1437,247 @@ class MissionBuilder:
                     )
 
 # ---------------------------------------------------------------------------
+# Home-relative science scaling
+#
+# When ``home != Kerbin`` the player starts on an alien world; stock KSP's
+# science multipliers (calibrated for Kerbin home) make every body's reward
+# reflect "how alien from Kerbin" rather than "how alien from the player's
+# actual home".
+#
+# Three rules, applied per-situation (landed/splashed/fly_low/.../recovery):
+#   - body == home          -> Kerbin's stock value for that situation.
+#                              Surface sample at Eeloo home == surface sample
+#                              at Kerbin home, biome by biome.
+#   - body == Kerbin        -> Laythe's stock value × Δv ratio.  Laythe is
+#                              Kerbin's physical analog (atmosphere, ocean,
+#                              similar gravity / size), so it gives the right
+#                              shape for "Kerbin as the alien target".  The
+#                              Δv ratio uses Laythe-from-Kerbin as the
+#                              denominator — that's the canonical "alien
+#                              Laythe-class planet" reward-per-Δv calibration,
+#                              and applying it here means Kerbin-from-any-home
+#                              feels exactly like Laythe-from-Kerbin in
+#                              science / Δv terms.
+#   - any other body        -> stock_mult × round-trip Δv ratio.  Uniform per
+#                              body — every situation scales by the same
+#                              factor.  Preserves Squad's reward-per-Δv
+#                              calibration from Kerbin home onto every other
+#                              home.
+#
+# ``effective_situation_mult`` is the single source of truth.  Both
+# ``science_budget`` (rules + sphere-ladder) and ``home_relative_science_values``
+# (slot_data emission) read from it.  Same arithmetic on both sides, so the
+# server's accounting and the player's actual yields cannot drift.
+# ---------------------------------------------------------------------------
+
+
+# Slot-data field name -> Body attribute holding that situation's stock
+# multiplier.  Used to translate the per-situation effective-mult call
+# into the right ``getattr`` against the Body dataclass.
+SITUATION_FIELD_TO_ATTR: dict[str, str] = {
+    "landed":     "landed_mult",
+    "splashed":   "splashed_mult",
+    "fly_low":    "fly_low_mult",
+    "fly_high":   "fly_high_mult",
+    "space_low":  "space_low_mult",
+    "space_high": "space_high_mult",
+    "recovery":   "recovery_mult",
+}
+
+
+# Cache MissionBuilder per home — construction is heavy (builds the full
+# mission graph + every (body, mission_type) profile) but the result is
+# deterministic and pure.  Sharing a single builder per home across all
+# ``_return_dv`` calls means we pay the cost ~once per process.
+@lru_cache(maxsize=None)
+def _mission_builder_for(home: BodyName) -> "MissionBuilder":
+    return MissionBuilder(home=home)
+
+
+# Squad calibrates outer-system interplanetary missions with roughly 1.67×
+# the science-per-Δv of intra-Kerbin-system targets (Mun / Minmus).  When a
+# body that was interplanetary from Kerbin becomes intra-system from the new
+# home (e.g. Vall is sibling-moon-of-Jool from Laythe home, not a far Jool
+# moon from Kerbin home), Squad's stock multiplier still carries that
+# interplanetary premium — we strip it.
+_INTERPLANETARY_PREMIUM: float = 1.67
+
+
+@lru_cache(maxsize=None)
+def _return_dv(body: BodyName, home: BodyName) -> float:
+    """Cheapest round-trip Δv from ``home`` to ``body`` and back, using
+    ``MissionType.RETURN`` profiles (both legs + capture / aerobrake).
+
+    Round-trip rather than one-way because Kerbin's thick atmosphere
+    makes one-way capture from any vacuum body nearly free (aerobrake);
+    the return leg has to actually climb back out of Kerbin's gravity well.
+
+    Returns ``inf`` when no return profile exists (e.g. Kerbol)."""
+    builder = _mission_builder_for(home)
+    profiles = builder.profiles_for(body, MissionType.RETURN)
+    if not profiles:
+        return float("inf")
+    return min(sum(e.base_dv for e in profile) for profile in profiles)
+
+
+@lru_cache(maxsize=None)
+def _return_edge_count(body: BodyName, home: BodyName) -> int:
+    """Number of edges in the cheapest RETURN profile.  Each edge is a
+    distinct mission phase (launch / SOI transition / capture / descent /
+    return leg), so the count is a direct proxy for "planning complexity"
+    — how many burn windows, how many transfers, how many SOI changes.
+
+    Returns 0 if there's no return profile (caller falls back to 1.0)."""
+    builder = _mission_builder_for(home)
+    profiles = builder.profiles_for(body, MissionType.RETURN)
+    if not profiles:
+        return 0
+    return len(min(profiles, key=lambda p: sum(e.base_dv for e in p)))
+
+
+def _intra_system(body: BodyName, home: BodyName) -> bool:
+    """Body and home share an SOI tree.  Four ways this is true:
+
+    - ``body == home`` itself
+    - body is home's moon         (e.g. Laythe → Vall, but only when home=Jool)
+    - body is home's parent       (e.g. Laythe → Jool — Jool is Laythe's planet)
+    - body is home's sibling moon (e.g. Laythe → Vall, both moons of Jool)
+
+    Used by ``_mission_scalar`` to strip the interplanetary premium from
+    bodies that become intra-system targets from the new home."""
+    if body == home:
+        return True
+    body_obj = BODY_BY_NAME[body]
+    home_obj = BODY_BY_NAME[home]
+    if body_obj.parent == home:
+        return True
+    if body == home_obj.parent:
+        return True
+    if body_obj.parent is not None and body_obj.parent == home_obj.parent:
+        return True
+    return False
+
+
+def _mission_scalar(
+    body: BodyName, home: BodyName,
+    ref_body: BodyName, ref_home: BodyName,
+) -> float:
+    """Composite scaling factor: Δv ratio × edge-count ratio × intra-system
+    penalty, computed against a reference (body, home) pair.
+
+    Three components, each independently motivated:
+
+    1. **Δv ratio** ``dv(B,H) / dv(refB,refH)`` — preserves Squad's
+       reward-per-Δv calibration across home changes.
+    2. **Edge-count ratio** ``edges(B,H) / edges(refB,refH)`` — captures
+       mission planning complexity orthogonal to Δv.  Eeloo→Mun and
+       Kerbin→Mun have similar Δv but Eeloo→Mun is far more complex
+       (multiple SOI transitions); the edge ratio rewards that.
+    3. **Intra-system penalty** ``÷ 1.67`` when the actual case is
+       intra-system but the reference is not.  Strips Squad's implicit
+       "interplanetary premium" when a stock-interplanetary body becomes
+       a sibling-moon hop from the new home.
+
+    Falls back to 1.0 when reference data is missing / unreachable."""
+    dv_now = _return_dv(body, home)
+    dv_ref = _return_dv(ref_body, ref_home)
+    if (dv_now == float("inf")
+            or dv_ref == float("inf")
+            or dv_ref == 0.0):
+        return 1.0
+
+    ec_now = _return_edge_count(body, home)
+    ec_ref = _return_edge_count(ref_body, ref_home)
+    edge_factor = (ec_now / ec_ref) if (ec_now > 0 and ec_ref > 0) else 1.0
+
+    # Premium is only stripped when shifting interplanetary -> intra-system;
+    # the converse (Mun from Eeloo: intra -> interplanetary) is handled by
+    # the edge-count ratio naturally rewarding the added phases.
+    actual_intra = _intra_system(body, home)
+    ref_intra = _intra_system(ref_body, ref_home)
+    intra_factor = (1.0 / _INTERPLANETARY_PREMIUM) if (actual_intra and not ref_intra) else 1.0
+
+    return (dv_now / dv_ref) * edge_factor * intra_factor
+
+
+def effective_situation_mult(
+    body: BodyName, situation_attr: str, home: BodyName,
+) -> float:
+    """THE source of truth for home-relative science multipliers.  Returns
+    the effective stock-equivalent multiplier for ``body``'s ``situation_attr``
+    (a Body field name like ``"landed_mult"``) given the player's ``home``.
+
+    ``science_budget`` (rules + sphere-ladder) computes per-situation
+    contributions from this function; ``home_relative_science_values``
+    emits the same values to the client.  Same function, no drift.
+    """
+    body_obj = BODY_BY_NAME[body]
+    if home == BodyName.KERBIN:
+        return getattr(body_obj, situation_attr)
+    if body == home:
+        # Home becomes "Kerbin home" — substitute Kerbin's stock value.
+        return getattr(BODY_BY_NAME[BodyName.KERBIN], situation_attr)
+    if body == BodyName.KERBIN:
+        # Alien Kerbin: borrow Laythe's stock shape (physical analog —
+        # atmosphere, ocean, similar gravity) and scale against
+        # Laythe-from-Kerbin as the reference baseline.  Kerbin-from-any-
+        # non-Kerbin-home then takes on Laythe-from-Kerbin's reward profile.
+        laythe = BODY_BY_NAME[BodyName.LAYTHE]
+        scalar = _mission_scalar(
+            BodyName.KERBIN, home,
+            BodyName.LAYTHE, BodyName.KERBIN,
+        )
+        return getattr(laythe, situation_attr) * scalar
+    # Other non-home bodies: reference is body-from-Kerbin, the stock
+    # calibration.  _mission_scalar applies Δv ratio + edge-count ratio
+    # + intra-system penalty as appropriate.
+    return getattr(body_obj, situation_attr) * _mission_scalar(
+        body, home, body, BodyName.KERBIN,
+    )
+
+
+# Fixed, complete list of CelestialBodyScienceParams fields the client
+# writes.  Every body entry in ``home_relative_science_values`` must
+# contain ALL of these keys — missing fields hard-fail on the client.
+SCIENCE_SITUATIONS: tuple[str, ...] = (
+    "landed",
+    "splashed",
+    "fly_low",
+    "fly_high",
+    "space_low",
+    "space_high",
+    "recovery",
+)
+
+
+def home_relative_science_values(home: BodyName) -> dict[str, dict[str, float]]:
+    """Slot-data shape: ``{body_name: {situation: absolute_value, ...}}``.
+    Returns ``{}`` when ``home == Kerbin`` (the client treats absent key as
+    "feature off, leave stock alone").
+
+    When the key IS present, the dict MUST contain every body in
+    ``ALL_BODIES`` and every situation in ``SCIENCE_SITUATIONS``.  The
+    client validates this and hard-fails on any missing entry — no
+    silent defaults, no "scalar 1.0 fallback".
+
+    All values are computed via ``effective_situation_mult`` — the same
+    function ``science_budget`` consumes on the server.  The client
+    receives absolute values and writes them directly into
+    ``CelestialBody.scienceValues``; no math happens on the client, so
+    server and client cannot drift.
+    """
+    if home == BodyName.KERBIN:
+        return {}
+    out: dict[str, dict[str, float]] = {}
+    for body in ALL_BODIES:
+        out[body.name.value] = {
+            field: effective_situation_mult(body.name, attr, home)
+            for field, attr in SITUATION_FIELD_TO_ATTR.items()
+        }
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Science budget estimator (used by tech-tree access rules)
 # ---------------------------------------------------------------------------
 
@@ -1382,6 +1687,7 @@ def science_budget(
     has_barometer: bool,
     has_capsule: bool,
     can_land_crewed: bool,
+    home: BodyName,
     psi_tier: int = 0,
 ) -> float:
     """
@@ -1406,6 +1712,12 @@ def science_budget(
     Gravimeter.  ``mobileMaterialsLab`` (Sci Jr., 200 kg) is intentionally
     NOT counted — its payload cost isn't modelled by the capability system,
     so counting its yield as free would over-estimate accessible science.
+
+    ``home`` is the player's starting body.  Each situation multiplier is
+    looked up through ``effective_situation_mult`` — the same function the
+    slot_data emitter uses — so the rules-side accounting and the runtime
+    yields the client writes into ``CelestialBody.scienceValues`` are
+    arithmetically identical.  For Kerbin home this is just the stock mult.
     """
     base_instr: float = 0.0
     if has_thermometer:
@@ -1430,32 +1742,42 @@ def science_budget(
     crew_orbital_val: float = (5.0 + 8.0) if has_capsule else 0.0
     crew_surface_val: float = (5.0 + 8.0 + 30.0) if (has_capsule and can_land_crewed) else 0.0
 
+    bn = body.name
+    eff_space_low  = effective_situation_mult(bn, "space_low_mult",  home)
+    eff_space_high = effective_situation_mult(bn, "space_high_mult", home)
+    eff_landed     = effective_situation_mult(bn, "landed_mult",     home)
+    eff_splashed   = effective_situation_mult(bn, "splashed_mult",   home)
+
     # Orbital science (global, not per-biome)
     orbital = (base_instr + psi_space + crew_orbital_val) * (
-        body.space_low_mult + body.space_high_mult
+        eff_space_low + eff_space_high
     )
 
-    # Flying science (atmosphere only; use min to underestimate)
+    # Flying science (atmosphere only; use min to underestimate).
+    # ``has_atmosphere`` is the real gate — the effective mults are 1.0 for
+    # vacuum bodies (KSP's stock "n/a baseline") so a > 0 check is meaningless.
     flying = 0.0
-    if body.has_atmosphere and body.fly_low_mult > 0 and body.fly_high_mult > 0:
+    if body.has_atmosphere:
+        eff_fly_low  = effective_situation_mult(bn, "fly_low_mult",  home)
+        eff_fly_high = effective_situation_mult(bn, "fly_high_mult", home)
         flying = (base_instr + psi_fly + crew_orbital_val) * min(
-            body.fly_low_mult, body.fly_high_mult
+            eff_fly_low, eff_fly_high
         )
 
     # Landed science (scales with biome count)
     landed = 0.0
     if body.can_land and body.num_biomes > 0:
         landed = (
-            (base_instr + psi_landed) * body.landed_mult
-            + crew_surface_val * body.landed_mult
+            (base_instr + psi_landed) * eff_landed
+            + crew_surface_val * eff_landed
         ) * body.num_biomes
 
     # Splashed science (ocean biomes only)
     splashed = 0.0
     if body.has_ocean and body.num_splash_biomes > 0:
         splashed = (
-            (base_instr + psi_splashed) * body.splashed_mult
-            + crew_surface_val * body.splashed_mult
+            (base_instr + psi_splashed) * eff_splashed
+            + crew_surface_val * eff_splashed
         ) * body.num_splash_biomes
 
     return orbital + flying + landed + splashed
