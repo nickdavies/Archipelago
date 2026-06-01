@@ -3897,34 +3897,65 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
     home = str(world.mission_builder.home)
     infeasible = world.model_infeasible_locations
 
-    # Per-location intrinsic rank ceilings (from an empty prior).
-    # Deterministic per-location seed: world.seed + location name.
-    # Avoids cross-location coupling via the shared world.random.
-    import hashlib as _hashlib
-    import random as _random
+    # Per-location intrinsic rank ceilings.
+    #
+    # PERF: instead of running the full greedy bumper for every location
+    # (~250 locations × 60+ iterations each), evaluate capability ONCE
+    # at max ranks with full admit (the flags object is shared + cached),
+    # then ask the optimizer per location what kit it used.  The kit's
+    # parts' rank_sigs give the location's intrinsic ceiling — the
+    # minimum ranks at which that mission becomes feasible.  This is the
+    # same number the bumper converged to, reached in one optimizer call
+    # instead of a long greedy walk.  Results are deduped by canonical
+    # mission key (Mun Landing 1/2/3 share one mission → one eval).
+    from .ranks import RANK_AXES_BY_KEY as _RABK
+    _max_ranks = MinimumRanks(tuple(sorted(
+        ((a, _RABK[a].buckets) for a in RankAxisKey),
+        key=lambda x: x[0].value,
+    )))
+    _pad_max = (len(world.mission_builder.launch_pad_caps) - 1
+                if world.mission_builder.launch_pad_caps else 0)
+    _max_flags = _pre_pass_for_ranks(
+        _max_ranks, ctx,
+        start_with_clamps=start_with_clamps,
+        progressive_launch_pad=progressive_launch_pad,
+        launch_pad_caps=world.mission_builder.launch_pad_caps,
+        pad_tier=_pad_max,
+        precollected_names=precollected_names,
+        reps_only=None,
+    )
+    _diff = DIFFICULTY_PROFILES[difficulty]
+
+    def _ranks_from_kit(kit) -> MinimumRanks:
+        out = MinimumRanks.empty()
+        for part_name in kit.all_parts():
+            sig = rank_sig_for(part_name, ctx)
+            for ax, rk in sig.axes:
+                if rk > (out.get(ax) or 0):
+                    out = out.with_axis(ax, rk)
+        return out
+
     location_min_ranks: dict[str, MinimumRanks] = {}
+    _ranks_by_mission: dict[tuple, Optional[MinimumRanks]] = {}
     for loc in world.multiworld.get_locations(world.player):
         if loc.address is None or loc.name in infeasible:
             continue
         info = _parse_location(loc.name)
         if info is None:
             continue
-        seed_bytes = _hashlib.sha256(
-            f"{world.multiworld.seed}|{loc.name}".encode()
-        ).digest()[:8]
-        loc_rng = _random.Random(int.from_bytes(seed_bytes, "big"))
-        rocket = minimal_ranks_for(
-            loc.name, MinimumRanks.empty(), ctx,
-            difficulty=difficulty,
-            progressive_launch_pad=progressive_launch_pad,
-            start_with_clamps=start_with_clamps,
-            rng=loc_rng,
-            mission_builder=world.mission_builder,
-            precollected_names=precollected_names,
-        )
-        if rocket is None:
+        # Canonical mission key — dedup locations that share one mission.
+        mkey = (info.body, info.mission_type, info.crewed, info.threshold_km)
+        if mkey in _ranks_by_mission:
+            derived = _ranks_by_mission[mkey]
+        else:
+            result = _evaluate(_max_flags, info, _diff, world.mission_builder)
+            derived = (_ranks_from_kit(result.kit_used)
+                       if result.feasible and result.kit_used is not None
+                       else None)
+            _ranks_by_mission[mkey] = derived
+        if derived is None:
             continue
-        location_min_ranks[loc.name] = rocket.ranks
+        location_min_ranks[loc.name] = derived
         ladder.location_signatures[loc.name] = LocationSignature(
             dv=_goal_dv(loc.name, world.mission_builder),
             requirements=tuple(),
