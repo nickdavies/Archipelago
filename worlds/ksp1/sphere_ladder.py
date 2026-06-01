@@ -1936,11 +1936,9 @@ def minimal_ranks_for(
         else:
             stuck_iters = 0
         prev_blocker_count = cur_count
-        # Pick a bump.  Scored selection (mass-min objective + stage_diag
-        # candidate narrowing) is the primary mechanism — ports the
-        # legacy _pick_bump intelligence to the rank system.  Random
-        # axis selection wasted iterations picking irrelevant axes from
-        # the catchall NO_VIABLE_STAGE list.
+        # Pick a bump.  Scored selection (mass-min objective +
+        # stage_diag candidate narrowing) is the primary mechanism —
+        # ports the legacy _pick_bump intelligence to the rank system.
         axis = _pick_rank_bump_scored(
             result.blocking, ranks, ctx, rng,
             difficulty=difficulty,
@@ -2175,6 +2173,7 @@ _PAYLOAD_MASS_REDUCING_AXES: tuple[RankAxisKey, ...] = (
 _MASS_RELATED_FAILURES = frozenset({
     "dv_short", "twr_short", "dry_mass_kills_ratio", "mass_cap_exceeded",
 })
+
 
 
 def _pick_rank_bump_scored(blocking, ranks: MinimumRanks, ctx: RankContext,
@@ -3882,6 +3881,9 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
     """
     from .rocket_math import clear_find_optimal_stage_cache
     clear_find_optimal_stage_cache()
+    # Identity-based pre-pass cache: clear so cross-seed flag objects
+    # can't collide on id() after garbage collection.
+    _RANK_PRE_PASS_CACHE.clear()
     ladder = SphereLadder()
     ctx = getattr(world, "_rank_context", DEFAULT_CONTEXT)
     difficulty = ["casual", "normal", "expert", "insane"][
