@@ -71,13 +71,12 @@ CAPABILITY_ITEMS: frozenset[str] = frozenset(
         )
         for p in parts
     )
-) | frozenset(PROGRESSIVE_PART_COUNTS.keys()) | {
-    # Non-part progressives that still affect capability. Without these
-    # the L2 fingerprint collapses different counts onto the same cache
-    # key — e.g. Pad=0 vs Pad=3 both fingerprint identically, so the
-    # first computed mass cap (100t base) is returned for everyone.
+) | {
+    # Counted progressives that still affect capability — counts must
+    # appear in the L2 fingerprint to distinguish e.g. Pad=0 vs Pad=3.
     "Progressive Launch Pad",
     "Progressive R&D",
+    "Progressive Science Instrument",
 }
 
 # Terminal velocity threshold for parachute adequacy (m/s)
@@ -111,15 +110,11 @@ _SOUNDING_MIN_TWR: float = 1.1   # minimum sea-level TWR to count as a viable ro
 
 
 # ---------------------------------------------------------------------------
-# Parts that nominally provide the ``capsule`` flag but cannot serve as
-# the terminal payload for real missions (no thermal protection, no
-# pressurized cabin, can't survive interplanetary or atmospheric reentry).
-# Excluded from ``lightest_capsule`` selection in _pre_pass.
+# Capsule eligibility is data-driven: ``parts.py:_capsule_spec_from_cfg``
+# returns ``None`` for srf-only crew positions (chair-style), and that
+# strips the ``capsule`` provides flag at MiscEquipment construction.
+# No hand-curated exclusion list needed here.
 # ---------------------------------------------------------------------------
-
-_CAPSULE_EXCLUSIONS: frozenset[str] = frozenset({
-    "seatExternalCmd",   # external chair
-})
 
 
 # ---------------------------------------------------------------------------
@@ -311,27 +306,25 @@ class RocketCapability:
 def _capability_fingerprint(state: CollectionState, player: int) -> frozenset[tuple[str, int]]:
     """Return the set of (name, count) for capability-affecting items.
 
-    For progressive items, the count matters (unlocks different tiers).
-    For individual items, count is capped at 1 (presence/absence).
+    Phase 2: counts matter for the surviving counted progressives
+    (Pad / R&D / PSI); every other item is a binary presence/absence.
     """
     from .items import (
         PROGRESSIVE_LAUNCH_PAD_NAME, PROGRESSIVE_LAUNCH_PAD_COUNT,
         PROGRESSIVE_RD_NAME, PROGRESSIVE_RD_COUNT,
+        PROGRESSIVE_SCIENCE_INSTRUMENT_NAME, PROGRESSIVE_PSI_COUNT,
     )
-    _NON_PART_PROGRESSIVE_COUNTS = {
+    _COUNTED = {
         PROGRESSIVE_LAUNCH_PAD_NAME: PROGRESSIVE_LAUNCH_PAD_COUNT,
         PROGRESSIVE_RD_NAME: PROGRESSIVE_RD_COUNT,
+        PROGRESSIVE_SCIENCE_INSTRUMENT_NAME: PROGRESSIVE_PSI_COUNT,
     }
     result: list[tuple[str, int]] = []
     for name in CAPABILITY_ITEMS:
         c = state.count(name, player)
         if c > 0:
-            if name in PROGRESSIVE_PART_COUNTS:
-                result.append((name, min(c, PROGRESSIVE_PART_COUNTS[name])))
-            elif name in _NON_PART_PROGRESSIVE_COUNTS:
-                result.append((name, min(c, _NON_PART_PROGRESSIVE_COUNTS[name])))
-            else:
-                result.append((name, 1))
+            cap = _COUNTED.get(name)
+            result.append((name, min(c, cap) if cap is not None else 1))
     return frozenset(result)
 
 
@@ -391,42 +384,23 @@ def explain_body_unreachable(state: CollectionState, player: int, body_name: str
 
 def _pre_pass(item_count_fn: Callable[[str], int],
               start_with_clamps: bool,
-              rep_names: frozenset[str] = frozenset(),
               progressive_launch_pad: bool = False,
               launch_pad_caps: tuple[float, ...] | None = None) -> EquipmentFlags:
     """
-    Iterate every item the player has collected and build EquipmentFlags.
+    Iterate every PART_DB item the player has and build EquipmentFlags.
 
-    Progressive items are expanded first: for each progressive item the player
-    has N copies of, unlock the parts from tiers 1..N.  Then individual items
-    (non-absorbed) are processed as before.
+    Phase 2: parts are individual AP items — there is no progressive-tier
+    expansion.  ``item_count_fn(item_name)`` returns 1 if the player has
+    received that part and 0 otherwise.  The ``Progressive Launch Pad``
+    counted progressive is the only non-binary count consulted (drives
+    ``launch_pad_mass_cap``).
     """
     flags = EquipmentFlags()
 
-    # Grant launch clamps if the option is enabled
     if start_with_clamps:
         flags.has_launch_clamp = True
 
-    # Build the set of part names unlocked by progressive items
-    progressive_unlocked: set[str] = set()
-    for prog_name, tiers in PROGRESSIVE_PART_TIERS.items():
-        count = item_count_fn(prog_name)
-        if count <= 0:
-            continue
-        max_tier = max(tiers.keys())
-        for t in range(1, min(count, max_tier) + 1):
-            progressive_unlocked.update(tiers[t])
-
-    # Set progressive binary gate flags
-    flags.has_launch_engine = item_count_fn("Progressive Launch Engine") > 0
-    flags.has_vacuum_engine = item_count_fn("Progressive Vacuum Engine") > 0
-    flags.has_lfo_fuel = item_count_fn("Progressive LFO Tank") > 0
-    flags.has_srb_fuel = item_count_fn("Progressive SRB") > 0
-
-    # Launch-pad mass cap: indexed by collected count of
-    # "Progressive Launch Pad". 0 copies → starting cap; each additional
-    # copy raises the cap. Only active when the option is enabled
-    # (otherwise the default inf applies).
+    # Launch-pad mass cap: index by collected count of "Progressive Launch Pad".
     if progressive_launch_pad:
         from .items import PROGRESSIVE_LAUNCH_PAD_NAME, PROGRESSIVE_LAUNCH_PAD_CAPS_KERBIN
         caps = launch_pad_caps or PROGRESSIVE_LAUNCH_PAD_CAPS_KERBIN
@@ -434,26 +408,20 @@ def _pre_pass(item_count_fn: Callable[[str], int],
         idx = min(pad_count, len(caps) - 1)
         flags.launch_pad_mass_cap = caps[idx]
 
-    # Process parts: both progressive-unlocked and individual non-absorbed items
+    # Process every PART_DB item.
     for item_name, parts in PART_DB.items():
-        if item_name in PROGRESSIVE_PART_NAMES:
-            # Absorbed part: only available if unlocked by progressive tier
-            if item_name not in progressive_unlocked:
-                continue
-            if item_name in rep_names:
-                count = 1  # rep: auto-granted by the progressive tier unlock
-            else:
-                # Non-rep: only available if the individual item was received
-                count = item_count_fn(item_name)
-                if count == 0:
-                    continue
-        else:
-            count = item_count_fn(item_name)
-            if count == 0:
-                continue
-
+        count = item_count_fn(item_name)
+        if count == 0:
+            continue
         for part in parts:
             _add_part_to_flags(flags, part, count)
+
+    # Binary gate flags are derived from concrete parts (no more progressive
+    # binary checks).
+    flags.has_launch_engine = any(e.atm_thrust > 0 for e in flags.available_engines)
+    flags.has_vacuum_engine = any(e.vac_thrust > 0 for e in flags.available_engines)
+    flags.has_lfo_fuel = any(t.fuel_type == "lfo" for t in flags.available_tanks)
+    flags.has_srb_fuel = bool(flags.available_srbs)
 
     # Docking ports don't affect staging_tier — they can't be used for
     # practical stage separation (can't attach below engines, no automatic
@@ -467,12 +435,15 @@ def _pre_pass(item_count_fn: Callable[[str], int],
     # Derive relay tier from available relays
     flags.relay_tier = _compute_relay_tier(flags)
 
-    # Pick the asymptote-best non-drogue parachute once.  Lowest
-    # mass-per-drag-area wins (see ``_required_chute_count`` doc).
-    # ``None`` if the player has none — landing checks handle that.
-    non_drogue = [p for p in flags.available_parachutes if not p.is_drogue]
-    if non_drogue:
-        flags.best_chute = min(non_drogue,
+    # Pick the asymptote-best parachute once.  Lowest mass-per-drag-area
+    # wins (see ``_required_chute_count`` doc).  Drogues are included —
+    # the physics-accurate landing check (``_required_chute_count``)
+    # already handles "drag insufficient even with all chutes" by
+    # returning -1; the boolean ``has_parachutes`` was a redundant
+    # shortcut that surprised the bumper into picking a non-drogue rep
+    # at higher ranks when a drogue-only kit could land with enough copies.
+    if flags.available_parachutes:
+        flags.best_chute = min(flags.available_parachutes,
                                 key=lambda p: p.mass / max(p.drag_area, 1e-3))
 
     # (lightest_probe=None when no probe found — gate blocks before use)
@@ -569,18 +540,22 @@ def _add_part_to_flags(flags: EquipmentFlags, part, count: int) -> None:
             flags.best_heat_shield = part
 
     elif isinstance(part, Parachute):
-        if not part.is_drogue:  # drogue chutes excluded from all logic
-            if part.is_radial:
-                flags.has_parachutes = True
-                flags.total_chute_drag_area += part.drag_area * count
-                flags.parachute_count += count
-                flags.available_parachutes.extend([part] * count)
-            elif not flags._has_inline_chute:
-                flags._has_inline_chute = True
-                flags.has_parachutes = True
-                flags.total_chute_drag_area += part.drag_area
-                flags.parachute_count += 1
-                flags.available_parachutes.append(part)
+        # Drogues now count toward parachute capability — the
+        # ``_required_chute_count`` physics check decides if drag area
+        # is sufficient (drogues need many copies to land a craft, but
+        # the math handles that).  Treating drogues as no-op was a
+        # gameplay-incorrect shortcut.
+        if part.is_radial:
+            flags.has_parachutes = True
+            flags.total_chute_drag_area += part.drag_area * count
+            flags.parachute_count += count
+            flags.available_parachutes.extend([part] * count)
+        elif not flags._has_inline_chute:
+            flags._has_inline_chute = True
+            flags.has_parachutes = True
+            flags.total_chute_drag_area += part.drag_area
+            flags.parachute_count += 1
+            flags.available_parachutes.append(part)
 
     elif isinstance(part, LandingLeg):
         if part.tier > flags.landing_leg_tier:
@@ -637,12 +612,6 @@ def _apply_misc(flags: EquipmentFlags, part: MiscEquipment, count: int) -> None:
             if flags.lightest_probe is None or part.mass < flags.lightest_probe.mass:
                 flags.lightest_probe = part
         elif flag == CF.CAPSULE:
-            # The external command seat (an exposed kerbal chair) provides
-            # the ``capsule`` flag but cannot survive interplanetary travel
-            # or atmospheric reentry — exclude it from terminal-payload
-            # consideration.
-            if part.name in _CAPSULE_EXCLUSIONS:
-                continue
             flags.has_capsule = True
             if flags.lightest_capsule is None or part.mass < flags.lightest_capsule.mass:
                 flags.lightest_capsule = part
@@ -720,6 +689,97 @@ def _apply_misc(flags: EquipmentFlags, part: MiscEquipment, count: int) -> None:
 # ---------------------------------------------------------------------------
 
 @dataclass
+class KitUsed:
+    """Complete set of parts the capability evaluator depended on to
+    reach feasibility.  Populated only on ``ProfileResult.feasible``.
+
+    Distinguishes three categories of part:
+
+    1. **Explicit picks**: the engines, tanks, and per-stage equipment
+       the optimizer selected (recorded per stage).
+    2. **Implicit picks**: the ``lightest_*`` / ``best_*`` parts
+       capability pulled in for terminal payload (capsule, probe),
+       reentry (heat shield, parachute), landing (legs), support
+       (relay antennas, power source), and attitude control
+       (reaction wheel, RCS thruster + tank).
+    3. **Presence-only representatives**: parts whose mere availability
+       enabled a boolean / tier flag the optimizer relied on but didn't
+       directly consume — e.g. a radial decoupler enables
+       ``staging_tier=2`` (asparagus/onion dry-mass factor), a
+       ``fuelLine`` enables ``has_fuel_lines`` (asparagus mode), an SRB
+       enables ``has_srb_fuel`` even when the optimal stage was
+       liquid-only.  These flags affect the search bounds; without
+       them in the rep set, the re-evaluation can't reproduce the same
+       optimal kit.
+
+    ``all_parts()`` returns the union — feed that into
+    ``_pre_pass_for_ranks(..., reps_only=...)`` and the resulting flags
+    object will be functionally equivalent to the one this kit was
+    extracted from, so the feasibility claim is reproducible.
+    """
+    # 1. Explicit
+    stage_engines: list[str] = field(default_factory=list)
+    stage_tanks: list[str] = field(default_factory=list)
+    stage_equipment: list[str] = field(default_factory=list)
+    # 2. Implicit
+    capsule: Optional[str] = None
+    probe_core: Optional[str] = None
+    parachute: Optional[str] = None
+    heat_shield: Optional[str] = None
+    landing_legs: list[str] = field(default_factory=list)
+    relays: list[str] = field(default_factory=list)
+    rtg: Optional[str] = None
+    solar: Optional[str] = None
+    solar_retractable: Optional[str] = None
+    monoprop_tank: Optional[str] = None
+    rcs_thruster: Optional[str] = None
+    reaction_wheel: Optional[str] = None
+    aero_control: Optional[str] = None
+    ladder: Optional[str] = None
+    # 3. Presence-only representatives
+    stack_decoupler: Optional[str] = None
+    radial_decoupler: Optional[str] = None
+    fuel_line: Optional[str] = None
+    srb: Optional[str] = None
+
+    # Per-role viable substitutes for the chosen pick.  Keyed by the
+    # KitUsed field name (e.g. "capsule", "radial_decoupler"); values are
+    # the set of part names that satisfy the same physical role at a
+    # similar quality level.  Derived from the rank model (same axis-rank)
+    # for ranked parts; from capability-flag membership for presence-only
+    # roles.  Bumper / chain code can ``rng.choice`` among the union of
+    # ``{chosen} ∪ alternates`` to vary per-seed picks while staying
+    # within feasibility (verification is the caller's responsibility —
+    # rank-equivalence is necessary but not sufficient for cascading
+    # mission profiles).
+    alternates: dict[str, frozenset[str]] = field(default_factory=dict)
+
+    # Per-stage propulsion alternates: list aligned with stage_engines /
+    # stage_tanks.  Each element is the set of viable substitutes for
+    # that stage's pick.
+    stage_engine_alternates: list[frozenset[str]] = field(default_factory=list)
+    stage_tank_alternates: list[frozenset[str]] = field(default_factory=list)
+
+    def all_parts(self) -> frozenset[str]:
+        out: set[str] = set()
+        out.update(self.stage_engines)
+        out.update(self.stage_tanks)
+        out.update(self.stage_equipment)
+        out.update(self.landing_legs)
+        out.update(self.relays)
+        for v in (self.capsule, self.probe_core, self.parachute,
+                  self.heat_shield, self.rtg, self.solar,
+                  self.solar_retractable, self.monoprop_tank,
+                  self.rcs_thruster, self.reaction_wheel,
+                  self.aero_control, self.ladder,
+                  self.stack_decoupler, self.radial_decoupler,
+                  self.fuel_line, self.srb):
+            if v:
+                out.add(v)
+        return frozenset(out)
+
+
+@dataclass
 class ProfileResult:
     feasible: bool
     launch_mass: float = 0.0          # total wet mass at kerbin_surface
@@ -731,11 +791,94 @@ class ProfileResult:
     blocking: list[BlockingInfo] = field(default_factory=list)
     # Command module + support equipment for the terminal stage: [(count, part_id), ...]
     terminal_parts: list[tuple[int, str]] = field(default_factory=list)
+    # Complete structured kit (populated on feasible results, see KitUsed).
+    kit_used: Optional[KitUsed] = None
 
     @property
     def failure_reasons(self) -> list[str]:
         """Back-compat string view of ``blocking``."""
         return [str(b) for b in self.blocking]
+
+
+def _build_kit_used(flags: EquipmentFlags,
+                    stage_results: list[StageResult],
+                    terminal_parts: list[tuple[int, str]]) -> KitUsed:
+    """Assemble the full structured kit the optimizer relied on.
+
+    See ``KitUsed`` for the categorization.  This is called once at the
+    end of ``_evaluate_profile`` when the result is feasible.
+    """
+    kit = KitUsed()
+    # 1. Explicit per-stage parts
+    for sr in stage_results:
+        if sr.engine_name and sr.engine_name != "none":
+            kit.stage_engines.append(sr.engine_name)
+        if sr.tank_name and sr.tank_name != "none":
+            kit.stage_tanks.append(sr.tank_name)
+        for _, p in sr.equipment:
+            if p:
+                kit.stage_equipment.append(p)
+    # 2. Implicit lightest_/best_ picks
+    if flags.lightest_capsule:
+        kit.capsule = flags.lightest_capsule.name
+    if flags.lightest_probe:
+        kit.probe_core = flags.lightest_probe.name
+    if flags.best_chute:
+        kit.parachute = flags.best_chute.name
+    if flags.best_heat_shield:
+        kit.heat_shield = flags.best_heat_shield.name
+    if flags.lightest_rtg:
+        kit.rtg = flags.lightest_rtg.name
+    if flags.lightest_solar:
+        kit.solar = flags.lightest_solar.name
+    if flags.lightest_solar_retractable:
+        kit.solar_retractable = flags.lightest_solar_retractable.name
+    if flags.lightest_monoprop_tank:
+        kit.monoprop_tank = flags.lightest_monoprop_tank.name
+    if flags.lightest_rcs_thruster:
+        kit.rcs_thruster = flags.lightest_rcs_thruster.name
+    if flags.lightest_reaction_wheel:
+        kit.reaction_wheel = flags.lightest_reaction_wheel.name
+    if flags.lightest_aero_control:
+        kit.aero_control = flags.lightest_aero_control.name
+    if flags.lightest_ladder:
+        kit.ladder = flags.lightest_ladder.name
+    # Relays: keep every tier the mission needed (terminal_parts captured
+    # only the lightest, but we want each tier represented so the chain
+    # can attribute them correctly on the relay rank axis).
+    for tier, part in flags.lightest_relay.items():
+        if part:
+            kit.relays.append(part.name)
+    # All admitted landing legs — the optimizer picks per body, and the
+    # bumper's rank axis stretches across the tier ladder, so include
+    # every option capability had.
+    for leg in flags.available_landing_legs:
+        kit.landing_legs.append(leg.name)
+    # 3. Presence-only representatives.  Pick the lightest matching part
+    # for each True flag that affects stage optimization — without these
+    # in the rep set, re-eval can't reproduce the same flag-state and
+    # the optimizer's choices fall apart (e.g. staging_tier=2 disables
+    # the asparagus/onion dry-mass factor).
+    if flags.staging_tier >= 1:
+        stack = [d for d in flags.available_decouplers if d.kind == "stack"]
+        if stack:
+            kit.stack_decoupler = min(stack, key=lambda d: d.mass).name
+    if flags.staging_tier >= 2:
+        radial = [d for d in flags.available_decouplers if d.kind == "radial"]
+        if radial:
+            kit.radial_decoupler = min(radial, key=lambda d: d.mass).name
+    if flags.has_fuel_lines:
+        # FUEL_LINE is provided by a MiscEquipment (fuelLine in stock).
+        # Look up the part by capability flag so modded fuel lines work too.
+        from .parts import PART_DB, MiscEquipment as _ME, CapabilityFlag as _CF
+        for nm, parts in PART_DB.items():
+            if any(isinstance(p, _ME) and _CF.FUEL_LINE in p.provides for p in parts):
+                kit.fuel_line = nm
+                break
+    if flags.has_srb_fuel and flags.available_srbs:
+        kit.srb = min(flags.available_srbs,
+                      key=lambda s: s.dry_mass + s.fuel_mass).name
+    return kit
 
 
 def _has_attitude_control(flags: EquipmentFlags) -> bool:
@@ -1483,12 +1626,14 @@ def _evaluate_profile(
                 mass_cap=flags.launch_pad_mass_cap,
             )],
         )
+    reversed_stages = list(reversed(stage_results_list))
     return ProfileResult(
         feasible=True,
         launch_mass=payload,
-        stage_results=list(reversed(stage_results_list)),
+        stage_results=reversed_stages,
         edge_groups=groups,
         terminal_parts=terminal_parts,
+        kit_used=_build_kit_used(flags, reversed_stages, terminal_parts),
     )
 
 
@@ -2329,7 +2474,6 @@ def compute_capability_from_items(
     difficulty_name: str,
     start_with_clamps: bool,
     mission_builder: MissionBuilder,
-    rep_names: frozenset[str] = frozenset(),
     progressive_launch_pad: bool = False,
     contract_specs: tuple = (),
 ) -> tuple[RocketCapability, EquipmentFlags]:
@@ -2339,7 +2483,7 @@ def compute_capability_from_items(
     per-contract feasibility into ``cap.contract_access``. Empty = no contracts.
     """
     diff = DIFFICULTY_PROFILES[difficulty_name]
-    flags = _pre_pass(item_count_fn, start_with_clamps, rep_names,
+    flags = _pre_pass(item_count_fn, start_with_clamps,
                       progressive_launch_pad,
                       launch_pad_caps=mission_builder.launch_pad_caps)
     body_profiles = _LazyBodyProfiles(flags, diff, mission_builder)
@@ -2394,15 +2538,9 @@ def _compute_capability(state: CollectionState, player: int) -> RocketCapability
     options = world.options
     difficulty_name = ["casual", "normal", "expert", "insane"][options.difficulty.value]
     start_with_clamps = bool(options.start_with_launch_clamps.value)
-    rep_names = frozenset(
-        rep
-        for tiers in world.progressive_representatives.values()
-        for rep in tiers.values()
-    )
     cap, _ = compute_capability_from_items(
         lambda name: state.count(name, player),
         difficulty_name, start_with_clamps, world.mission_builder,
-        rep_names=rep_names,
         progressive_launch_pad=bool(options.progressive_launch_pad.value),
         contract_specs=(*getattr(world, "contract_specs", ()),
                         *getattr(world, "goal_contract_specs", ())),

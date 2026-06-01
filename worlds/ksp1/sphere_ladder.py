@@ -47,9 +47,16 @@ from .items import (
     PROGRESSIVE_RD_COUNT, PROGRESSIVE_RD_NAME,
 )
 from .parts import (
+    CapabilityFlag,
+    MiscEquipment,
+    PART_DB,
     PROGRESSIVE_PART_COUNTS as _BASE_PROGRESSIVE_PART_COUNTS,
     PROGRESSIVE_PART_NAMES,
     PROGRESSIVE_PART_TIERS,
+)
+from .ranks import (
+    DEFAULT_CONTEXT, RANK_AXES, RANK_AXES_BY_KEY, RankAxisKey, RankContext,
+    rank_sig_for, ranks_for_context,
 )
 
 
@@ -475,6 +482,59 @@ class MinimalRocket:
 
 
 @dataclass(frozen=True)
+class MinimumRanks:
+    """Per-axis upper bound on admitted ranks for the rank-space sphere
+    walker (Phase 1 scaffold).
+
+    Stored as a sorted tuple of ``(RankAxisKey, int)`` for hashability.
+    Absent axes are *unconstrained* — every item on that axis is admitted.
+    The default ``empty()`` value therefore admits everything; the bumper
+    *adds* axes as missions force constraints.
+
+    Internal invariants:
+      * ``upper_bounds`` is sorted by ``RankAxisKey.value`` (StrEnum value)
+        so equality / hashing is canonical.
+      * Each axis appears at most once.
+    """
+    upper_bounds: tuple[tuple[RankAxisKey, int], ...] = ()
+
+    def get(self, axis: RankAxisKey) -> Optional[int]:
+        for k, v in self.upper_bounds:
+            if k == axis:
+                return v
+        return None
+
+    def with_axis(self, axis: RankAxisKey, value: int) -> "MinimumRanks":
+        """Return a new MinimumRanks with ``axis`` set to ``value`` (replace
+        or insert).  No-op (returns ``self``) if the value is already set."""
+        existing = self.get(axis)
+        if existing == value:
+            return self
+        keep = [(k, v) for k, v in self.upper_bounds if k != axis]
+        keep.append((axis, value))
+        keep.sort(key=lambda x: x[0].value)
+        return MinimumRanks(tuple(keep))
+
+    def merged_max(self, other: "MinimumRanks") -> "MinimumRanks":
+        """Element-wise max across the union of keys.  Missing-on-one-side
+        is treated as unconstrained on that side, so the *other* side's
+        value wins."""
+        if not self.upper_bounds:
+            return other
+        if not other.upper_bounds:
+            return self
+        merged: dict[RankAxisKey, int] = {k: v for k, v in self.upper_bounds}
+        for k, v in other.upper_bounds:
+            existing = merged.get(k)
+            merged[k] = v if existing is None else max(existing, v)
+        return MinimumRanks(tuple(sorted(merged.items(), key=lambda x: x[0].value)))
+
+    @classmethod
+    def empty(cls) -> "MinimumRanks":
+        return cls(())
+
+
+@dataclass(frozen=True)
 class LocationSignature:
     """Position of a location in the capability partial order.
 
@@ -514,15 +574,25 @@ def _reqs_strict_less(a: tuple[tuple[str, int], ...],
 
 @dataclass
 class SphereBoundary:
-    """A sphere in the ladder: a location whose minimum kit is
-    enforced ahead of fill.  Items in ``delta`` are constrained
-    (Rule B) to land only at strictly-easier locations than this
-    sphere's signature.
+    """A sphere in the rank-space ladder.
+
+    ``ranks`` / ``ranks_delta`` track the cumulative rank ceiling and the
+    increment over the prior sphere.  ``extras`` / ``extras_delta`` track
+    counted progressives the bumper increments outside the rank model.
+    ``reps_collected`` is the union of all bumper-selected reps through
+    this sphere — used by chain-walker reps-only feasibility proofs and
+    by downstream tech-tier band funding.
     """
     name: str
     location_name: str
-    is_predictable: bool             # True for S_launch / S_orbit / S_goal*
-    rocket: MinimalRocket
+    is_predictable: bool
+    ranks: MinimumRanks
+    ranks_delta: MinimumRanks
+    reps_collected: frozenset[str] = frozenset()
+    extras: dict[str, int] = field(default_factory=dict)
+    extras_delta: dict[str, int] = field(default_factory=dict)
+    flags: EquipmentFlags = field(default_factory=lambda: None)  # type: ignore[arg-type]
+    profile_dv: float = 0.0
     signature: Optional[LocationSignature] = None
 
 
@@ -1155,6 +1225,1045 @@ def _pre_pass_cached(
     )
     _PRE_PASS_CACHE[key] = flags
     return flags
+
+
+# ---------------------------------------------------------------------------
+# Rank-space sphere walker — Phase 1 scaffold.
+#
+# This subsystem mirrors the progressive-tier walker above using
+# ``MinimumRanks`` ceilings keyed by ``RankAxisKey``.  It runs *alongside*
+# the existing walker (does not replace it yet); the existing walker
+# remains the placement authority.  The rank walker's purpose is to:
+#   1. Compute per-sphere minimum rank ceilings for the predictable
+#      anchors (S_launch / S_orbit / S_goal).
+#   2. Record designated reps — one part per ``(axis, rank)`` bump — so
+#      later phases can drive per-seed variance from real bumper output.
+#
+# Phase 2 will swap this in as the source of truth and retire the
+# progressive-tier walker.  Until then, the rank walker is permitted to
+# fail silently; failures emit a single warning and the existing walker's
+# output stands.
+# ---------------------------------------------------------------------------
+
+
+# BlockingReason → rank axes that could plausibly resolve it.  Mirrors
+# ``_BUMP_TABLE`` above but keyed by ``RankAxisKey``.  Hash order is
+# stable for cache hashing; per-priority-group selection happens in
+# ``_RANK_PRIORITY_GROUPS``.
+_RANK_BUMP_TABLE: dict[BlockingReason, tuple[RankAxisKey, ...]] = {
+    BlockingReason.NO_VIABLE_STAGE: (
+        RankAxisKey.LFO_TANK, RankAxisKey.LF_TANK, RankAxisKey.XENON_TANK,
+        RankAxisKey.LAUNCH_ENGINE, RankAxisKey.VAC_ENGINE,
+        RankAxisKey.STACK_DECOUPLER, RankAxisKey.SRB,
+        RankAxisKey.RADIAL_DECOUPLER,
+        RankAxisKey.CAPSULE, RankAxisKey.PROBE_SAS,
+        RankAxisKey.SOLAR, RankAxisKey.RELAY,
+        RankAxisKey.PARACHUTE, RankAxisKey.LANDING_LEG,
+        RankAxisKey.HEAT_SHIELD, RankAxisKey.SAS,
+    ),
+    BlockingReason.NO_ENGINE: (
+        RankAxisKey.VAC_ENGINE, RankAxisKey.LAUNCH_ENGINE,
+    ),
+    BlockingReason.NO_LAUNCH_ENGINE: (RankAxisKey.LAUNCH_ENGINE,),
+    BlockingReason.NO_FUEL: (
+        RankAxisKey.LFO_TANK, RankAxisKey.XENON_TANK, RankAxisKey.LF_TANK,
+    ),
+    BlockingReason.NO_PROPULSION: (
+        RankAxisKey.LAUNCH_ENGINE, RankAxisKey.LFO_TANK, RankAxisKey.SRB,
+    ),
+    BlockingReason.STAGING_TIER_INSUFFICIENT: (RankAxisKey.STACK_DECOUPLER,),
+    BlockingReason.NO_HEAT_SHIELD: (RankAxisKey.HEAT_SHIELD,),
+    BlockingReason.RELAY_TIER_TOO_LOW: (RankAxisKey.RELAY,),
+    BlockingReason.INSUFFICIENT_POWER_SOLAR_OK: (RankAxisKey.SOLAR,),
+    # RTG is a discrete unlock today; not modeled on a rank axis (Phase 2).
+    BlockingReason.INSUFFICIENT_POWER_NEEDS_RTG: (),
+    BlockingReason.NO_PROBE_CORE: (RankAxisKey.PROBE_SAS,),
+    BlockingReason.NO_CAPSULE: (RankAxisKey.CAPSULE,),
+    BlockingReason.NO_COMMAND_MODULE: (
+        RankAxisKey.CAPSULE, RankAxisKey.PROBE_SAS,
+    ),
+    BlockingReason.PARACHUTE_TERMINAL_VELOCITY: (RankAxisKey.PARACHUTE,),
+    BlockingReason.NO_PARACHUTE: (RankAxisKey.PARACHUTE,),
+    BlockingReason.NO_SAFE_DESCENT: (RankAxisKey.PARACHUTE,),
+    BlockingReason.CAPSULE_SOUNDING_INCOMPLETE: (
+        RankAxisKey.PARACHUTE, RankAxisKey.STACK_DECOUPLER,
+    ),
+    BlockingReason.LANDING_LEGS_MISSING: (RankAxisKey.LANDING_LEG,),
+    # Ladder doesn't have a rank axis yet — handled discretely in Phase 2.
+    BlockingReason.NO_LADDER: (),
+    # Launch Pad is a counted progressive in Phase 1; rank gating in Phase 2.
+    BlockingReason.LAUNCH_MASS_EXCEEDED: (),
+    BlockingReason.SOUNDING_ALTITUDE_TOO_LOW: (
+        RankAxisKey.LAUNCH_ENGINE, RankAxisKey.LFO_TANK, RankAxisKey.SRB,
+    ),
+    BlockingReason.NO_SOUNDING_ALTITUDE: (
+        RankAxisKey.LAUNCH_ENGINE, RankAxisKey.LFO_TANK, RankAxisKey.SRB,
+    ),
+    BlockingReason.NO_ATTITUDE_CONTROL: (
+        RankAxisKey.SAS, RankAxisKey.PROBE_SAS, RankAxisKey.CAPSULE,
+    ),
+}
+
+
+# Ranked priority groups (parallels BUMP_PRIORITY_GROUPS).  The bumper
+# walks groups in order and picks within the first group that overlaps
+# the candidate set.
+RANK_PRIORITY_GROUPS: tuple[frozenset[RankAxisKey], ...] = (
+    # Group 1: thrust/fuel.
+    frozenset({
+        RankAxisKey.LAUNCH_ENGINE, RankAxisKey.VAC_ENGINE,
+        RankAxisKey.LFO_TANK, RankAxisKey.LF_TANK, RankAxisKey.XENON_TANK,
+        RankAxisKey.MONOPROP_TANK, RankAxisKey.SRB,
+        RankAxisKey.STACK_DECOUPLER, RankAxisKey.RADIAL_DECOUPLER,
+    }),
+    # Group 2: aero/heat + attitude.
+    frozenset({
+        RankAxisKey.HEAT_SHIELD, RankAxisKey.PARACHUTE,
+        RankAxisKey.PROBE_SAS, RankAxisKey.SAS,
+    }),
+    # Group 3: power.
+    frozenset({RankAxisKey.SOLAR}),
+    # Group 4: control / landing / payload.
+    frozenset({RankAxisKey.LANDING_LEG, RankAxisKey.CAPSULE}),
+    # Group 5: blow-open.
+    frozenset({RankAxisKey.RELAY}),
+)
+
+
+def _rank_group_index(axis: RankAxisKey) -> int:
+    for i, group in enumerate(RANK_PRIORITY_GROUPS):
+        if axis in group:
+            return i
+    return len(RANK_PRIORITY_GROUPS)
+
+
+# Per-axis cache of `[items_at_rank_K]` for K in 1..buckets.  Used by the
+# rep recorder to pick a random part among the new admissions when a
+# rank ceiling rises from K-1 to K.  Keyed by ``RankContext`` since the
+# rank table varies (only ``SRB`` differs today, but the cache is general).
+_ITEMS_AT_RANK_CACHE: dict[
+    RankContext, dict[RankAxisKey, dict[int, tuple[str, ...]]]
+] = {}
+
+
+def _items_at_rank(ctx: RankContext) -> dict[RankAxisKey, dict[int, tuple[str, ...]]]:
+    cached = _ITEMS_AT_RANK_CACHE.get(ctx)
+    if cached is not None:
+        return cached
+    table = ranks_for_context(ctx)
+    out: dict[RankAxisKey, dict[int, tuple[str, ...]]] = {}
+    for axis_key, items in table.items():
+        by_rank: dict[int, list[str]] = {}
+        for name, rank in items.items():
+            by_rank.setdefault(rank, []).append(name)
+        out[axis_key] = {r: tuple(sorted(names)) for r, names in by_rank.items()}
+    _ITEMS_AT_RANK_CACHE[ctx] = out
+    return out
+
+
+def _rank_admits_item(item_name: str, ranks: MinimumRanks, ctx: RankContext) -> bool:
+    """Item is admitted iff every axis it participates in has the item's
+    rank ≤ the ceiling on that axis.  Items with empty rank_sig (filler,
+    non-ranked progressives) are admitted unconditionally."""
+    sig = rank_sig_for(item_name, ctx)
+    if not sig.axes:
+        return True
+    for axis_key, item_rank in sig.axes:
+        cap = ranks.get(axis_key)
+        if cap is None or item_rank > cap:
+            return False
+    return True
+
+
+# Cache for ``_pre_pass_for_ranks`` — same shape as ``_pre_pass_cached``.
+# Keyed by the hashable ``MinimumRanks.upper_bounds`` tuple plus options.
+_RANK_PRE_PASS_CACHE: dict[tuple, EquipmentFlags] = {}
+
+
+def _enrich_kit_alternates(kit, ctx: RankContext) -> None:
+    """Populate ``kit.alternates`` and ``kit.stage_*_alternates`` in place.
+
+    Two sources of alternates:
+
+    1. **Rank-equivalence** (cheap):  if the chosen part has a rank on
+       the relevant axis, alternates = every other part at that same
+       (axis, rank).  Rank buckets group parts by capability-score, so
+       same-rank parts deliver comparable performance — most random
+       substitutes will still be viable.
+
+    2. **Capability-flag membership** (cheap):  for presence-only roles
+       (RTG, fuel line, RCS, reaction wheel, ladder, aero control) the
+       part isn't on a rank axis but has a ``provides`` flag.
+       Alternates = all parts with the same flag.
+
+    For per-stage propulsion (engine + tank), alternates are derived
+    from each stage's chosen part's rank.
+
+    Caveat: rank-equivalence is necessary but not sufficient for the
+    cascading mission-profile case (substituting one part can change a
+    downstream stage's optimal pick).  Callers verify the substituted
+    kit reproduces feasibility before adopting it; otherwise fall back
+    to ``kit`` as-extracted.
+    """
+    from .parts import PART_DB, MiscEquipment, CapabilityFlag
+    from .ranks import RankAxisKey
+
+    by_rank_per_axis = _items_at_rank(ctx)
+
+    def _same_axis_rank_alternates(part_name: str, axis: RankAxisKey) -> frozenset[str]:
+        sig = rank_sig_for(part_name, ctx)
+        for ax, rk in sig.axes:
+            if ax == axis:
+                pool = by_rank_per_axis.get(axis, {}).get(rk, ())
+                return frozenset(p for p in pool if p != part_name)
+        return frozenset()
+
+    def _flag_alternates(flag: CapabilityFlag,
+                         exclude: Optional[str] = None) -> frozenset[str]:
+        out: set[str] = set()
+        for nm, parts in PART_DB.items():
+            if exclude is not None and nm == exclude:
+                continue
+            for p in parts:
+                if isinstance(p, MiscEquipment) and flag in p.provides:
+                    out.add(nm)
+                    break
+        return frozenset(out)
+
+    # Map KitUsed field name → (axis, lookup-strategy).  axis is None
+    # for parts that live on no rank axis — those use the flag fallback.
+    rank_axis_for_field = {
+        'capsule': RankAxisKey.CAPSULE,
+        'probe_core': RankAxisKey.PROBE_SAS,
+        'parachute': RankAxisKey.PARACHUTE,
+        'heat_shield': RankAxisKey.HEAT_SHIELD,
+        'solar': RankAxisKey.SOLAR,
+        'solar_retractable': RankAxisKey.SOLAR,
+        'monoprop_tank': RankAxisKey.MONOPROP_TANK,
+        'stack_decoupler': RankAxisKey.STACK_DECOUPLER,
+        'radial_decoupler': RankAxisKey.RADIAL_DECOUPLER,
+        'srb': RankAxisKey.SRB,
+    }
+    flag_for_field = {
+        'rtg': CapabilityFlag.RTG,
+        'fuel_line': CapabilityFlag.FUEL_LINE,
+        'rcs_thruster': CapabilityFlag.RCS,
+        'reaction_wheel': CapabilityFlag.REACTION_WHEEL,
+        'aero_control': CapabilityFlag.AERO_CONTROL,
+        'ladder': CapabilityFlag.LADDER,
+    }
+
+    for field_name, axis in rank_axis_for_field.items():
+        chosen = getattr(kit, field_name)
+        if chosen:
+            kit.alternates[field_name] = _same_axis_rank_alternates(chosen, axis)
+    for field_name, flag in flag_for_field.items():
+        chosen = getattr(kit, field_name)
+        if chosen:
+            kit.alternates[field_name] = _flag_alternates(flag, exclude=chosen)
+
+    # Per-stage propulsion: alternate set for each stage's engine + tank
+    # picks, derived from the part's rank on the relevant axis (engine on
+    # LAUNCH_ENGINE or VAC_ENGINE — try both — tank on its fuel-type axis).
+    engine_axes = (RankAxisKey.LAUNCH_ENGINE, RankAxisKey.VAC_ENGINE)
+    tank_axes = (RankAxisKey.LFO_TANK, RankAxisKey.LF_TANK,
+                 RankAxisKey.XENON_TANK, RankAxisKey.MONOPROP_TANK)
+    for eng in kit.stage_engines:
+        alts: set[str] = set()
+        for ax in engine_axes:
+            alts |= _same_axis_rank_alternates(eng, ax)
+        kit.stage_engine_alternates.append(frozenset(alts))
+    for tank in kit.stage_tanks:
+        alts = set()
+        for ax in tank_axes:
+            alts |= _same_axis_rank_alternates(tank, ax)
+        kit.stage_tank_alternates.append(frozenset(alts))
+
+
+def _random_kit_variant(kit, rng: Random) -> frozenset[str]:
+    """Build a per-seed variant of ``kit`` by random-picking among the
+    chosen + alternates for every role.  Returns the full set of part
+    names.  Caller verifies feasibility before adopting — rank-equivalence
+    doesn't guarantee cross-stage cascades survive.
+    """
+    out: set[str] = set()
+    out.update(kit.stage_equipment)
+    out.update(kit.landing_legs)
+    out.update(kit.relays)
+    for i, eng in enumerate(kit.stage_engines):
+        alts = kit.stage_engine_alternates[i] if i < len(kit.stage_engine_alternates) else frozenset()
+        out.add(rng.choice((eng,) + tuple(alts)) if alts else eng)
+    for i, tank in enumerate(kit.stage_tanks):
+        alts = kit.stage_tank_alternates[i] if i < len(kit.stage_tank_alternates) else frozenset()
+        out.add(rng.choice((tank,) + tuple(alts)) if alts else tank)
+    for field_name in (
+        'capsule', 'probe_core', 'parachute', 'heat_shield',
+        'rtg', 'solar', 'solar_retractable', 'monoprop_tank',
+        'rcs_thruster', 'reaction_wheel', 'aero_control', 'ladder',
+        'stack_decoupler', 'radial_decoupler', 'fuel_line', 'srb',
+    ):
+        chosen = getattr(kit, field_name)
+        if not chosen:
+            continue
+        alts = kit.alternates.get(field_name, frozenset())
+        out.add(rng.choice((chosen,) + tuple(alts)) if alts else chosen)
+    return frozenset(out)
+
+
+def _pre_pass_for_ranks(
+    ranks: MinimumRanks,
+    ctx: RankContext,
+    *,
+    start_with_clamps: bool,
+    progressive_launch_pad: bool,
+    launch_pad_caps: tuple[float, ...] | None,
+    pad_tier: int = 0,
+    precollected_names: frozenset[str] = frozenset(),
+    reps_only: Optional[frozenset[str]] = None,
+) -> EquipmentFlags:
+    """Build EquipmentFlags from a rank ceiling OR a specific rep set.
+
+    Two modes:
+
+    * **Full rank-admit** (``reps_only=None``): admits every PART_DB item
+      whose rank on every applicable axis is ≤ the ceiling on that axis.
+      Used for *intrinsic* per-location queries (what's the minimum kit
+      this location needs) and for diagnostic exploration.
+
+    * **Reps-only** (``reps_only`` is a frozenset of part names): admits
+      ONLY those parts + precollected items.  Used by the chain-walker
+      bumper because solvability requires the proof to use only the
+      parts the player actually has — i.e., the bumper's recorded reps
+      — not the broader set the rank ceiling abstractly admits.  Without
+      this, the chain claims feasibility under a kit the AP fill never
+      reproduces (only reps land as PROGRESSION; alternates are USEFUL
+      and may not be collected in time).
+
+    Precollected items are admitted in both modes.
+    """
+    cache_key = (
+        ranks.upper_bounds, ctx,
+        start_with_clamps, progressive_launch_pad, launch_pad_caps,
+        pad_tier, precollected_names, reps_only,
+    )
+    cached = _RANK_PRE_PASS_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    if reps_only is not None:
+        admitted = set(reps_only) | (precollected_names & PART_DB.keys())
+    else:
+        admitted = set()
+        for item_name in PART_DB:
+            if _rank_admits_item(item_name, ranks, ctx):
+                admitted.add(item_name)
+        admitted |= precollected_names & PART_DB.keys()
+
+    def cf(name: str, _adm=admitted, _pad=pad_tier) -> int:
+        if name == PROGRESSIVE_LAUNCH_PAD_NAME:
+            return _pad
+        return 1 if name in _adm else 0
+
+    flags = _pre_pass(
+        cf,
+        start_with_clamps=start_with_clamps,
+        progressive_launch_pad=progressive_launch_pad,
+        launch_pad_caps=launch_pad_caps,
+    )
+    # In rank-space mode the progressive binary gate flags
+    # (``has_launch_engine``, ``has_vacuum_engine``, ``has_lfo_fuel``,
+    # ``has_srb_fuel``) are derived from progressive item counts in
+    # ``_pre_pass`` — but the rank walker never feeds those counts in.
+    # Recover the same semantics from the actual parts admitted: a part
+    # is "a launch engine" if it produces atmospheric thrust, "a vacuum
+    # engine" if it produces vacuum thrust (every engine does, but we
+    # keep the symmetry with the progressive path), etc.  Matches what
+    # the Phase 2 plan calls for in ``capability._pre_pass``'s simplified
+    # form.
+    flags.has_launch_engine = any(e.atm_thrust > 0 for e in flags.available_engines)
+    flags.has_vacuum_engine = any(e.vac_thrust > 0 for e in flags.available_engines)
+    flags.has_lfo_fuel = any(t.fuel_type == "lfo" for t in flags.available_tanks)
+    flags.has_srb_fuel = bool(flags.available_srbs)
+    _RANK_PRE_PASS_CACHE[cache_key] = flags
+    return flags
+
+
+@dataclass(frozen=True)
+class RankBumperResult:
+    """Output of ``minimal_ranks_for``.
+
+    ``ranks`` / ``delta`` track the rank ceiling and increment.  ``extras``
+    / ``extras_delta`` track the counted progressives (Pad / R&D / PSI)
+    the bumper incremented outside the rank model — Pad is the only one
+    the bumper itself touches today (LAUNCH_MASS_EXCEEDED → Pad bump);
+    R&D / PSI are injected by the chain orchestrator via tech-tree
+    band-funding logic.
+    """
+    ranks: MinimumRanks
+    delta: MinimumRanks
+    reps: dict[tuple[RankAxisKey, int], str]
+    flags: EquipmentFlags
+    profile_dv: float
+    reps_collected: frozenset[str] = frozenset()
+    extras: dict[str, int] = field(default_factory=dict)
+    extras_delta: dict[str, int] = field(default_factory=dict)
+
+
+def _pick_rank_rep(axis: RankAxisKey, new_rank: int,
+                   ctx: RankContext, rng: Random) -> Optional[str]:
+    """Pick a random part among the items newly admitted by bumping
+    ``axis`` to ``new_rank``.  Returns ``None`` if there are none.
+
+    Random pick — only used when there's no blocker context to score
+    against (the cheap path inside trial-eval, where the trial bump's
+    rep is itself a temporary).  The main bumper loop uses
+    ``_pick_rank_rep_scored`` which trial-evaluates each candidate
+    against the mission's current blockers.
+    """
+    by_rank = _items_at_rank(ctx).get(axis, {})
+    candidates = by_rank.get(new_rank, ())
+    if not candidates:
+        return None
+    return rng.choice(candidates)
+
+
+def _pick_rank_rep_scored(
+    axis: RankAxisKey, new_rank: int, ctx: RankContext, rng: Random,
+    *, ranks: MinimumRanks, reps_collected: set, info, diff,
+    start_with_clamps: bool, progressive_launch_pad: bool,
+    launch_pad_caps, pad_tier: int, precollected_names: frozenset,
+    mission_builder,
+) -> Optional[str]:
+    """Trial each candidate rep at ``(axis, new_rank)``: add it to a
+    copy of ``reps_collected``, lift co-axis ranks per its rank_sig,
+    re-evaluate the mission, pick the candidate with the lowest blocker
+    count (then lowest launch_mass).  Replaces the random rep pick that
+    was choosing mid-tier engines at rank 5 instead of the high-Isp
+    ones the mission actually needs.
+    """
+    by_rank = _items_at_rank(ctx).get(axis, {})
+    candidates = by_rank.get(new_rank, ())
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+    scored: list[tuple[int, float, int, float, str]] = []
+    base_ranks = ranks.with_axis(axis, new_rank)
+    for cand in sorted(candidates):
+        trial_reps = set(reps_collected); trial_reps.add(cand)
+        trial_ranks = base_ranks
+        sig = rank_sig_for(cand, ctx)
+        for co_axis, co_rank in sig.axes:
+            if co_axis == axis:
+                continue
+            if (trial_ranks.get(co_axis) or 0) < co_rank:
+                trial_ranks = trial_ranks.with_axis(co_axis, co_rank)
+        trial_flags = _pre_pass_for_ranks(
+            trial_ranks, ctx,
+            start_with_clamps=start_with_clamps,
+            progressive_launch_pad=progressive_launch_pad,
+            launch_pad_caps=launch_pad_caps,
+            pad_tier=pad_tier,
+            precollected_names=precollected_names,
+            reps_only=frozenset(trial_reps),
+        )
+        trial_result = _evaluate(trial_flags, info, diff, mission_builder)
+        feasibility = 0 if trial_result.feasible else 1
+        mass = trial_result.launch_mass or float("inf")
+        # Blocker reduction is the real "closer to feasible" signal;
+        # mass-only sorts pick weak lightweight engines for infeasible
+        # trials.  Mirror the same fix as in _pick_rank_bump_scored.
+        scored.append((feasibility, len(trial_result.blocking), mass,
+                       rng.random(), cand))
+    scored.sort()
+    return scored[0][-1]
+
+
+def _pick_rank_rep_scored(
+    axis: RankAxisKey, new_rank: int, ctx: RankContext, rng: Random,
+    *, ranks: MinimumRanks, reps_collected: set, info, diff,
+    start_with_clamps: bool, progressive_launch_pad: bool,
+    launch_pad_caps, pad_tier: int, precollected_names: frozenset,
+    mission_builder,
+) -> Optional[str]:
+    """Trial each candidate part at ``(axis, new_rank)``: add it to a
+    copy of ``reps_collected``, lift co-axis ranks per its rank_sig,
+    re-evaluate blockers, and pick the candidate with the lowest blocker
+    count.  Random tiebreak preserves variance.
+
+    Returns ``None`` if no candidates exist at that bucket.
+    """
+    by_rank = _items_at_rank(ctx).get(axis, {})
+    candidates = by_rank.get(new_rank, ())
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+    scored: list[tuple[int, float, str]] = []
+    for cand in candidates:
+        trial_reps = set(reps_collected); trial_reps.add(cand)
+        trial_ranks = ranks.with_axis(axis, new_rank)
+        sig = rank_sig_for(cand, ctx)
+        for co_axis, co_rank in sig.axes:
+            if co_axis == axis:
+                continue
+            if (trial_ranks.get(co_axis) or 0) < co_rank:
+                trial_ranks = trial_ranks.with_axis(co_axis, co_rank)
+        trial_flags = _pre_pass_for_ranks(
+            trial_ranks, ctx,
+            start_with_clamps=start_with_clamps,
+            progressive_launch_pad=progressive_launch_pad,
+            launch_pad_caps=launch_pad_caps,
+            pad_tier=pad_tier,
+            precollected_names=precollected_names,
+            reps_only=frozenset(trial_reps),
+        )
+        trial_result = _evaluate(trial_flags, info, diff, mission_builder)
+        scored.append((
+            len(trial_result.blocking),
+            0.0 if trial_result.feasible else 1.0,
+            cand,
+        ))
+    scored.sort(key=lambda x: (x[0], x[1], rng.random()))
+    return scored[0][2]
+
+
+def _rank_axis_at_cap(axis: RankAxisKey, ranks: MinimumRanks) -> bool:
+    """Return True if ``axis`` ceiling already equals the axis's max
+    bucket — no more bumps possible."""
+    max_buckets = RANK_AXES_BY_KEY[axis].buckets
+    current = ranks.get(axis) or 0
+    return current >= max_buckets
+
+
+def _axes_for_stage_diag(stage_diag) -> tuple[RankAxisKey, ...]:
+    """Map ``StageDiagnostic.failure`` to the rank axes that resolve it.
+
+    Ports the legacy ``_bump_candidates_for_stage_diag`` logic into the
+    rank-axis world — same atmosphere-aware engine selection, same fuel-
+    type tank dispatch, same broad fallback for performance failures.
+    """
+    from .capability_reasons import StageFailure
+    if stage_diag is None:
+        return ()
+    f = stage_diag.failure
+    in_atm = stage_diag.in_atmosphere
+    # Filter failures.
+    if f == StageFailure.HEAT_SHIELD_TOO_SMALL:
+        return (RankAxisKey.HEAT_SHIELD,)
+    if f in (StageFailure.NO_ENGINES_AFTER_FILTER,
+              StageFailure.REQUIRE_GIMBAL_NONE,
+              StageFailure.REQUIRE_THROTTLE_NONE):
+        # Need more engines pass the filters.  In atmosphere → launch
+        # tier (+ SRB).  In vacuum → vacuum tier.
+        if in_atm:
+            return (RankAxisKey.LAUNCH_ENGINE, RankAxisKey.SRB)
+        return (RankAxisKey.VAC_ENGINE,)
+    # Tank-side failures: target the fuel-type tank axis.
+    if f == StageFailure.NO_TANK_FOR_FUEL_TYPE:
+        out: list[RankAxisKey] = []
+        for ft in stage_diag.engine_fuel_types_attempted:
+            if ft in ("lfo", "lf"):
+                out.append(RankAxisKey.LFO_TANK)  # LFO covers LF via fuel-drop
+            elif ft == "xenon":
+                out.append(RankAxisKey.XENON_TANK)
+            elif ft == "monoprop":
+                out.append(RankAxisKey.MONOPROP_TANK)
+        return tuple(out)
+    if f == StageFailure.ENGINE_TOO_BIG_FOR_TANK:
+        return (RankAxisKey.LFO_TANK,)
+    if f == StageFailure.MASS_CAP_EXCEEDED:
+        # Handled outside rank axes via the Pad extras bump.
+        return ()
+    # Performance failures (DV_SHORT / TWR_SHORT / DRY_MASS_KILLS_RATIO):
+    # broad set — anything that could shrink the rocket or give it more
+    # thrust/fuel.  Atmosphere-aware engine inclusion.
+    base: list[RankAxisKey] = [
+        RankAxisKey.LFO_TANK, RankAxisKey.XENON_TANK,
+        RankAxisKey.STACK_DECOUPLER, RankAxisKey.RADIAL_DECOUPLER,
+    ]
+    if in_atm:
+        base += [RankAxisKey.LAUNCH_ENGINE, RankAxisKey.SRB]
+    else:
+        base += [RankAxisKey.VAC_ENGINE]
+    return tuple(base)
+
+
+def _pick_rank_bump(blocking, ranks: MinimumRanks, rng: Random) -> Optional[RankAxisKey]:
+    """Choose an axis to bump based on the current blocking reasons.
+
+    Walks ``RANK_PRIORITY_GROUPS`` in order; the first group that
+    overlaps the candidate axes is the random pick pool.  Axes already
+    at their max bucket are excluded.
+
+    For ``NO_VIABLE_STAGE`` blockers carrying a ``stage_diag``, uses
+    ``_axes_for_stage_diag`` to target the specific axis (e.g. tank
+    fuel-type, engine class) rather than the 15-axis catchall.
+    """
+    candidates: set[RankAxisKey] = set()
+    for b in blocking:
+        if b.reason == BlockingReason.NO_VIABLE_STAGE and b.stage_diag is not None:
+            for axis in _axes_for_stage_diag(b.stage_diag):
+                if not _rank_axis_at_cap(axis, ranks):
+                    candidates.add(axis)
+            continue
+        for axis in _RANK_BUMP_TABLE.get(b.reason, ()):
+            if _rank_axis_at_cap(axis, ranks):
+                continue
+            candidates.add(axis)
+    if not candidates:
+        return None
+    for group in RANK_PRIORITY_GROUPS:
+        overlap = candidates & group
+        if overlap:
+            return rng.choice(sorted(overlap, key=lambda a: a.value))
+    return rng.choice(sorted(candidates, key=lambda a: a.value))
+
+
+def minimal_ranks_for(
+    location_name: str,
+    prior_ranks: MinimumRanks,
+    ctx: RankContext,
+    difficulty: str,
+    progressive_launch_pad: bool,
+    start_with_clamps: bool,
+    rng: Random,
+    mission_builder: MissionBuilder,
+    prior_extras: Optional[dict[str, int]] = None,
+    prior_reps: frozenset[str] = frozenset(),
+    precollected_names: frozenset[str] = frozenset(),
+    max_iterations: int = 500,
+    reps_only_mode: bool = True,
+) -> Optional[RankBumperResult]:
+    """Rank-space sphere walker (Phase 1 scaffold).
+
+    Greedy bumper: starting from ``prior_ranks``, repeatedly bump an axis
+    ceiling by 1 until the mission becomes feasible.  Each bump records a
+    designated rep (a random newly-admitted part) in ``RankBumperResult.reps``.
+
+    Returns ``None`` if the location isn't capability-gated (tech-tree
+    biome / starting inventory) OR if no kit reaches it within
+    ``max_iterations`` bumps.
+    """
+    info = _parse_location(location_name)
+    if info is None:
+        return None
+    diff = DIFFICULTY_PROFILES[difficulty]
+    ranks = prior_ranks
+    extras = dict(prior_extras or {})
+    reps: dict[tuple[RankAxisKey, int], str] = {}
+    reps_collected: set[str] = set(prior_reps)
+    prev_blocker_count = -1
+    stuck_iters = 0
+    pad_cap_count = (
+        len(mission_builder.launch_pad_caps) - 1
+        if mission_builder.launch_pad_caps else 0
+    )
+    for _iter in range(max_iterations):
+        flags = _pre_pass_for_ranks(
+            ranks, ctx,
+            start_with_clamps=start_with_clamps,
+            progressive_launch_pad=progressive_launch_pad,
+            launch_pad_caps=mission_builder.launch_pad_caps,
+            pad_tier=extras.get(PROGRESSIVE_LAUNCH_PAD_NAME, 0),
+            precollected_names=precollected_names,
+            reps_only=frozenset(reps_collected) if reps_only_mode else None,
+        )
+        result = _evaluate(flags, info, diff, mission_builder)
+        if result.feasible:
+            delta_pairs: list[tuple[RankAxisKey, int]] = []
+            for axis_key, ceil in ranks.upper_bounds:
+                prior = prior_ranks.get(axis_key) or 0
+                if ceil > prior:
+                    delta_pairs.append((axis_key, ceil))
+            delta = MinimumRanks(tuple(sorted(delta_pairs, key=lambda x: x[0].value)))
+            prior_extras_d = dict(prior_extras or {})
+            extras_delta = {
+                k: v - prior_extras_d.get(k, 0)
+                for k, v in extras.items()
+                if v > prior_extras_d.get(k, 0)
+            }
+            return RankBumperResult(
+                ranks=ranks,
+                delta=delta,
+                reps=reps,
+                reps_collected=frozenset(reps_collected),
+                flags=flags,
+                profile_dv=result.launch_mass,
+                extras=extras,
+                extras_delta=extras_delta,
+            )
+        # Mass-cap blocker: bump Pad outside the rank model.  This is the
+        # one extra counted-progressive the bumper itself touches —
+        # R&D / PSI are injected by the chain orchestrator via
+        # tech-tree band funding.
+        mass_block = any(
+            b.reason == BlockingReason.LAUNCH_MASS_EXCEEDED
+            for b in result.blocking
+        )
+        if mass_block and progressive_launch_pad:
+            cur_pad = extras.get(PROGRESSIVE_LAUNCH_PAD_NAME, 0)
+            if cur_pad < pad_cap_count:
+                extras[PROGRESSIVE_LAUNCH_PAD_NAME] = cur_pad + 1
+                continue
+        # Discrete-unlock blockers: blockers whose resolution is a
+        # specific named part not on any rank axis.  Map each blocker
+        # to the ``CapabilityFlag`` it needs; resolve to part names by
+        # scanning PART_DB for any MiscEquipment that provides the flag.
+        # Replaces the legacy ``("rtg",)`` / ``("telescopicLadder", …)``
+        # hand-curated part lists — adding a modded RTG or ladder part
+        # now works automatically as long as it provides the right flag.
+        discrete_unlocks_for: dict[BlockingReason, CapabilityFlag] = {
+            BlockingReason.INSUFFICIENT_POWER_NEEDS_RTG: CapabilityFlag.RTG,
+            BlockingReason.NO_LADDER: CapabilityFlag.LADDER,
+        }
+        added_discrete = False
+        for b in result.blocking:
+            needed_flag = discrete_unlocks_for.get(b.reason)
+            if needed_flag is None:
+                continue
+            for item_name, parts in PART_DB.items():
+                for p in parts:
+                    if isinstance(p, MiscEquipment) and needed_flag in p.provides:
+                        if item_name not in reps_collected:
+                            reps_collected.add(item_name)
+                            added_discrete = True
+                        break
+        if added_discrete:
+            continue
+        cur_count = len(result.blocking)
+        if prev_blocker_count >= 0 and cur_count >= prev_blocker_count:
+            stuck_iters += 1
+        else:
+            stuck_iters = 0
+        prev_blocker_count = cur_count
+        # Pick a bump.  Scored selection (mass-min objective + stage_diag
+        # candidate narrowing) is the primary mechanism — ports the
+        # legacy _pick_bump intelligence to the rank system.  Random
+        # axis selection wasted iterations picking irrelevant axes from
+        # the catchall NO_VIABLE_STAGE list.
+        axis = _pick_rank_bump_scored(
+            result.blocking, ranks, ctx, rng,
+            difficulty=difficulty,
+            progressive_launch_pad=progressive_launch_pad,
+            start_with_clamps=start_with_clamps,
+            launch_pad_caps=mission_builder.launch_pad_caps,
+            pad_tier=extras.get(PROGRESSIVE_LAUNCH_PAD_NAME, 0),
+            precollected_names=precollected_names,
+            mission_builder=mission_builder,
+            info=info,
+            diff=diff,
+            reps_collected=reps_collected,
+            reps_only_mode=reps_only_mode,
+        )
+        if axis is None:
+            # Fall back to the catchall candidate set if stage_diag-targeted
+            # axes are exhausted (e.g. non-NO_VIABLE_STAGE blockers only).
+            axis = _pick_rank_bump(result.blocking, ranks, rng)
+        if axis is None:
+            # Capability-guided rescue: when greedy ran out of axis
+            # bumps, run a single full-admit eval at MAX ranks.  If
+            # feasible, ``ProfileResult.kit_used`` is the complete
+            # structured set of parts the optimizer relied on —
+            # including presence-only representatives (radial
+            # decoupler for staging_tier=2, fuelLine for asparagus,
+            # etc.) that aren't directly used in any stage but enable
+            # the dry-mass factors the optimization assumed.
+            #
+            # The chain's ranks must be lifted to cover the rank_sigs
+            # of every kit part — otherwise item_rule rejects them
+            # from sphere placement.  We expand ``ranks`` to the union
+            # of (current ceiling, max kit-part rank) per axis, then
+            # verify the lifted-ranks + union-reps combination
+            # actually reproduces feasibility.
+            from .ranks import RANK_AXES_BY_KEY as _RABK
+            max_ranks_for_rescue = MinimumRanks(tuple(sorted(
+                ((a, _RABK[a].buckets) for a in RankAxisKey),
+                key=lambda x: x[0].value,
+            )))
+            rescue_flags = _pre_pass_for_ranks(
+                max_ranks_for_rescue, ctx,
+                start_with_clamps=start_with_clamps,
+                progressive_launch_pad=progressive_launch_pad,
+                launch_pad_caps=mission_builder.launch_pad_caps,
+                pad_tier=extras.get(PROGRESSIVE_LAUNCH_PAD_NAME, 0),
+                precollected_names=precollected_names,
+                reps_only=None,
+            )
+            rescue_result = _evaluate(rescue_flags, info, diff, mission_builder)
+            if rescue_result.feasible and rescue_result.kit_used is not None:
+                kit = rescue_result.kit_used
+                _enrich_kit_alternates(kit, ctx)
+                # Try a per-seed random variant of the kit first
+                # (alternates derived from rank-equivalence + provides-flag
+                # membership).  If the variant verifies, use it — that
+                # preserves per-seed variance even on the rescue path.
+                # If verification fails (cascade broke), fall back to the
+                # deterministic ``kit.all_parts()`` which is guaranteed
+                # to reproduce capability's feasibility claim.
+                variant_parts = _random_kit_variant(kit, rng)
+                lifted_ranks = ranks
+                for u in variant_parts:
+                    sig = rank_sig_for(u, ctx)
+                    for ax, rk in sig.axes:
+                        cur = lifted_ranks.get(ax) or 0
+                        if rk > cur:
+                            lifted_ranks = lifted_ranks.with_axis(ax, rk)
+                union_reps = reps_collected | variant_parts
+                verify_flags = _pre_pass_for_ranks(
+                    lifted_ranks, ctx,
+                    start_with_clamps=start_with_clamps,
+                    progressive_launch_pad=progressive_launch_pad,
+                    launch_pad_caps=mission_builder.launch_pad_caps,
+                    pad_tier=extras.get(PROGRESSIVE_LAUNCH_PAD_NAME, 0),
+                    precollected_names=precollected_names,
+                    reps_only=frozenset(union_reps),
+                )
+                verify_result = _evaluate(verify_flags, info, diff, mission_builder)
+                kit_parts = variant_parts
+                if not verify_result.feasible:
+                    # Variant broke a cascade.  Fall back to the
+                    # deterministic optimal kit and re-verify.
+                    kit_parts = kit.all_parts()
+                    lifted_ranks = ranks
+                    for u in kit_parts:
+                        sig = rank_sig_for(u, ctx)
+                        for ax, rk in sig.axes:
+                            cur = lifted_ranks.get(ax) or 0
+                            if rk > cur:
+                                lifted_ranks = lifted_ranks.with_axis(ax, rk)
+                    union_reps = reps_collected | kit_parts
+                    verify_flags = _pre_pass_for_ranks(
+                        lifted_ranks, ctx,
+                        start_with_clamps=start_with_clamps,
+                        progressive_launch_pad=progressive_launch_pad,
+                        launch_pad_caps=mission_builder.launch_pad_caps,
+                        pad_tier=extras.get(PROGRESSIVE_LAUNCH_PAD_NAME, 0),
+                        precollected_names=precollected_names,
+                        reps_only=frozenset(union_reps),
+                    )
+                    verify_result = _evaluate(verify_flags, info, diff, mission_builder)
+                if verify_result.feasible:
+                    for u in kit_parts:
+                        if u not in reps_collected:
+                            reps_collected.add(u)
+                            sig = rank_sig_for(u, ctx)
+                            for ax, rk in sig.axes:
+                                if (ax, rk) not in reps:
+                                    reps[(ax, rk)] = u
+                    delta_pairs: list[tuple[RankAxisKey, int]] = []
+                    for axis_key, ceil in lifted_ranks.upper_bounds:
+                        prior = prior_ranks.get(axis_key) or 0
+                        if ceil > prior:
+                            delta_pairs.append((axis_key, ceil))
+                    delta = MinimumRanks(tuple(sorted(delta_pairs, key=lambda x: x[0].value)))
+                    prior_extras_d = dict(prior_extras or {})
+                    extras_delta = {
+                        k: v - prior_extras_d.get(k, 0)
+                        for k, v in extras.items()
+                        if v > prior_extras_d.get(k, 0)
+                    }
+                    return RankBumperResult(
+                        ranks=lifted_ranks, delta=delta, reps=reps,
+                        reps_collected=frozenset(reps_collected),
+                        flags=verify_flags,
+                        profile_dv=verify_result.launch_mass,
+                        extras=extras, extras_delta=extras_delta,
+                    )
+            # Swap-fallback: greedy hill-climb on rep alternatives.
+            cur_blockers = len(result.blocking)
+            cur_mass = result.launch_mass or float("inf")
+            for _swap_iter in range(8):
+                best_swap: Optional[tuple[int, float, RankAxisKey, int, str, str]] = None
+                for (swap_axis, swap_rank), current_rep in list(reps.items()):
+                    alternatives = _items_at_rank(ctx).get(swap_axis, {}).get(swap_rank, ())
+                    for alt in alternatives:
+                        if alt == current_rep:
+                            continue
+                        new_reps = (reps_collected - {current_rep}) | {alt}
+                        swap_flags = _pre_pass_for_ranks(
+                            ranks, ctx,
+                            start_with_clamps=start_with_clamps,
+                            progressive_launch_pad=progressive_launch_pad,
+                            launch_pad_caps=mission_builder.launch_pad_caps,
+                            pad_tier=extras.get(PROGRESSIVE_LAUNCH_PAD_NAME, 0),
+                            precollected_names=precollected_names,
+                            reps_only=frozenset(new_reps),
+                        )
+                        swap_result = _evaluate(swap_flags, info, diff, mission_builder)
+                        nb = len(swap_result.blocking)
+                        m = swap_result.launch_mass or float("inf")
+                        score = (nb, m)
+                        if (nb < cur_blockers or
+                            (nb == cur_blockers and m < cur_mass)):
+                            if best_swap is None or (nb, m) < (best_swap[0], best_swap[1]):
+                                best_swap = (nb, m, swap_axis, swap_rank, current_rep, alt)
+                if best_swap is None:
+                    break
+                nb, m, sa, sr, cur, alt = best_swap
+                reps_collected.discard(cur)
+                reps_collected.add(alt)
+                reps[(sa, sr)] = alt
+                cur_blockers = nb
+                cur_mass = m
+                if nb == 0:
+                    # Feasible — return
+                    final_flags = _pre_pass_for_ranks(
+                        ranks, ctx,
+                        start_with_clamps=start_with_clamps,
+                        progressive_launch_pad=progressive_launch_pad,
+                        launch_pad_caps=mission_builder.launch_pad_caps,
+                        pad_tier=extras.get(PROGRESSIVE_LAUNCH_PAD_NAME, 0),
+                        precollected_names=precollected_names,
+                        reps_only=frozenset(reps_collected),
+                    )
+                    delta_pairs: list[tuple[RankAxisKey, int]] = []
+                    for axis_key, ceil in ranks.upper_bounds:
+                        prior = prior_ranks.get(axis_key) or 0
+                        if ceil > prior:
+                            delta_pairs.append((axis_key, ceil))
+                    delta = MinimumRanks(tuple(sorted(delta_pairs, key=lambda x: x[0].value)))
+                    prior_extras_d = dict(prior_extras or {})
+                    extras_delta = {
+                        k: v - prior_extras_d.get(k, 0)
+                        for k, v in extras.items()
+                        if v > prior_extras_d.get(k, 0)
+                    }
+                    return RankBumperResult(
+                        ranks=ranks, delta=delta, reps=reps,
+                        reps_collected=frozenset(reps_collected),
+                        flags=final_flags, profile_dv=m,
+                        extras=extras, extras_delta=extras_delta,
+                    )
+            return None
+        new_rank = (ranks.get(axis) or 0) + 1
+        rep_name = _pick_rank_rep(axis, new_rank, ctx, rng)
+        if rep_name is not None:
+            reps[(axis, new_rank)] = rep_name
+            reps_collected.add(rep_name)
+        ranks = ranks.with_axis(axis, new_rank)
+        # Co-axis lift.
+        if rep_name is not None:
+            sig = rank_sig_for(rep_name, ctx)
+            for co_axis, co_rank in sig.axes:
+                if co_axis == axis:
+                    continue
+                current = ranks.get(co_axis) or 0
+                if co_rank > current:
+                    ranks = ranks.with_axis(co_axis, co_rank)
+    return None
+
+
+# Payload-mass-reducing rank axes: when the bumper is stuck on a
+# stage-level mass blocker, expanding to these axes can shrink the
+# *upstream* stage's payload via lighter terminal equipment / more
+# efficient upper-stage propulsion.  Mirrors legacy
+# ``_PAYLOAD_MASS_REDUCING_CHAINS`` translated to rank axes.
+_PAYLOAD_MASS_REDUCING_AXES: tuple[RankAxisKey, ...] = (
+    RankAxisKey.VAC_ENGINE,    # higher rank = more efficient upper-stage
+    RankAxisKey.LAUNCH_ENGINE, # higher rank = better atm Isp
+    RankAxisKey.SOLAR,         # higher rank = lighter panels at distance
+    RankAxisKey.SAS,           # higher rank = lighter reaction wheel
+    RankAxisKey.CAPSULE,       # higher rank = built-in wheels + monoprop
+    RankAxisKey.PROBE_SAS,     # higher rank = lighter probe with wheels
+    RankAxisKey.HEAT_SHIELD,   # higher rank = larger shield, fewer needed
+    RankAxisKey.PARACHUTE,     # higher rank = better drag, fewer needed
+    RankAxisKey.LANDING_LEG,   # higher rank = stronger, fewer needed
+)
+
+# Stage-failure modes that benefit from a payload-mass audit when the
+# bumper's primary candidate set is exhausted.
+_MASS_RELATED_FAILURES = frozenset({
+    "dv_short", "twr_short", "dry_mass_kills_ratio", "mass_cap_exceeded",
+})
+
+
+def _pick_rank_bump_scored(blocking, ranks: MinimumRanks, ctx: RankContext,
+                           rng: Random, *,
+                           difficulty: str,
+                           progressive_launch_pad: bool,
+                           start_with_clamps: bool,
+                           launch_pad_caps,
+                           pad_tier: int,
+                           precollected_names: frozenset[str],
+                           mission_builder, info, diff,
+                           reps_collected: Optional[set[str]] = None,
+                           reps_only_mode: bool = True) -> Optional[RankAxisKey]:
+    """Trial-bump every candidate axis; pick the one with the best
+    ``(feasibility, launch_mass, n_blocking)`` score.
+
+    Candidate source: ``stage_diag.failure`` for ``NO_VIABLE_STAGE`` (via
+    ``_axes_for_stage_diag``), ``_RANK_BUMP_TABLE`` for other blockers.
+    """
+    candidates: set[RankAxisKey] = set()
+    for b in blocking:
+        if b.reason == BlockingReason.NO_VIABLE_STAGE and b.stage_diag is not None:
+            axes = _axes_for_stage_diag(b.stage_diag)
+        else:
+            axes = _RANK_BUMP_TABLE.get(b.reason, ())
+        for axis in axes:
+            if not _rank_axis_at_cap(axis, ranks):
+                candidates.add(axis)
+    if not candidates:
+        return None
+    scored: list[tuple[int, float, int, int, float, RankAxisKey]] = []
+    # Iterate in a deterministic, priority-group-aware order: lower
+    # priority group first, then axis value within group.  ``set``
+    # iteration is hash-randomized per Python process under the default
+    # PYTHONHASHSEED — different solve-check workers were taking
+    # different bumper paths on the same seed because each consumed the
+    # ``rng`` in a different order.
+    def _cand_sort_key(a: RankAxisKey) -> tuple[int, str]:
+        for i, g in enumerate(RANK_PRIORITY_GROUPS):
+            if a in g:
+                return (i, a.value)
+        return (len(RANK_PRIORITY_GROUPS), a.value)
+    for cand in sorted(candidates, key=_cand_sort_key):
+        new_rank = (ranks.get(cand) or 0) + 1
+        trial_ranks = ranks.with_axis(cand, new_rank)
+        trial_reps_set = None
+        if reps_only_mode and reps_collected is not None:
+            trial_reps = set(reps_collected)
+            sample_rep = _pick_rank_rep(cand, new_rank, ctx, rng)
+            if sample_rep is not None:
+                trial_reps.add(sample_rep)
+                _sig = rank_sig_for(sample_rep, ctx)
+                for _co_axis, _co_rank in _sig.axes:
+                    if _co_axis == cand:
+                        continue
+                    if (trial_ranks.get(_co_axis) or 0) < _co_rank:
+                        trial_ranks = trial_ranks.with_axis(_co_axis, _co_rank)
+            trial_reps_set = frozenset(trial_reps)
+        trial_flags = _pre_pass_for_ranks(
+            trial_ranks, ctx,
+            start_with_clamps=start_with_clamps,
+            progressive_launch_pad=progressive_launch_pad,
+            launch_pad_caps=launch_pad_caps,
+            pad_tier=pad_tier,
+            precollected_names=precollected_names,
+            reps_only=trial_reps_set,
+        )
+        trial_result = _evaluate(trial_flags, info, diff, mission_builder)
+        feasibility_rank = 0 if trial_result.feasible else 1
+        mass = trial_result.launch_mass or float("inf")
+        group_idx = len(RANK_PRIORITY_GROUPS)
+        for i, g in enumerate(RANK_PRIORITY_GROUPS):
+            if cand in g:
+                group_idx = i
+                break
+        # Sort order: feasibility > blocker reduction > mass.  Putting
+        # n_blockers before mass: for infeasible candidates ``launch_mass``
+        # comes back as the *payload* mass from stage failures, so a
+        # tiny weak engine (ionEngine: 0.25 t) "looks lighter" than a
+        # strong heavy engine (LV-T91: 4 t) and gets picked, leaving
+        # the rep set unable to deliver hard missions like Moho / Bop.
+        # Blocker-reduction is the real "closer to feasible" signal.
+        scored.append((
+            feasibility_rank, len(trial_result.blocking), mass,
+            group_idx, rng.random(), cand,
+        ))
+    scored.sort()
+
+    return scored[0][-1]
 
 
 def minimal_rocket_for(
@@ -2281,34 +3390,550 @@ def _install_bootstrap_local_rule(world: "KSP1World") -> None:
 # Orchestrator
 # ---------------------------------------------------------------------------
 
+def _compute_location_rank_ceilings(
+    world: "KSP1World",
+) -> dict[str, MinimumRanks]:
+    """Compute the intrinsic per-location MinimumRanks ceiling.
+
+    For each capability-gated player location, runs ``minimal_ranks_for``
+    with an empty prior — the result is the minimum kit the rank-space
+    bumper needs to satisfy that location.  Items whose rank exceeds any
+    of these ceilings on any axis must not be placed at that location.
+
+    Non-capability-gated locations (tech-tree, KSC biomes, starting
+    inventory) are excluded — they're gated by other mechanisms.
+    """
+    ctx = getattr(world, "_rank_context", DEFAULT_CONTEXT)
+    difficulty = ["casual", "normal", "expert", "insane"][
+        world.options.difficulty.value
+    ]
+    pad_on = bool(world.options.progressive_launch_pad)
+    clamps = bool(world.options.start_with_launch_clamps)
+    precollected_names = frozenset(
+        it.name for it in world.multiworld.precollected_items[world.player]
+    )
+    infeasible = world.model_infeasible_locations
+    out: dict[str, MinimumRanks] = {}
+    for loc in world.multiworld.get_locations(world.player):
+        if loc.address is None:
+            continue
+        if loc.name in infeasible:
+            continue
+        info = _parse_location(loc.name)
+        if info is None:
+            continue
+        rocket = minimal_ranks_for(
+            loc.name, MinimumRanks.empty(), ctx,
+            difficulty=difficulty,
+            progressive_launch_pad=pad_on,
+            start_with_clamps=clamps,
+            rng=world.random,
+            mission_builder=world.mission_builder,
+            precollected_names=precollected_names,
+        )
+        if rocket is None:
+            continue
+        out[loc.name] = rocket.ranks
+    return out
+
+
+def _install_rank_ceiling_rule(
+    world: "KSP1World",
+    ceilings: dict[str, MinimumRanks],
+    bootstrap_locations: set[str],
+) -> None:
+    """Per-location item_rule: admit only items whose rank on every axis
+    is ≤ the location's ceiling on that axis.
+
+    Composes with the location's existing item_rule (if any) by AND-ing.
+    Bootstrap locations (KSC biomes, starting inv, First Launch) skip
+    the rule — they're handled by local-only restrictions.
+    """
+    player = world.player
+    for loc in world.multiworld.get_locations(player):
+        if loc.name in bootstrap_locations:
+            continue
+        ceiling = ceilings.get(loc.name)
+        if ceiling is None:
+            continue
+        ceiling_dict = dict(ceiling.upper_bounds)
+        existing = loc.item_rule
+
+        def _rule(item, _ceil=ceiling_dict, _p=player, _orig=existing) -> bool:
+            if _orig is not None and not _orig(item):
+                return False
+            if item.player != _p:
+                return True
+            sig = getattr(item, "rank_sig", None)
+            if sig is None or not sig.axes:
+                return True
+            for axis_key, item_rank in sig.axes:
+                cap = _ceil.get(axis_key)
+                if cap is None or item_rank > cap:
+                    return False
+            return True
+
+        loc.item_rule = _rule
+
+
+def _demote_non_rep_parts(
+    world: "KSP1World",
+    rep_names: set[str],
+    chain_cumulative: MinimumRanks,
+) -> int:
+    """Demote every PROGRESSION part the bumper didn't designate as a rep,
+    AND strip rank-axis entries that exceed the chain's cumulative ceiling.
+
+    Two effects per item:
+      1. Classification: bumper reps stay PROGRESSION; the three
+         counted progressives (R&D, Pad, PSI) stay PROGRESSION; every
+         other PROGRESSION item demotes to USEFUL.
+      2. Rank signature: any (axis, rank) entry whose rank exceeds the
+         chain's cumulative ceiling on that axis is dropped from the
+         item's ``rank_sig``.  Items past goal on every axis end up with
+         an empty signature and place freely (the rank-ceiling rule
+         exempts empty-sig items).
+    """
+    from BaseClasses import ItemClassification
+    from .items import (
+        PROGRESSIVE_RD_NAME, PROGRESSIVE_LAUNCH_PAD_NAME,
+        PROGRESSIVE_SCIENCE_INSTRUMENT_NAME,
+    )
+    from .ranks import ItemRankSig
+    _KEEP_PROGRESSIVE: frozenset[str] = frozenset({
+        PROGRESSIVE_RD_NAME,
+        PROGRESSIVE_LAUNCH_PAD_NAME,
+        PROGRESSIVE_SCIENCE_INSTRUMENT_NAME,
+    })
+    ceiling = dict(chain_cumulative.upper_bounds)
+    player = world.player
+    demoted = 0
+    promoted = 0
+    for item in world.multiworld.itempool:
+        if item.player != player:
+            continue
+        # (2) Trim past-goal axes from the rank_sig so the item isn't
+        # gated by axes the chain never raised that far.
+        sig = getattr(item, "rank_sig", None)
+        if sig is not None and sig.axes:
+            kept = tuple(
+                (axis_key, rank) for axis_key, rank in sig.axes
+                if rank <= ceiling.get(axis_key, 0)
+            )
+            if len(kept) != len(sig.axes):
+                item.rank_sig = ItemRankSig(kept)
+        # (1) PROMOTE bumper-picked reps to PROGRESSION regardless of
+        # their initial classification.  The chain's feasibility proof
+        # assumed the player collects each rep; if some reps are USEFUL
+        # / FILLER (e.g., the legacy ``_RECLASSIFY_USEFUL`` list marks
+        # ``mk3FuselageLF.50`` as USEFUL because Mk3 fuselages were
+        # considered redundant alternates), fill scatters them anywhere
+        # and the player may never reach them.  Promoting forces AP to
+        # place every rep at a reachable location, matching the bumper's
+        # contract.
+        if item.name in rep_names or item.name in _KEEP_PROGRESSIVE:
+            if item.classification != ItemClassification.progression:
+                item.classification = ItemClassification.progression
+                promoted += 1
+            continue
+        # (2) Demote non-reps.
+        if item.classification != ItemClassification.progression:
+            continue
+        item.classification = ItemClassification.useful
+        demoted += 1
+    return demoted
+
+
+def _record_rank_sphere_reps(world: "KSP1World", ladder: SphereLadder) -> None:
+    """Walk the predictable sphere anchors in rank-space, recording the
+    designated rep part name for every ``(RankAxisKey, rank)`` bump the
+    bumper performs.
+
+    Stores two attributes on the world:
+      * ``_sphere_rank_reps``: ``dict[(RankAxisKey, int), str]`` — every
+        rep encountered across the whole chain, latest one wins on
+        conflict (ladder is walked S_launch → S_orbit → S_goal in that
+        order, so later anchors override earlier).  Future phases will
+        want a per-sphere structure; for now the flat dict is enough.
+      * ``_sphere_rank_cumulative``: ``MinimumRanks`` — final ceiling
+        after walking every predictable anchor.
+
+    Defensive: any per-anchor failure is logged and skipped — the
+    progressive walker is the placement authority in Phase 1.
+    """
+    home_atmo_bodies = {
+        BodyName.KERBIN.value, BodyName.EVE.value,
+        BodyName.DUNA.value, BodyName.LAYTHE.value,
+    }
+    ctx = RankContext(
+        home_has_atmosphere=str(world.mission_builder.home) in home_atmo_bodies,
+    )
+    difficulty = ["casual", "normal", "expert", "insane"][
+        world.options.difficulty.value
+    ]
+    progressive_launch_pad = bool(world.options.progressive_launch_pad)
+    start_with_clamps = bool(world.options.start_with_launch_clamps)
+    precollected_names = frozenset(
+        it.name for it in world.multiworld.precollected_items[world.player]
+    )
+    reps: dict[tuple[RankAxisKey, int], str] = {}
+    cumulative = MinimumRanks.empty()
+    # Walk predictable spheres only (S_launch, S_orbit, S_goal*).
+    # Intermediates depend on a chain that the rank walker doesn't fully
+    # model yet (tech tree band funding, KSC biome locations); revisit
+    # in Phase 2 once the rank walker is the source of truth.
+    for sphere in ladder.spheres:
+        if not sphere.is_predictable:
+            continue
+        rocket = minimal_ranks_for(
+            sphere.location_name,
+            cumulative,
+            ctx,
+            difficulty=difficulty,
+            progressive_launch_pad=progressive_launch_pad,
+            start_with_clamps=start_with_clamps,
+            rng=world.random,
+            mission_builder=world.mission_builder,
+            precollected_names=precollected_names,
+        )
+        if rocket is None:
+            # Non-fatal: scaffold can't reach this anchor.  Phase 1's
+            # progressive walker still placed items correctly; this just
+            # means the rank-space view is incomplete for this seed.
+            continue
+        for key, rep in rocket.reps.items():
+            reps[key] = rep
+        cumulative = rocket.ranks
+    world._sphere_rank_reps = reps
+    world._sphere_rank_cumulative = cumulative
+
+
+def _compute_location_priors(
+    ladder: SphereLadder,
+    location_min_ranks: dict[str, MinimumRanks],
+    location_min_extras: dict[str, dict[str, int]],
+    location_names_in_chain: set[str],
+) -> tuple[dict[str, MinimumRanks], dict[str, dict[str, int]]]:
+    """For each capability-gated location L, return ``(prior_ranks,
+    prior_extras)`` — the cumulative kit at the chain sphere JUST BEFORE
+    L becomes reachable.  Items belonging to that sphere or later
+    (rank-delta items, R&D / Pad copies introduced there) must be banned
+    at L: collecting them at L would be a chicken-and-egg dependency.
+
+    Locations not covered by any sphere (post-goal / unfundable tech)
+    are treated with the full chain cumulative as their prior — i.e.,
+    only chain-irrelevant items can land at them.  This mirrors the
+    legacy "sentinel-beyond-goal" path.
+    """
+    # Build per-sphere prior cumulatives (prior_index 0 = empty kit;
+    # prior_index i = sphere_(i-1)'s cumulative).
+    prior_ranks_per: list[MinimumRanks] = [MinimumRanks.empty()]
+    prior_extras_per: list[dict[str, int]] = [{}]
+    for sphere in ladder.spheres:
+        prior_ranks_per.append(sphere.ranks)
+        prior_extras_per.append(dict(sphere.extras))
+    # Full chain cumulative for sentinel fallback.
+    if ladder.spheres:
+        full_ranks = ladder.spheres[-1].ranks
+        full_extras = dict(ladder.spheres[-1].extras)
+    else:
+        full_ranks = MinimumRanks.empty()
+        full_extras = {}
+    loc_prior_ranks: dict[str, MinimumRanks] = {}
+    loc_prior_extras: dict[str, dict[str, int]] = {}
+    for loc_name, min_ranks in location_min_ranks.items():
+        min_extras = location_min_extras.get(loc_name, {})
+        found_idx: Optional[int] = None
+        for i, sphere in enumerate(ladder.spheres):
+            covers_ranks = all(
+                (sphere.ranks.get(axis_key) or 0) >= rank
+                for axis_key, rank in min_ranks.upper_bounds
+            )
+            covers_extras = all(
+                sphere.extras.get(name, 0) >= count
+                for name, count in min_extras.items()
+            )
+            if covers_ranks and covers_extras:
+                found_idx = i
+                break
+        if found_idx is None:
+            # Unreachable in this chain — sentinel: only items NOT used
+            # anywhere in the chain can land here, so prior is the
+            # full chain cumulative.
+            loc_prior_ranks[loc_name] = full_ranks
+            loc_prior_extras[loc_name] = dict(full_extras)
+        else:
+            loc_prior_ranks[loc_name] = prior_ranks_per[found_idx]
+            loc_prior_extras[loc_name] = prior_extras_per[found_idx]
+    return loc_prior_ranks, loc_prior_extras
+
+
+def _install_placement_rules(
+    world: "KSP1World",
+    location_min_ranks: dict[str, MinimumRanks],
+    loc_prior_extras: dict[str, dict[str, int]],
+    bootstrap_locations: set[str],
+    chain_full_extras: dict[str, int],
+) -> None:
+    """Per-location item_rule for Phase 2 placement.
+
+    Two independent mechanisms, composed via AND with whatever rule the
+    location already carries:
+
+      * **Rank ceiling** for PART items (``rank_sig`` populated).
+        A part with rank R on axis A is admitted iff R ≤
+        ``location_min_ranks[L][A]`` — the location's intrinsic
+        min-ranks from the bumper.  This mirrors the legacy "tier 1
+        parts go anywhere reachable" property: low-rank items have
+        many admitting locations; high-rank items are restricted to
+        late-chain spots that need them.
+
+      * **Chain-ordering** for counted progressives (``_sphere_tier``
+        set, ``rank_sig`` empty: R&D / Pad / PSI).  Tier T banned at L
+        iff T > ``loc_prior_extras[L][name]`` — replicates the legacy
+        Rule B (3) R&D soft-lock and Pad self-ban.  Tiers past the
+        chain's max for that counted progressive are admitted
+        unconditionally (no chain position → no constraint).
+
+    Splitting these matches the legacy design: ``_install_tier_ban_rule``
+    banned ``(progressive_item, tier)`` pairs — i.e., wrappers, not
+    individual parts.  Individual parts only saw the implicit ceiling
+    via the wrapper.  In rank-space the wrappers are gone, so the parts
+    use the location's intrinsic rank ceiling directly.
+    """
+    player = world.player
+    for loc in world.multiworld.get_locations(player):
+        if loc.name in bootstrap_locations:
+            continue
+        loc_ranks = location_min_ranks.get(loc.name)
+        loc_extras = loc_prior_extras.get(loc.name)
+        if loc_ranks is None and loc_extras is None:
+            continue
+        ranks_dict = dict(loc_ranks.upper_bounds) if loc_ranks is not None else {}
+        extras_dict = dict(loc_extras) if loc_extras is not None else {}
+        existing = loc.item_rule
+
+        def _rule(item, _r=ranks_dict, _e=extras_dict, _p=player,
+                  _chain=chain_full_extras, _orig=existing) -> bool:
+            if _orig is not None and not _orig(item):
+                return False
+            if item.player != _p:
+                return True
+            sig = getattr(item, "rank_sig", None)
+            if sig is not None and sig.axes:
+                # Rank ceiling: PART item admitted iff every axis is
+                # at or below the location's intrinsic min on that axis.
+                for axis_key, rank in sig.axes:
+                    if rank > _r.get(axis_key, 0):
+                        return False
+                return True
+            # Counted progressive: chain-ordering on extras.
+            tier = getattr(item, "_sphere_tier", None)
+            if tier is not None:
+                if tier > _chain.get(item.name, 0):
+                    return True  # past-chain — admitted anywhere
+                if tier > _e.get(item.name, 0):
+                    return False
+            return True
+
+        loc.item_rule = _rule
+
+
+def _admitted_set_for_ranks(
+    ranks: MinimumRanks, ctx: RankContext,
+    precollected_names: frozenset[str],
+) -> set[str]:
+    """Return the set of PART_DB item names admitted by ``ranks``.
+    Used to build the ``item_count_fn`` for rank-space capability
+    queries."""
+    admitted: set[str] = set()
+    for item_name in PART_DB:
+        if _rank_admits_item(item_name, ranks, ctx):
+            admitted.add(item_name)
+    admitted |= precollected_names & PART_DB.keys()
+    return admitted
+
+
+def _compute_tech_tier_signatures_rank(
+    world: "KSP1World", ladder: SphereLadder, ctx: RankContext,
+) -> tuple[dict[str, LocationSignature], dict[str, MinimumRanks],
+           dict[str, dict[str, int]], dict[int, SphereBoundary]]:
+    """Rank-space port of the legacy ``_compute_tech_tier_signatures``.
+
+    Walks the chain, computes science accumulation per sphere from the
+    capability the sphere's ``(ranks, extras)`` proves, and identifies
+    the earliest sphere that funds each tech tier's cumulative cost.
+    Returns:
+      * ``signatures``  — tech-tree location → LocationSignature
+      * ``min_ranks``   — tech-tree location → MinimumRanks
+      * ``min_extras``  — tech-tree location → counted-progressive kit
+        (PSI/Pad copies the player should have by this sphere)
+      * ``band_funding`` — R&D band → funding sphere (caller injects R&D
+        copies at this sphere's depth)
+    """
+    from .capability import compute_capability_from_items
+    from .locations import TechTreeLocation, effective_tech_slots_per_node
+    from .rules import bankable_science, effective_science_safety
+    from .tech_tree import TECH_NODES, TIER_TO_BAND, cumulative_tier_cost
+
+    difficulty_idx = world.options.difficulty.value
+    difficulty_name = ["casual", "normal", "expert", "insane"][difficulty_idx]
+    safety = effective_science_safety(world.options, difficulty_idx)
+    pad_on = bool(world.options.progressive_launch_pad)
+    clamps = bool(world.options.start_with_launch_clamps)
+    precollected_names = frozenset(
+        it.name for it in world.multiworld.precollected_items[world.player]
+    )
+    home = world.mission_builder.home
+
+    # Per-sphere science accumulation.  Use sphere.reps_collected
+    # (reps-only model) so the capability matches what fill actually
+    # places — not what the rank ceiling would *abstractly* admit.
+    sphere_science: list[tuple[SphereBoundary, float]] = []
+    for sphere in ladder.spheres:
+        admitted = (sphere.reps_collected
+                    | (precollected_names & frozenset(PART_DB.keys())))
+        extras = sphere.extras
+
+        def _count(name: str, _adm=admitted, _ext=extras) -> int:
+            if name in _ext:
+                return _ext[name]
+            return 1 if name in _adm else 0
+
+        cap, _flags = compute_capability_from_items(
+            _count, difficulty_name,
+            start_with_clamps=clamps,
+            mission_builder=world.mission_builder,
+            progressive_launch_pad=pad_on,
+        )
+        from .items import PROGRESSIVE_SCIENCE_INSTRUMENT_NAME
+        psi_tier = extras.get(PROGRESSIVE_SCIENCE_INSTRUMENT_NAME, 0)
+        sphere_science.append((sphere, bankable_science(cap, psi_tier, home) * safety))
+
+    sigs: dict[str, LocationSignature] = {}
+    min_ranks_out: dict[str, MinimumRanks] = {}
+    min_extras_out: dict[str, dict[str, int]] = {}
+    band_funding: dict[int, SphereBoundary] = {}
+    num_slots = effective_tech_slots_per_node(world.options, difficulty_idx)
+    tier_set = sorted({n.tier for n in TECH_NODES})
+
+    for tier in tier_set:
+        target = cumulative_tier_cost(tier)
+        rd_required = TIER_TO_BAND.get(tier, 0)
+        funding: Optional[SphereBoundary] = None
+        for sphere, science in sphere_science:
+            if science >= target and sphere.signature is not None:
+                funding = sphere
+                break
+        if funding is None:
+            # Unfundable tier — no sphere proves enough science under this
+            # seed's goal.  Locations remain ungated by rank ceiling; the
+            # demote-trim will scatter chain items past them.
+            continue
+        reqs_dict = dict(funding.signature.requirements)
+        if rd_required > 0:
+            reqs_dict["progressive_rd"] = rd_required
+        sig = LocationSignature(
+            dv=funding.signature.dv,
+            requirements=tuple(sorted(reqs_dict.items())),
+            body_chain_depth=funding.signature.body_chain_depth,
+        )
+        # min_ranks for tech-tree locations is the funding sphere's
+        # cumulative rank ceiling; R&D / PSI go in min_extras.
+        extras_kit = dict(funding.extras)
+        if rd_required > 0:
+            extras_kit[PROGRESSIVE_RD_NAME] = max(
+                extras_kit.get(PROGRESSIVE_RD_NAME, 0), rd_required
+            )
+        for node in TECH_NODES:
+            if node.tier != tier:
+                continue
+            for slot in range(1, num_slots + 1):
+                loc_name = str(TechTreeLocation(node.display_name, slot))
+                sigs[loc_name] = sig
+                min_ranks_out[loc_name] = funding.ranks
+                min_extras_out[loc_name] = extras_kit
+        if rd_required > 0:
+            prev = band_funding.get(rd_required)
+            if prev is None or (
+                prev.signature is not None
+                and funding.signature.dv < prev.signature.dv
+            ):
+                band_funding[rd_required] = funding
+    return sigs, min_ranks_out, min_extras_out, band_funding
+
+
 def apply_sphere_ladder(world: "KSP1World") -> None:
-    """Build the sphere ladder for ``world`` and install fill-time
-    placement guidance.  Called from ``world.pre_fill``.
+    """Build the rank-space sphere ladder for ``world`` and install
+    fill-time placement guidance.  Phase 2 — the progressive walker has
+    been retired.
 
     Scope:
-      - Compute LocationSignature for every capability-gated location.
+      - Compute per-location MinimumRanks ceiling + LocationSignature.
       - Build the predictable ladder (S_launch / S_orbit / S_goal).
-      - Add random intermediate spheres between the predictable anchors.
-      - Walk the combined chain in dv order, accumulating kits.
-      - Install Rule A (bootstrap-local) on KSC + First Launch.
-      - Install Rule B (per-copy tier ban) on every non-bootstrap
-        capability-gated location.
-      - Register ``S_launch.delta`` as ``local_early_items``.
+      - Pick random intermediate spheres.
+      - Walk the combined chain in rank space, accumulating ranks +
+        designated reps per ``(axis, rank)`` bump.
+      - Install bootstrap-local on KSC / First Launch / starting-inv.
+      - Install per-location rank-ceiling ``item_rule``.
+      - Demote parts that exceed the chain's cumulative ceiling.
+      - Register S_launch-admitted parts as ``local_early_items`` so AP
+        prefers them on sphere-0 locations.
     """
-    clear_minimal_rocket_cache()
     from .rocket_math import clear_find_optimal_stage_cache
     clear_find_optimal_stage_cache()
     ladder = SphereLadder()
-    # Compute signatures + min-kits up front (intrinsic; don't depend
-    # on the chain).
-    ladder.location_signatures, location_min_kits = _compute_location_signatures(world)
+    ctx = getattr(world, "_rank_context", DEFAULT_CONTEXT)
+    difficulty = ["casual", "normal", "expert", "insane"][
+        world.options.difficulty.value
+    ]
+    progressive_launch_pad = bool(world.options.progressive_launch_pad)
+    start_with_clamps = bool(world.options.start_with_launch_clamps)
+    precollected_names = frozenset(
+        it.name for it in world.multiworld.precollected_items[world.player]
+    )
+    home = str(world.mission_builder.home)
+    infeasible = world.model_infeasible_locations
+
+    # Per-location intrinsic rank ceilings (from an empty prior).
+    # Deterministic per-location seed: world.seed + location name.
+    # Avoids cross-location coupling via the shared world.random.
+    import hashlib as _hashlib
+    import random as _random
+    location_min_ranks: dict[str, MinimumRanks] = {}
+    for loc in world.multiworld.get_locations(world.player):
+        if loc.address is None or loc.name in infeasible:
+            continue
+        info = _parse_location(loc.name)
+        if info is None:
+            continue
+        seed_bytes = _hashlib.sha256(
+            f"{world.multiworld.seed}|{loc.name}".encode()
+        ).digest()[:8]
+        loc_rng = _random.Random(int.from_bytes(seed_bytes, "big"))
+        rocket = minimal_ranks_for(
+            loc.name, MinimumRanks.empty(), ctx,
+            difficulty=difficulty,
+            progressive_launch_pad=progressive_launch_pad,
+            start_with_clamps=start_with_clamps,
+            rng=loc_rng,
+            mission_builder=world.mission_builder,
+            precollected_names=precollected_names,
+        )
+        if rocket is None:
+            continue
+        location_min_ranks[loc.name] = rocket.ranks
+        ladder.location_signatures[loc.name] = LocationSignature(
+            dv=_goal_dv(loc.name, world.mission_builder),
+            requirements=tuple(),
+            body_chain_depth=_body_chain_depth(info.body, world.mission_builder.home),
+        )
 
     # Predictable spheres provide the spine.
     predictable_labels = [(label, name) for label, name in _predictable_spheres(world)]
     predictable_names = {name for _, name in predictable_labels}
 
     # Look up dv of the three anchors (defaults if missing).
-    home = str(world.mission_builder.home)
     launch_sig = ladder.location_signatures.get(f"{home} First Launch")
     orbit_sig = ladder.location_signatures.get(f"{home} Orbit 1")
     launch_dv = launch_sig.dv if launch_sig else 0.0
@@ -2358,125 +3983,123 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
         sig = ladder.location_signatures.get(name)
         if sig is None:
             return (group, 0, 0.0, 0, name)
-        min_kit_size = len(location_min_kits.get(name, {}))
-        return (group, min_kit_size, sig.dv, sig.body_chain_depth, name)
+        min_rank_size = len(
+            location_min_ranks.get(name, MinimumRanks.empty()).upper_bounds
+        )
+        return (group, min_rank_size, sig.dv, sig.body_chain_depth, name)
 
     all_sphere_names.sort(key=_sort_key)
 
-    cumulative: dict[str, int] = {}
+    # Walk the chain in rank space.  Reps-only mode: each bumper call
+    # uses ONLY the reps collected so far + precollected items for its
+    # feasibility check, matching what fill places as PROGRESSION.
+    cumulative_ranks = MinimumRanks.empty()
+    cumulative_extras: dict[str, int] = {}
+    cumulative_reps: frozenset[str] = frozenset()
+    sphere_rank_reps: dict[tuple[RankAxisKey, int], str] = {}
     for label, location_name, is_pred in all_sphere_names:
-        if is_pred:
-            rocket = _build_rocket_or_raise(world, location_name, cumulative, label)
-        else:
-            rep_names = frozenset(
-                rep
-                for tiers in world.progressive_representatives.values()
-                for rep in tiers.values()
-            )
-            precollected_names = frozenset(
-                it.name for it in world.multiworld.precollected_items[world.player]
-            )
-            difficulty = ["casual", "normal", "expert", "insane"][
-                world.options.difficulty.value
-            ]
-            rocket = minimal_rocket_for(
-                location_name, cumulative, rep_names,
-                difficulty,
-                bool(world.options.progressive_launch_pad),
-                bool(world.options.start_with_launch_clamps),
-                world.random,
-                world.mission_builder,
-                precollected_names=precollected_names,
-            )
-            if rocket is None:
-                continue  # intermediate: skip silently if infeasible
-
-        # Tech-tree anchor spheres carry bookkeeping injection (R&D + PSI)
-        # that minimal_rocket_for doesn't know about — they don't affect
-        # physics but they DO need to be chain-tracked so Rule B distributes
-        # the progressive copies sphere-by-sphere.  Merge into the rocket's
-        # delta and cumulative before recording the sphere boundary.
-        if label.startswith("S_tier_anchor["):
-            rocket = _inject_into_rocket(rocket, _TECH_ANCHOR_INJECT, cumulative)
-
+        rocket = minimal_ranks_for(
+            location_name, cumulative_ranks, ctx,
+            difficulty=difficulty,
+            progressive_launch_pad=progressive_launch_pad,
+            start_with_clamps=start_with_clamps,
+            rng=world.random,
+            mission_builder=world.mission_builder,
+            prior_extras=cumulative_extras,
+            prior_reps=cumulative_reps,
+            precollected_names=precollected_names,
+        )
+        if rocket is None:
+            if is_pred:
+                # Chain-walk failure on a predictable anchor.  Fall back
+                # to the intrinsic per-location ranks (computed earlier
+                # from an empty prior) and merge into cumulative.  If
+                # even THAT is missing, the location is truly infeasible.
+                intrinsic = location_min_ranks.get(location_name)
+                if intrinsic is None:
+                    raise OptionError(
+                        f"Sphere ladder: predictable anchor {label} "
+                        f"({location_name!r}) is unreachable under any rank kit."
+                    )
+                merged = cumulative_ranks.merged_max(intrinsic)
+                rocket = RankBumperResult(
+                    ranks=merged,
+                    delta=intrinsic,
+                    reps={},
+                    flags=_pre_pass_for_ranks(
+                        merged, ctx,
+                        start_with_clamps=start_with_clamps,
+                        progressive_launch_pad=progressive_launch_pad,
+                        launch_pad_caps=world.mission_builder.launch_pad_caps,
+                        pad_tier=cumulative_extras.get(PROGRESSIVE_LAUNCH_PAD_NAME, 0),
+                        precollected_names=precollected_names,
+                    ),
+                    profile_dv=0.0,
+                    extras=dict(cumulative_extras),
+                    extras_delta={},
+                )
+            else:
+                continue
+        for key, rep in rocket.reps.items():
+            sphere_rank_reps[key] = rep
+        cumulative_ranks = rocket.ranks
+        cumulative_extras = dict(rocket.extras)
+        cumulative_reps = rocket.reps_collected
         ladder.spheres.append(SphereBoundary(
             name=label,
             location_name=location_name,
             is_predictable=is_pred,
-            rocket=rocket,
+            ranks=rocket.ranks,
+            ranks_delta=rocket.delta,
+            reps_collected=rocket.reps_collected,
+            extras=dict(rocket.extras),
+            extras_delta=dict(rocket.extras_delta),
+            flags=rocket.flags,
+            profile_dv=rocket.profile_dv,
             signature=ladder.location_signatures.get(location_name),
         ))
-        cumulative = _kit_merge(cumulative, rocket.cumulative)
-
-    ladder.cumulative_kit = cumulative
-
-    # Post-pass: assign signatures + min-kits to tech-tree slot locations
-    # by inverting accumulated science against the sphere chain.  Tech-tree
-    # locations are gated on science (not capability dv), so they need their
-    # own derivation path — but Rule B picks them up automatically once
-    # they have an entry in location_signatures / location_min_kits.
-    tech_sigs, tech_kits, band_funding = _compute_tech_tier_signatures(world, ladder)
-    ladder.location_signatures.update(tech_sigs)
-    location_min_kits.update(tech_kits)
-
-    # R&D ban is handled directly in _install_tier_ban_rule via the
-    # band_funding map (see soft-lock guard in Rule B part 3).  No
-    # in-chain R&D injection: keeping the chain's delta/cumulative
-    # honest about what's physically needed avoids partial-order
-    # incomparability between funding spheres (which may have unique
-    # reqs like relay_tier=3) and other location signatures.
-
-    # Sentinel pass for ladder-UNREACHABLE mission locations.
-    # ``_compute_location_signatures`` skips locations where
-    # ``minimal_rocket_for`` returns None — i.e., the rep set cannot fly
-    # the mission even with maxed progressives (e.g. Vall Sample Return
-    # for a duna_return goal).  Without a signature, Rule B doesn't fire
-    # and any progressive item can land there — including chain-critical
-    # ones, which then strand.  Treat them as "post-goal": ban every
-    # progressive item appearing anywhere in the chain.  Mirrors the
-    # tech-tier unfundable handling.
-    _chain_full_kit: dict[str, int] = {}
-    for sphere in ladder.spheres:
-        for name, count in sphere.rocket.cumulative.items():
-            _chain_full_kit[name] = max(_chain_full_kit.get(name, 0), count)
-    # Also include items required by any location's min_kit — critically,
-    # Progressive R&D copies needed to unlock tech-tree locations that
-    # hold chain items.  Without this, R&D copies can land at sentinel
-    # locations and the player is locked out of tech-hosted chain items.
-    for kit in location_min_kits.values():
-        for name, count in kit.items():
-            _chain_full_kit[name] = max(_chain_full_kit.get(name, 0), count)
-    _sphere_sigs = [s.signature for s in ladder.spheres if s.signature is not None]
-    if _sphere_sigs:
-        _max_dv = max(s.dv for s in _sphere_sigs)
-        _union_reqs: dict[str, int] = {}
-        for s in _sphere_sigs:
-            for k, v in s.requirements:
-                _union_reqs[k] = max(_union_reqs.get(k, 0), v)
-        _unreachable_sig = LocationSignature(
-            dv=_max_dv + 1.0e6,
-            requirements=tuple(sorted(_union_reqs.items())),
-            body_chain_depth=max(s.body_chain_depth for s in _sphere_sigs) + 100,
-        )
-        for loc in world.multiworld.get_locations(world.player):
-            if loc.address is None:
-                continue
-            if loc.name in ladder.location_signatures:
-                continue
-            if _parse_location(loc.name) is None:
-                continue  # tech-tree / KSC / starting-inv handled elsewhere
-            # Proxy goal locations (Eve/Tylo/Laythe Return + Sample Return)
-            # are NOT excluded here.  They have a special access rule
-            # (state.has_all_progression) but until that rule is satisfied
-            # the player can't reach them, so chain items still strand.
-            ladder.location_signatures[loc.name] = _unreachable_sig
-            location_min_kits[loc.name] = dict(_chain_full_kit)
 
     world._sphere_ladder = ladder
+    world._sphere_rank_reps = sphere_rank_reps
+    world._sphere_rank_cumulative = cumulative_ranks
 
-    # Rule A: bootstrap-local restriction on starting-inv / KSC /
-    # First Launch.  Starting-inventory locations already carry this
-    # rule via locations.py; we extend to KSC + First Launch here.
+    # Tech-tree band funding: walk the chain accumulating science and
+    # assign each tech tier a funding sphere.  Without this, R&D copies
+    # have no chain-placement target and float to early bands.
+    tech_sigs, tech_min_ranks, tech_min_extras, band_funding = (
+        _compute_tech_tier_signatures_rank(world, ladder, ctx)
+    )
+    ladder.location_signatures.update(tech_sigs)
+    location_min_ranks.update(tech_min_ranks)
+    # Mirror tech-tree min_extras alongside min_ranks so the chain-
+    # ordering rule sees R&D / PSI requirements per tech location.
+    location_min_extras: dict[str, dict[str, int]] = dict(tech_min_extras)
+
+    # Inject R&D into the chain at each funding sphere so subsequent
+    # spheres' cumulative_extras reflect "by sphere S, player has R&D=B".
+    # Without this the chain-ordering rule treats every R&D copy as
+    # post-goal and bans them everywhere reachable.
+    for band, funding_sphere in band_funding.items():
+        # Find funding sphere's index in ladder.spheres.
+        idx = None
+        for i, s in enumerate(ladder.spheres):
+            if s is funding_sphere:
+                idx = i
+                break
+        if idx is None:
+            continue
+        cur = funding_sphere.extras_delta.get(PROGRESSIVE_RD_NAME, 0)
+        prior_at_funding = funding_sphere.extras.get(PROGRESSIVE_RD_NAME, 0) - cur
+        new_count = max(band, funding_sphere.extras.get(PROGRESSIVE_RD_NAME, 0))
+        funding_sphere.extras[PROGRESSIVE_RD_NAME] = new_count
+        funding_sphere.extras_delta[PROGRESSIVE_RD_NAME] = new_count - prior_at_funding
+        # Propagate forward to all later sphere cumulatives.
+        for later in ladder.spheres[idx + 1:]:
+            later.extras[PROGRESSIVE_RD_NAME] = max(
+                later.extras.get(PROGRESSIVE_RD_NAME, 0), new_count,
+            )
+
+    # Bootstrap-local rule on starting-inv / KSC / First Launch.
     _install_bootstrap_local_rule(world)
     bootstrap_locations = set(world.location_builder.ksc_biome_names) | {f"{home} First Launch"}
     for loc in world.multiworld.get_locations(world.player):
@@ -2485,23 +4108,172 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
         if loc.name.startswith("Starting Inventory"):
             bootstrap_locations.add(loc.name)
 
-    # Rule B: per-copy progressive bans on capability-gated locations.
-    _install_tier_ban_rule(world, ladder, bootstrap_locations, location_min_kits, band_funding)
+    # Per-location chain-ordering rule (replaces the previous rank-
+    # ceiling rule).  Combines:
+    #   * Self-ban — items in L's own min_kit can't land at L.
+    #   * Chain-ordering — items added at the sphere covering L (or
+    #     later) can't land at L; collecting them at L would be a
+    #     chicken-and-egg.
+    #   * R&D soft-lock — R&D=B banned at L if L isn't reachable with
+    #     band B's funding sphere's cumulative kit.
+    #   * Pad self-ban — Pad=K banned at L if L's min_extras need K.
+    location_names_in_chain = {s.location_name for s in ladder.spheres}
+    loc_prior_ranks, loc_prior_extras = _compute_location_priors(
+        ladder, location_min_ranks, location_min_extras,
+        location_names_in_chain,
+    )
+    chain_full_extras: dict[str, int] = {}
+    for sphere in ladder.spheres:
+        for name, count in sphere.extras.items():
+            chain_full_extras[name] = max(chain_full_extras.get(name, 0), count)
+    _install_placement_rules(
+        world, location_min_ranks, loc_prior_extras, bootstrap_locations,
+        chain_full_extras,
+    )
 
-    # Demote progressive copies the ladder doesn't need to ``useful`` so
-    # they can scatter past goal.  Must run after the ladder is built
-    # (we need ``cumulative_kit`` and ``band_funding``) and before the
-    # main fill examines item classifications.
-    _reclassify_spare_progressives(world, ladder, band_funding)
+    # Demote everything that isn't in the chain's collected reps set,
+    # and clear past-goal rank entries so above-ceiling items can
+    # scatter freely.  ``cumulative_reps`` is the union of all parts
+    # the bumper admitted across the chain — under the bulk-admit
+    # extension it includes every part at any (axis, rank) the chain
+    # touched.
+    rep_part_names = set(cumulative_reps)
+    rep_part_names |= set(sphere_rank_reps.values())  # belt-and-suspenders
+    _demote_non_rep_parts(world, rep_part_names, cumulative_ranks)
+    # === DIAGNOSTIC (temporary, gated) ===
+    import os as _os
+    if not _os.environ.get('KSP_PHASE2_DIAG'):
+        return
+    try:
+        with open('/home/nick/workspaces/ksp_ap/scratchpad/diag_compare.txt', 'w') as _dout:
+            _dout.write(f'=== CHAIN ({len(ladder.spheres)} spheres) ===\n')
+            for _i, _s in enumerate(ladder.spheres):
+                _dout.write(f'  [{_i}] {_s.name} @ {_s.location_name}\n')
+                _dout.write(f'      ranks={list(_s.ranks.upper_bounds)}\n')
+                _dout.write(f'      reps_collected ({len(_s.reps_collected)}):'
+                            f' {sorted(_s.reps_collected)}\n')
+                _dout.write(f'      bumper flags: has_launch={_s.flags.has_launch_engine}, '
+                            f'has_vac={_s.flags.has_vacuum_engine}, '
+                            f'engines={len(_s.flags.available_engines)}, '
+                            f'tanks={len(_s.flags.available_tanks)}, '
+                            f'srbs={len(_s.flags.available_srbs)}, '
+                            f'capsule={_s.flags.has_capsule}, '
+                            f'probe={_s.flags.has_probe_core}\n')
+            # Show what FINAL sphere claims vs what player actually has.
+            if ladder.spheres:
+                _final = ladder.spheres[-1]
+                _dout.write(f'\n=== FINAL SPHERE bumper claim ===\n')
+                _dout.write(f'reps_collected: {sorted(_final.reps_collected)}\n')
+                _dout.write(f'flags: has_launch={_final.flags.has_launch_engine}, '
+                            f'has_vac={_final.flags.has_vacuum_engine}, '
+                            f'engines={len(_final.flags.available_engines)}, '
+                            f'tanks={len(_final.flags.available_tanks)}\n')
+                _dout.write(f'engines: {[e.name for e in _final.flags.available_engines]}\n')
+                _dout.write(f'tanks: {[(t.name, t.fuel_type) for t in _final.flags.available_tanks]}\n')
+            # Pool composition.
+            from BaseClasses import ItemClassification
+            _prog = [_it for _it in world.multiworld.itempool
+                     if _it.player == world.player
+                     and _it.classification == ItemClassification.progression]
+            _dout.write(f'\n=== POOL (after demote) ===\n')
+            _dout.write(f'PROGRESSION items ({len(_prog)}):\n')
+            for _it in _prog:
+                _dout.write(f'  {_it.name}\n')
+        return
+    except Exception as _e:
+        with open('/home/nick/workspaces/ksp_ap/scratchpad/diag_compare.txt', 'a') as _eout:
+            import traceback
+            _eout.write(f'DIAG_FAIL: {_e}\n{traceback.format_exc()}\n')
+        return
+    try:
+        import os
+        from BaseClasses import CollectionState, ItemClassification
+        os.makedirs('/home/nick/workspaces/ksp_ap/scratchpad', exist_ok=True)
+        with open('/home/nick/workspaces/ksp_ap/scratchpad/diag.txt', 'w') as _out:
+            _out.write(f'=== CHAIN ({len(ladder.spheres)} spheres) ===\n')
+            for _i, _s in enumerate(ladder.spheres):
+                _out.write(f'  [{_i}] {_s.name} @ {_s.location_name}\n')
+                _out.write(f'      ranks={list(_s.ranks.upper_bounds)}\n')
+                _out.write(f'      extras={dict(_s.extras)}\n')
+            _pool = world.multiworld.itempool
+            _by_class = {}
+            for _it in _pool:
+                if _it.player != world.player:
+                    continue
+                _by_class.setdefault(_it.classification, []).append(_it.name)
+            for _c, _names in _by_class.items():
+                _out.write(f'POOL[{_c.name}] {len(_names)} items\n')
+            _state = CollectionState(world.multiworld)
+            _locs = [_l for _l in world.multiworld.get_locations(world.player)
+                     if _l.address is not None]
+            _reach = sum(1 for _l in _locs if _l.can_reach(_state))
+            _out.write(f'LOCS[reachable from precollected]={_reach}/{len(_locs)}\n')
+            _prog = [_it for _it in _pool if _it.player == world.player
+                     and _it.classification == ItemClassification.progression]
+            _out.write(f'PROG_COUNT={len(_prog)}\n')
+            for _it in _prog:
+                _acc = sum(1 for _l in _locs if _l.item_rule(_it))
+                _acc_r = sum(1 for _l in _locs
+                             if _l.item_rule(_it) and _l.can_reach(_state))
+                _out.write(f'  {_it.name!r:40} rule_ok={_acc:4d} '
+                           f'reach_ok={_acc_r:4d}\n')
+            # Sample: which locations does the BUMPER's first rep accept?
+            _out.write('=== SAMPLE LOCATIONS (capability-gated, reachable) ===\n')
+            _reach_locs = [_l for _l in _locs[:50] if _l.can_reach(_state)]
+            for _l in _reach_locs[:20]:
+                _out.write(f'  {_l.name}\n')
+            _out.write(f'=== SPHERE REP PICKS (count={len(sphere_rank_reps)}) ===\n')
+            for _k in sorted(sphere_rank_reps.keys(), key=lambda x: (x[0].value, x[1])):
+                _out.write(f'  {_k[0].value}={_k[1]} -> {sphere_rank_reps[_k]!r}\n')
+            _out.write(f'rep_part_names ({len(rep_part_names)}): {sorted(rep_part_names)}\n')
+            # Simulate fill progressively to see what makes progress.
+            _out.write('=== SIM: progressively add bumper reps to state ===\n')
+            # Build a list of all PROGRESSION items in pool.
+            _prog_list = list(_prog)
+            # Sort: rank-bearing parts by rank-sum (low first), then R&D/Pad/PSI.
+            def _key(it):
+                _sig = getattr(it, "rank_sig", None)
+                if _sig is None or not _sig.axes:
+                    return (1, 999)
+                return (0, sum(r for _, r in _sig.axes))
+            _prog_list.sort(key=_key)
+            _sim_state = CollectionState(world.multiworld)
+            _step_reach = sum(1 for _l in _locs if _l.can_reach(_sim_state))
+            _out.write(f'  step 0: reachable={_step_reach}\n')
+            from .capability import compute_capability_from_items as _ccfi
+            _diff_name = ["casual", "normal", "expert", "insane"][world.options.difficulty.value]
+            for _i, _it in enumerate(_prog_list[:25], start=1):
+                _sim_state.collect(_it, prevent_sweep=True)
+                _step_reach = sum(1 for _l in _locs if _l.can_reach(_sim_state))
+                if _i <= 5 or _i % 5 == 0:
+                    _c, _f = _ccfi(
+                        lambda n, _s=_sim_state, _p=world.player: _s.count(n, _p),
+                        _diff_name,
+                        bool(world.options.start_with_launch_clamps.value),
+                        world.mission_builder,
+                        progressive_launch_pad=bool(world.options.progressive_launch_pad.value),
+                    )
+                    _out.write(f'  step {_i:2d} +{_it.name!r}: reach={_step_reach}/'
+                               f'{len(_locs)} engines={len(_f.available_engines)} '
+                               f'tanks={len(_f.available_tanks)} '
+                               f'sounding_km={_c.sounding_altitude_km:.0f}\n')
+    except Exception as _e:
+        with open('/home/nick/workspaces/ksp_ap/scratchpad/diag.txt', 'a') as _out:
+            import traceback
+            _out.write(f'DIAG_FAILED: {_e}\n{traceback.format_exc()}\n')
+    # === END DIAGNOSTIC ===
 
-    # Sphere-1 boost: items needed to clear S_launch get placed at sphere-0
-    # locations by AP's distribute_early_items.
+    # Sphere-1 boost: items whose rank is admitted by S_launch's ceiling
+    # AND that the bumper picked as designated reps at S_launch level
+    # go on local-early so AP places them at sphere-0 locations.
     launch_sphere = next(
-        (s for s in ladder.spheres if s.location_name == f"{home} First Launch"),
+        (s for s in ladder.spheres if s.name == "S_launch"),
         None,
     )
+    local_early = world.multiworld.local_early_items[world.player]
     if launch_sphere is not None:
-        launch_delta = launch_sphere.rocket.delta
-        local_early = world.multiworld.local_early_items[world.player]
-        for name, count in launch_delta.items():
-            local_early[name] = max(local_early.get(name, 0), count)
+        for (_axis, _rank), rep_name in sphere_rank_reps.items():
+            launch_ceil = dict(launch_sphere.ranks.upper_bounds)
+            if launch_ceil.get(_axis, 0) >= _rank:
+                local_early[rep_name] = max(local_early.get(rep_name, 0), 1)
+

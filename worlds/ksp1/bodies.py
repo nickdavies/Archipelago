@@ -416,7 +416,7 @@ MUN = Body(
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=14,
     solar_distance_au=1.0,
-    landing_leg_tier=2,
+    landing_leg_tier=1,
     power_requirement="solar",
     eva_jetpack_twr=_jetpack_twr(1.63),
     dv=BodyDeltaV(
@@ -462,7 +462,7 @@ MOHO = Body(
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=20,
     solar_distance_au=0.34,
-    landing_leg_tier=2,
+    landing_leg_tier=1,
     power_requirement="solar",
     eva_jetpack_twr=_jetpack_twr(2.70),
     dv=BodyDeltaV(
@@ -535,7 +535,7 @@ DUNA = Body(
     atm_pressure_kpa=6.755, atm_density_kg_m3=0.096,
     can_land=True, low_orbit_alt_km=50,
     solar_distance_au=1.52,
-    landing_leg_tier=2,
+    landing_leg_tier=1,
     power_requirement="solar_marginal",
     eva_jetpack_twr=_jetpack_twr(2.94),
     dv=BodyDeltaV(
@@ -559,7 +559,7 @@ IKE = Body(
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=10,
     solar_distance_au=1.52,
-    landing_leg_tier=2,
+    landing_leg_tier=1,
     power_requirement="solar_marginal",
     eva_jetpack_twr=_jetpack_twr(1.10),
     dv=BodyDeltaV(
@@ -582,7 +582,7 @@ DRES = Body(
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=25,
     solar_distance_au=2.65,
-    landing_leg_tier=2,
+    landing_leg_tier=1,
     power_requirement="solar_marginal",
     eva_jetpack_twr=_jetpack_twr(2.94),
     dv=BodyDeltaV(
@@ -658,7 +658,7 @@ VALL = Body(
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=15,
     solar_distance_au=5.20,
-    landing_leg_tier=2,
+    landing_leg_tier=1,
     power_requirement="rtg",
     eva_jetpack_twr=_jetpack_twr(2.31),
     dv=BodyDeltaV(
@@ -750,7 +750,7 @@ EELOO = Body(
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=10,
     solar_distance_au=6.0,
-    landing_leg_tier=2,
+    landing_leg_tier=1,
     power_requirement="rtg",
     eva_jetpack_twr=_jetpack_twr(1.72),
     dv=BodyDeltaV(

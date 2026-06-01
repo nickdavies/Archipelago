@@ -132,6 +132,49 @@ class Decoupler:
     size_class: float
 
 
+# Typed sub-specs for MiscEquipment parts that participate in rank axes.
+# These default to None on MiscEquipment; the loader populates them from
+# parts.json fields produced by scripts/extract_parts.py.
+
+@dataclass(frozen=True)
+class SolarSpec:
+    """Solar panel data sourced from ModuleDeployableSolarPanel."""
+    charge_rate: float       # EC/sec at 1 AU sun distance
+    tracking: bool           # True = deployable/sun-tracking; False = fixed (OX-STAT)
+
+
+@dataclass(frozen=True)
+class AntennaSpec:
+    """Antenna data sourced from ModuleDataTransmitter.
+
+    Only ``DIRECT`` and ``RELAY`` antennas count for the RELAY rank axis;
+    ``INTERNAL`` (the 5kW transmitter built into pods/probes) is excluded.
+    """
+    power: float             # raw antennaPower (large numbers — log/quantize at scoring time)
+    combinable: bool
+    antenna_type: str        # "DIRECT" | "RELAY" | "INTERNAL"
+
+
+@dataclass(frozen=True)
+class CapsuleSpec:
+    """Crew-pod data sourced from top-level ``CrewCapacity`` + drainable
+    resource mass.  ``effective_dry_mass = part.mass - drainable_propellant``
+    is the rank ordering quantity; capsule pods carry MonoPropellant /
+    LiquidFuel / Oxidizer that can be drained pre-launch."""
+    crew_capacity: int
+    drainable_mass: float    # tonnes of removable propellant at 100% fill
+
+
+@dataclass(frozen=True)
+class ProbeCoreSpec:
+    """Probe-core SAS service level from ``ModuleSAS.SASServiceLevel`` (0..3).
+
+    Pods carry ModuleSAS too but their primary rank axis is CAPSULE; this
+    spec is only attached when ``provides`` contains :py:attr:`CapabilityFlag.PROBE_CORE`.
+    """
+    sas_level: int
+
+
 @dataclass(frozen=True)
 class MiscEquipment:
     name: str
@@ -142,6 +185,10 @@ class MiscEquipment:
     # shield to the capsule it protects — a 1.25m pod needs a 1.25m shield, not
     # the lightest available.  0.0 when the part has no meaningful diameter.
     size_class: float = 0.0
+    solar: Optional[SolarSpec] = None
+    antenna: Optional[AntennaSpec] = None
+    capsule: Optional[CapsuleSpec] = None
+    probe_core: Optional[ProbeCoreSpec] = None
 
 
 # ---------------------------------------------------------------------------
@@ -1046,6 +1093,67 @@ def _fuel_mass_from_resources(resources: dict[str, float]) -> float:
     return total
 
 
+# Resources that capsule pods carry as drainable propellant.  ElectricCharge
+# isn't a propellant; Ablator is structural (removing it removes reentry heat
+# shielding).  All others (MonoPropellant, LiquidFuel, Oxidizer, XenonGas) are
+# drainable pre-launch and reduce the capsule's effective dry mass for the
+# CAPSULE rank ordering.
+_DRAINABLE_RESOURCES: frozenset[str] = frozenset({
+    "MonoPropellant", "LiquidFuel", "Oxidizer", "XenonGas",
+})
+
+
+def _solar_spec_from_cfg(cfg: dict) -> Optional["SolarSpec"]:
+    s = cfg.get("solar")
+    if not s:
+        return None
+    return SolarSpec(charge_rate=float(s["charge_rate"]), tracking=bool(s["tracking"]))
+
+
+def _antenna_spec_from_cfg(cfg: dict) -> Optional["AntennaSpec"]:
+    a = cfg.get("antenna")
+    if not a:
+        return None
+    return AntennaSpec(
+        power=float(a["power"]),
+        combinable=bool(a["combinable"]),
+        antenna_type=str(a.get("type", "")),
+    )
+
+
+def _capsule_spec_from_cfg(cfg: dict) -> Optional["CapsuleSpec"]:
+    crew = int(cfg.get("crew_capacity", 0))
+    if crew <= 0:
+        return None
+    # Data-driven exclusion of non-sealed crew positions (e.g. the
+    # External Command Seat).  A "real" capsule has at least one stack
+    # bulkhead so it can serve as a terminal payload mounted on top of
+    # a rocket; an srf-only part is a chair clipped to the hull and
+    # cannot survive reentry or pressurization missions.  Replaces the
+    # legacy hand-curated ``_CAPSULE_EXCLUSIONS`` list.
+    bulkheads = cfg.get("bulkhead_profiles", [])
+    if all(b == "srf" for b in bulkheads):
+        return None
+    resources = cfg.get("resources", {})
+    drainable = 0.0
+    for res_name, amount in resources.items():
+        if res_name not in _DRAINABLE_RESOURCES:
+            continue
+        density = _RESOURCE_DENSITY.get(res_name)
+        if density is None:
+            continue
+        drainable += float(amount) * density
+    return CapsuleSpec(crew_capacity=crew, drainable_mass=drainable)
+
+
+def _probe_core_spec_from_cfg(cfg: dict, provides: frozenset) -> Optional["ProbeCoreSpec"]:
+    if CapabilityFlag.PROBE_CORE not in provides:
+        return None
+    # Stayputnik has no ModuleSAS in cfg — SAS level defaults to 0.
+    sas = int(cfg.get("sas_level", 0))
+    return ProbeCoreSpec(sas_level=sas)
+
+
 def _build_part(part_type: type, cfg: dict, overrides: dict, name: str) -> AnyPart:
     """Construct a frozen part dataclass from cfg JSON data + manual overrides."""
     cfg_name = name
@@ -1151,12 +1259,25 @@ def _build_part(part_type: type, cfg: dict, overrides: dict, name: str) -> AnyPa
         return Decoupler(name=cfg_name, mass=mass, kind=kind, size_class=size)
 
     if part_type is MiscEquipment:
+        provides = overrides.get("provides", frozenset())
+        capsule_spec = _capsule_spec_from_cfg(cfg)
+        # Honor the data-driven capsule rejection (e.g. srf-only chair):
+        # if the part-name's PartMapping says it provides ``capsule`` but
+        # the cfg says it isn't a sealed pod, strip ``capsule`` from
+        # ``provides`` so capability code (has_capsule, available_capsules)
+        # never sees it.
+        if "capsule" in provides and capsule_spec is None:
+            provides = provides - frozenset({"capsule"})
         return MiscEquipment(
             name=cfg_name,
             mass=mass,
-            provides=overrides.get("provides", frozenset()),
+            provides=provides,
             crew_capacity=int(cfg.get("crew_capacity", 0) or 0),
             size_class=size,
+            solar=_solar_spec_from_cfg(cfg),
+            antenna=_antenna_spec_from_cfg(cfg),
+            capsule=capsule_spec,
+            probe_core=_probe_core_spec_from_cfg(cfg, provides),
         )
 
     raise TypeError(f"Unknown part type: {part_type}")

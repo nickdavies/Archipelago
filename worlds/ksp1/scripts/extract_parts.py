@@ -183,6 +183,58 @@ def extract_part(part_dict: dict) -> dict | None:
     if resources:
         result["resources"] = resources
 
+    # Crew capacity (top-level field, present on command pods / crew cabins)
+    try:
+        crew = int(part_dict.get("CrewCapacity", "0"))
+    except ValueError:
+        crew = 0
+    if crew > 0:
+        result["crew_capacity"] = crew
+
+    # Solar panel (fixed and deployable both use ModuleDeployableSolarPanel)
+    solar_mod = _find_module(part_dict, "ModuleDeployableSolarPanel")
+    if solar_mod:
+        try:
+            charge = float(solar_mod.get("chargeRate", "0"))
+        except ValueError:
+            charge = 0.0
+        if charge > 0:
+            # `isTracking = false` is set explicitly on fixed panels (OX-STAT,
+            # OX-STAT-XL).  Absent or "true" means deployable/tracking.
+            tracking = solar_mod.get("isTracking", "true").strip().lower() != "false"
+            result["solar"] = {
+                "charge_rate": charge,
+                "tracking": tracking,
+            }
+
+    # Antenna (ModuleDataTransmitter)
+    antenna_mod = _find_module(part_dict, "ModuleDataTransmitter")
+    if antenna_mod:
+        try:
+            power = float(antenna_mod.get("antennaPower", "0"))
+        except ValueError:
+            power = 0.0
+        if power > 0:
+            combinable = antenna_mod.get("antennaCombinable", "False").strip().lower() == "true"
+            atype = antenna_mod.get("antennaType", "").strip()
+            result["antenna"] = {
+                "power": power,
+                "combinable": combinable,
+                "type": atype,
+            }
+
+    # SAS service level (ModuleSAS — appears on probe cores AND command pods AND
+    # standalone reaction wheel modules).  Standalone reaction wheels generally
+    # don't carry SAS in stock; probe cores and pods do.  Stored unconditionally
+    # so the rank scorer can use it directly.
+    sas_mod = _find_module(part_dict, "ModuleSAS")
+    if sas_mod:
+        try:
+            lvl = int(sas_mod.get("SASServiceLevel", "0"))
+        except ValueError:
+            lvl = 0
+        result["sas_level"] = lvl
+
     return result
 
 

@@ -27,7 +27,7 @@ from .bodies import (
     home_system_bodies, relay_tier_table_for, science_budget,
 )
 from .capability import get_capability
-from .items import ITEM_TABLE, PROGRESSIVE_RD_NAME, PROGRESSIVE_PART_ITEM_NAMES, SCIENCE_PACK_NAMES
+from .items import ITEM_TABLE, PROGRESSIVE_RD_NAME, SCIENCE_PACK_NAMES
 from .locations import (
     EVENT_BY_NAME,
     EventName,
@@ -75,14 +75,15 @@ _TRANSMIT_ONLY_DISCOUNT: float = 0.75
 # Science needed to declare the tech tree complete (buy all 62 nodes)
 _TECH_TREE_COMPLETE_SCIENCE = cumulative_tier_cost(MAX_TIER)
 
-# All progression-classified items (individual parts + progressive part items).
-# Eve Return/Sample Return require these — the capability system can't compute
-# Eve ascent so we use this as a proxy for "you have everything needed."
-# Progressive R&D is excluded (separate tech tree gate, not rocket capability).
-_ALL_PROGRESSION_ITEMS: frozenset[str] = frozenset(
-    name for name, (_, cls) in ITEM_TABLE.items()
-    if cls == ItemClassification.progression
-) | PROGRESSIVE_PART_ITEM_NAMES
+# Phase 2: every part item (no longer wrapped behind progressives).
+# Eve / Tylo / Laythe Return + Sample Return use this as a proxy for "you
+# have everything the capability solver can't model from physics."  Per
+# the design, these missions are hard-banned outside their target homes,
+# so the strictness of "every part" is academic in practice.  Progressive
+# R&D is excluded (separate tech-tree gate, not rocket capability); the
+# remaining kept progressives (Pad, PSI) are also excluded because they
+# don't represent rocket parts.
+_ALL_PROGRESSION_ITEMS: frozenset[str] = frozenset(ITEM_TABLE.keys())
 
 
 def _make_all_parts_rule(player: int) -> Callable[[CollectionState], bool]:

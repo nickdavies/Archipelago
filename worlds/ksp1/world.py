@@ -14,7 +14,6 @@ from .bodies import (
     home_relative_science_values,
 )
 from .items import ITEM_NAME_TO_ID, PROGRESSIVE_LAUNCH_PAD_CAPS, _FILLER_ITEMS
-from .parts import PROGRESSIVE_PART_TIERS
 from .locations import (
     ALL_EVENTS, KSC_BIOMES, KSC_LOCATION_PREFIX,
     LOCATION_NAME_TO_ID, LocationBuilder, MAX_TECH_SLOTS,
@@ -189,10 +188,6 @@ class KSP1World(World):
     # Fingerprint → RocketCapability, shared across all CollectionState copies
     capability_cache: dict[frozenset[tuple[str, int]], RocketCapability]
 
-    # Per progressive tier, the randomly-selected representative part name.
-    # Set during create_items(); included in slot_data for the client.
-    progressive_representatives: dict[str, dict[int, str]]
-
     # Resolved goal specification (preset or custom).
     goal_spec: GoalSpec
 
@@ -249,16 +244,17 @@ class KSP1World(World):
         home = BodyName(self.options.starting_body.current_key.title())
         self.mission_builder = MissionBuilder(home=home)
         self.location_builder = LocationBuilder(home=home)
+        # Per-world RankContext for sphere-ladder + item.rank_sig.
+        # ``home_has_atmosphere`` drives the SRB axis scorer; the rest
+        # of the rank table is body-agnostic.
+        from .ranks import RankContext
+        _atmo_homes = {BodyName.KERBIN, BodyName.EVE, BodyName.DUNA, BodyName.LAYTHE}
+        self._rank_context = RankContext(home_has_atmosphere=(home in _atmo_homes))
 
         # UT regen: restore options from original generation's slot_data.
         passthrough = getattr(self.multiworld, "re_gen_passthrough", {})
         if isinstance(passthrough, dict) and self.game in passthrough:
             self._apply_slot_data(passthrough[self.game])
-
-        # Pick representatives now — cross-player rule evaluation during
-        # other worlds' create_regions (e.g. pokemon_rb door_shuffle) can
-        # call get_capability before any create_items has run.
-        items.select_progressive_representatives(self)
 
         # Model-infeasible-locations set is a checked-in static lookup
         # keyed by home body — generated offline by
@@ -347,16 +343,6 @@ class KSP1World(World):
         d["node_bands"] = {n.node_id: TIER_TO_BAND[n.tier] for n in TECH_NODES}
         d["goal_locations"] = goal_spec_location_names(self.goal_spec)
         d["goal_display_name"] = self.goal_spec.display_name
-        # Progressive tier data for the client mod
-        d["progressive_tiers"] = {
-            name: {str(t): parts for t, parts in tiers.items()}
-            for name, tiers in PROGRESSIVE_PART_TIERS.items()
-        }
-        # Server-selected representative per progressive tier
-        d["progressive_representatives"] = {
-            name: {str(t): rep for t, rep in reps.items()}
-            for name, reps in self.progressive_representatives.items()
-        }
         # Authoritative data for C# client — eliminates hardcoded dicts.
         d["event_scales"] = {e.name: e.scale for e in ALL_EVENTS}
         d["tech_display_names"] = {n.node_id: n.display_name for n in TECH_NODES}
@@ -475,34 +461,18 @@ class KSP1World(World):
                     self._ut_contract_specs).items():
                 getattr(self.options, attr).value = bodies
 
-        # Stash progressive reps so create_items() uses them instead of re-randomizing.
-        self._ut_progressive_representatives = {
-            name: {int(t): rep for t, rep in reps.items()}
-            for name, reps in slot_data.get("progressive_representatives", {}).items()
-        }
-
     def explain_rule(self, target_name: str, state: CollectionState) -> list[dict] | None:
         """UT hook: /explain <location> shows rocket design, /explain parts [filter] shows inventory."""
         from .bodies import DIFFICULTY_PROFILES
         from .capability import compute_capability_from_items, evaluate_mission_detailed
         from .capability_format import (
             CHECK_MAP, format_rocket_output, format_parts_list,
-            format_progressive_chains, format_contract_output,
+            format_contract_output,
         )
 
         # Sub-command: /explain parts [filter]
-        #   "progressive [chain]" reveals the per-seed progressive part
-        #   assignments instead of filtering received inventory.
         if target_name.startswith("parts"):
             filter_text = target_name[5:].strip()
-            if filter_text == "progressive" or filter_text.startswith("progressive "):
-                chain_filter = filter_text[len("progressive"):].strip()
-                lines = format_progressive_chains(
-                    self.progressive_representatives,
-                    lambda n: state.count(n, self.player),
-                    chain_filter,
-                )
-                return [{"type": "text", "text": "\n".join(lines)}]
             item_counts: dict[str, int] = {}
             for name in self.item_name_to_id:
                 count = state.count(name, self.player)
@@ -529,17 +499,11 @@ class KSP1World(World):
             self.options.difficulty.value
         ]
 
-        rep_names = frozenset(
-            rep
-            for tiers in self.progressive_representatives.values()
-            for rep in tiers.values()
-        )
         cap, flags = compute_capability_from_items(
             lambda name: state.count(name, self.player),
             difficulty_name,
             bool(self.options.start_with_launch_clamps.value),
             self.mission_builder,
-            rep_names=rep_names,
         )
 
         # Contract locations aren't in CHECK_MAP — their feasibility needs the
