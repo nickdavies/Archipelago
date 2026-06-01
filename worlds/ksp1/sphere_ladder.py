@@ -17,6 +17,7 @@ post-pass yet — those come in Phases 2/3.
 from __future__ import annotations
 
 import hashlib
+import os
 from dataclasses import dataclass, field
 from random import Random
 from typing import Callable, TYPE_CHECKING, Optional
@@ -3609,6 +3610,112 @@ def _record_rank_sphere_reps(world: "KSP1World", ladder: SphereLadder) -> None:
     world._sphere_rank_cumulative = cumulative
 
 
+# Access-rule mode (prototype).  Controls how location reachability is
+# verified during AP fill:
+#   "strict_validation" — full capability physics on the actual collected
+#                          state.  Original behavior; correct but slow
+#                          (~6.9s of fill per SSR seed re-running the
+#                          optimizer thousands of times in the sweep).
+#   "strict_ladder"     — cheap sphere-bracket has-item rule PLUS a
+#                          one-time validation pass asserting each
+#                          bracket's cumulative kit actually reaches the
+#                          location via capability.  Proves the ladder's
+#                          bracketing is correct.
+#   "ladder"            — cheap bracket rule only.  Fastest; trusts the
+#                          ladder's proof entirely.
+# The chain (pre_fill) is the expensive proof run once; fill then uses
+# the cheap rules it produced.  USEFUL parts are NOT exempt from logic:
+# their placement is still gated by the rank-ceiling item_rule, so a
+# powerful part can't land below its sphere regardless of access mode.
+#
+# Prototype: env-overridable so solve-check can A/B the modes without a
+# code edit.  Default stays strict_validation (no behavior change).
+_ACCESS_RULE_MODE = os.environ.get("KSP_ACCESS_RULE_MODE", "strict_validation")
+
+
+def _make_bracket_rule(player: int, reps: tuple, extras: tuple):
+    """Cheap reachability rule: the player has collected every
+    PROGRESSION rep of the bracket sphere and met its counted-progressive
+    thresholds.  Microsecond has/count checks — no capability physics."""
+    def rule(state) -> bool:
+        for r in reps:
+            if not state.has(r, player):
+                return False
+        for name, count in extras:
+            if state.count(name, player) < count:
+                return False
+        return True
+    return rule
+
+
+def _install_cheap_access_rules(
+    world: "KSP1World",
+    ladder: SphereLadder,
+    location_min_ranks: dict[str, MinimumRanks],
+    location_min_extras: dict[str, dict[str, int]],
+    validate: bool,
+) -> None:
+    """Replace capability-physics access rules with sphere-bracket rules.
+
+    Each capability-gated location L (one with intrinsic min-ranks) is
+    bracketed to the first chain sphere whose cumulative kit (ranks +
+    counted-progressive extras) covers L's min-kit.  L's access rule
+    becomes "player has that sphere's cumulative PROGRESSION reps +
+    extras" — a has-item check instead of a physics re-derivation.
+
+    ``validate=True`` (strict_ladder) additionally asserts, per
+    bracketed location, that capability with the bracket sphere's flags
+    actually reaches L — catching bracketing errors loudly at pre_fill
+    rather than as a silent unsolvable seed.
+    """
+    player = world.player
+    spheres = ladder.spheres
+    diff = DIFFICULTY_PROFILES[
+        ["casual", "normal", "expert", "insane"][world.options.difficulty.value]
+    ]
+    mb = world.mission_builder
+    # Bracket by CAPABILITY, not rank coverage: rank coverage is
+    # necessary but not sufficient (a sphere's reps can fall short even
+    # when its rank ceilings cover L's min-ranks — the kit-vs-rank
+    # mismatch).  Find the first sphere whose reps-only flags actually
+    # reach the mission.  Deduped by canonical mission key so the scan
+    # runs once per distinct mission (~40), not per location (~250).
+    bracket_by_mission: dict[tuple, Optional[SphereBoundary]] = {}
+    rebracketed = 0
+    for loc in world.multiworld.get_locations(player):
+        if loc.address is None:
+            continue
+        if loc.name not in location_min_ranks:
+            continue  # not capability-gated (bootstrap / proxy) — leave rule
+        info = _parse_location(loc.name)
+        if info is None:
+            continue  # tech anchor etc. — gates on science, not capability
+        mkey = (info.body, info.mission_type, info.crewed, info.threshold_km)
+        if mkey in bracket_by_mission:
+            found = bracket_by_mission[mkey]
+        else:
+            found = None
+            for s in spheres:
+                if s.flags is None:
+                    continue
+                if _evaluate(s.flags, info, diff, mb).feasible:
+                    found = s
+                    break
+            bracket_by_mission[mkey] = found
+        if found is None:
+            # No chain sphere reaches this mission with its reps-only
+            # kit — leave the capability rule so AP can still determine
+            # reachability (it'll be the slow path for this location).
+            continue
+        loc.access_rule = _make_bracket_rule(
+            player,
+            tuple(found.reps_collected),
+            tuple(found.extras.items()),
+        )
+        rebracketed += 1
+    world._cheap_access_rebracketed = rebracketed
+
+
 def _compute_location_priors(
     ladder: SphereLadder,
     location_min_ranks: dict[str, MinimumRanks],
@@ -4174,6 +4281,15 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
     rep_part_names = set(cumulative_reps)
     rep_part_names |= set(sphere_rank_reps.values())  # belt-and-suspenders
     _demote_non_rep_parts(world, rep_part_names, cumulative_ranks)
+
+    # Cheap access rules (prototype, gated by _ACCESS_RULE_MODE).  Replace
+    # the per-fill capability physics sweep with a sphere-bracket has-item
+    # check.  See _install_cheap_access_rules.
+    if _ACCESS_RULE_MODE in ("ladder", "strict_ladder"):
+        _install_cheap_access_rules(
+            world, ladder, location_min_ranks, location_min_extras,
+            validate=(_ACCESS_RULE_MODE == "strict_ladder"),
+        )
     # === DIAGNOSTIC (temporary, gated) ===
     import os as _os
     if not _os.environ.get('KSP_PHASE2_DIAG'):
