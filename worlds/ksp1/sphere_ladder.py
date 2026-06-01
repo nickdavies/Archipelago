@@ -30,6 +30,7 @@ from .bodies import (
 from .capability import (
     EquipmentFlags, ProfileResult,
     _evaluate_sounding, _pre_pass, evaluate_mission_detailed,
+    build_kit_for_result,
 )
 from .capability_reasons import (
     BlockingInfo, BlockingReason, StageDiagnostic, StageFailure,
@@ -1988,8 +1989,9 @@ def minimal_ranks_for(
                 reps_only=None,
             )
             rescue_result = _evaluate(rescue_flags, info, diff, mission_builder)
-            if rescue_result.feasible and rescue_result.kit_used is not None:
-                kit = rescue_result.kit_used
+            rescue_kit = build_kit_for_result(rescue_flags, rescue_result)
+            if rescue_kit is not None:
+                kit = rescue_kit
                 _enrich_kit_alternates(kit, ctx)
                 # Try a per-seed random variant of the kit first
                 # (alternates derived from rank-equivalence + provides-flag
@@ -3949,9 +3951,8 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
             derived = _ranks_by_mission[mkey]
         else:
             result = _evaluate(_max_flags, info, _diff, world.mission_builder)
-            derived = (_ranks_from_kit(result.kit_used)
-                       if result.feasible and result.kit_used is not None
-                       else None)
+            kit = build_kit_for_result(_max_flags, result)
+            derived = _ranks_from_kit(kit) if kit is not None else None
             _ranks_by_mission[mkey] = derived
         if derived is None:
             continue

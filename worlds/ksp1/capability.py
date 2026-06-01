@@ -800,13 +800,28 @@ class ProfileResult:
         return [str(b) for b in self.blocking]
 
 
+# Precomputed once: the part name that provides FUEL_LINE (asparagus
+# enabler).  Scanning PART_DB inside _build_kit_used per call was a hot-
+# loop regression (called for every feasible eval).
+_FUEL_LINE_PART: Optional[str] = None
+for _nm, _parts in PART_DB.items():
+    if any(isinstance(_p, MiscEquipment) and CapabilityFlag.FUEL_LINE in _p.provides
+           for _p in _parts):
+        _FUEL_LINE_PART = _nm
+        break
+del _nm, _parts
+
+
 def _build_kit_used(flags: EquipmentFlags,
                     stage_results: list[StageResult],
                     terminal_parts: list[tuple[int, str]]) -> KitUsed:
     """Assemble the full structured kit the optimizer relied on.
 
-    See ``KitUsed`` for the categorization.  This is called once at the
-    end of ``_evaluate_profile`` when the result is feasible.
+    See ``KitUsed`` for the categorization.  Called only at the two
+    sites that consume a kit — the per-mission ceiling computation
+    (sphere_ladder loop 1) and the capability-guided rescue — NOT on
+    every feasible eval.  Building it for the bumper's ~60k feasibility
+    probes per seed was pure overhead.
     """
     kit = KitUsed()
     # 1. Explicit per-stage parts
@@ -867,18 +882,24 @@ def _build_kit_used(flags: EquipmentFlags,
         radial = [d for d in flags.available_decouplers if d.kind == "radial"]
         if radial:
             kit.radial_decoupler = min(radial, key=lambda d: d.mass).name
-    if flags.has_fuel_lines:
-        # FUEL_LINE is provided by a MiscEquipment (fuelLine in stock).
-        # Look up the part by capability flag so modded fuel lines work too.
-        from .parts import PART_DB, MiscEquipment as _ME, CapabilityFlag as _CF
-        for nm, parts in PART_DB.items():
-            if any(isinstance(p, _ME) and _CF.FUEL_LINE in p.provides for p in parts):
-                kit.fuel_line = nm
-                break
+    if flags.has_fuel_lines and _FUEL_LINE_PART is not None:
+        kit.fuel_line = _FUEL_LINE_PART
     if flags.has_srb_fuel and flags.available_srbs:
         kit.srb = min(flags.available_srbs,
                       key=lambda s: s.dry_mass + s.fuel_mass).name
     return kit
+
+
+def build_kit_for_result(flags: EquipmentFlags,
+                         result: "ProfileResult") -> Optional[KitUsed]:
+    """Build the structured KitUsed from a feasible ProfileResult + the
+    flags it was evaluated against.  Returns ``None`` if the result is
+    infeasible.  This is the explicit entry point for the two consumers
+    (per-mission ceiling, rescue) now that ``_evaluate_profile`` no
+    longer builds the kit eagerly."""
+    if not result.feasible:
+        return None
+    return _build_kit_used(flags, result.stage_results, result.terminal_parts)
 
 
 def _has_attitude_control(flags: EquipmentFlags) -> bool:
@@ -1633,7 +1654,8 @@ def _evaluate_profile(
         stage_results=reversed_stages,
         edge_groups=groups,
         terminal_parts=terminal_parts,
-        kit_used=_build_kit_used(flags, reversed_stages, terminal_parts),
+        # kit_used is NOT built here — it's expensive and only two call
+        # sites consume it.  They call ``build_kit_for_result`` explicitly.
     )
 
 
@@ -2486,6 +2508,8 @@ def compute_capability_from_items(
     flags = _pre_pass(item_count_fn, start_with_clamps,
                       progressive_launch_pad,
                       launch_pad_caps=mission_builder.launch_pad_caps)
+    # Lazy: bodies are assessed on first query (AP fill rules touch only
+    # a few bodies per state; eager _assess_bodies evaluated all 17).
     body_profiles = _LazyBodyProfiles(flags, diff, mission_builder)
     sounding_km = _compute_sounding_altitude(flags, mission_builder.home_body)
 
