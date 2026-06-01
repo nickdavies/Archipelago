@@ -1488,16 +1488,26 @@ def _random_kit_variant(kit, rng: Random) -> frozenset[str]:
     names.  Caller verifies feasibility before adopting — rank-equivalence
     doesn't guarantee cross-stage cascades survive.
     """
+    # ``sorted`` before every rng.choice: a frozenset's iteration order is
+    # hash-randomized per process (PYTHONHASHSEED), so ``tuple(alts)`` would
+    # make the variant pick — and thus the resulting kit / cheap rules /
+    # fill — non-reproducible across solve-check workers.  Sorting pins the
+    # candidate order so the seeded rng gives the same pick everywhere.
+    def _pick(chosen, alts):
+        if not alts:
+            return chosen
+        return rng.choice([chosen] + sorted(alts))
+
     out: set[str] = set()
     out.update(kit.stage_equipment)
     out.update(kit.landing_legs)
     out.update(kit.relays)
     for i, eng in enumerate(kit.stage_engines):
         alts = kit.stage_engine_alternates[i] if i < len(kit.stage_engine_alternates) else frozenset()
-        out.add(rng.choice((eng,) + tuple(alts)) if alts else eng)
+        out.add(_pick(eng, alts))
     for i, tank in enumerate(kit.stage_tanks):
         alts = kit.stage_tank_alternates[i] if i < len(kit.stage_tank_alternates) else frozenset()
-        out.add(rng.choice((tank,) + tuple(alts)) if alts else tank)
+        out.add(_pick(tank, alts))
     for field_name in (
         'capsule', 'probe_core', 'parachute', 'heat_shield',
         'rtg', 'solar', 'solar_retractable', 'monoprop_tank',
@@ -1507,8 +1517,7 @@ def _random_kit_variant(kit, rng: Random) -> frozenset[str]:
         chosen = getattr(kit, field_name)
         if not chosen:
             continue
-        alts = kit.alternates.get(field_name, frozenset())
-        out.add(rng.choice((chosen,) + tuple(alts)) if alts else chosen)
+        out.add(_pick(chosen, kit.alternates.get(field_name, frozenset())))
     return frozenset(out)
 
 
@@ -3654,6 +3663,7 @@ def _install_ladder_rules(
     location_min_ranks: dict[str, MinimumRanks],
     location_min_extras: dict[str, dict[str, int]],
     bootstrap_locations: set,
+    save_original: bool = False,
 ) -> None:
     """Install BOTH the cheap access rule and the placement item_rule for
     every capability-gated location, driven by a SINGLE capability
@@ -3689,6 +3699,10 @@ def _install_ladder_rules(
         s = spheres[j - 1]
         return dict(s.ranks.upper_bounds), dict(s.extras)
 
+    # strict_ladder: keep the original capability access rule per
+    # location so post_fill can swap it back in and independently
+    # re-verify the cheap-rule fill is winnable under real capability.
+    saved: dict[str, object] = {}
     bracket_by_mission: dict[tuple, Optional[int]] = {}
     rebracketed = 0
     for loc in world.multiworld.get_locations(player):
@@ -3713,6 +3727,8 @@ def _install_ladder_rules(
             # No sphere reaches this mission with its reps-only kit —
             # leave the capability rule as the (slow) fallback.
             continue
+        if save_original:
+            saved[loc.name] = loc.access_rule
         sphere = spheres[j]
         # Access rule: has the bracket sphere's full cumulative kit.
         loc.access_rule = _make_bracket_rule(
@@ -3744,6 +3760,8 @@ def _install_ladder_rules(
         loc.item_rule = _rule
         rebracketed += 1
     world._cheap_access_rebracketed = rebracketed
+    if save_original:
+        world._strict_ladder_saved_rules = saved
 
 
 def _compute_location_priors(
@@ -4305,6 +4323,7 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
         _install_ladder_rules(
             world, ladder, location_min_ranks, location_min_extras,
             bootstrap_locations,
+            save_original=(_ACCESS_RULE_MODE == "strict_ladder"),
         )
     else:
         _install_placement_rules(

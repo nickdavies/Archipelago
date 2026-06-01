@@ -318,6 +318,28 @@ class KSP1World(World):
         from .sphere_ladder import apply_sphere_ladder
         apply_sphere_ladder(self)
 
+    def post_fill(self) -> None:
+        # strict_ladder cross-check: the cheap sphere-bracket access
+        # rules were used during fill.  Now swap the saved capability
+        # access rules back in and independently confirm the resulting
+        # item placement is winnable under real physics.  A failure
+        # means the ladder's bracketing produced a fill the capability
+        # system can't actually solve — a loud, catchable bug rather
+        # than a silently broken shipped seed.
+        saved = getattr(self, "_strict_ladder_saved_rules", None)
+        if not saved:
+            return
+        for loc in self.multiworld.get_locations(self.player):
+            orig = saved.get(loc.name)
+            if orig is not None:
+                loc.access_rule = orig
+        if not self.multiworld.can_beat_game():
+            from Options import OptionError
+            raise OptionError(
+                "strict_ladder cross-check FAILED: the cheap-rule fill is "
+                "not winnable under capability rules — sphere bracketing bug."
+            )
+
     def create_item(self, name: str) -> items.KSP1Item:
         return items.create_item(self, name)
 
