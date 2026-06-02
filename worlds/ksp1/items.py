@@ -222,6 +222,11 @@ ITEM_NAME_TO_ID: dict[str, int] = {
 #: Always precollected — structural necessity in every seed.
 ALWAYS_PRECOLLECTED: tuple[str, ...] = ("strutConnector",)
 
+#: Precollected only for the complete_tech_tree goal, whose science funding
+#: assumes basic temperature science on every body.  Scoped to that goal so
+#: it doesn't perturb the item pool / fill of goals that don't need it.
+TECH_TREE_PRECOLLECTED: tuple[str, ...] = ("sensorThermometer",)
+
 #: Precollected when start_with_launch_clamps option is enabled.
 CLAMP_PRECOLLECTED: tuple[str, ...] = ("launchClamp1",)
 
@@ -291,6 +296,8 @@ def create_all_items(world: KSP1World) -> None:
     precollected: set[str] = set(ALWAYS_PRECOLLECTED)
     if world.options.start_with_launch_clamps:
         precollected.update(CLAMP_PRECOLLECTED)
+    if world.goal_spec.complete_tech_tree:
+        precollected.update(TECH_TREE_PRECOLLECTED)
 
     for name in precollected:
         world.multiworld.push_precollected(create_item(world, name))

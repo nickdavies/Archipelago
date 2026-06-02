@@ -319,13 +319,9 @@ class KSP1World(World):
         apply_sphere_ladder(self)
 
     def post_fill(self) -> None:
-        # strict_ladder cross-check: the cheap sphere-bracket access
-        # rules were used during fill.  Now swap the saved capability
-        # access rules back in and independently confirm the resulting
-        # item placement is winnable under real physics.  A failure
-        # means the ladder's bracketing produced a fill the capability
-        # system can't actually solve — a loud, catchable bug rather
-        # than a silently broken shipped seed.
+        # strict_ladder cross-check: the cheap sphere-bracket access rules
+        # were used during fill.  Swap the saved capability access rules
+        # back in and confirm the placement is winnable under real physics.
         saved = getattr(self, "_strict_ladder_saved_rules", None)
         if not saved:
             return
@@ -333,12 +329,56 @@ class KSP1World(World):
             orig = saved.get(loc.name)
             if orig is not None:
                 loc.access_rule = orig
+        if self.multiworld.can_beat_game():
+            return  # cheap-rule fill is winnable under capability — done
+
+        # FALLBACK.  The cheap fill produced a placement capability can't
+        # solve — a reps-only-vs-capability divergence (currently only on
+        # hard alien-home interplanetary goals; never Kerbin).  Rather than
+        # abort, log the divergence (the punch-list for the round-trip fix)
+        # and RE-FILL with the capability rules now active — equivalent to
+        # strict_validation for this one seed.  Rare, so the slow fill is
+        # only paid where the cheap path is unsound.
+        import logging
+        from Fill import distribute_items_restrictive
+        from Options import OptionError
+        self._strict_ladder_fell_back = True
+        logging.warning(
+            "KSP1 strict_ladder fallback (re-fill with capability rules): "
+            "home=%s goal=%s — %s",
+            self.mission_builder.home, self.options.goal.current_key,
+            self._strict_ladder_divergence_summary(),
+        )
+        cleared = []
+        for loc in self.multiworld.get_locations(self.player):
+            if loc.address is not None and loc.item is not None and not loc.locked:
+                it = loc.item
+                loc.item = None
+                it.location = None
+                cleared.append(it)
+        self.multiworld.itempool = cleared
+        distribute_items_restrictive(self.multiworld)
         if not self.multiworld.can_beat_game():
-            from Options import OptionError
             raise OptionError(
-                "strict_ladder cross-check FAILED: the cheap-rule fill is "
-                "not winnable under capability rules — sphere bracketing bug."
+                "strict_ladder fallback FAILED: a capability-rule re-fill is "
+                "still not winnable — genuine unsolvable seed, not a "
+                "bracketing bug."
             )
+
+    def _strict_ladder_divergence_summary(self) -> str:
+        """Short description of what capability can't reach under the cheap
+        fill — logged on fallback to build the round-trip (3) punch-list."""
+        from BaseClasses import CollectionState, ItemClassification
+        st = CollectionState(self.multiworld)
+        st.sweep_for_advancements()
+        unreached = [
+            (l.name, l.item.name)
+            for l in self.multiworld.get_locations(self.player)
+            if l.item and (l.item.classification & ItemClassification.progression)
+            and not l.can_reach(st)
+        ]
+        sample = ", ".join(f"{n}<-{it}" for n, it in unreached[:5])
+        return f"{len(unreached)} unreachable progression; e.g. {sample}"
 
     def create_item(self, name: str) -> items.KSP1Item:
         return items.create_item(self, name)

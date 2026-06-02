@@ -61,6 +61,17 @@ from .ranks import (
     rank_sig_for, ranks_for_context,
 )
 
+# Parts providing the basic temperature/pressure instruments that
+# ``bankable_science`` credits on every body.  Computed from PART_DB by
+# capability flag so modded instruments are picked up automatically.
+_BASIC_SCIENCE_INSTRUMENTS: frozenset[str] = frozenset(
+    nm for nm, parts in PART_DB.items()
+    if any(isinstance(p, MiscEquipment)
+           and (CapabilityFlag.THERMOMETER in p.provides
+                or CapabilityFlag.BAROMETER in p.provides)
+           for p in parts)
+)
+
 
 # Unified per-item caps for sphere-ladder bumping.  Combines progressive
 # *part* counts (engine/tank/etc.) with the non-part progressives
@@ -1438,7 +1449,6 @@ def _enrich_kit_alternates(kit, ctx: RankContext) -> None:
         'capsule': RankAxisKey.CAPSULE,
         'probe_core': RankAxisKey.PROBE_SAS,
         'parachute': RankAxisKey.PARACHUTE,
-        'heat_shield': RankAxisKey.HEAT_SHIELD,
         'solar': RankAxisKey.SOLAR,
         'solar_retractable': RankAxisKey.SOLAR,
         'monoprop_tank': RankAxisKey.MONOPROP_TANK,
@@ -1501,6 +1511,7 @@ def _random_kit_variant(kit, rng: Random) -> frozenset[str]:
     out: set[str] = set()
     out.update(kit.stage_equipment)
     out.update(kit.landing_legs)
+    out.update(kit.heat_shields)
     out.update(kit.relays)
     for i, eng in enumerate(kit.stage_engines):
         alts = kit.stage_engine_alternates[i] if i < len(kit.stage_engine_alternates) else frozenset()
@@ -1509,10 +1520,11 @@ def _random_kit_variant(kit, rng: Random) -> frozenset[str]:
         alts = kit.stage_tank_alternates[i] if i < len(kit.stage_tank_alternates) else frozenset()
         out.add(_pick(tank, alts))
     for field_name in (
-        'capsule', 'probe_core', 'parachute', 'heat_shield',
+        'capsule', 'probe_core', 'parachute',
         'rtg', 'solar', 'solar_retractable', 'monoprop_tank',
         'rcs_thruster', 'reaction_wheel', 'aero_control', 'ladder',
         'stack_decoupler', 'radial_decoupler', 'fuel_line', 'srb',
+        'ion_power',
     ):
         chosen = getattr(kit, field_name)
         if not chosen:
@@ -3637,9 +3649,11 @@ def _record_rank_sphere_reps(world: "KSP1World", ladder: SphereLadder) -> None:
 # their placement is still gated by the rank-ceiling item_rule, so a
 # powerful part can't land below its sphere regardless of access mode.
 #
-# Prototype: env-overridable so solve-check can A/B the modes without a
-# code edit.  Default stays strict_validation (no behavior change).
-_ACCESS_RULE_MODE = os.environ.get("KSP_ACCESS_RULE_MODE", "strict_validation")
+# Env-overridable so solve-check can A/B the modes without a code edit.
+# Default is strict_ladder: the cheap sphere-bracket rules drive fill, and
+# post_fill swaps the capability rules back in to assert the placement is
+# winnable under real physics.  Validated at N=100/goal (0 failures).
+_ACCESS_RULE_MODE = os.environ.get("KSP_ACCESS_RULE_MODE", "strict_ladder")
 
 
 def _make_bracket_rule(player: int, reps: tuple, extras: tuple):
@@ -3692,18 +3706,17 @@ def _install_ladder_rules(
     ]
     mb = world.mission_builder
 
-    def _prior(j: int) -> tuple[dict, dict]:
-        """(ranks_dict, extras_dict) of the sphere before index j."""
-        if j <= 0:
-            return {}, {}
-        s = spheres[j - 1]
-        return dict(s.ranks.upper_bounds), dict(s.extras)
-
     # strict_ladder: keep the original capability access rule per
     # location so post_fill can swap it back in and independently
     # re-verify the cheap-rule fill is winnable under real capability.
     saved: dict[str, object] = {}
     bracket_by_mission: dict[tuple, Optional[int]] = {}
+    # Per-location feasibility bracket (first sphere whose cumulative kit can
+    # FLY the mission).  This is the single source of truth for a mission's
+    # sphere — the placement rule reuses it instead of re-deriving via
+    # rank-vector domination, which diverges from the chain (see
+    # _install_unified_sphere_rules).
+    bracket_by_loc: dict[str, int] = {}
     rebracketed = 0
     for loc in world.multiworld.get_locations(player):
         if loc.address is None or loc.name in bootstrap_locations:
@@ -3727,6 +3740,7 @@ def _install_ladder_rules(
             # No sphere reaches this mission with its reps-only kit —
             # leave the capability rule as the (slow) fallback.
             continue
+        bracket_by_loc[loc.name] = j
         if save_original:
             saved[loc.name] = loc.access_rule
         sphere = spheres[j]
@@ -3736,30 +3750,14 @@ def _install_ladder_rules(
             tuple(sphere.reps_collected),
             tuple(sphere.extras.items()),
         )
-        # Placement: rank ceiling = PRIOR sphere (bans L's unlock reps).
-        ranks_dict, extras_dict = _prior(j)
-        existing = loc.item_rule
-
-        def _rule(item, _r=ranks_dict, _e=extras_dict, _p=player,
-                  _orig=existing) -> bool:
-            if _orig is not None and not _orig(item):
-                return False
-            if item.player != _p:
-                return True
-            sig = getattr(item, "rank_sig", None)
-            if sig is not None and sig.axes:
-                for axis_key, rank in sig.axes:
-                    if rank > _r.get(axis_key, 0):
-                        return False
-                return True
-            tier = getattr(item, "_sphere_tier", None)
-            if tier is not None and tier > _e.get(item.name, 0):
-                return False
-            return True
-
-        loc.item_rule = _rule
+        # No item_rule ban here.  The chicken-and-egg (a rep needed to reach
+        # L sitting at L) is prevented by AP's restrictive fill, which never
+        # places a progression item at a location unreachable without it —
+        # the same protection strict_validation relies on.  Placement balance
+        # is the unified sphere rule's job (_install_unified_sphere_rules).
         rebracketed += 1
     world._cheap_access_rebracketed = rebracketed
+    world._cheap_access_bracket = bracket_by_loc
     if save_original:
         world._strict_ladder_saved_rules = saved
 
@@ -3824,6 +3822,40 @@ def _compute_location_priors(
     return loc_prior_ranks, loc_prior_extras
 
 
+def _make_placement_rule(player, ranks_dict, extras_dict, chain_full_extras,
+                         existing, gate_parts: bool = True):
+    """Rank-ceiling (PART items) + counted-progressive chain-ordering rule.
+
+    ``gate_parts=False`` skips the PART rank ceiling, applying only the
+    counted-progressive chain-ordering (used by the strict_ladder uniform
+    progressive pass).
+    """
+    def _rule(item, _r=ranks_dict, _e=extras_dict, _p=player,
+              _chain=chain_full_extras, _orig=existing, _gp=gate_parts) -> bool:
+        if _orig is not None and not _orig(item):
+            return False
+        if item.player != _p:
+            return True
+        sig = getattr(item, "rank_sig", None)
+        if sig is not None and sig.axes:
+            if not _gp:
+                return True
+            for axis_key, rank in sig.axes:
+                if rank > _r.get(axis_key, 0):
+                    return False
+            return True
+        tier = getattr(item, "_sphere_tier", None)
+        if tier is not None:
+            if tier > _chain.get(item.name, 0):
+                return True  # past-chain — admitted anywhere
+            if tier > _e.get(item.name, 0):
+                return False
+        return True
+    return _rule
+
+
+
+
 def _install_placement_rules(
     world: "KSP1World",
     location_min_ranks: dict[str, MinimumRanks],
@@ -3867,30 +3899,127 @@ def _install_placement_rules(
             continue
         ranks_dict = dict(loc_ranks.upper_bounds) if loc_ranks is not None else {}
         extras_dict = dict(loc_extras) if loc_extras is not None else {}
+        loc.item_rule = _make_placement_rule(
+            player, ranks_dict, extras_dict, chain_full_extras, loc.item_rule,
+        )
+
+
+_EMPTY_EXTRAS: dict[str, int] = {}
+
+
+def _sphere_covers(s: "SphereBoundary", axes, extras) -> bool:
+    """True iff sphere ``s`` admits an item/location with these rank
+    ``axes`` (iterable of ``(axis, rank)``) and counted-progressive
+    ``extras`` (``name -> count``).
+
+    Same admission test as :func:`_rank_admits_item`: an axis absent from
+    the sphere's ceiling is *unavailable* (cap 0), not unconstrained.
+    """
+    ranks = s.ranks
+    for ax, rk in axes:
+        cap = ranks.get(ax)
+        if cap is None or rk > cap:
+            return False
+    if extras:
+        s_extras = s.extras
+        for nm, cnt in extras.items():
+            if cnt > s_extras.get(nm, 0):
+                return False
+    return True
+
+
+def _first_covering_sphere(spheres, axes, extras) -> int:
+    """Ladder index of the first sphere that covers ``(axes, extras)``.
+
+    Sphere rank ceilings and counted-progressive ``extras`` grow
+    monotonically along the chain, so the first covering sphere is the
+    ladder position.  Returns ``len(spheres)`` when no real sphere covers
+    it (beyond the chain's reach).
+    """
+    for i, s in enumerate(spheres):
+        if _sphere_covers(s, axes, extras):
+            return i
+    return len(spheres)
+
+
+def _item_min_sphere(item, spheres) -> int:
+    """Ladder position of an item — the first sphere at which it becomes
+    available, and therefore the earliest location sphere it may sit at.
+
+    * Parts use their ``rank_sig`` axes against sphere rank ceilings.
+    * Counted progressives (R&D / Pad / PSI) use ``{name: tier}`` against
+      sphere ``extras``.
+    * Items the chain never requires — spare high-rank parts whose ranks
+      exceed the goal, or counted progressives the goal never bumps — are
+      unconstrained (sphere 0).  This reproduces the legacy "past-chain ⇒
+      admitted anywhere" escape, so they remain free filler.
+    """
+    sig = getattr(item, "rank_sig", None)
+    if sig is not None and sig.axes:
+        idx = _first_covering_sphere(spheres, sig.axes, _EMPTY_EXTRAS)
+        return 0 if idx == len(spheres) else idx
+    tier = getattr(item, "_sphere_tier", None)
+    if tier is not None:
+        idx = _first_covering_sphere(spheres, (), {item.name: tier})
+        return 0 if idx == len(spheres) else idx
+    return 0
+
+
+def _install_unified_sphere_rules(
+    world: "KSP1World",
+    ladder: "SphereLadder",
+    location_min_ranks: dict[str, MinimumRanks],
+    location_min_extras: dict[str, dict[str, int]],
+    bootstrap_locations: set[str],
+) -> None:
+    """The unified placement rule: every item is admissible at location L
+    iff ``item.min_sphere <= L.sphere`` — one sphere-index comparison for
+    parts, R&D, Pad and PSI alike.
+
+    Replaces the rank-ceiling (parts) / extras-chain-ordering (counted
+    progressives) split.  It is purely a balance / progression-ordering
+    constraint; soundness is owned by the capability cross-check in
+    ``post_fill``, not here.  Locations with no rank requirement (KSC,
+    starting inventory, Victory) are left to their existing rule.
+    """
+    player = world.player
+    spheres = ladder.spheres
+    # Missions: reuse the cheap-access FEASIBILITY bracket (first sphere whose
+    # cumulative kit can fly the mission) — the chain's own oracle.  Re-deriving
+    # via rank-vector domination diverges, because a mission's independent
+    # minimal kit can sit on a different point of the Δv trade-off frontier
+    # than the chain ever visits (incomparable vectors → falls to the top).
+    # Tech nodes / KSC: their kit IS a chain sphere's (funding kit / capsule),
+    # so _first_covering_sphere is exact for them.
+    cheap_bracket: dict[str, int] = getattr(world, "_cheap_access_bracket", {})
+    loc_sphere: dict[str, int] = {}
+    for name, ranks in location_min_ranks.items():
+        if name in cheap_bracket:
+            loc_sphere[name] = cheap_bracket[name]
+        else:
+            loc_sphere[name] = _first_covering_sphere(
+                spheres, ranks.upper_bounds, location_min_extras.get(name, _EMPTY_EXTRAS)
+            )
+    for loc in world.multiworld.get_locations(player):
+        if loc.name in bootstrap_locations:
+            continue
+        L = loc_sphere.get(loc.name)
+        if L is None:
+            continue  # ungated (KSC / starting inventory / event) — keep existing rule
         existing = loc.item_rule
 
-        def _rule(item, _r=ranks_dict, _e=extras_dict, _p=player,
-                  _chain=chain_full_extras, _orig=existing) -> bool:
+        def _rule(item, _p=player, _L=L, _spheres=spheres, _orig=existing) -> bool:
             if _orig is not None and not _orig(item):
                 return False
             if item.player != _p:
                 return True
-            sig = getattr(item, "rank_sig", None)
-            if sig is not None and sig.axes:
-                # Rank ceiling: PART item admitted iff every axis is
-                # at or below the location's intrinsic min on that axis.
-                for axis_key, rank in sig.axes:
-                    if rank > _r.get(axis_key, 0):
-                        return False
-                return True
-            # Counted progressive: chain-ordering on extras.
-            tier = getattr(item, "_sphere_tier", None)
-            if tier is not None:
-                if tier > _chain.get(item.name, 0):
-                    return True  # past-chain — admitted anywhere
-                if tier > _e.get(item.name, 0):
-                    return False
-            return True
+            ms = _item_min_sphere(item, _spheres)
+            if item.advancement:
+                # "Parts to explore sphere N live in sphere N-1": a chain rep
+                # is reachable only at its prerequisite sphere (chicken-and-egg
+                # at/above its own), so floor it at min_sphere - 1.
+                return ms <= _L + 1
+            return ms <= _L
 
         loc.item_rule = _rule
 
@@ -4105,9 +4234,22 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
         if mkey in _ranks_by_mission:
             derived = _ranks_by_mission[mkey]
         else:
-            result = _evaluate(_max_flags, info, _diff, world.mission_builder)
-            kit = build_kit_for_result(_max_flags, result)
-            derived = _ranks_from_kit(kit) if kit is not None else None
+            # Minimal kit grown from nothing (the chain's own bumper) — the
+            # intrinsic per-location requirement.  The previous max-flags kit
+            # over-specified support gear (best antenna/capsule/SAS), pinning
+            # every mission to the top sphere; this is the empty-prior minimum
+            # the rest of the code already assumes (see the chain-walk
+            # fallback comment below).
+            rocket = minimal_ranks_for(
+                loc.name, MinimumRanks.empty(), ctx,
+                difficulty=difficulty,
+                progressive_launch_pad=progressive_launch_pad,
+                start_with_clamps=start_with_clamps,
+                rng=world.random,
+                mission_builder=world.mission_builder,
+                precollected_names=precollected_names,
+            )
+            derived = rocket.ranks if rocket is not None else None
             _ranks_by_mission[mkey] = derived
         if derived is None:
             continue
@@ -4252,6 +4394,37 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
     world._sphere_rank_reps = sphere_rank_reps
     world._sphere_rank_cumulative = cumulative_ranks
 
+    # Science-instrument early cap (S_sci) — complete_tech_tree only.
+    # The funding pass credits temperature/pressure instrument science on
+    # every reachable body, but no flight mission requires an instrument,
+    # so the bumper never makes them reps.  Inject the (non-precollected)
+    # basic instruments into the reps of every sphere at/after ~45% of the
+    # chain's dv range.  One move, via existing machinery:
+    #   * counts them in the funding pass's bankable_science (sound funding
+    #     — the deep MAX_TIER funding sphere now actually has the barometer
+    #     the body_max_yield estimate assumed);
+    #   * makes them proper reps, not orphan progression (the cheap access
+    #     rules for >=45%-dv missions require them, so fill can't strand
+    #     them — fixes the SSR/mun_flag regressions);
+    #   * caps placement to the first ~45% of the run: the chain-ordering
+    #     ban keeps them out of >=45%-dv locations, so they land somewhere
+    #     in the first half (with variance — not jammed at sphere 0 like
+    #     AP's early_items would do).
+    if world.goal_spec.complete_tech_tree:
+        _sci_inject = _BASIC_SCIENCE_INSTRUMENTS - precollected_names
+        _sci_dvs = [s.signature.dv for s in ladder.spheres
+                    if s.signature is not None]
+        if _sci_inject and _sci_dvs:
+            _sci_cap_dv = 0.45 * max(_sci_dvs)
+            for _s in ladder.spheres:
+                if _s.signature is not None and _s.signature.dv >= _sci_cap_dv:
+                    _s.reps_collected = frozenset(_s.reps_collected) | _sci_inject
+            # Keep the chain's cumulative rep set (used by the demote below
+            # to decide PROGRESSION vs USEFUL) in sync with the injection —
+            # otherwise the funding pass credits the instruments but the
+            # demote marks them USEFUL, so they're never collected.
+            cumulative_reps = cumulative_reps | _sci_inject
+
     # Tech-tree band funding: walk the chain accumulating science and
     # assign each tech tier a funding sphere.  Without this, R&D copies
     # have no chain-placement target and float to early bands.
@@ -4297,6 +4470,28 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
         if loc.name.startswith("Starting Inventory"):
             bootstrap_locations.add(loc.name)
 
+    # Step A: pull the early "ungated" locations into the sphere system, so
+    # every location is sphere-locked by the kit needed to reach it (the one
+    # exception is Starting Inventory, pinned to sphere 0).  KSC science and
+    # the first splashdown need a capsule; First Launch and Starting Inventory
+    # sit at sphere 0.  Discarding them from ``bootstrap_locations`` lets the
+    # unified sphere rule gate them (it skips the bootstrap set).
+    _capsule_kit = MinimumRanks.empty().with_axis(RankAxisKey.CAPSULE, 1)
+    _gate_early: dict[str, MinimumRanks] = {
+        name: _capsule_kit for name in world.location_builder.ksc_biome_names
+    }
+    _gate_early[f"{home} First Launch"] = MinimumRanks.empty()
+    for loc in world.multiworld.get_locations(world.player):
+        if loc.address is None:
+            continue
+        if loc.name == "Splashdown":
+            _gate_early[loc.name] = _capsule_kit
+        elif loc.name.startswith("Starting Inventory"):
+            _gate_early[loc.name] = MinimumRanks.empty()
+    for _name, _ranks in _gate_early.items():
+        location_min_ranks.setdefault(_name, _ranks)
+        bootstrap_locations.discard(_name)
+
     # Per-location chain-ordering rule (replaces the previous rank-
     # ceiling rule).  Combines:
     #   * Self-ban — items in L's own min_kit can't land at L.
@@ -4315,15 +4510,25 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
     for sphere in ladder.spheres:
         for name, count in sphere.extras.items():
             chain_full_extras[name] = max(chain_full_extras.get(name, 0), count)
+    # Expose the finalized per-location rank/extras maps for analysis tooling.
+    world._location_min_ranks = location_min_ranks
+    world._location_min_extras = location_min_extras
     if _ACCESS_RULE_MODE in ("ladder", "strict_ladder"):
-        # Unified path: one capability-bracket per mission drives BOTH
-        # the cheap access rule and the placement item_rule, so they
-        # can't disagree.  Replaces both the per-fill capability sweep
-        # and the rank-based _install_placement_rules.
+        # Cheap reachability: one capability-bracket per mission gives each
+        # location a microsecond ``has_all(reps)`` access rule (validated
+        # against real physics by the post_fill cross-check).
         _install_ladder_rules(
             world, ladder, location_min_ranks, location_min_extras,
             bootstrap_locations,
             save_original=(_ACCESS_RULE_MODE == "strict_ladder"),
+        )
+        # Unified placement: ONE rule for every item — admissible at L iff
+        # its ladder position (min_sphere) ≤ L's.  Parts, R&D, Pad and PSI
+        # share the same sphere-index comparison; soundness is the cross-
+        # check's job, not this balance rule.
+        _install_unified_sphere_rules(
+            world, ladder, location_min_ranks, location_min_extras,
+            bootstrap_locations,
         )
     else:
         _install_placement_rules(
@@ -4386,7 +4591,6 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
             _eout.write(f'DIAG_FAIL: {_e}\n{traceback.format_exc()}\n')
         return
     try:
-        import os
         from BaseClasses import CollectionState, ItemClassification
         os.makedirs('/home/nick/workspaces/ksp_ap/scratchpad', exist_ok=True)
         with open('/home/nick/workspaces/ksp_ap/scratchpad/diag.txt', 'w') as _out:

@@ -725,7 +725,7 @@ class KitUsed:
     capsule: Optional[str] = None
     probe_core: Optional[str] = None
     parachute: Optional[str] = None
-    heat_shield: Optional[str] = None
+    heat_shields: list[str] = field(default_factory=list)
     landing_legs: list[str] = field(default_factory=list)
     relays: list[str] = field(default_factory=list)
     rtg: Optional[str] = None
@@ -741,6 +741,10 @@ class KitUsed:
     radial_decoupler: Optional[str] = None
     fuel_line: Optional[str] = None
     srb: Optional[str] = None
+    # Large-power enabler for ION (xenon) engines — see
+    # _filter_engines_for_ion.  Without it in the rep set, a re-eval
+    # filters the ion engine out (NO_VIABLE_STAGE).
+    ion_power: Optional[str] = None
 
     # Per-role viable substitutes for the chosen pick.  Keyed by the
     # KitUsed field name (e.g. "capsule", "radial_decoupler"); values are
@@ -766,14 +770,15 @@ class KitUsed:
         out.update(self.stage_tanks)
         out.update(self.stage_equipment)
         out.update(self.landing_legs)
+        out.update(self.heat_shields)
         out.update(self.relays)
         for v in (self.capsule, self.probe_core, self.parachute,
-                  self.heat_shield, self.rtg, self.solar,
+                  self.rtg, self.solar,
                   self.solar_retractable, self.monoprop_tank,
                   self.rcs_thruster, self.reaction_wheel,
                   self.aero_control, self.ladder,
                   self.stack_decoupler, self.radial_decoupler,
-                  self.fuel_line, self.srb):
+                  self.fuel_line, self.srb, self.ion_power):
             if v:
                 out.add(v)
         return frozenset(out)
@@ -812,6 +817,28 @@ for _nm, _parts in PART_DB.items():
 del _nm, _parts
 
 
+def _lightest_part_providing(flag: "CapabilityFlag") -> Optional[str]:
+    """Lightest PART_DB item that provides *flag*, by part mass.  Used to
+    capture presence-only enablers (large battery / solar array) in the
+    kit so a re-eval can reproduce the flag state."""
+    best: Optional[tuple[str, float]] = None
+    for nm, parts in PART_DB.items():
+        for p in parts:
+            if flag in getattr(p, "provides", ()):  # type: ignore[arg-type]
+                if best is None or p.mass < best[1]:
+                    best = (nm, p.mass)
+                break
+    return best[0] if best else None
+
+
+# Precomputed once: lightest parts that enable ION (xenon) engines via the
+# large-power gate in ``_filter_engines_for_ion``.  Battery is preferred —
+# it carries no rank axis, so adding it to a kit doesn't inflate any rank
+# ceiling (the large solar panel sits at SOLAR rank 3).
+_BATTERY_LARGE_PART: Optional[str] = _lightest_part_providing(CapabilityFlag.BATTERY_LARGE)
+_SOLAR_LARGE_PART: Optional[str] = _lightest_part_providing(CapabilityFlag.SOLAR_ARRAY_LARGE)
+
+
 def _build_kit_used(flags: EquipmentFlags,
                     stage_results: list[StageResult],
                     terminal_parts: list[tuple[int, str]]) -> KitUsed:
@@ -840,8 +867,14 @@ def _build_kit_used(flags: EquipmentFlags,
         kit.probe_core = flags.lightest_probe.name
     if flags.best_chute:
         kit.parachute = flags.best_chute.name
-    if flags.best_heat_shield:
-        kit.heat_shield = flags.best_heat_shield.name
+    # Heat shields: capture the exact shield each stage charged (lightest
+    # covering that stage's engine) — NOT the global biggest — so a re-eval
+    # has the same shield options and reproduces the optimizer's choice.
+    _seen_hs: set[str] = set()
+    for sr in stage_results:
+        if sr.heat_shield_name and sr.heat_shield_name not in _seen_hs:
+            _seen_hs.add(sr.heat_shield_name)
+            kit.heat_shields.append(sr.heat_shield_name)
     if flags.lightest_rtg:
         kit.rtg = flags.lightest_rtg.name
     if flags.lightest_solar:
@@ -887,6 +920,16 @@ def _build_kit_used(flags: EquipmentFlags,
     if flags.has_srb_fuel and flags.available_srbs:
         kit.srb = min(flags.available_srbs,
                       key=lambda s: s.dry_mass + s.fuel_mass).name
+    # ION power gate: if the optimizer used a xenon engine in any stage,
+    # the kit must carry the large-power enabler it relied on, else a
+    # re-eval filters the ion engine out (NO_VIABLE_STAGE).
+    _xenon_names = {e.name for e in flags.available_engines
+                    if e.fuel_type == "xenon"}
+    if _xenon_names and any(se in _xenon_names for se in kit.stage_engines):
+        if flags.has_battery_large and _BATTERY_LARGE_PART is not None:
+            kit.ion_power = _BATTERY_LARGE_PART
+        elif flags.has_solar_array_large and _SOLAR_LARGE_PART is not None:
+            kit.ion_power = _SOLAR_LARGE_PART
     return kit
 
 
@@ -1357,6 +1400,13 @@ def _evaluate_profile(
             equip_mass += leg_mass
             if leg_id:
                 stage_equipment.append((_LANDING_LEG_COUNT, leg_id))
+        # Heat-shield options the optimizer may charge (per-engine lightest
+        # covering shield).  Empty when this stage needs no shield.
+        heat_shields_arg: tuple[tuple[float, float, str], ...] = ()
+        if needs_hs and flags.available_heat_shields:
+            heat_shields_arg = tuple(sorted(
+                (hs.size_class, hs.mass, hs.name) for hs in flags.available_heat_shields
+            ))
 
         # Heat-shield options the optimizer may charge (per-engine lightest
         # covering shield).  Empty when this stage needs no shield.
