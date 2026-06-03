@@ -17,6 +17,7 @@ post-pass yet — those come in Phases 2/3.
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 from dataclasses import dataclass, field
 from random import Random
@@ -1974,6 +1975,17 @@ def minimal_ranks_for(
             # axes are exhausted (e.g. non-NO_VIABLE_STAGE blockers only).
             axis = _pick_rank_bump(result.blocking, ranks, rng)
         if axis is None:
+            # The greedy bumper could not map any remaining blocker to an axis
+            # it can still raise — a structural smell (the rep at some capped
+            # axis can't satisfy the mission).  Make it loud: every rescue is a
+            # mission the rank ladder couldn't build cleanly.
+            logging.warning(
+                "KSP1 sphere-bumper RESCUE (bailed to full-admit kit): "
+                "%s/%s crewed=%s blockers=%s",
+                info.body, info.mission_type, info.crewed,
+                [(b.reason.name, getattr(b.stage_diag, "failure", None))
+                 for b in result.blocking],
+            )
             # Capability-guided rescue: when greedy ran out of axis
             # bumps, run a single full-admit eval at MAX ranks.  If
             # feasible, ``ProfileResult.kit_used`` is the complete
@@ -2064,6 +2076,47 @@ def minimal_ranks_for(
                             for ax, rk in sig.axes:
                                 if (ax, rk) not in reps:
                                     reps[(ax, rk)] = u
+                    # Minimize the rescue kit.  The max-flags optimizer grabs
+                    # the BEST (highest-rank) parts it can — relay:8, srb:8,
+                    # solar:7 — even when the mission needs far less.  Drop every
+                    # rep the mission stays feasible without and re-derive the
+                    # lifted ranks, so a rescue contributes a minimal kit instead
+                    # of dumping the whole maxed set (+60 reps) onto this sphere.
+                    if reps_only_mode and os.environ.get("KSP_MINIMIZE_KIT", "1") == "1":
+                        _rpp = dict(
+                            start_with_clamps=start_with_clamps,
+                            progressive_launch_pad=progressive_launch_pad,
+                            launch_pad_caps=mission_builder.launch_pad_caps,
+                            pad_tier=extras.get(PROGRESSIVE_LAUNCH_PAD_NAME, 0),
+                            precollected_names=precollected_names,
+                        )
+                        kept = set(reps_collected)
+                        _changed = True
+                        while _changed:
+                            _changed = False
+                            for _rep in sorted(kept - set(prior_reps)):
+                                _trial = kept - {_rep}
+                                _tf = _pre_pass_for_ranks(
+                                    lifted_ranks, ctx,
+                                    reps_only=frozenset(_trial), **_rpp)
+                                if _evaluate(_tf, info, diff,
+                                             mission_builder).feasible:
+                                    kept = _trial
+                                    _changed = True
+                        if kept != reps_collected:
+                            reps_collected = kept
+                            lifted_ranks = prior_ranks
+                            for _rep in reps_collected:
+                                for _ax, _rk in rank_sig_for(_rep, ctx).axes:
+                                    if _rk > (lifted_ranks.get(_ax) or 0):
+                                        lifted_ranks = lifted_ranks.with_axis(_ax, _rk)
+                            reps = {k: v for k, v in reps.items()
+                                    if v in reps_collected}
+                            verify_flags = _pre_pass_for_ranks(
+                                lifted_ranks, ctx,
+                                reps_only=frozenset(reps_collected), **_rpp)
+                            verify_result = _evaluate(
+                                verify_flags, info, diff, mission_builder)
                     delta_pairs: list[tuple[RankAxisKey, int]] = []
                     for axis_key, ceil in lifted_ranks.upper_bounds:
                         prior = prior_ranks.get(axis_key) or 0
