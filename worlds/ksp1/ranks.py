@@ -256,10 +256,16 @@ class RankAxis:
 RANK_AXES: tuple[RankAxis, ...] = (
     RankAxis(RankAxisKey.LAUNCH_ENGINE,    _engine_launch,                RankDirection.HIGHER_BETTER),
     RankAxis(RankAxisKey.VAC_ENGINE,       _engine_vac,                   RankDirection.HIGHER_BETTER),
-    RankAxis(RankAxisKey.LFO_TANK,         _make_tank_scorer("lfo"),      RankDirection.LOWER_BETTER),
-    RankAxis(RankAxisKey.LF_TANK,          _make_tank_scorer("lf"),       RankDirection.LOWER_BETTER),
-    RankAxis(RankAxisKey.XENON_TANK,       _make_tank_scorer("xenon"),    RankDirection.LOWER_BETTER),
-    RankAxis(RankAxisKey.MONOPROP_TANK,    _make_tank_scorer("monoprop"), RankDirection.LOWER_BETTER),
+    # Tanks rank by dry mass but SMALL=early (HIGHER_BETTER on dry_mass puts
+    # the heaviest/biggest tanks at the top rank).  Small tanks must be the
+    # early admit: the optimizer stacks them to any fuel total, so exposing
+    # only giant fuselages early (the old LOWER_BETTER flip) forced rockets
+    # built from bad-ratio Mk3 parts (478t Mun landing).  Big tanks are a
+    # late convenience, not an early gate.
+    RankAxis(RankAxisKey.LFO_TANK,         _make_tank_scorer("lfo"),      RankDirection.HIGHER_BETTER),
+    RankAxis(RankAxisKey.LF_TANK,          _make_tank_scorer("lf"),       RankDirection.HIGHER_BETTER),
+    RankAxis(RankAxisKey.XENON_TANK,       _make_tank_scorer("xenon"),    RankDirection.HIGHER_BETTER),
+    RankAxis(RankAxisKey.MONOPROP_TANK,    _make_tank_scorer("monoprop"), RankDirection.HIGHER_BETTER),
     RankAxis(RankAxisKey.SRB,              _srb,                          RankDirection.HIGHER_BETTER),
     RankAxis(RankAxisKey.HEAT_SHIELD,      _heat_shield,                  RankDirection.HIGHER_BETTER),
     RankAxis(RankAxisKey.PARACHUTE,        _parachute,                    RankDirection.HIGHER_BETTER),
@@ -352,6 +358,19 @@ _RANK_CAP = int(os.environ.get("KSP_RANK_CAP", "8"))
 # _compute_ranks_for_context.  Single source of truth for "axis at cap".
 _AXIS_MAX_RANK: dict[RankAxisKey, int] = {}
 
+# Fungible axes get a *shallow* cap.  Tanks are ~interchangeable (LFO
+# dry-fraction is 0.111-0.127 across the whole DB) and the optimizer just
+# stacks small tanks to any total, so a deep rank ladder is meaningless and
+# actively harmful: it parks big tanks at the top rank where they pile onto
+# the final spheres.  Two ranks is enough — small tanks gate early (the
+# building block), big tanks land low and place freely.  The launch-pad mass
+# cap, not the tank rank, is the real size limiter.
+_FUNGIBLE_AXIS_CAP = 2
+_FUNGIBLE_AXES: frozenset[RankAxisKey] = frozenset({
+    RankAxisKey.LFO_TANK, RankAxisKey.LF_TANK,
+    RankAxisKey.XENON_TANK, RankAxisKey.MONOPROP_TANK,
+})
+
 
 def _compute_ranks_for_context(ctx: RankContext) -> dict[RankAxisKey, dict[str, int]]:
     out: dict[RankAxisKey, dict[str, int]] = {}
@@ -362,7 +381,8 @@ def _compute_ranks_for_context(ctx: RankContext) -> dict[RankAxisKey, dict[str, 
             s = _item_score(parts, axis, ctx)
             if s is not None:
                 scored.append((item_name, s))
-        buckets = _bucketize([s for _, s in scored], _RANK_CAP)
+        cap = _FUNGIBLE_AXIS_CAP if axis.key in _FUNGIBLE_AXES else _RANK_CAP
+        buckets = _bucketize([s for _, s in scored], cap)
         max_rank = max(buckets) if buckets else 1
         _AXIS_MAX_RANK[axis.key] = max_rank
         # For LOWER_BETTER axes, the bucketing above puts low scores in

@@ -51,6 +51,7 @@ from .items import (
 )
 from .parts import (
     CapabilityFlag,
+    FuelTank,
     MiscEquipment,
     PART_DB,
     PROGRESSIVE_PART_COUNTS as _BASE_PROGRESSIVE_PART_COUNTS,
@@ -1947,6 +1948,43 @@ def minimal_ranks_for(
                         break
         if added_discrete:
             continue
+
+        # Reactive constraint-driven fix: ENGINE_TOO_BIG_FOR_TANK names the
+        # minimum tank size that mounts the stuck engine.  Pick a random tank
+        # of the right fuel type at or above that size — every such tank is a
+        # logically-valid fix — instead of bumping the tank rank and hoping the
+        # rep happens to be big enough (the old path that drove rescues).
+        if os.environ.get("KSP_REACTIVE_TANK", "1") == "1":
+            reactive_added = False
+            for b in result.blocking:
+                sd = getattr(b, "stage_diag", None)
+                if (sd is None
+                        or sd.failure != StageFailure.ENGINE_TOO_BIG_FOR_TANK
+                        or sd.min_tank_size_needed <= 0):
+                    continue
+                want_ft = {("lfo" if ft in ("lfo", "lf") else ft)
+                           for ft in sd.engine_fuel_types_attempted} or {"lfo"}
+                valid = [
+                    name for name, parts in PART_DB.items()
+                    if name not in reps_collected
+                    for p in parts
+                    if isinstance(p, FuelTank) and p.fuel_type in want_ft
+                    and p.size_class >= sd.min_tank_size_needed
+                ]
+                if not valid:
+                    continue
+                pick = rng.choice(sorted(valid))
+                reps_collected.add(pick)
+                for _ax, _rk in rank_sig_for(pick, ctx).axes:
+                    if (_ax, _rk) not in reps:
+                        reps[(_ax, _rk)] = pick
+                    if _rk > (ranks.get(_ax) or 0):
+                        ranks = ranks.with_axis(_ax, _rk)
+                reactive_added = True
+                break
+            if reactive_added:
+                continue
+
         cur_count = len(result.blocking)
         if prev_blocker_count >= 0 and cur_count >= prev_blocker_count:
             stuck_iters += 1
