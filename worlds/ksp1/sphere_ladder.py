@@ -1669,9 +1669,14 @@ def _pick_rank_rep_scored(
         return None
     if len(candidates) == 1:
         return candidates[0]
+    # Cap trial-evaluated candidates for speed; random sample (not
+    # top-by-score) preserves the bumper's per-seed rep variance.
+    cands = list(candidates)
+    if len(cands) > 6:
+        cands = rng.sample(cands, 6)
     scored: list[tuple[int, float, int, float, str]] = []
     base_ranks = ranks.with_axis(axis, new_rank)
-    for cand in sorted(candidates):
+    for cand in sorted(cands):
         trial_reps = set(reps_collected); trial_reps.add(cand)
         trial_ranks = base_ranks
         sig = rank_sig_for(cand, ctx)
@@ -1699,55 +1704,6 @@ def _pick_rank_rep_scored(
                        rng.random(), cand))
     scored.sort()
     return scored[0][-1]
-
-
-def _pick_rank_rep_scored(
-    axis: RankAxisKey, new_rank: int, ctx: RankContext, rng: Random,
-    *, ranks: MinimumRanks, reps_collected: set, info, diff,
-    start_with_clamps: bool, progressive_launch_pad: bool,
-    launch_pad_caps, pad_tier: int, precollected_names: frozenset,
-    mission_builder,
-) -> Optional[str]:
-    """Trial each candidate part at ``(axis, new_rank)``: add it to a
-    copy of ``reps_collected``, lift co-axis ranks per its rank_sig,
-    re-evaluate blockers, and pick the candidate with the lowest blocker
-    count.  Random tiebreak preserves variance.
-
-    Returns ``None`` if no candidates exist at that bucket.
-    """
-    by_rank = _items_at_rank(ctx).get(axis, {})
-    candidates = by_rank.get(new_rank, ())
-    if not candidates:
-        return None
-    if len(candidates) == 1:
-        return candidates[0]
-    scored: list[tuple[int, float, str]] = []
-    for cand in candidates:
-        trial_reps = set(reps_collected); trial_reps.add(cand)
-        trial_ranks = ranks.with_axis(axis, new_rank)
-        sig = rank_sig_for(cand, ctx)
-        for co_axis, co_rank in sig.axes:
-            if co_axis == axis:
-                continue
-            if (trial_ranks.get(co_axis) or 0) < co_rank:
-                trial_ranks = trial_ranks.with_axis(co_axis, co_rank)
-        trial_flags = _pre_pass_for_ranks(
-            trial_ranks, ctx,
-            start_with_clamps=start_with_clamps,
-            progressive_launch_pad=progressive_launch_pad,
-            launch_pad_caps=launch_pad_caps,
-            pad_tier=pad_tier,
-            precollected_names=precollected_names,
-            reps_only=frozenset(trial_reps),
-        )
-        trial_result = _evaluate(trial_flags, info, diff, mission_builder)
-        scored.append((
-            len(trial_result.blocking),
-            0.0 if trial_result.feasible else 1.0,
-            cand,
-        ))
-    scored.sort(key=lambda x: (x[0], x[1], rng.random()))
-    return scored[0][2]
 
 
 def _rank_axis_at_cap(axis: RankAxisKey, ranks: MinimumRanks) -> bool:
@@ -2195,7 +2151,20 @@ def minimal_ranks_for(
                     )
             return None
         new_rank = (ranks.get(axis) or 0) + 1
-        rep_name = _pick_rank_rep(axis, new_rank, ctx, rng)
+        # Pick the part at this (axis, rank) that actually clears the most
+        # blockers, not a random one — a random low-rank pick is often too
+        # weak, forcing the bumper to over-raise the rank (orbit "needs" vac:5,
+        # Pol "needs" launch:5 when a good rank-2 part flies it).
+        rep_name = _pick_rank_rep_scored(
+            axis, new_rank, ctx, rng,
+            ranks=ranks, reps_collected=reps_collected, info=info, diff=diff,
+            start_with_clamps=start_with_clamps,
+            progressive_launch_pad=progressive_launch_pad,
+            launch_pad_caps=mission_builder.launch_pad_caps,
+            pad_tier=extras.get(PROGRESSIVE_LAUNCH_PAD_NAME, 0),
+            precollected_names=precollected_names,
+            mission_builder=mission_builder,
+        )
         if rep_name is not None:
             reps[(axis, new_rank)] = rep_name
             reps_collected.add(rep_name)
