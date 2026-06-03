@@ -1893,6 +1893,43 @@ def minimal_ranks_for(
         )
         result = _evaluate(flags, info, diff, mission_builder)
         if result.feasible:
+            if (reps_only_mode and os.environ.get("KSP_MINIMIZE_KIT", "1") == "1"
+                    and (reps_collected - set(prior_reps))):
+                # Minimization pass.  The greedy from-empty bumper raises an
+                # axis (e.g. vac_engine rank) when cheaper enablers (tanks /
+                # staging) weren't built up yet, and never backtracks — leaving
+                # an inflated kit (orbit "needs" vac:5 when vac:1 + fuel works).
+                # Drop delta reps the mission no longer needs, then re-derive
+                # ranks from the survivors so the sphere kit is truly minimal.
+                _pp = dict(
+                    start_with_clamps=start_with_clamps,
+                    progressive_launch_pad=progressive_launch_pad,
+                    launch_pad_caps=mission_builder.launch_pad_caps,
+                    pad_tier=extras.get(PROGRESSIVE_LAUNCH_PAD_NAME, 0),
+                    precollected_names=precollected_names,
+                )
+                kept = set(reps_collected)
+                _changed = True
+                while _changed:
+                    _changed = False
+                    for _rep in sorted(kept - set(prior_reps)):
+                        _trial = kept - {_rep}
+                        _tf = _pre_pass_for_ranks(
+                            ranks, ctx, reps_only=frozenset(_trial), **_pp)
+                        if _evaluate(_tf, info, diff, mission_builder).feasible:
+                            kept = _trial
+                            _changed = True
+                if kept != reps_collected:
+                    reps_collected = kept
+                    _new = prior_ranks
+                    for _rep in reps_collected:
+                        for _ax, _rk in rank_sig_for(_rep, ctx).axes:
+                            if _rk > (_new.get(_ax) or 0):
+                                _new = _new.with_axis(_ax, _rk)
+                    ranks = _new
+                    reps = {k: v for k, v in reps.items() if v in reps_collected}
+                    flags = _pre_pass_for_ranks(
+                        ranks, ctx, reps_only=frozenset(reps_collected), **_pp)
             delta_pairs: list[tuple[RankAxisKey, int]] = []
             for axis_key, ceil in ranks.upper_bounds:
                 prior = prior_ranks.get(axis_key) or 0
@@ -3965,6 +4002,38 @@ def _item_min_sphere(item, spheres) -> int:
     return 0
 
 
+def _compute_cascade_lo(
+    n: int, cap: dict[int, int], demand: dict[int, int],
+) -> dict[int, int]:
+    """Capacity-driven lower bound per advancement min_sphere.
+
+    A chain rep new at sphere ``k`` belongs at its prerequisite sphere
+    ``k-1``, but if that sphere (and the ones just below it) lack the room
+    to hold every rep that targets the region, the window must expand
+    *earlier*.  For each ``k`` with demand, walk back from ``k-1``
+    accumulating capacity until the spheres ``[lo, k-1]`` comfortably hold
+    the reps targeting that span (free room ≥ max(20%, 5)).  ``lo`` is how
+    far back reps with min_sphere ``k`` may be placed.
+    """
+    lo: dict[int, int] = {}
+    for k in range(1, n + 1):
+        if demand.get(k, 0) == 0:
+            continue
+        target = k - 1
+        need = 0
+        avail = 0
+        res = 0
+        for s in range(target, -1, -1):
+            avail += cap.get(s, 0)
+            need += demand.get(s + 1, 0)  # reps targeting s (min_sphere s+1)
+            margin = max(5, round(0.2 * avail))
+            res = s
+            if avail >= need + margin:
+                break
+        lo[k] = res
+    return lo
+
+
 def _install_unified_sphere_rules(
     world: "KSP1World",
     ladder: "SphereLadder",
@@ -4000,6 +4069,26 @@ def _install_unified_sphere_rules(
             loc_sphere[name] = _first_covering_sphere(
                 spheres, ranks.upper_bounds, location_min_extras.get(name, _EMPTY_EXTRAS)
             )
+
+    # Capacity-driven cascade.  A chain rep belongs at its prerequisite sphere
+    # (min_sphere-1), but high-rank reps whose prerequisite sphere is empty /
+    # thin are otherwise structurally unplaceable (banned below, chicken-and-egg
+    # at/above).  ``lo`` expands the window earlier sphere-by-sphere until the
+    # candidate spheres hold enough room.
+    from collections import Counter
+    cap: dict[int, int] = dict(Counter(loc_sphere.values()))
+    chain_reps: set[str] = set()
+    for s in spheres:
+        chain_reps |= s.reps_collected
+    demand: Counter = Counter()
+    for it in world.multiworld.itempool:
+        if it.player != player:
+            continue
+        if it.name in chain_reps or getattr(it, "_sphere_tier", None) is not None:
+            demand[_item_min_sphere(it, spheres)] += 1
+    cascade_lo = _compute_cascade_lo(len(spheres), cap, dict(demand))
+    world._cascade_lo = cascade_lo  # expose for analysis
+
     for loc in world.multiworld.get_locations(player):
         if loc.name in bootstrap_locations:
             continue
@@ -4008,17 +4097,22 @@ def _install_unified_sphere_rules(
             continue  # ungated (KSC / starting inventory / event) — keep existing rule
         existing = loc.item_rule
 
-        def _rule(item, _p=player, _L=L, _spheres=spheres, _orig=existing) -> bool:
+        def _rule(item, _p=player, _L=L, _spheres=spheres, _orig=existing,
+                  _lo=cascade_lo) -> bool:
             if _orig is not None and not _orig(item):
                 return False
             if item.player != _p:
                 return True
             ms = _item_min_sphere(item, _spheres)
             if item.advancement:
-                # "Parts to explore sphere N live in sphere N-1": a chain rep
-                # is reachable only at its prerequisite sphere (chicken-and-egg
-                # at/above its own), so floor it at min_sphere - 1.
-                return ms <= _L + 1
+                # Minimization moves over-bumped high-rank parts out of the
+                # chain into USEFUL (gated late), so the advancement set is the
+                # genuine minimal/basic kit — safe to place reachably (AP's
+                # fill handles reachability; the cross-check confirms).  The
+                # capacity-cascade lower bound is kept as an env-gated
+                # alternative while the rep-picker overpower is rooted out.
+                return os.environ.get("KSP_ADV_PERMISSIVE", "1") == "1" or \
+                    _L >= _lo.get(ms, max(0, ms - 1))
             return ms <= _L
 
         loc.item_rule = _rule
