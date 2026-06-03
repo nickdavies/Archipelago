@@ -58,7 +58,7 @@ from .parts import (
 )
 from .ranks import (
     DEFAULT_CONTEXT, RANK_AXES, RANK_AXES_BY_KEY, RankAxisKey, RankContext,
-    rank_sig_for, ranks_for_context,
+    max_rank_for, rank_sig_for, ranks_for_context,
 )
 
 # Parts providing the basic temperature/pressure instruments that
@@ -1707,9 +1707,9 @@ def _pick_rank_rep_scored(
 
 
 def _rank_axis_at_cap(axis: RankAxisKey, ranks: MinimumRanks) -> bool:
-    """Return True if ``axis`` ceiling already equals the axis's max
-    bucket — no more bumps possible."""
-    max_buckets = RANK_AXES_BY_KEY[axis].buckets
+    """Return True if ``axis`` ceiling already equals the axis's effective
+    max rank (min(distinct scores, cap)) — no more bumps possible."""
+    max_buckets = max_rank_for(axis)
     current = ranks.get(axis) or 0
     return current >= max_buckets
 
@@ -1989,9 +1989,8 @@ def minimal_ranks_for(
             # of (current ceiling, max kit-part rank) per axis, then
             # verify the lifted-ranks + union-reps combination
             # actually reproduces feasibility.
-            from .ranks import RANK_AXES_BY_KEY as _RABK
             max_ranks_for_rescue = MinimumRanks(tuple(sorted(
-                ((a, _RABK[a].buckets) for a in RankAxisKey),
+                ((a, max_rank_for(a)) for a in RankAxisKey),
                 key=lambda x: x[0].value,
             )))
             rescue_flags = _pre_pass_for_ranks(
@@ -4257,9 +4256,8 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
     # same number the bumper converged to, reached in one optimizer call
     # instead of a long greedy walk.  Results are deduped by canonical
     # mission key (Mun Landing 1/2/3 share one mission → one eval).
-    from .ranks import RANK_AXES_BY_KEY as _RABK
     _max_ranks = MinimumRanks(tuple(sorted(
-        ((a, _RABK[a].buckets) for a in RankAxisKey),
+        ((a, max_rank_for(a)) for a in RankAxisKey),
         key=lambda x: x[0].value,
     )))
     _pad_max = (len(world.mission_builder.launch_pad_caps) - 1

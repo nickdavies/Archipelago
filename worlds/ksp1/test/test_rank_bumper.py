@@ -53,8 +53,8 @@ class TestRankPrePass(unittest.TestCase):
     def test_max_ranks_admits_full_part_db(self) -> None:
         """With every axis at its maximum bucket, every part participating
         in any rank axis is admitted."""
-        from worlds.ksp1.ranks import RANK_AXES
-        all_max = MinimumRanks(tuple((a.key, a.buckets) for a in RANK_AXES))
+        from worlds.ksp1.ranks import RANK_AXES, max_rank_for
+        all_max = MinimumRanks(tuple((a.key, max_rank_for(a.key)) for a in RANK_AXES))
         flags = _pre_pass_for_ranks(
             all_max, DEFAULT_CONTEXT,
             start_with_clamps=True, progressive_launch_pad=False,

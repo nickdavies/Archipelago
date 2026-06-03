@@ -24,6 +24,7 @@ within the sphere's ceiling.  This module deliberately contains no AP imports
 from __future__ import annotations
 
 import math
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -247,28 +248,29 @@ def _probe_sas(p: AnyPart, ctx: RankContext) -> Optional[float]:
 class RankAxis:
     key: RankAxisKey
     scorer: Callable[[AnyPart, RankContext], Optional[float]]
-    buckets: int
     direction: RankDirection
+    # Rank count is data-driven: min(distinct score values in PART_DB,
+    # _RANK_CAP).  See max_rank_for().  No per-axis hand-tuned count.
 
 
 RANK_AXES: tuple[RankAxis, ...] = (
-    RankAxis(RankAxisKey.LAUNCH_ENGINE,    _engine_launch,                5, RankDirection.HIGHER_BETTER),
-    RankAxis(RankAxisKey.VAC_ENGINE,       _engine_vac,                   5, RankDirection.HIGHER_BETTER),
-    RankAxis(RankAxisKey.LFO_TANK,         _make_tank_scorer("lfo"),      5, RankDirection.LOWER_BETTER),
-    RankAxis(RankAxisKey.LF_TANK,          _make_tank_scorer("lf"),       3, RankDirection.LOWER_BETTER),
-    RankAxis(RankAxisKey.XENON_TANK,       _make_tank_scorer("xenon"),    3, RankDirection.LOWER_BETTER),
-    RankAxis(RankAxisKey.MONOPROP_TANK,    _make_tank_scorer("monoprop"), 3, RankDirection.LOWER_BETTER),
-    RankAxis(RankAxisKey.SRB,              _srb,                          3, RankDirection.HIGHER_BETTER),
-    RankAxis(RankAxisKey.HEAT_SHIELD,      _heat_shield,                  3, RankDirection.HIGHER_BETTER),
-    RankAxis(RankAxisKey.PARACHUTE,        _parachute,                    3, RankDirection.HIGHER_BETTER),
-    RankAxis(RankAxisKey.LANDING_LEG,      _landing_leg,                  3, RankDirection.LOWER_BETTER),
-    RankAxis(RankAxisKey.STACK_DECOUPLER,  _stack_decoupler,              3, RankDirection.HIGHER_BETTER),
-    RankAxis(RankAxisKey.RADIAL_DECOUPLER, _radial_decoupler,             3, RankDirection.HIGHER_BETTER),
-    RankAxis(RankAxisKey.SOLAR,            _solar,                        3, RankDirection.HIGHER_BETTER),
-    RankAxis(RankAxisKey.RELAY,            _relay,                        5, RankDirection.HIGHER_BETTER),
-    RankAxis(RankAxisKey.SAS,              _sas,                          3, RankDirection.LOWER_BETTER),
-    RankAxis(RankAxisKey.CAPSULE,          _capsule,                      5, RankDirection.LOWER_BETTER),
-    RankAxis(RankAxisKey.PROBE_SAS,        _probe_sas,                    4, RankDirection.HIGHER_BETTER),
+    RankAxis(RankAxisKey.LAUNCH_ENGINE,    _engine_launch,                RankDirection.HIGHER_BETTER),
+    RankAxis(RankAxisKey.VAC_ENGINE,       _engine_vac,                   RankDirection.HIGHER_BETTER),
+    RankAxis(RankAxisKey.LFO_TANK,         _make_tank_scorer("lfo"),      RankDirection.LOWER_BETTER),
+    RankAxis(RankAxisKey.LF_TANK,          _make_tank_scorer("lf"),       RankDirection.LOWER_BETTER),
+    RankAxis(RankAxisKey.XENON_TANK,       _make_tank_scorer("xenon"),    RankDirection.LOWER_BETTER),
+    RankAxis(RankAxisKey.MONOPROP_TANK,    _make_tank_scorer("monoprop"), RankDirection.LOWER_BETTER),
+    RankAxis(RankAxisKey.SRB,              _srb,                          RankDirection.HIGHER_BETTER),
+    RankAxis(RankAxisKey.HEAT_SHIELD,      _heat_shield,                  RankDirection.HIGHER_BETTER),
+    RankAxis(RankAxisKey.PARACHUTE,        _parachute,                    RankDirection.HIGHER_BETTER),
+    RankAxis(RankAxisKey.LANDING_LEG,      _landing_leg,                  RankDirection.LOWER_BETTER),
+    RankAxis(RankAxisKey.STACK_DECOUPLER,  _stack_decoupler,              RankDirection.HIGHER_BETTER),
+    RankAxis(RankAxisKey.RADIAL_DECOUPLER, _radial_decoupler,             RankDirection.HIGHER_BETTER),
+    RankAxis(RankAxisKey.SOLAR,            _solar,                        RankDirection.HIGHER_BETTER),
+    RankAxis(RankAxisKey.RELAY,            _relay,                        RankDirection.HIGHER_BETTER),
+    RankAxis(RankAxisKey.SAS,              _sas,                          RankDirection.LOWER_BETTER),
+    RankAxis(RankAxisKey.CAPSULE,          _capsule,                      RankDirection.LOWER_BETTER),
+    RankAxis(RankAxisKey.PROBE_SAS,        _probe_sas,                    RankDirection.HIGHER_BETTER),
 )
 
 RANK_AXES_BY_KEY: dict[RankAxisKey, RankAxis] = {a.key: a for a in RANK_AXES}
@@ -335,6 +337,21 @@ def _item_score(parts: list[AnyPart], axis: RankAxis, ctx: RankContext) -> Optio
 
 _RANK_CACHE: dict[RankContext, dict[RankAxisKey, dict[str, int]]] = {}
 
+# Global cap on the rank-bucket count.  The *effective* bucket count for an
+# axis is ``min(distinct score values, _RANK_CAP)``, computed from PART_DB at
+# load — no per-axis hand-tuned ints.  Discrete axes (few distinct values,
+# e.g. heat-shield coverage tiers, decoupler sizes) fall under the cap and get
+# one rank per distinct value (correct resolution).  Continuous axes (engines/
+# tanks, ~unique score per part) hit the cap and stay coarse so multiple parts
+# share each rank — preserving the rep-picker's per-seed variance (with one
+# rank per part the "next" part would be fully predictable).  Adapts
+# automatically as PART_DB gains/loses parts (mods, DLC toggles).
+_RANK_CAP = int(os.environ.get("KSP_RANK_CAP", "8"))
+
+# Effective max rank per axis (= min(distinct, _RANK_CAP)); filled by
+# _compute_ranks_for_context.  Single source of truth for "axis at cap".
+_AXIS_MAX_RANK: dict[RankAxisKey, int] = {}
+
 
 def _compute_ranks_for_context(ctx: RankContext) -> dict[RankAxisKey, dict[str, int]]:
     out: dict[RankAxisKey, dict[str, int]] = {}
@@ -345,15 +362,19 @@ def _compute_ranks_for_context(ctx: RankContext) -> dict[RankAxisKey, dict[str, 
             s = _item_score(parts, axis, ctx)
             if s is not None:
                 scored.append((item_name, s))
-        buckets = _bucketize([s for _, s in scored], axis.buckets)
+        buckets = _bucketize([s for _, s in scored], _RANK_CAP)
+        max_rank = max(buckets) if buckets else 1
+        _AXIS_MAX_RANK[axis.key] = max_rank
         # For LOWER_BETTER axes, the bucketing above puts low scores in
         # low buckets (best parts in rank 1).  But the design intent for
         # rank-space placement is:  rank 1 = worst part (admitted early
         # as a forced choice), rank N = best part (admitted late as a
         # reward).  Flip the bucket index so the semantic is uniform
-        # across direction.
+        # across direction.  Flip around the *effective* max rank
+        # (min(distinct, _RANK_CAP)), not the cap, so value-based axes
+        # (distinct < cap) flip correctly.
         if axis.direction == RankDirection.LOWER_BETTER:
-            buckets = [axis.buckets + 1 - b for b in buckets]
+            buckets = [max_rank + 1 - b for b in buckets]
         out[axis.key] = {name: b for (name, _), b in zip(scored, buckets)}
         # Stash raw scores so the bumper can rank candidates inside a
         # bucket — random picks within a bucket waste bumps when several
@@ -391,6 +412,18 @@ def ranks_for_context(ctx: RankContext = DEFAULT_CONTEXT) -> dict[RankAxisKey, d
         cached = _compute_ranks_for_context(ctx)
         _RANK_CACHE[ctx] = cached
     return cached
+
+
+def max_rank_for(axis_key: RankAxisKey, ctx: RankContext = DEFAULT_CONTEXT) -> int:
+    """Effective max rank (cap) for an axis = ``min(distinct scores, _RANK_CAP)``.
+
+    Single source of truth for the bumper's "is this axis already at cap"
+    check and for building max-rank vectors.  Data-driven, so it tracks
+    PART_DB size automatically.
+    """
+    if axis_key not in _AXIS_MAX_RANK:
+        ranks_for_context(ctx)
+    return _AXIS_MAX_RANK.get(axis_key, _RANK_CAP)
 
 
 # ---------------------------------------------------------------------------
