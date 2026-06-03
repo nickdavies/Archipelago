@@ -798,6 +798,13 @@ class ProfileResult:
     terminal_parts: list[tuple[int, str]] = field(default_factory=list)
     # Complete structured kit (populated on feasible results, see KitUsed).
     kit_used: Optional[KitUsed] = None
+    # Best-effort partial rocket captured when the result is INFEASIBLE:
+    # the stages that did build (terminal -> as far up the ascent as the
+    # optimizer got) before the binding stage failed.  Lets the bumper /
+    # analysis layer examine the near-miss architecture (e.g. a heavy
+    # terminal stage driving a mass cascade) instead of only seeing the
+    # single failing-stage diagnostic.  Empty on feasible results.
+    partial_stages: list[StageResult] = field(default_factory=list)
 
     @property
     def failure_reasons(self) -> list[str]:
@@ -1574,6 +1581,8 @@ def _evaluate_profile(
             for e in group
         )
         if is_ascent_group:
+            ms_diag_out: list = []
+            ms_partial_out: list = []
             multistage = find_optimal_multistage_ascent(
                 required_dv=req_dv,
                 payload_mass=stage_payload,
@@ -1612,11 +1621,17 @@ def _evaluate_profile(
                 run_parallel=run_parallel,
             )
             if multistage is None:
+                stage_diag = ms_diag_out[0] if ms_diag_out else None
+                # Whole near-miss rocket: stages already built downstream
+                # (terminal -> this group) + the partial ascent that got
+                # furthest before the binding stage failed.
+                partial = list(stage_results_list) + ms_partial_out
                 return ProfileResult(False, launch_mass=payload, blocking=[BlockingInfo(
                     reason=BlockingReason.NO_VIABLE_STAGE,
                     body=body.name,
                     dv_needed=req_dv,
-                )])
+                    stage_diag=stage_diag,
+                )], partial_stages=partial)
             # Bottom stage carries the group-level equipment (aero surfaces,
             # ladder, etc.) for the multi-stage ascent.
             multistage[0].equipment = stage_equipment + multistage[0].equipment
@@ -1645,7 +1660,7 @@ def _evaluate_profile(
                 body=body.name,
                 dv_needed=req_dv,
                 stage_diag=stage_diag,
-            )])
+            )], partial_stages=list(stage_results_list))
 
         # Chutes for aero-landing edges in mixed groups
         if aero_land_edges:

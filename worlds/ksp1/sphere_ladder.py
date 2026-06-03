@@ -1756,17 +1756,16 @@ def _axes_for_stage_diag(stage_diag) -> tuple[RankAxisKey, ...]:
         # Handled outside rank axes via the Pad extras bump.
         return ()
     # Performance failures (DV_SHORT / TWR_SHORT / DRY_MASS_KILLS_RATIO):
-    # broad set — anything that could shrink the rocket or give it more
-    # thrust/fuel.  Atmosphere-aware engine inclusion.
-    base: list[RankAxisKey] = [
-        RankAxisKey.LFO_TANK, RankAxisKey.XENON_TANK,
-        RankAxisKey.STACK_DECOUPLER, RankAxisKey.RADIAL_DECOUPLER,
-    ]
-    if in_atm:
-        base += [RankAxisKey.LAUNCH_ENGINE, RankAxisKey.SRB]
-    else:
-        base += [RankAxisKey.VAC_ENGINE]
-    return tuple(base)
+    # a too-weak rocket is fixed by EITHER more propulsion/staging OR less
+    # payload mass.  The mass lever matters most on heavy-cascade ascents
+    # (Moho/Pol/Eeloo sample return drag a 1000-3000 t terminal payload up
+    # the gravity well): a lighter capsule / lighter support equipment
+    # shrinks the cascade far more than another engine can lift it.  An
+    # earlier narrow set here (thrust/fuel axes only) omitted the
+    # payload-reducers and capped out fast, dumping those missions into the
+    # rescue path.  Hand back the full NO_VIABLE_STAGE lever set and let the
+    # scored picker trial-evaluate which one actually closes the gap.
+    return _RANK_BUMP_TABLE[BlockingReason.NO_VIABLE_STAGE]
 
 
 def _pick_rank_bump(blocking, ranks: MinimumRanks, rng: Random) -> Optional[RankAxisKey]:
@@ -2017,12 +2016,29 @@ def minimal_ranks_for(
             # it can still raise — a structural smell (the rep at some capped
             # axis can't satisfy the mission).  Make it loud: every rescue is a
             # mission the rank ladder couldn't build cleanly.
+            diag_lines = []
+            for b in result.blocking:
+                sd = getattr(b, "stage_diag", None)
+                if sd is not None:
+                    diag_lines.append(
+                        f"{b.reason.name}/{sd.failure.value} "
+                        f"dv={sd.best_dv_achieved:.0f}/{sd.required_dv:.0f} "
+                        f"twr={sd.best_twr_achieved:.2f}/{sd.twr_floor:.2f} "
+                        f"payload={sd.payload_mass:.1f}t cap={sd.mass_cap:.0f}t"
+                    )
+                else:
+                    diag_lines.append(b.reason.name)
+            partial = getattr(result, "partial_stages", [])
+            stage_summary = " | ".join(
+                f"{s.engine_count}x{s.engine_name}+{s.tank_count}tk "
+                f"dv={s.delta_v:.0f} wet={s.stage_mass_wet:.1f}t"
+                for s in partial
+            )
             logging.warning(
                 "KSP1 sphere-bumper RESCUE (bailed to full-admit kit): "
-                "%s/%s crewed=%s blockers=%s",
+                "%s/%s crewed=%s\n  blockers: %s\n  partial rocket (launch->top): %s",
                 info.body, info.mission_type, info.crewed,
-                [(b.reason.name, getattr(b.stage_diag, "failure", None))
-                 for b in result.blocking],
+                "; ".join(diag_lines), stage_summary or "(none built)",
             )
             # Capability-guided rescue: when greedy ran out of axis
             # bumps, run a single full-admit eval at MAX ranks.  If
