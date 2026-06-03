@@ -51,6 +51,7 @@ from .items import (
 )
 from .parts import (
     CapabilityFlag,
+    Engine,
     FuelTank,
     MiscEquipment,
     PART_DB,
@@ -1970,6 +1971,65 @@ def minimal_ranks_for(
                     if isinstance(p, FuelTank) and p.fuel_type in want_ft
                     and p.size_class >= sd.min_tank_size_needed
                 ]
+                if not valid:
+                    continue
+                pick = rng.choice(sorted(valid))
+                reps_collected.add(pick)
+                for _ax, _rk in rank_sig_for(pick, ctx).axes:
+                    if (_ax, _rk) not in reps:
+                        reps[(_ax, _rk)] = pick
+                    if _rk > (ranks.get(_ax) or 0):
+                        ranks = ranks.with_axis(_ax, _rk)
+                reactive_added = True
+                break
+            if reactive_added:
+                continue
+
+        # Reactive constraint-driven fix #2: REQUIRE_THROTTLE_NONE /
+        # REQUIRE_GIMBAL_NONE name an engine *property* the stage needs that
+        # no available engine has.  Throttle/gimbal aren't rank axes (they're
+        # engine flags), so bumping the engine rank and hoping the picked rep
+        # happens to be throttleable/gimballed is a rescue-driving gamble.
+        # Instead pick a random engine that actually has the property, burns a
+        # fuel type we can already fund, and produces thrust in the stage's
+        # environment — every such engine is a logically-valid fix.
+        if os.environ.get("KSP_REACTIVE_ENGINE", "1") == "1":
+            reactive_added = False
+            fundable = {ft for ft, tks in (flags.tanks_by_fuel_type or {}).items()
+                        if tks}
+            for b in result.blocking:
+                sd = getattr(b, "stage_diag", None)
+                if sd is None:
+                    continue
+                if sd.failure == StageFailure.REQUIRE_THROTTLE_NONE:
+                    prop = "throttleable"
+                elif sd.failure == StageFailure.REQUIRE_GIMBAL_NONE:
+                    prop = "has_gimbal"
+                else:
+                    continue
+                in_atm = sd.in_atmosphere
+
+                def _engine_ok(p, *, require_fundable: bool) -> bool:
+                    if not isinstance(p, Engine) or not getattr(p, prop):
+                        return False
+                    if (p.atm_thrust if in_atm else p.vac_thrust) <= 0:
+                        return False
+                    return (p.fuel_type in fundable) if require_fundable else True
+
+                # Prefer an engine we can fuel right now; fall back to any
+                # engine with the property (the bump loop funds its tank via
+                # the NO_TANK_FOR_FUEL_TYPE -> tank-axis path).
+                valid = [
+                    name for name, parts in PART_DB.items()
+                    if name not in reps_collected
+                    for p in parts if _engine_ok(p, require_fundable=True)
+                ]
+                if not valid:
+                    valid = [
+                        name for name, parts in PART_DB.items()
+                        if name not in reps_collected
+                        for p in parts if _engine_ok(p, require_fundable=False)
+                    ]
                 if not valid:
                     continue
                 pick = rng.choice(sorted(valid))
