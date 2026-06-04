@@ -83,15 +83,15 @@ class TestEnginesByMissionClass(unittest.TestCase):
         self.assertEqual(self.vac[nerv], self.vac_buckets,
                          "Nerv should be a top-tier vacuum engine")
 
-    def test_dawn_top_vac_off_launch_or_bottom(self) -> None:
+    def test_dawn_off_engine_axes_out_of_logic(self) -> None:
+        # Ion (Dawn) is out of logic: its ~4200s Isp would dominate every
+        # dv-bound mission and flatten per-seed variance, and it's never
+        # actually required (every mission is reachable non-ion).  So it's
+        # left off the engine rank axes entirely -- capability ignores it
+        # too -- and stays an out-of-logic bonus part.
         dawn = "ionEngine"
-        self.assertEqual(self.vac[dawn], self.vac_buckets,
-                         "Dawn (ion) should be top vacuum rank thanks to xenon multiplier")
-        # Dawn does technically have atm_thrust > 0 (atm_isp blends), so it appears
-        # on the launch axis but should be at the absolute bottom.
-        if dawn in self.launch:
-            self.assertEqual(self.launch[dawn], 1,
-                             "Dawn should rank as the worst launch engine if on the axis")
+        self.assertNotIn(dawn, self.vac, "ion must be off the vacuum engine axis")
+        self.assertNotIn(dawn, self.launch, "ion must be off the launch engine axis")
 
 
 class TestTanksByDryMass(unittest.TestCase):

@@ -161,11 +161,15 @@ PROGRESSIVE_SCIENCE_INSTRUMENT_NAME: str = "Progressive Science Instrument"
 
 # Kerbin baseline tonnage caps by collected count (index = number of copies
 # received).  Index 0 = no copies = starting cap.  Starting at 100t lets
-# sphere-0 do basic Kerbin / Mun / Minmus orbit + landing without any
-# Launch Pad item, which breaks the bootstrap deadlock when the item is
-# banned from the early bucket.  Non-Kerbin homes scale these by their
-# surface→low-orbit dv ratio (see ``progressive_launch_pad_caps_for``).
-PROGRESSIVE_LAUNCH_PAD_CAPS_KERBIN: tuple[float, ...] = (100.0, 200.0, 500.0, float("inf"))
+# sphere-0 do basic Kerbin / Mun / Minmus orbit + landing without any Launch
+# Pad item, which breaks the bootstrap deadlock when the item is banned from
+# the early bucket.  (A lower, more binding base is desirable but makes the
+# pad load-bearing in the bootstrap band -- the chain-ordered copies then
+# strand in the restrictive fill; that needs milestone-based pad placement,
+# tracked separately.)  Non-Kerbin homes scale these by their surface→low-
+# orbit dv ratio (see ``progressive_launch_pad_caps_for``).
+PROGRESSIVE_LAUNCH_PAD_CAPS_KERBIN: tuple[float, ...] = (
+    100.0, 200.0, 500.0, float("inf"))
 
 # Count of copies in the item pool — fixed regardless of home.  Only the
 # tonnage caps scale; the player always collects the same number of items.

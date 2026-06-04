@@ -40,13 +40,18 @@ def _bumper(loc: str, seed: int = 42, prior: MinimumRanks = MinimumRanks.empty()
 class TestRankPrePass(unittest.TestCase):
     def test_empty_admits_only_non_ranked_parts(self) -> None:
         """An empty MinimumRanks ceiling rejects every item that has any
-        rank — only filler / non-ranked items pass."""
+        rank — only non-ranked items pass.  Ion is the lone non-ranked
+        engine (it's out of logic, so it's off the engine axes; see
+        ``_engine_vac``), so it slips through the rank gate here — but
+        capability's ``_filter_engines_for_ion`` strips it at evaluation
+        time, keeping it out of logic in practice."""
         flags = _pre_pass_for_ranks(
             MinimumRanks.empty(), DEFAULT_CONTEXT,
             start_with_clamps=True, progressive_launch_pad=False,
             launch_pad_caps=None,
         )
-        self.assertEqual(flags.available_engines, [])
+        self.assertEqual([e.fuel_type for e in flags.available_engines],
+                         ["xenon"] * len(flags.available_engines))
         self.assertEqual(flags.available_tanks, [])
         self.assertEqual(flags.available_srbs, [])
 

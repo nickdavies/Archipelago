@@ -2012,6 +2012,8 @@ def minimal_ranks_for(
                 def _engine_ok(p, *, require_fundable: bool) -> bool:
                     if not isinstance(p, Engine) or not getattr(p, prop):
                         return False
+                    if p.fuel_type == "xenon":  # ion is out of logic
+                        return False
                     if (p.atm_thrust if in_atm else p.vac_thrust) <= 0:
                         return False
                     return (p.fuel_type in fundable) if require_fundable else True
@@ -2050,6 +2052,7 @@ def minimal_ranks_for(
         else:
             stuck_iters = 0
         prev_blocker_count = cur_count
+
         # Pick a bump.  Scored selection (mass-min objective +
         # stage_diag candidate narrowing) is the primary mechanism —
         # ports the legacy _pick_bump intelligence to the rank system.
@@ -3675,6 +3678,7 @@ def _demote_non_rep_parts(
     world: "KSP1World",
     rep_names: set[str],
     chain_cumulative: MinimumRanks,
+    chain_extras: Optional[dict[str, int]] = None,
 ) -> int:
     """Demote every PROGRESSION part the bumper didn't designate as a rep,
     AND strip rank-axis entries that exceed the chain's cumulative ceiling.
@@ -3726,6 +3730,21 @@ def _demote_non_rep_parts(
         # and the player may never reach them.  Promoting forces AP to
         # place every rep at a reachable location, matching the bumper's
         # contract.
+        # (1a) Spare Launch Pad copies.  A pad copy gates progression only up
+        # to the max tier the chain actually bumped (``chain_extras[Pad]``).
+        # Copies beyond that gate nothing, but keeping them PROGRESSION clogs
+        # the restrictive fill: a spare tier-3 pad with no reachable home left
+        # aborts the whole fill ("No more spots to place").  Demote those
+        # spares to USEFUL so they scatter freely; the chain-needed tiers stay
+        # PROGRESSION.  (R&D / PSI keep the blanket rule -- their tier needs
+        # aren't fully captured in extras, so demoting them risks solvability.)
+        if item.name == PROGRESSIVE_LAUNCH_PAD_NAME and chain_extras is not None:
+            tier = getattr(item, "_sphere_tier", None)
+            if tier is not None and tier > chain_extras.get(item.name, 0):
+                if item.classification == ItemClassification.progression:
+                    item.classification = ItemClassification.useful
+                    demoted += 1
+                continue
         if item.name in rep_names or item.name in _KEEP_PROGRESSIVE:
             if item.classification != ItemClassification.progression:
                 item.classification = ItemClassification.progression
@@ -4772,7 +4791,8 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
     # touched.
     rep_part_names = set(cumulative_reps)
     rep_part_names |= set(sphere_rank_reps.values())  # belt-and-suspenders
-    _demote_non_rep_parts(world, rep_part_names, cumulative_ranks)
+    _demote_non_rep_parts(world, rep_part_names, cumulative_ranks,
+                          chain_extras=chain_full_extras)
     # === DIAGNOSTIC (temporary, gated) ===
     import os as _os
     if not _os.environ.get('KSP_PHASE2_DIAG'):

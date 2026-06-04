@@ -101,6 +101,8 @@ def _engine_launch(p: AnyPart, ctx: RankContext) -> Optional[float]:
         return None
     if p.atm_thrust <= 0:
         return None
+    if p.fuel_type == "xenon":  # ion is out of logic — see _engine_vac
+        return None
     return (
         0.4 * p.atm_isp
         + 0.3 * (p.atm_thrust / max(p.mass, 0.05))
@@ -114,17 +116,20 @@ def _engine_vac(p: AnyPart, ctx: RankContext) -> Optional[float]:
         return None
     if p.vac_thrust <= 0:
         return None
-    score = (
+    # Ion (xenon) is out of logic: its absurd Isp dominates every dv-bound
+    # mission, which crowns it the required engine and kills variance.  It's
+    # also never *needed* (every mission is reachable non-ion, just heavier).
+    # So leave it off the engine axes entirely — capability ignores it too,
+    # and it stays an out-of-logic bonus the player can fly if they collect
+    # it.  See _filter_engines_for_ion.
+    if p.fuel_type == "xenon":
+        return None
+    return (
         1.5 * p.vac_isp
         + 0.2 * math.log(1.0 + p.vac_thrust / max(p.mass, 0.05))
         + (20.0 if p.throttleable else 0.0)
         - 5.0 * p.mass
     )
-    # Xenon nudge: Dawn has stupendous Isp but tiny thrust; without the
-    # bonus the mass penalty would rank it middling.
-    if p.fuel_type == "xenon":
-        score *= 1.3
-    return score
 
 
 def _make_tank_scorer(fuel_type: str) -> Callable[[AnyPart, RankContext], Optional[float]]:
