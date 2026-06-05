@@ -614,11 +614,12 @@ def _set_early_bucket_item_bans(world: KSP1World, player: int, difficulty: int) 
     """Ban Progressive Launch Pad from starter inventory only.
 
     The Pad item is a blow-open item: collecting it raises the launch-mass
-    cap by a big jump and opens many bodies at once.  Keeping it out of
-    the starter bucket spreads its discovery across the game.
-    Sphere-ladder Rule B handles other early-bucket restrictions
-    (e.g. the differentiators previously banned by the now-removed
-    ``ban_differentiators_early`` option).
+    cap by a big jump and opens many bodies at once.  It must never be
+    *handed to the player at game load* — even at a binding low base where
+    the pad is needed early, the player should have to earn it on a real
+    location, not start with it.  So it's banned from the starter bucket
+    (the auto-checked starting-inventory locations); the placement system
+    still has to find it an early *non-starter* home.
     """
     if not world.options.progressive_launch_pad:
         return

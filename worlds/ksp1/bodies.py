@@ -869,7 +869,7 @@ MissionProfiles = dict[tuple[BodyName, MissionType], list[list[MissionEdge]]]
 # their surface→low-orbit dv ratio.  Index 0 (no copies) is the starting
 # cap; index N is "unlimited" so the player isn't blocked at the goal.
 _PROGRESSIVE_LAUNCH_PAD_CAPS_KERBIN: tuple[float, ...] = (
-    100.0, 200.0, 500.0, float("inf"))
+    20.0, 100.0, 400.0, float("inf"))
 
 # Reference Isp used in the rocket-equation scaling (m/s).  Roughly an
 # LV-909 vacuum engine — a mid-tier optimization point that matches

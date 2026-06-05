@@ -169,7 +169,7 @@ PROGRESSIVE_SCIENCE_INSTRUMENT_NAME: str = "Progressive Science Instrument"
 # tracked separately.)  Non-Kerbin homes scale these by their surface→low-
 # orbit dv ratio (see ``progressive_launch_pad_caps_for``).
 PROGRESSIVE_LAUNCH_PAD_CAPS_KERBIN: tuple[float, ...] = (
-    100.0, 200.0, 500.0, float("inf"))
+    20.0, 100.0, 400.0, float("inf"))
 
 # Count of copies in the item pool — fixed regardless of home.  Only the
 # tonnage caps scale; the player always collects the same number of items.

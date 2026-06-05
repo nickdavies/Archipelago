@@ -3730,15 +3730,18 @@ def _demote_non_rep_parts(
         # and the player may never reach them.  Promoting forces AP to
         # place every rep at a reachable location, matching the bumper's
         # contract.
-        # (1a) Spare Launch Pad copies.  A pad copy gates progression only up
-        # to the max tier the chain actually bumped (``chain_extras[Pad]``).
-        # Copies beyond that gate nothing, but keeping them PROGRESSION clogs
-        # the restrictive fill: a spare tier-3 pad with no reachable home left
-        # aborts the whole fill ("No more spots to place").  Demote those
-        # spares to USEFUL so they scatter freely; the chain-needed tiers stay
-        # PROGRESSION.  (R&D / PSI keep the blanket rule -- their tier needs
-        # aren't fully captured in extras, so demoting them risks solvability.)
-        if item.name == PROGRESSIVE_LAUNCH_PAD_NAME and chain_extras is not None:
+        # (1a) Spare counted-progressive copies (R&D / Pad / PSI).  A copy
+        # gates progression only up to the max tier the chain actually bumped
+        # (``chain_extras[name]`` — for R&D the highest funded band, for Pad
+        # the highest mass tier, for PSI the highest science tier; the chain
+        # never bumps PSI so chain_extras[PSI]=0).  Copies beyond that gate
+        # nothing, yet keeping them PROGRESSION clogs the restrictive fill's
+        # early region with dead weight — e.g. all 3 PSI and the unused R&D
+        # bands land at ms=0 every simple-goal seed and crowd out the reps
+        # that genuinely need an early home.  Demote those spares to USEFUL so
+        # they scatter freely; the chain-needed tiers fall through and stay
+        # PROGRESSION below.
+        if item.name in _KEEP_PROGRESSIVE and chain_extras is not None:
             tier = getattr(item, "_sphere_tier", None)
             if tier is not None and tier > chain_extras.get(item.name, 0):
                 if item.classification == ItemClassification.progression:
@@ -3869,26 +3872,27 @@ def _install_ladder_rules(
     location_min_extras: dict[str, dict[str, int]],
     bootstrap_locations: set,
     save_original: bool = False,
+    install_access: bool = True,
 ) -> None:
-    """Install BOTH the cheap access rule and the placement item_rule for
-    every capability-gated location, driven by a SINGLE capability
-    bracket — so access and placement can't disagree (the FillError-
-    causing inconsistency the prototype surfaced).
+    """Compute each capability-gated location's feasibility bracket and,
+    when ``install_access`` is set, swap in the cheap ``has_all(reps)``
+    access rule driven by that single bracket.
 
     For each location L:
       * **Bracket** ``j`` = first chain sphere whose reps-only flags
         actually reach L's mission (capability, not rank coverage —
         deduped per mission so the scan runs ~40 times, not ~250).
-      * **Access rule**: ``state.has_all(sphere[j].reps_collected)`` plus
-        the sphere's counted-progressive thresholds.  L is reachable
-        once the player holds the kit that the ladder proved reaches it.
-      * **Placement item_rule**: a part is admitted at L iff its rank is
-        within the PRIOR sphere's ceiling (``sphere[j-1].ranks``; empty
-        for j=0).  This bans exactly the reps that unlock L's bracket
-        sphere from landing at L — they must be collected earlier, which
-        is what makes the cheap access rule cycle-free.  USEFUL parts are
-        gated the same way, so a high-rank part still can't land before
-        its sphere (the power-engine-too-early concern).
+      * **Access rule** (only if ``install_access``):
+        ``state.has_all(sphere[j].reps_collected)`` plus the sphere's
+        counted-progressive thresholds.  L is reachable once the player
+        holds the kit that the ladder proved reaches it.
+
+    ``install_access=False`` still records the bracket (so the unified
+    placement rule's loc_sphere uses the chain's feasibility oracle) but
+    leaves the raw capability access rule untouched — the capability /
+    strict_validation verification modes gate the whole seed on physics.
+    Placement is never installed here; that is the windowed sphere rule's
+    job (:func:`_install_unified_sphere_rules`).
     """
     player = world.player
     spheres = ladder.spheres
@@ -3919,28 +3923,52 @@ def _install_ladder_rules(
             continue  # tech anchor — gates on science, not capability
         mkey = (info.body, info.mission_type, info.crewed, info.threshold_km)
         if mkey in bracket_by_mission:
-            j = bracket_by_mission[mkey]
+            j, pad_req = bracket_by_mission[mkey]
         else:
             j = None
+            pad_req = 0
             for i, s in enumerate(spheres):
-                if s.flags is not None and _evaluate(s.flags, info, diff, mb).feasible:
+                if s.flags is None:
+                    continue
+                r = _evaluate(s.flags, info, diff, mb)
+                if r.feasible:
                     j = i
+                    # Precise per-mission pad = the lightest pad tier (number
+                    # of copies) whose tonnage cap fits THIS mission's launch
+                    # mass — its own physics requirement, not the chain's
+                    # cumulative pad.  caps[T] is the cap with T copies, so a
+                    # ≤caps[0] mission needs 0 copies (no gate) and only heavier
+                    # missions record a requirement.  (Approximation: mass is
+                    # measured with the bracket sphere's pad; the mass↔pad
+                    # staging coupling is left to the dynamic-tier work.)
+                    caps = mb.launch_pad_caps
+                    pad_req = next((t for t, c in enumerate(caps)
+                                    if r.launch_mass <= c), len(caps) - 1)
                     break
-            bracket_by_mission[mkey] = j
+            bracket_by_mission[mkey] = (j, pad_req)
         if j is None:
             # No sphere reaches this mission with its reps-only kit —
             # leave the capability rule as the (slow) fallback.
             continue
         bracket_by_loc[loc.name] = j
-        if save_original:
-            saved[loc.name] = loc.access_rule
-        sphere = spheres[j]
-        # Access rule: has the bracket sphere's full cumulative kit.
-        loc.access_rule = _make_bracket_rule(
-            player,
-            tuple(sphere.reps_collected),
-            tuple(sphere.extras.items()),
-        )
+        # Missions are gated by MASS (the pad tonnage cap), so the pad is their
+        # only counted-progressive requirement (R&D/PSI gate science, not
+        # missions).  Recording the precise per-mission pad makes the placement
+        # self-ban a real destination gate: a pad copy can't land at a mission
+        # that already needs that many copies.
+        if pad_req > 0:
+            location_min_extras.setdefault(loc.name, {})[
+                PROGRESSIVE_LAUNCH_PAD_NAME] = pad_req
+        if install_access:
+            if save_original:
+                saved[loc.name] = loc.access_rule
+            sphere = spheres[j]
+            # Access rule: has the bracket sphere's full cumulative kit.
+            loc.access_rule = _make_bracket_rule(
+                player,
+                tuple(sphere.reps_collected),
+                tuple(sphere.extras.items()),
+            )
         # No item_rule ban here.  The chicken-and-egg (a rep needed to reach
         # L sitting at L) is prevented by AP's restrictive fill, which never
         # places a progression item at a location unreachable without it —
@@ -3949,150 +3977,9 @@ def _install_ladder_rules(
         rebracketed += 1
     world._cheap_access_rebracketed = rebracketed
     world._cheap_access_bracket = bracket_by_loc
-    if save_original:
+    if save_original and install_access:
         world._strict_ladder_saved_rules = saved
 
-
-def _compute_location_priors(
-    ladder: SphereLadder,
-    location_min_ranks: dict[str, MinimumRanks],
-    location_min_extras: dict[str, dict[str, int]],
-    location_names_in_chain: set[str],
-) -> tuple[dict[str, MinimumRanks], dict[str, dict[str, int]]]:
-    """For each capability-gated location L, return ``(prior_ranks,
-    prior_extras)`` — the cumulative kit at the chain sphere JUST BEFORE
-    L becomes reachable.  Items belonging to that sphere or later
-    (rank-delta items, R&D / Pad copies introduced there) must be banned
-    at L: collecting them at L would be a chicken-and-egg dependency.
-
-    Locations not covered by any sphere (post-goal / unfundable tech)
-    are treated with the full chain cumulative as their prior — i.e.,
-    only chain-irrelevant items can land at them.  This mirrors the
-    legacy "sentinel-beyond-goal" path.
-    """
-    # Build per-sphere prior cumulatives (prior_index 0 = empty kit;
-    # prior_index i = sphere_(i-1)'s cumulative).
-    prior_ranks_per: list[MinimumRanks] = [MinimumRanks.empty()]
-    prior_extras_per: list[dict[str, int]] = [{}]
-    for sphere in ladder.spheres:
-        prior_ranks_per.append(sphere.ranks)
-        prior_extras_per.append(dict(sphere.extras))
-    # Full chain cumulative for sentinel fallback.
-    if ladder.spheres:
-        full_ranks = ladder.spheres[-1].ranks
-        full_extras = dict(ladder.spheres[-1].extras)
-    else:
-        full_ranks = MinimumRanks.empty()
-        full_extras = {}
-    loc_prior_ranks: dict[str, MinimumRanks] = {}
-    loc_prior_extras: dict[str, dict[str, int]] = {}
-    for loc_name, min_ranks in location_min_ranks.items():
-        min_extras = location_min_extras.get(loc_name, {})
-        found_idx: Optional[int] = None
-        for i, sphere in enumerate(ladder.spheres):
-            covers_ranks = all(
-                (sphere.ranks.get(axis_key) or 0) >= rank
-                for axis_key, rank in min_ranks.upper_bounds
-            )
-            covers_extras = all(
-                sphere.extras.get(name, 0) >= count
-                for name, count in min_extras.items()
-            )
-            if covers_ranks and covers_extras:
-                found_idx = i
-                break
-        if found_idx is None:
-            # Unreachable in this chain — sentinel: only items NOT used
-            # anywhere in the chain can land here, so prior is the
-            # full chain cumulative.
-            loc_prior_ranks[loc_name] = full_ranks
-            loc_prior_extras[loc_name] = dict(full_extras)
-        else:
-            loc_prior_ranks[loc_name] = prior_ranks_per[found_idx]
-            loc_prior_extras[loc_name] = prior_extras_per[found_idx]
-    return loc_prior_ranks, loc_prior_extras
-
-
-def _make_placement_rule(player, ranks_dict, extras_dict, chain_full_extras,
-                         existing, gate_parts: bool = True):
-    """Rank-ceiling (PART items) + counted-progressive chain-ordering rule.
-
-    ``gate_parts=False`` skips the PART rank ceiling, applying only the
-    counted-progressive chain-ordering (used by the strict_ladder uniform
-    progressive pass).
-    """
-    def _rule(item, _r=ranks_dict, _e=extras_dict, _p=player,
-              _chain=chain_full_extras, _orig=existing, _gp=gate_parts) -> bool:
-        if _orig is not None and not _orig(item):
-            return False
-        if item.player != _p:
-            return True
-        sig = getattr(item, "rank_sig", None)
-        if sig is not None and sig.axes:
-            if not _gp:
-                return True
-            for axis_key, rank in sig.axes:
-                if rank > _r.get(axis_key, 0):
-                    return False
-            return True
-        tier = getattr(item, "_sphere_tier", None)
-        if tier is not None:
-            if tier > _chain.get(item.name, 0):
-                return True  # past-chain — admitted anywhere
-            if tier > _e.get(item.name, 0):
-                return False
-        return True
-    return _rule
-
-
-
-
-def _install_placement_rules(
-    world: "KSP1World",
-    location_min_ranks: dict[str, MinimumRanks],
-    loc_prior_extras: dict[str, dict[str, int]],
-    bootstrap_locations: set[str],
-    chain_full_extras: dict[str, int],
-) -> None:
-    """Per-location item_rule for Phase 2 placement.
-
-    Two independent mechanisms, composed via AND with whatever rule the
-    location already carries:
-
-      * **Rank ceiling** for PART items (``rank_sig`` populated).
-        A part with rank R on axis A is admitted iff R ≤
-        ``location_min_ranks[L][A]`` — the location's intrinsic
-        min-ranks from the bumper.  This mirrors the legacy "tier 1
-        parts go anywhere reachable" property: low-rank items have
-        many admitting locations; high-rank items are restricted to
-        late-chain spots that need them.
-
-      * **Chain-ordering** for counted progressives (``_sphere_tier``
-        set, ``rank_sig`` empty: R&D / Pad / PSI).  Tier T banned at L
-        iff T > ``loc_prior_extras[L][name]`` — replicates the legacy
-        Rule B (3) R&D soft-lock and Pad self-ban.  Tiers past the
-        chain's max for that counted progressive are admitted
-        unconditionally (no chain position → no constraint).
-
-    Splitting these matches the legacy design: ``_install_tier_ban_rule``
-    banned ``(progressive_item, tier)`` pairs — i.e., wrappers, not
-    individual parts.  Individual parts only saw the implicit ceiling
-    via the wrapper.  In rank-space the wrappers are gone, so the parts
-    use the location's intrinsic rank ceiling directly.
-    """
-    player = world.player
-    for loc in world.multiworld.get_locations(player):
-        if loc.name in bootstrap_locations:
-            continue
-        loc_ranks = location_min_ranks.get(loc.name)
-        loc_extras = loc_prior_extras.get(loc.name)
-        if loc_ranks is None and loc_extras is None:
-            continue
-        ranks_dict = dict(loc_ranks.upper_bounds) if loc_ranks is not None else {}
-        extras_dict = dict(loc_extras) if loc_extras is not None else {}
-        loc.item_rule = _make_placement_rule(
-            player, ranks_dict, extras_dict, chain_full_extras, loc.item_rule,
-        )
 
 
 _EMPTY_EXTRAS: dict[str, int] = {}
@@ -4195,15 +4082,24 @@ def _install_unified_sphere_rules(
     location_min_extras: dict[str, dict[str, int]],
     bootstrap_locations: set[str],
 ) -> None:
-    """The unified placement rule: every item is admissible at location L
-    iff ``item.min_sphere <= L.sphere`` — one sphere-index comparison for
-    parts, R&D, Pad and PSI alike.
+    """The unified placement rule — a per-item sphere *window* keyed on
+    each item's ladder position ``ms = _item_min_sphere(item)``:
 
-    Replaces the rank-ceiling (parts) / extras-chain-ordering (counted
-    progressives) split.  It is purely a balance / progression-ordering
-    constraint; soundness is owned by the capability cross-check in
-    ``post_fill``, not here.  Locations with no rank requirement (KSC,
-    starting inventory, Victory) are left to their existing rule.
+      * PROGRESSION reps: ``cascade_lo[ms] <= L.sphere <= ms-1``.  The rep
+        must be collectable strictly before the sphere that needs it, so
+        AP's restrictive fill can always place it reachably (this is what
+        keeps fill from cornering itself on a broadly-gating item).  The
+        lower bound is normally ``ms-1`` and only widens earlier when the
+        prerequisite spheres lack capacity (the cascade, _compute_cascade_lo).
+      * USEFUL / filler: ``L.sphere >= ms`` — lower bound only, so a
+        surprise alternate never arrives before the rep chosen in its
+        stead, but may appear any time after.
+
+    Parts, R&D, Pad and PSI share this one sphere-index window.  Full
+    soundness (every location reachable with the kit placed before it) is
+    additionally proven by the capability cross-check in ``post_fill``.
+    Locations with no rank requirement (KSC, starting inventory, Victory)
+    keep their existing rule.
     """
     player = world.player
     spheres = ladder.spheres
@@ -4250,23 +4146,36 @@ def _install_unified_sphere_rules(
         if L is None:
             continue  # ungated (KSC / starting inventory / event) — keep existing rule
         existing = loc.item_rule
+        # This location's own counted-progressive requirement, e.g.
+        # {Pad: 2, R&D: 1} = "reaching L needs pad tier 2 and R&D band 1".
+        my_extras = location_min_extras.get(loc.name, _EMPTY_EXTRAS)
 
         def _rule(item, _p=player, _L=L, _spheres=spheres, _orig=existing,
-                  _lo=cascade_lo) -> bool:
+                  _ext=my_extras) -> bool:
             if _orig is not None and not _orig(item):
                 return False
             if item.player != _p:
                 return True
-            ms = _item_min_sphere(item, _spheres)
             if item.advancement:
-                # Minimization moves over-bumped high-rank parts out of the
-                # chain into USEFUL (gated late), so the advancement set is the
-                # genuine minimal/basic kit — safe to place reachably (AP's
-                # fill handles reachability; the cross-check confirms).  The
-                # capacity-cascade lower bound is kept as an env-gated
-                # alternative while the rep-picker overpower is rooted out.
-                return os.environ.get("KSP_ADV_PERMISSIVE", "1") == "1" or \
-                    _L >= _lo.get(ms, max(0, ms - 1))
+                tier = getattr(item, "_sphere_tier", None)
+                if tier is not None:
+                    # Counted progressive (R&D / Pad / PSI) — the UNIQUE
+                    # provider of its tier (no alternate gives you pad tier 2
+                    # except the 2nd pad copy).  Admit this copy at L only
+                    # where L does NOT already require this tier or higher;
+                    # then L is reachable with a lower tier, so collecting the
+                    # copy here can never be circular.  Cheap: one lookup in
+                    # the chain's precomputed per-location requirement.
+                    return _ext.get(item.name, 0) < tier
+                # Part: many alternates share its rank, so no single part is
+                # uniquely required to reach any location.  The chain selected
+                # the reps; AP's restrictive fill places them (it handles the
+                # part-combination reachability the per-location rule can't).
+                return True
+            # USEFUL / filler: lower bound on sphere only — never earlier than
+            # its own tier, so a surprise alternate can't outshine the rep
+            # placed in its stead.
+            ms = _item_min_sphere(item, _spheres)
             return ms <= _L
 
         loc.item_rule = _rule
@@ -4739,49 +4648,51 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
         location_min_ranks.setdefault(_name, _ranks)
         bootstrap_locations.discard(_name)
 
-    # Per-location chain-ordering rule (replaces the previous rank-
-    # ceiling rule).  Combines:
-    #   * Self-ban — items in L's own min_kit can't land at L.
-    #   * Chain-ordering — items added at the sphere covering L (or
-    #     later) can't land at L; collecting them at L would be a
-    #     chicken-and-egg.
-    #   * R&D soft-lock — R&D=B banned at L if L isn't reachable with
-    #     band B's funding sphere's cumulative kit.
-    #   * Pad self-ban — Pad=K banned at L if L's min_extras need K.
-    location_names_in_chain = {s.location_name for s in ladder.spheres}
-    loc_prior_ranks, loc_prior_extras = _compute_location_priors(
-        ladder, location_min_ranks, location_min_extras,
-        location_names_in_chain,
-    )
     chain_full_extras: dict[str, int] = {}
     for sphere in ladder.spheres:
         for name, count in sphere.extras.items():
             chain_full_extras[name] = max(chain_full_extras.get(name, 0), count)
+    # Inject the tech tree's PSI need at the chain level (mirrors the R&D band
+    # injection above).  Only the complete_tech_tree goal funds its science
+    # assuming PSI=PROGRESSIVE_PSI_COUNT (see _pick_tech_tree_anchors, gated on
+    # the same goal_spec flag), but the bumper never bumps PSI into sphere
+    # extras — so without this chain_full_extras[PSI] reads 0 and the spare-
+    # demote drops the very PSI copies the tree was funded with, starving its
+    # science.  (band_funding is the wrong gate: tech *nodes* are optional
+    # checks present for every goal, so it's non-empty even for mun_flag.)
+    if world.goal_spec.complete_tech_tree:
+        from .items import (
+            PROGRESSIVE_PSI_COUNT,
+            PROGRESSIVE_SCIENCE_INSTRUMENT_NAME as _PSI_NAME,
+        )
+        chain_full_extras[_PSI_NAME] = max(
+            chain_full_extras.get(_PSI_NAME, 0), PROGRESSIVE_PSI_COUNT,
+        )
     # Expose the finalized per-location rank/extras maps for analysis tooling.
     world._location_min_ranks = location_min_ranks
     world._location_min_extras = location_min_extras
-    if _ACCESS_RULE_MODE in ("ladder", "strict_ladder"):
-        # Cheap reachability: one capability-bracket per mission gives each
-        # location a microsecond ``has_all(reps)`` access rule (validated
-        # against real physics by the post_fill cross-check).
-        _install_ladder_rules(
-            world, ladder, location_min_ranks, location_min_extras,
-            bootstrap_locations,
-            save_original=(_ACCESS_RULE_MODE == "strict_ladder"),
-        )
-        # Unified placement: ONE rule for every item — admissible at L iff
-        # its ladder position (min_sphere) ≤ L's.  Parts, R&D, Pad and PSI
-        # share the same sphere-index comparison; soundness is the cross-
-        # check's job, not this balance rule.
-        _install_unified_sphere_rules(
-            world, ladder, location_min_ranks, location_min_extras,
-            bootstrap_locations,
-        )
-    else:
-        _install_placement_rules(
-            world, location_min_ranks, loc_prior_extras, bootstrap_locations,
-            chain_full_extras,
-        )
+
+    # Access rule.  The feasibility bracket is computed in every mode (so the
+    # unified placement rule's loc_sphere always uses the chain's oracle);
+    # ``install_access`` only decides whether the cheap has_all(reps) rule is
+    # swapped in:
+    #   * ladder / strict_ladder — install the cheap bracket rule (strict_ladder
+    #     additionally saves the raw capability rule so post_fill can re-prove
+    #     the placement under physics and re-fill if the bracket ever diverged).
+    #   * capability / strict_validation — leave the raw capability access rule
+    #     in place, gating the whole seed on real physics for verification.
+    ladder_mode = _ACCESS_RULE_MODE in ("ladder", "strict_ladder")
+    _install_ladder_rules(
+        world, ladder, location_min_ranks, location_min_extras,
+        bootstrap_locations,
+        save_original=(_ACCESS_RULE_MODE == "strict_ladder"),
+        install_access=ladder_mode,
+    )
+    # Single placement authority for every mode: the windowed sphere rule.
+    _install_unified_sphere_rules(
+        world, ladder, location_min_ranks, location_min_extras,
+        bootstrap_locations,
+    )
 
     # Demote everything that isn't in the chain's collected reps set,
     # and clear past-goal rank entries so above-ceiling items can
