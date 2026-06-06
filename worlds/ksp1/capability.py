@@ -790,6 +790,12 @@ class ProfileResult:
     launch_mass: float = 0.0          # total wet mass at kerbin_surface
     stage_results: list[StageResult] = field(default_factory=list)
     edge_groups: list[list[MissionEdge]] = field(default_factory=list)
+    # Index into ``edge_groups`` for each entry of ``stage_results`` (same
+    # order).  Usually 1:1, but a multi-stage ascent group expands into K
+    # stages that all map back to the single ascent group — so the formatter
+    # must use this rather than zipping ``stage_results``/``edge_groups`` by
+    # position (which silently misaligns every stage above the ascent).
+    stage_group_indices: list[int] = field(default_factory=list)
     # Structured blocking info; ``failure_reasons`` is the legacy string
     # view derived from ``blocking``. Producers populate ``blocking``;
     # downstream consumers can read either.
@@ -1350,6 +1356,10 @@ def _evaluate_profile(
                 global_attitude_force_gimbal = True
 
     stage_results_list: list[StageResult] = []
+    # Edge-group index for each appended stage (parallel to
+    # ``stage_results_list``).  A multi-stage ascent appends K stages for one
+    # group, so this is the only reliable stage→group map for the formatter.
+    stage_group_list: list[int] = []
 
     # ``reversed(groups)`` iterates terminal → ascent; track the matching
     # flight-order index so we can hook stage-specific behaviour.
@@ -1523,6 +1533,7 @@ def _evaluate_profile(
                 equipment=stage_equipment,
                 heat_shield_name=passive_shield[2] if passive_shield else None,
             ))
+            stage_group_list.append(flight_idx)
             payload = passive_mass
             continue
 
@@ -1641,6 +1652,7 @@ def _evaluate_profile(
             # reversal at the ProfileResult assembly.
             for sr in reversed(multistage):
                 stage_results_list.append(sr)
+                stage_group_list.append(flight_idx)
             # The bottom stage's wet mass is the launch mass (running total
             # for the outer loop's next-back-up iteration).
             payload = multistage[0].stage_mass_wet
@@ -1679,6 +1691,7 @@ def _evaluate_profile(
 
         result.equipment = stage_equipment
         stage_results_list.append(result)
+        stage_group_list.append(flight_idx)
         # The stage's wet mass becomes the payload for the next stage back
         payload = result.stage_mass_wet
 
@@ -1719,6 +1732,7 @@ def _evaluate_profile(
         launch_mass=payload,
         stage_results=reversed_stages,
         edge_groups=groups,
+        stage_group_indices=list(reversed(stage_group_list)),
         terminal_parts=terminal_parts,
         # kit_used is NOT built here — it's expensive and only two call
         # sites consume it.  They call ``build_kit_for_result`` explicitly.
