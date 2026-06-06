@@ -64,7 +64,7 @@ class Engine:
     has_gimbal: bool
     size_class: float       # metres: 0.625, 1.25, 2.5, 3.75, 5.0
     fuel_type: str          # "lfo" | "lf" | "xenon" (derived tag)
-    radial_mountable: bool = False  # True if engine has "srf" in bulkhead_profiles
+    radial_mountable: bool = False  # True only for srf-ONLY (purpose-built radial) engines
     # Stock-resource names the engine consumes (excluding ElectricCharge),
     # sorted. Used for generic tank/engine compatibility.
     propellants: tuple[str, ...] = ()
@@ -1048,7 +1048,15 @@ def _build_part(part_type: type, cfg: dict, overrides: dict, name: str) -> AnyPa
     size = _best_size_class(cfg.get("bulkhead_profiles", []))
 
     bulkheads = cfg.get("bulkhead_profiles", [])
-    is_radial = "srf" in bulkheads
+    is_radial = "srf" in bulkheads  # can be surface-attached
+    # srf-ONLY parts have no stack node.  For tanks, that means they can't be a
+    # stage's central spine (every externalTank* radial side tank is one).  For
+    # engines, srf-only is the signal of a purpose-built radial engine (Spider,
+    # Thud, Twitch, Puff): the nozzle bends 90deg off the mount, so it's only
+    # useful side-mounted.  An engine with a stack node + srf (Ant, Vector,
+    # Aerospike) is a stack engine whose nozzle points along the mount, so
+    # radial-mounting it is pointless — those are stack-only here.
+    is_radial_only = bool(bulkheads) and all(b == "srf" for b in bulkheads)
 
     if part_type is Engine:
         eng = cfg["engine"]
@@ -1070,7 +1078,7 @@ def _build_part(part_type: type, cfg: dict, overrides: dict, name: str) -> AnyPa
             has_gimbal=cfg.get("has_gimbal", False),
             size_class=size,
             fuel_type=_fuel_type_from_propellants(eng["propellants"]),
-            radial_mountable=is_radial,
+            radial_mountable=is_radial_only,
             propellants=propellants,
         )
 
