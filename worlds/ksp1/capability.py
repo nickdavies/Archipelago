@@ -862,8 +862,9 @@ def _build_kit_used(flags: EquipmentFlags,
     for sr in stage_results:
         if sr.engine_name and sr.engine_name != "none":
             kit.stage_engines.append(sr.engine_name)
-        if sr.tank_name and sr.tank_name != "none":
-            kit.stage_tanks.append(sr.tank_name)
+        for _, tname in sr.tank_manifest:
+            if tname and tname != "none":
+                kit.stage_tanks.append(tname)
         for _, p in sr.equipment:
             if p:
                 kit.stage_equipment.append(p)

@@ -2093,7 +2093,7 @@ def minimal_ranks_for(
                     diag_lines.append(b.reason.name)
             partial = getattr(result, "partial_stages", [])
             stage_summary = " | ".join(
-                f"{s.engine_count}x{s.engine_name}+{s.tank_count}tk "
+                f"{s.engine_count}x{s.engine_name}+{sum(n for n, _ in s.tank_manifest)}tk "
                 f"dv={s.delta_v:.0f} wet={s.stage_mass_wet:.1f}t"
                 for s in partial
             )

@@ -297,6 +297,167 @@ def _size_parallel_unit(payload, e_mass, n_eng_core, n_eng_boost,
     return hi, col_dry, dv_exact(hi)
 
 
+# A tank is "packing-eligible" only if its fuel:dry ratio is within this
+# fraction of the best ratio available for the fuel type.  Nearly all tanks of
+# a given fuel type share one ratio, so this keeps them all and the pack is just
+# "largest first".  But an LF engine (Nerv) sees oxidizer-drained LFO *views*
+# whose ratio is ~half the native-LF tanks'; this threshold drops those dead-
+# oxidizer views so the pack matches the optimizer's best-ratio choice instead
+# of ballooning mass by grabbing a big bad-ratio tank.
+_TANK_PACK_RATIO_TOLERANCE = 0.15
+
+
+def _tank_ratio(t):
+    return t.fuel_mass / t.dry_mass if t.dry_mass > 0.0 else float("inf")
+
+
+def _packable_tanks(tanks, engine):
+    """Return ``(packable, rho_star)``: the mountable, non-radial, near-best-ratio
+    tanks for this engine (largest first) and the best fuel:dry ratio among them.
+
+    Only tanks the ``engine`` can mount on survive — radial side-tanks (no
+    central stack node) are excluded and the optimizer's size gate
+    (``engine.size_class <= tank.size_class``) is applied.  Among those, tanks
+    more than ``_TANK_PACK_RATIO_TOLERANCE`` worse than the best fuel:dry ratio
+    are dropped: for uniform-ratio fuel types this keeps every tank (the pack is
+    just "largest first"), but for an LF engine seeing oxidizer-drained LFO
+    views it discards the dead-oxidizer tanks, keeping the build's mass honest.
+    ``rho_star`` is returned so the caller need not recompute the max."""
+    mountable = [t for t in tanks
+                 if not t.is_radial and t.fuel_mass > 0.0
+                 and engine.size_class <= t.size_class]
+    if not mountable:
+        return [], 0.0
+    rho_star = max(_tank_ratio(t) for t in mountable)
+    floor = rho_star * (1.0 - _TANK_PACK_RATIO_TOLERANCE)
+    packable = sorted(
+        (t for t in mountable if _tank_ratio(t) >= floor),
+        key=lambda t: t.fuel_mass, reverse=True,
+    )
+    return packable, rho_star
+
+
+def _merge_manifest(pack):
+    """Collapse a pack ``[(count, tank), ...]`` to ``((count, name), ...)``,
+    merging duplicate tank names and keeping largest-fuel-first order."""
+    agg: dict[str, int] = {}
+    rep: dict[str, FuelTank] = {}
+    for n, t in pack:
+        agg[t.name] = agg.get(t.name, 0) + n
+        rep.setdefault(t.name, t)
+    return tuple((agg[name], name)
+                 for name in sorted(agg, key=lambda nm: rep[nm].fuel_mass,
+                                    reverse=True))
+
+
+def _pack_columns(fuel_target, packable, cols):
+    """Express ``fuel_target`` tonnes of fuel as the realistic tanks a player
+    builds, returning ``(col, tank_dry)`` where ``col`` is ONE column's
+    ``[(count, tank), ...]`` and tank_dry is the total (full) tank dry mass over
+    all ``cols`` columns.  Each column holds ``fuel_target/cols`` of fuel as full
+    near-best-ratio tanks (largest first) plus one covering tank **partial-filled**
+    to the leftover — so the packed fuel equals ``fuel_target`` exactly and the
+    only dead dry mass is the covering tank's.
+
+    ``cols`` (>=1) is the mounting floor: a non-radial multi-engine stage beyond
+    adapter capacity replicates one column per engine, guaranteeing every engine
+    has a tank to mount on.  ``packable`` must be non-empty and largest-first.
+    Allocation is kept minimal (no merged manifest, no covering list) because the
+    sizing convergence calls this per iteration; the merge happens once after."""
+    per_col = fuel_target / cols
+    col: list[tuple[int, FuelTank]] = []
+    col_dry = 0.0
+    remaining = per_col
+    for t in packable:
+        if remaining <= 1e-12:
+            break
+        n = int(remaining // t.fuel_mass)
+        if n > 0:
+            col.append((n, t))
+            col_dry += n * t.dry_mass
+            remaining -= n * t.fuel_mass
+    if remaining > 1e-12:
+        col.append((1, _covering_tank(packable, remaining)))
+        col_dry += col[-1][1].dry_mass
+    return col, col_dry * cols
+
+
+def _covering_tank(packable, remaining):
+    """Smallest packable tank that can hold ``remaining`` (it gets partial-filled
+    to it); the largest tank if none is big enough.  Allocation-free.  Shared by
+    ``_pack_columns`` and ``_pack_dry`` so their dry mass always agrees."""
+    cov = None
+    cov_fuel = float("inf")
+    for t in packable:
+        if remaining <= t.fuel_mass < cov_fuel:
+            cov, cov_fuel = t, t.fuel_mass
+    return cov if cov is not None else packable[0]
+
+
+def _pack_dry(fuel_target, packable, cols):
+    """Total full-tank dry mass for packing ``fuel_target`` into ``cols``
+    columns — the allocation-free scalar the sizing convergence needs, identical
+    to ``_pack_columns``'s dry (shared covering logic).  The column list and the
+    merged manifest are built once, only on the committed winning stage."""
+    per_col = fuel_target / cols
+    col_dry = 0.0
+    remaining = per_col
+    for t in packable:
+        if remaining <= 1e-12:
+            break
+        n = int(remaining // t.fuel_mass)
+        if n > 0:
+            col_dry += n * t.dry_mass
+            remaining -= n * t.fuel_mass
+    if remaining > 1e-12:
+        col_dry += _covering_tank(packable, remaining).dry_mass
+    return col_dry * cols
+
+
+# Fixed-point fuel sizing converges geometrically; this bounds the rare slow
+# case.  Non-convergence is treated as infeasible (conservative false negative).
+_PACK_CONVERGE_ITERS = 8
+
+
+def _size_and_pack(base, R_minus_1, isp_g0, sm_df, required_dv, rho_star,
+                   packable, cols):
+    """Size a stage's fuel to meet ``required_dv``, returning
+    ``(fuel, tank_dry, actual_dv)`` or ``None`` if the tanks can't reach the dv.
+    The caller builds the tank manifest from ``fuel`` only when this candidate
+    wins — sizing itself stays allocation-free (``_pack_dry``).
+
+    The mass and the dv come from the SAME pack, so they can't drift.  Sizing is
+    a monotone fixed point: start optimistic (best ratio ``rho_star``, no dead
+    dry), pack, measure the pack's true dv; if short, the fuel that would meet dv
+    at the pack's *current* dry mass is strictly larger, so re-pack with it.
+    Each step raises fuel (and dv) until dv is met.
+
+    ``base`` = payload + engine mass; ``sm_df`` = staging dry factor (the dv sees
+    reduced dry mass under asparagus/onion, but the assembled stage carries the
+    full dry)."""
+    denom = 1.0 - R_minus_1 * sm_df / rho_star
+    if denom <= 0.0:
+        return None  # best ratio still can't reach the dv
+    fuel = R_minus_1 * base / denom
+    for _ in range(_PACK_CONVERGE_ITERS):
+        tank_dry = _pack_dry(fuel, packable, cols)
+        verify_dry = base + tank_dry * sm_df
+        if verify_dry <= 0.0:
+            return None
+        actual_dv = isp_g0 * math.log((verify_dry + fuel) / verify_dry)
+        if actual_dv >= required_dv:
+            return fuel, tank_dry, actual_dv
+        # Fuel meeting dv at the current (real) dry mass.  The 1.0001 nudges the
+        # target a hair past required so this monotone iteration *crosses* the
+        # exact fixed point (where dv == required) instead of asymptoting to it
+        # and stalling — critical when the pack is a single tank (dry constant).
+        new_fuel = R_minus_1 * verify_dry * 1.0001
+        if new_fuel <= fuel:
+            return None  # not increasing → dv unreachable with these tanks
+        fuel = new_fuel
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Core dataclass returned by find_optimal_stage
 # ---------------------------------------------------------------------------
