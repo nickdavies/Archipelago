@@ -92,8 +92,14 @@ class DifficultyProfile:
 
 
 DIFFICULTY_PROFILES: dict[str, DifficultyProfile] = {
+    # plane_change_fraction models a window-timing SKILL: matching an inclined
+    # target's plane is mostly avoidable by departing at the node, but it's a
+    # non-obvious optimization beginners don't do.  So casual pays ~full,
+    # normal+ are expected to time it (lower and lower tolerance up the ladder),
+    # insane pays nothing.  Only ASCENT-to-encounter edges carry a plane change;
+    # descending X→parent is always free (see _add_home_return_paths).
     "casual": DifficultyProfile(
-        fixed_margin=200, percent_margin=0.30, plane_change_fraction=0.50,
+        fixed_margin=200, percent_margin=0.30, plane_change_fraction=1.00,
         min_twr_atmo=1.5, min_twr_vac=1.2,
         ship_cd=0.0, srb_needs_rcs=True,
     ),
@@ -103,7 +109,7 @@ DIFFICULTY_PROFILES: dict[str, DifficultyProfile] = {
         ship_cd=0.1, srb_needs_rcs=True,
     ),
     "expert": DifficultyProfile(
-        fixed_margin=50, percent_margin=0.05, plane_change_fraction=0.10,
+        fixed_margin=50, percent_margin=0.05, plane_change_fraction=0.05,
         min_twr_atmo=1.3, min_twr_vac=1.1,
         ship_cd=0.2, srb_needs_rcs=False,
     ),
@@ -1266,6 +1272,14 @@ class MissionBuilder:
         # parent low-orbit *circularization*, which a reentry never performs
         # (you aerobrake).  Adding it over-charged Mun returns ~3.8× and Minmus
         # ~2.7× (e.g. Minmus 160 + 930 = 1090 vs the correct ~160).
+        #
+        # No plane change, at any difficulty: lowering your orbit from a moon
+        # down to its parent is always free — you keep whatever inclination you
+        # have and aerobrake at any angle.  The moon's inclination IS paid once,
+        # outbound, on the encounter edge (_add_moon_outbound_access) where you
+        # RAISE to meet the inclined moon.  Charging it again here double-counted
+        # it.  (Ascending-to-encounter pays a difficulty-scaled plane change;
+        # descending-to-parent never does.)
         if home.parent is None:
             for moon in self._moons_of(hn):
                 if moon.dv.dvLI is None:
@@ -1273,12 +1287,16 @@ class MissionBuilder:
                 self._add_ret(self._edge(
                     f"{moon.name.lower()}_low_orbit", f"{hnl}_intercept",
                     self._PV, moon.dv.dvLI, moon.name,
-                    pc=moon.dv.dvPlaneChange, attitude=True,
+                    attitude=True,
                 ))
         else:
             # Moon-home case: parent.low orbit → home.intercept (used by sibling
-            # moons returning home, and by inter-planet returns that land
-            # at parent.low orbit after the Hohmann arrival).
+            # moons returning home, and by inter-planet returns that land at
+            # parent.low orbit after the Hohmann arrival).  This RAISES to
+            # *encounter* the inclined home moon — not a descent — so it pays
+            # the moon's plane change.  effective_dv scales it by difficulty:
+            # it's a window-timing skill experts mostly avoid and beginners pay
+            # in full (see plane_change_fraction).
             tli_home = home.dv.dvPL if home.dv.dvPL is not None else home.dv.dvPE
             if tli_home is not None:
                 self._add_ret(self._edge(
@@ -1290,6 +1308,11 @@ class MissionBuilder:
         # Foreign moons (parent != home; for moon-home, this includes home's
         # own siblings): moon.low orbit → parent.low orbit combined escape.  Lets return
         # paths from foreign moons rejoin the trunk graph at the parent's low orbit.
+        # No plane change: an intra-system X→parent descent matches no target
+        # plane (the moon's own inclination is left behind on escape).  NOTE:
+        # routing moon→moon via parent.low orbit still forces a circularize-then-
+        # re-eject layover a direct moon-to-moon transfer would avoid — a graph
+        # gap tracked separately, not a per-edge dv fix.
         for moon in ALL_BODIES:
             if moon.parent is None or moon.name == hn:
                 continue
@@ -1302,7 +1325,7 @@ class MissionBuilder:
             self._add_ret(self._edge(
                 f"{moon.name.lower()}_low_orbit", f"{moon.parent.lower()}_low_orbit",
                 self._PV, combined, moon.name,
-                pc=moon.dv.dvPlaneChange, attitude=True,
+                attitude=True,
             ))
 
         # Home reentry (intercept → surface).  Atmospheric homes do aero
