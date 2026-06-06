@@ -458,6 +458,58 @@ def _size_and_pack(base, R_minus_1, isp_g0, sm_df, required_dv, rho_star,
     return None
 
 
+# Parallel-unit fuel sizing.  parallel_stage_dv is monotone increasing in
+# per-column fuel but has no closed inverse (segmented sum), so bisect — on a
+# CHEAP closed-form dry estimate (dry ≈ fuel/rho_star, the best tank's ratio),
+# then pack exactly only at the end and nudge up if the covering-tank dead mass
+# under-shot.  This keeps the hot bisection allocation-free; packing exactly
+# every iteration was the dominant cost (millions of _pack_dry calls).
+_PARALLEL_BISECT_ITERS = 18  # on a tight ideal-seeded bracket → sub-0.001 precision
+_PARALLEL_FUEL_GROW = 12     # 1.6x grows past the seed before declaring infeasible
+
+
+def _size_parallel_unit(payload, e_mass, n_eng_core, n_eng_boost,
+                        dec_mass, fl_mass, n_boost, mode,
+                        required_dv, isp_g0, packable):
+    """Size each identical column's fuel so the parallel unit (core +
+    ``n_boost`` boosters) meets ``required_dv``, at minimum fuel.  Returns
+    ``(col_fuel, col_tank_dry, actual_dv)`` or None if unreachable.
+
+    Every column packs the same ``col_fuel`` from ``packable`` (so one
+    column's tank dry mass is shared by core and boosters).  ``n_eng_boost``
+    is 0 for drop-tank boosters (no engine), ``n_eng_core`` for engine
+    boosters.  Each booster also carries ``dec_mass`` (radial decoupler) +
+    ``fl_mass`` (fuel line).  Exact bisection of ``[0, hi]`` (grow ``hi`` from a
+    rocket-equation seed until the dv is reached) so the returned build is the
+    minimum-fuel one — the speedup comes from pruning the engine search, not
+    from approximating the sizing."""
+    def dv_exact(col_fuel):
+        col_dry = _pack_dry(col_fuel, packable, 1)
+        core_dry = n_eng_core * e_mass + col_dry
+        booster_dry = n_eng_boost * e_mass + col_dry + dec_mass + fl_mass
+        dv = parallel_stage_dv(isp_g0, payload, core_dry, col_fuel,
+                               booster_dry, n_boost, mode)
+        return dv
+
+    R_minus_1 = math.exp(required_dv / isp_g0) - 1.0
+    hi = max(R_minus_1 * (payload + e_mass * n_eng_core) / (n_boost + 1), 0.05)
+    grow = 0
+    while dv_exact(hi) < required_dv and grow < _PARALLEL_FUEL_GROW:
+        hi *= 2.0
+        grow += 1
+    if dv_exact(hi) < required_dv:
+        return None
+    lo = 0.0  # always search DOWN from a sufficient hi to the true minimum
+    for _ in range(_PARALLEL_BISECT_ITERS):
+        mid = 0.5 * (lo + hi)
+        if dv_exact(mid) >= required_dv:
+            hi = mid
+        else:
+            lo = mid
+    col_dry = _pack_dry(hi, packable, 1)
+    return hi, col_dry, dv_exact(hi)
+
+
 # ---------------------------------------------------------------------------
 # Core dataclass returned by find_optimal_stage
 # ---------------------------------------------------------------------------

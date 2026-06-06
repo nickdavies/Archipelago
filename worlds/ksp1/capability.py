@@ -428,8 +428,8 @@ def _pre_pass(item_count_fn: Callable[[str], int],
     # staging). They set has_docking_port for future orbital assembly support.
 
     # Parallel staging mode (determined per-stage in _evaluate_profile):
-    #   staging_tier >= 2 + fuel lines → asparagus (50% dry mass factor)
-    #   staging_tier >= 2, no fuel lines → onion (75% dry mass factor)
+    #   staging_tier >= 2 + fuel lines → asparagus (real radial crossfeed build)
+    #   staging_tier >= 2, no fuel lines → onion (radial ring drop)
     #   staging_tier < 2 → none (no parallel staging)
 
     # Derive relay tier from available relays
@@ -704,8 +704,8 @@ class KitUsed:
        (reaction wheel, RCS thruster + tank).
     3. **Presence-only representatives**: parts whose mere availability
        enabled a boolean / tier flag the optimizer relied on but didn't
-       directly consume — e.g. a radial decoupler enables
-       ``staging_tier=2`` (asparagus/onion dry-mass factor), a
+       directly consume — e.g. a radial decoupler enables the radial
+       asparagus/onion build, a
        ``fuelLine`` enables ``has_fuel_lines`` (asparagus mode), an SRB
        enables ``has_srb_fuel`` even when the optimal stage was
        liquid-only.  These flags affect the search bounds; without
@@ -822,10 +822,13 @@ class ProfileResult:
 # enabler).  Scanning PART_DB inside _build_kit_used per call was a hot-
 # loop regression (called for every feasible eval).
 _FUEL_LINE_PART: Optional[str] = None
+_FUEL_LINE_MASS: float = 0.0
 for _nm, _parts in PART_DB.items():
-    if any(isinstance(_p, MiscEquipment) and CapabilityFlag.FUEL_LINE in _p.provides
-           for _p in _parts):
+    _fl = next((_p for _p in _parts if isinstance(_p, MiscEquipment)
+                and CapabilityFlag.FUEL_LINE in _p.provides), None)
+    if _fl is not None:
         _FUEL_LINE_PART = _nm
+        _FUEL_LINE_MASS = _fl.mass
         break
 del _nm, _parts
 
@@ -919,8 +922,8 @@ def _build_kit_used(flags: EquipmentFlags,
     # 3. Presence-only representatives.  Pick the lightest matching part
     # for each True flag that affects stage optimization — without these
     # in the rep set, re-eval can't reproduce the same flag-state and
-    # the optimizer's choices fall apart (e.g. staging_tier=2 disables
-    # the asparagus/onion dry-mass factor).
+    # the optimizer's choices fall apart (e.g. dropping the radial decoupler
+    # + fuel line would disable the asparagus build the optimizer chose).
     if flags.staging_tier >= 1:
         stack = [d for d in flags.available_decouplers if d.kind == "stack"]
         if stack:
@@ -1689,7 +1692,10 @@ def _evaluate_profile(
         if any(e.needs_ladder for e in group) and flags.lightest_ladder:
             stage_equipment.append((1, flags.lightest_ladder.name))
 
-        result.equipment = stage_equipment
+        # Prepend group equipment; KEEP what the optimizer already attached
+        # (a parallel build's radial decouplers + fuel lines), else they're
+        # lost from both the displayed build and the kit/gating.
+        result.equipment = stage_equipment + result.equipment
         stage_results_list.append(result)
         stage_group_list.append(flight_idx)
         # The stage's wet mass becomes the payload for the next stage back
