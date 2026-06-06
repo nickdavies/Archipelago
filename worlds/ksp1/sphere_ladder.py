@@ -3743,7 +3743,18 @@ def _demote_non_rep_parts(
         # PROGRESSION below.
         if item.name in _KEEP_PROGRESSIVE and chain_extras is not None:
             tier = getattr(item, "_sphere_tier", None)
-            if tier is not None and tier > chain_extras.get(item.name, 0):
+            keep_through = chain_extras.get(item.name, 0)
+            # complete_tech_tree's Victory requires EVERY R&D band collected
+            # (state.has(PROGRESSIVE_RD_NAME, MAX_RD_BAND)).  So every R&D copy
+            # is goal-required and must stay PROGRESSION regardless of how many
+            # bands the chain funded — AP only guarantees reachability for
+            # progression items, and a demoted (useful) R&D copy can strand at
+            # an unreachable location, making the goal unsolvable.
+            if (item.name == PROGRESSIVE_RD_NAME
+                    and world.goal_spec.complete_tech_tree):
+                from .tech_tree import MAX_RD_BAND
+                keep_through = MAX_RD_BAND
+            if tier is not None and tier > keep_through:
                 if item.classification == ItemClassification.progression:
                     item.classification = ItemClassification.useful
                     demoted += 1
