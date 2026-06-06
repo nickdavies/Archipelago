@@ -51,7 +51,7 @@ from worlds.ksp1.bodies import (
 )
 from worlds.ksp1.capability import compute_capability_from_items
 from worlds.ksp1.locations import EVENT_BY_NAME, EventName, MissionLocation
-from worlds.ksp1.parts import PART_DB, PROGRESSIVE_PART_COUNTS
+from worlds.ksp1.parts import PART_DB
 
 
 # Mission events whose feasibility the script probes.  Each (body, event)
@@ -82,14 +82,14 @@ DEFAULT_OVERHEAD: float = 0.25
 
 
 def _max_kit_counts() -> dict[str, int]:
-    """One of every individual part, every progressive at max tier.
+    """One of every individual part in ``PART_DB``.
 
-    The progressive-tier overrides come second so they win when an item
-    name appears in both PART_DB and PROGRESSIVE_PART_COUNTS.
+    With parts de-progressivized, every concrete part is its own item, so
+    the most permissive kit is simply one of each — strictly more
+    permissive than any single seed's selection, making the bodies this
+    flags infeasible the floor.
     """
-    counts: dict[str, int] = {name: 1 for name in PART_DB}
-    counts.update(PROGRESSIVE_PART_COUNTS)
-    return counts
+    return {name: 1 for name in PART_DB}
 
 
 def _profile_with_overhead(base_name: str, overhead: float) -> str:

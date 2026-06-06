@@ -189,43 +189,5 @@ class TestRankSigStability(unittest.TestCase):
         self.assertEqual(sig.axes, ())
 
 
-class TestProgressiveDirectionalConsistency(unittest.TestCase):
-    """A weaker monotonicity test: for HIGHER_BETTER axes whose progressive
-    tier ordering matches "weak first → strong last," verify the rank
-    assignment respects that direction.  Axes where progressive ordering
-    intentionally inverts (e.g. CAPSULE places heaviest pods first) are
-    excluded; specific assertions cover those above."""
-
-    # (progressive item name, RankAxisKey) — both go strong→strong in tier order.
-    _AXES_TO_CHECK = (
-        ("Progressive Heat Shield", RankAxisKey.HEAT_SHIELD),
-        ("Progressive Stack Decoupler", RankAxisKey.STACK_DECOUPLER),
-        ("Progressive Radial Decoupler", RankAxisKey.RADIAL_DECOUPLER),
-        ("Progressive SRB", RankAxisKey.SRB),
-        ("Progressive Parachute", RankAxisKey.PARACHUTE),
-    )
-
-    def test_higher_better_progressive_axes_are_ordered(self) -> None:
-        from worlds.ksp1.parts import PROGRESSIVE_PART_TIERS
-        all_ranks = ranks_for_context()
-        for prog_name, axis_key in self._AXES_TO_CHECK:
-            tiers = PROGRESSIVE_PART_TIERS.get(prog_name, {})
-            axis_ranks = all_ranks[axis_key]
-            # For each tier pair, every tier-N part should have rank ≥ every
-            # tier-(N-1) part on this axis (subject to bucket coarseness).
-            for tier in sorted(tiers):
-                if tier == 1:
-                    continue
-                lower = [axis_ranks[p] for p in tiers[tier - 1] if p in axis_ranks]
-                upper = [axis_ranks[p] for p in tiers[tier] if p in axis_ranks]
-                if not lower or not upper:
-                    continue
-                with self.subTest(axis=axis_key, tier=tier, prog=prog_name):
-                    self.assertGreaterEqual(
-                        min(upper), min(lower),
-                        f"{prog_name} tier {tier} parts should rank no lower than tier {tier-1}",
-                    )
-
-
 if __name__ == "__main__":
     unittest.main()

@@ -51,13 +51,10 @@ class TestItemLocationBalance(KSP1TestBase):
 
     def test_no_negative_filler_count(self):
         """Pool should never have more part items than locations."""
-        from worlds.ksp1.parts import PROGRESSIVE_PART_COUNTS
-        rep_count = sum(PROGRESSIVE_PART_COUNTS.values())
         part_item_count = (
             len(_SORTED_PART_NAMES)
             - len(ALWAYS_PRECOLLECTED)
             - len(CLAMP_PRECOLLECTED)
-            - rep_count  # representatives removed from pool
         )
         real_loc_count = sum(
             1 for loc in self.multiworld.get_locations(self.player)
@@ -201,49 +198,11 @@ class TestItemClassification(KSP1TestBase):
                 return item.classification
         raise KeyError(name)
 
-    def test_progressive_engine_items_in_pool(self):
-        """Progressive engine items must be in the pool. Per-seed,
-        `_reclassify_spare_progressives` may demote spare copies to
-        useful when the goal doesn't need every tier, so we don't
-        assert classification — only pool presence."""
-        for name in (
-            "Progressive Launch Engine",
-            "Progressive Vacuum Engine",
-        ):
-            count = sum(
-                1 for item in self.multiworld.itempool
-                if item.name == name
-            )
-            self.assertGreater(count, 0, f"{name} must be in the item pool")
-
     def test_rcs_is_useful(self):
         self.assertEqual(
             self._classification("RCSBlock.v2"),  # RV-105
             ItemClassification.useful,
             "RCS Thruster should be useful, not progression",
-        )
-
-    def test_progressive_ladder_in_pool(self):
-        # Telescopic ladders moved into Progressive Ladder group; the
-        # group item itself replaces them in the pool. Per-seed,
-        # `_reclassify_spare_progressives` may demote some/all copies to
-        # useful when the goal doesn't need the chain, but the pool must
-        # always contain Progressive Ladder copies.
-        count = sum(
-            1 for item in self.multiworld.itempool
-            if item.name == "Progressive Ladder"
-        )
-        self.assertGreater(
-            count, 0,
-            "Progressive Ladder must be in the item pool",
-        )
-
-    def test_basic_ladder_is_useful(self):
-        # ladder1 was demoted to useful (Progressive Ladder uses telescopic variants).
-        self.assertEqual(
-            self._classification("ladder1"),
-            ItemClassification.useful,
-            "ladder1 should be useful (excluded from Progressive Ladder)",
         )
 
 

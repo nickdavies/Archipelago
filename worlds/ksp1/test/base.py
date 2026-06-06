@@ -7,7 +7,7 @@ runtime is dominated by this step being re-run for every test method.
 
 Most tests don't read any of the sphere-ladder side effects:
 ``pre_fill`` populates ``world._sphere_ladder``, mutates item
-classifications via ``_reclassify_spare_progressives``, installs Rule A
+classifications via ``_demote_non_rep_parts``, installs Rule A
 (bootstrap-local) on KSC biomes, installs Rule B (per-copy tier ban) on
 non-bootstrap locations, and registers ``S_launch.delta`` as
 ``multiworld.local_early_items``. Tests that only inspect ``itempool``,

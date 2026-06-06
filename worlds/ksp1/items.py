@@ -32,7 +32,6 @@ from .parts import (
     PART_DB, PART_REGISTRY, CapabilityFlag,
     Engine, FuelTank, SolidBooster, HeatShield, Parachute,
     LandingLeg, Decoupler, MiscEquipment,
-    PROGRESSIVE_PART_TIERS,
 )
 from .contracts import all_possible_contract_specs
 from .ranks import RankContext, rank_sig_for
