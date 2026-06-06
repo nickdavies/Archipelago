@@ -1257,19 +1257,22 @@ class MissionBuilder:
                 self._PT, depart_dv, planet.name, pc=pc, attitude=True,
             ))
 
-        # Moons of home (planet-home case): the combined "escape moon and
-        # transfer back to home" burn goes directly to home.intercept,
-        # skipping home.low-orbit insertion (matches today's mun_low_orbit →
-        # kerbin_intercept pattern).
+        # Moons of home (planet-home case): low moon orbit → home reentry
+        # intercept.  This is a SINGLE energy-preserving ejection burn, NOT
+        # escape-then-separately-lower-Pe: ``dvLI`` already encodes the Oberth
+        # ejection (√(v_inf² + 2·v_circ²) − v_circ) that drops you straight
+        # onto a reentry trajectory, carrying your orbital energy out of the
+        # moon.  It does NOT include ``dvPL`` — that is the from-LKO Hohmann /
+        # parent low-orbit *circularization*, which a reentry never performs
+        # (you aerobrake).  Adding it over-charged Mun returns ~3.8× and Minmus
+        # ~2.7× (e.g. Minmus 160 + 930 = 1090 vs the correct ~160).
         if home.parent is None:
             for moon in self._moons_of(hn):
-                tli_dv = moon.dv.dvPL if moon.dv.dvPL is not None else moon.dv.dvPE
-                if tli_dv is None:
+                if moon.dv.dvLI is None:
                     continue
-                combined = moon.dv.dvLI + tli_dv
                 self._add_ret(self._edge(
                     f"{moon.name.lower()}_low_orbit", f"{hnl}_intercept",
-                    self._PV, combined, moon.name,
+                    self._PV, moon.dv.dvLI, moon.name,
                     pc=moon.dv.dvPlaneChange, attitude=True,
                 ))
         else:
