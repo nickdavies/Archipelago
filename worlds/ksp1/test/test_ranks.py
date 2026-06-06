@@ -189,5 +189,54 @@ class TestRankSigStability(unittest.TestCase):
         self.assertEqual(sig.axes, ())
 
 
+class TestSparseAxisOrdering(unittest.TestCase):
+    """Ordering guards for the sparse HIGHER_BETTER axes that no other test
+    pins (engines / tanks / solar / capsule / probe-core have their own).
+
+    These assert physically-meaningful orderings *derived from part
+    properties* — a scorer sign flip, a bucket collapse, or a bad property
+    read would silently reorder these axes, distorting bumper pacing and
+    risking unsatisfiable early spheres.  Self-contained: no dependency on
+    the retired progressive tiers (anchors are concrete PART_DB names).
+    """
+
+    def setUp(self) -> None:
+        self.r = ranks_for_context()
+
+    def test_heat_shield_bigger_ranks_higher(self) -> None:
+        # scorer: size_class — a 0.625m shield must rank below a 3.75m shield.
+        hs = self.r[RankAxisKey.HEAT_SHIELD]
+        self.assertLess(hs["HeatShield0"], hs["HeatShield3"],
+                        "smallest heat shield must rank below the largest")
+        self.assertLess(hs["HeatShield1"], hs["HeatShield2"])
+
+    def test_srb_bigger_impulse_ranks_higher(self) -> None:
+        # scorer: atm_isp * fuel_mass (home-aware) — separatron below Clydesdale.
+        srb = self.r[RankAxisKey.SRB]
+        self.assertLess(srb["sepMotor1"], srb["Clydesdale"],
+                        "tiny separator SRB must rank below the largest booster")
+        self.assertLess(srb["solidBooster.v2"], srb["Thoroughbred"])
+
+    def test_parachute_radial_outranks_inline(self) -> None:
+        # scorer: (drag_area / mass) * radial_bonus — radials beat inline chutes.
+        ch = self.r[RankAxisKey.PARACHUTE]
+        self.assertGreater(ch["parachuteRadial"], ch["parachuteSingle"],
+                           "radial chute should outrank the inline single chute")
+        self.assertLess(ch["parachuteDrogue"], ch["parachuteRadial"])
+
+    def test_radial_decoupler_fuelline_is_top(self) -> None:
+        # crossfeed fuel line is the top bucket (enables asparagus staging).
+        rd = self.r[RankAxisKey.RADIAL_DECOUPLER]
+        self.assertEqual(rd["fuelLine"], max_rank_for(RankAxisKey.RADIAL_DECOUPLER),
+                         "fuelLine must be the top radial-decoupler bucket")
+        self.assertLess(rd["radialDecoupler"], rd["fuelLine"])
+
+    def test_stack_decoupler_bigger_ranks_higher(self) -> None:
+        # scorer: size_class — smallest stack decoupler below the largest.
+        sd = self.r[RankAxisKey.STACK_DECOUPLER]
+        self.assertLess(sd["Decoupler.0"], sd["Decoupler.4"],
+                        "smallest stack decoupler must rank below the largest")
+
+
 if __name__ == "__main__":
     unittest.main()
