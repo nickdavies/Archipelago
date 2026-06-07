@@ -90,9 +90,10 @@ class TestContractWorldIntegration(KSP1TestBase):
 
     def test_contracts_generated(self):
         self.assertTrue(self.world.contract_specs,
-                        "default options should generate at least one mine contract")
+                        "default options should generate at least one contract")
+        enabled = {C.ContractType.MINE_ORE, C.ContractType.SURFACE_BASE}
         for spec in self.world.contract_specs:
-            self.assertEqual(spec.contract_type, C.ContractType.MINE_ORE)
+            self.assertIn(spec.contract_type, enabled)
             self.assertNotEqual(spec.body, self.world.mission_builder.home)
 
     def test_contract_item_and_location_exist(self):

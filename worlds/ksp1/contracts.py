@@ -80,6 +80,19 @@ class ResourceParam:
         return {"kind": "resource", "resource": self.resource, "min": self.minimum}
 
 
+@dataclass(frozen=True)
+class HasAnyPartParam:
+    """Vessel must carry at least one of ``parts`` (AvailablePart.name). The
+    server resolves a part CATEGORY to this explicit list so the client stays
+    dumb. ``label`` is the category name, for display only. Wraps the mod's
+    VesselHasPartParameter on the client."""
+    parts: tuple[str, ...]
+    label: str = ""
+
+    def to_json(self) -> dict:
+        return {"kind": "has_any_part", "parts": list(self.parts), "label": self.label}
+
+
 # Union of all parameter primitives (extend as new primitives land).
 ContractParam = SituationParam  # | ResourceParam | HasAnyPartParam | ...
 
@@ -90,7 +103,8 @@ ContractParam = SituationParam  # | ResourceParam | HasAnyPartParam | ...
 
 class ContractType(StrEnum):
     MINE_ORE = "mine_ore"
-    # Phase 2/3 add: SURFACE_BASE, SPACE_STATION, FLAG_PLANT, SAMPLE_RETURN, ORBIT.
+    SURFACE_BASE = "surface_base"
+    # Phase 2/3 add: SPACE_STATION, FLAG_PLANT, SAMPLE_RETURN, ORBIT.
 
 
 @dataclass(frozen=True)
@@ -127,6 +141,15 @@ class ContractTypeDef:
                 SituationParam("landed", body),
                 ResourceParam("Ore", MINE_ORE_UNITS),
             ]
+        if self.contract_type == ContractType.SURFACE_BASE:
+            # Landed at the body with a part from every required category on the
+            # vessel (lab + battery + power + relay). Server resolves each
+            # category to an explicit part list; the client just checks presence.
+            params = [SituationParam("landed", body)]
+            for cat in self.required_categories:
+                parts = tuple(sorted(CONTRACT_CATEGORY_MEMBERS.get(cat, frozenset())))
+                params.append(HasAnyPartParam(parts, label=cat))
+            return params
         raise NotImplementedError(
             f"build_parameters not implemented for {self.contract_type}")
 
@@ -146,6 +169,15 @@ CONTRACT_TYPE_DEFS: dict[ContractType, ContractTypeDef] = {
         required_categories=("drill", "ore_tank"),
         title_fmt="Mine {units} ore on {body}",
         synopsis_fmt="Extract {units} units of ore from the surface of {body}.",
+    ),
+    ContractType.SURFACE_BASE: ContractTypeDef(
+        contract_type=ContractType.SURFACE_BASE,
+        location_noun="Surface Base",
+        base_mission_type=MissionType.LAND,
+        crewed=None,                          # can be delivered uncrewed
+        required_categories=("science_lab", "battery", "power", "relay"),
+        title_fmt="Build a surface base on {body}",
+        synopsis_fmt="Land a science base (Mobile Lab + power + relay) on {body}.",
     ),
 }
 

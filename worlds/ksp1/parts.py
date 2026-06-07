@@ -1209,21 +1209,26 @@ PART_DB: dict[str, list[AnyPart]] = _load_part_db()
 
 @dataclass(frozen=True)
 class PartCategory:
-    """A named group of parts. Membership is the union of an explicit cfg_name
-    set and a metadata predicate over the raw parts.json cfg dict. Either may
-    be empty. ``resolve`` returns the matching ksp_names (= AvailablePart.name
-    on the client), optionally narrowed to an ``allowed`` subset for future
-    DLC / part-pool filtering.
+    """A named group of parts. Membership is the union of three matchers, any of
+    which may be empty: an explicit cfg_name set, a metadata predicate over the
+    raw parts.json cfg dict, and a set of capability ``provides`` flags (matches
+    any part whose provides intersect it — the clean way to name battery / power
+    / relay, which already carry provides flags). ``resolve`` returns the
+    matching ksp_names (= AvailablePart.name on the client), optionally narrowed
+    to an ``allowed`` subset for future DLC / part-pool filtering.
     """
     key: str
     members: frozenset[str] = frozenset()                 # explicit cfg_names
     predicate: Optional[Callable[[dict], bool]] = None    # over raw cfg dict
+    provides_any: frozenset[str] = frozenset()            # capability provides flags
     description: str = ""
 
-    def _matches(self, cfg_name: str, cfg: dict) -> bool:
+    def _matches(self, cfg_name: str, cfg: dict, provides: frozenset[str]) -> bool:
         if cfg_name in self.members:
             return True
-        return self.predicate is not None and self.predicate(cfg)
+        if self.predicate is not None and self.predicate(cfg):
+            return True
+        return bool(self.provides_any and (provides & self.provides_any))
 
     def resolve(self, allowed: Optional[frozenset[str]] = None) -> frozenset[str]:
         out: set[str] = set()
@@ -1233,7 +1238,8 @@ class PartCategory:
             cfg = _PARTS_JSON.get(mapping.cfg_name)
             if cfg is None:
                 continue
-            if self._matches(mapping.cfg_name, cfg):
+            provides = mapping.overrides.get("provides", frozenset())
+            if self._matches(mapping.cfg_name, cfg, provides):
                 out.add(mapping.ksp_name)
         return frozenset(out)
 
@@ -1255,6 +1261,23 @@ CONTRACT_PART_CATEGORIES: dict[str, PartCategory] = {
     "ore_tank": PartCategory(
         "ore_tank", predicate=_stores_resource("Ore"),
         description="ore storage tank"),
+    # Curated single part — the Mobile Processing Lab (MPL-LG-2).
+    "science_lab": PartCategory(
+        "science_lab", members=frozenset({"Large_Crewed_Lab"}),
+        description="mobile science lab"),
+    # Provides-flag derived. Battery via the dedicated battery flags (NOT
+    # "stores ElectricCharge" — pods/probes carry EC too). Power = solar or RTG.
+    "battery": PartCategory(
+        "battery", provides_any=frozenset({"battery_small", "battery_large"}),
+        description="rechargeable battery"),
+    "power": PartCategory(
+        "power", provides_any=frozenset({
+            "solar_fixed", "solar_retractable", "solar_array_large", "rtg"}),
+        description="power generation (solar/RTG)"),
+    "relay": PartCategory(
+        "relay", provides_any=frozenset({
+            "relay_t1", "relay_t2", "relay_t3", "relay_t4"}),
+        description="antenna able to relay home"),
 }
 
 # Resolved ksp_name membership per category, computed once over the full part
