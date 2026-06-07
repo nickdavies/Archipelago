@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from Options import Choice, ExcludeLocations, ItemsAccessibility, NamedRange, OptionDict, OptionSet, PerGameCommonOptions, Range, Toggle
 
 from .bodies import ALL_BODIES, BodyName
-from .contracts import ContractType
+from .contracts import ContractType, NON_GOAL_TYPES
 
 # All landable body names, derived from bodies.py (single source of truth).
 LANDABLE_BODY_NAMES: frozenset[str] = frozenset(
@@ -373,8 +373,8 @@ class ContractTypeWeights(OptionDict):
     Only ever-achievable (type, body) combinations are placed.
     """
     display_name = "Contract Type Weights"
-    valid_keys = frozenset(str(ct) for ct in ContractType)
-    default = {str(ct): 1 for ct in ContractType}
+    valid_keys = frozenset(str(ct) for ct in NON_GOAL_TYPES)
+    default = {str(ct): 1 for ct in NON_GOAL_TYPES}
 
 
 class NonGoalContractCount(NamedRange):

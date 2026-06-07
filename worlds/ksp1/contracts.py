@@ -167,6 +167,17 @@ class ContractType(StrEnum):
     FLAG_PLANT = "flag_plant"
     SAMPLE_RETURN = "sample_return"
     ORBIT = "orbit"
+    # Goal-only types — used when a goal achievement is one of these missions.
+    RETURN = "return"
+    FLYBY = "flyby"
+
+
+# Non-goal contract types (the pool of weighted pacing contracts). RETURN/FLYBY
+# are goal-only and never placed as non-goal contracts.
+NON_GOAL_TYPES: tuple[ContractType, ...] = (
+    ContractType.MINE_ORE, ContractType.SURFACE_BASE, ContractType.SPACE_STATION,
+    ContractType.FLAG_PLANT, ContractType.SAMPLE_RETURN, ContractType.ORBIT,
+)
 
 
 @dataclass(frozen=True)
@@ -190,7 +201,8 @@ class ContractTypeDef:
 
     def requires_landing(self) -> bool:
         return self.base_mission_type in (
-            MissionType.LAND, MissionType.FLAG_PLANT, MissionType.SAMPLE_RETURN)
+            MissionType.LAND, MissionType.FLAG_PLANT, MissionType.SAMPLE_RETURN,
+            MissionType.RETURN)
 
     def body_compatible(self, body) -> bool:
         """True if this type can target ``body`` at all (before feasibility)."""
@@ -229,6 +241,10 @@ class ContractTypeDef:
             return [PlantFlagParam(body)]
         if self.contract_type == ContractType.SAMPLE_RETURN:
             return [SampleReturnParam(body)]
+        if self.contract_type == ContractType.FLYBY:
+            return [SituationParam("flyby", body)]      # stock EnterSOI(body)
+        if self.contract_type == ContractType.RETURN:
+            return [SampleReturnParam(body)]            # reach body then recover home
         raise NotImplementedError(
             f"build_parameters not implemented for {self.contract_type}")
 
@@ -298,6 +314,25 @@ CONTRACT_TYPE_DEFS: dict[ContractType, ContractTypeDef] = {
         title_fmt="Return a surface sample from {body}",
         synopsis_fmt="Collect a surface sample from {body} and bring it home.",
     ),
+    # Goal-only types (used when a goal achievement is a return/flyby).
+    ContractType.RETURN: ContractTypeDef(
+        contract_type=ContractType.RETURN,
+        location_noun="Return",
+        base_mission_type=MissionType.RETURN,
+        crewed=None,
+        required_categories=(),
+        title_fmt="Return from {body}",
+        synopsis_fmt="Travel to {body} and return safely home.",
+    ),
+    ContractType.FLYBY: ContractTypeDef(
+        contract_type=ContractType.FLYBY,
+        location_noun="Flyby",
+        base_mission_type=MissionType.ESCAPE,
+        crewed=None,
+        required_categories=(),
+        title_fmt="Fly by {body}",
+        synopsis_fmt="Perform a flyby of {body}.",
+    ),
 }
 
 
@@ -339,6 +374,7 @@ class ContractSpec:
             "title": td.title(self.body),
             "synopsis": td.synopsis(self.body),
             "schema": CONTRACT_SCHEMA_VERSION,
+            "is_goal": self.is_goal,
             "parameters": [p.to_json() for p in td.build_parameters(self.body)],
         }
 
@@ -351,7 +387,7 @@ class ContractSpec:
         body = BodyName(name.rsplit(" on ", 1)[1])
         noun = name[len("Contract: "):].rsplit(" on ", 1)[0]
         ct = _CONTRACT_TYPE_BY_NOUN[noun]
-        return ContractSpec(ct, body)
+        return ContractSpec(ct, body, is_goal=bool(d.get("is_goal", False)))
 
 
 _CONTRACT_TYPE_BY_NOUN: dict[str, ContractType] = {
@@ -579,6 +615,28 @@ def _goal_achievements(goal_spec) -> set:
     return out
 
 
+# Goal mission type -> the contract type that represents it.
+_GOAL_MISSION_TO_CONTRACT: dict[MissionType, ContractType] = {
+    MissionType.FLAG_PLANT: ContractType.FLAG_PLANT,
+    MissionType.RETURN: ContractType.RETURN,
+    MissionType.SAMPLE_RETURN: ContractType.SAMPLE_RETURN,
+    MissionType.ORBIT: ContractType.ORBIT,
+    MissionType.ESCAPE: ContractType.FLYBY,
+}
+
+
+def _goal_contract_specs(goal_spec) -> list:
+    """One goal-contract per goal body achievement. Always generated (a goal is
+    mandatory) — no ever-achievable filter; model-infeasible goal bodies fall
+    back to the all-parts proxy in the access rule (see rules._set_contract_rules)."""
+    out = []
+    for body, mtype in sorted(_goal_achievements(goal_spec)):
+        ct = _GOAL_MISSION_TO_CONTRACT.get(mtype)
+        if ct is not None:
+            out.append(ContractSpec(ct, body, is_goal=True))
+    return out
+
+
 def _goal_max_dv(goal_spec, mission_builder: MissionBuilder) -> float:
     """The hardest goal mission's intrinsic dv. 0.0 when the goal has no body
     missions (e.g. complete_tech_tree) — callers then skip the harder-than-goal
@@ -625,15 +683,16 @@ def generate_contracts(world: "KSP1World") -> tuple[list[ContractSpec], list[Con
     goal_achievements = _goal_achievements(world.goal_spec)
 
     candidates: list[ContractSpec] = []
-    for ct in ContractType:
+    for ct in NON_GOAL_TYPES:
         if weights.get(str(ct), 0) <= 0:
             continue
         td = CONTRACT_TYPE_DEFS[ct]
         for body in eligible_bodies:
             if body.name == home or not td.body_compatible(body):
                 continue
-            # Migrated types: don't contractize a mission the goal already
-            # requires — keeps goals/victory untouched (additive model).
+            # Don't contractize a mission the goal already requires — the goal
+            # mission becomes a GOAL-contract instead (below), so a non-goal
+            # contract here would collide / double up.
             if (body.name, td.base_mission_type) in goal_achievements:
                 continue
             if goal_dv > 0 and _intrinsic_dv(mb, body.name, td.base_mission_type) > goal_dv:
@@ -644,7 +703,8 @@ def generate_contracts(world: "KSP1World") -> tuple[list[ContractSpec], list[Con
 
     chosen = _weighted_sample_without_replacement(
         rng, candidates, weights, _resolve_count(world))
-    return chosen, []
+    # Goals become contracts: one goal-contract per goal achievement, mandatory.
+    return chosen, _goal_contract_specs(world.goal_spec)
 
 
 def _weighted_sample_without_replacement(rng, candidates, weights, k):

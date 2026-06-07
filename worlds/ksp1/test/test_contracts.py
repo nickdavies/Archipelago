@@ -133,7 +133,14 @@ class TestContractWorldIntegration(KSP1TestBase):
         self.assertIn("career", d)
         self.assertTrue(d["career"]["infinite_funds"])
         self.assertEqual(len(d["career"]["building_levels"]), 9)
-        self.assertEqual(len(d["contracts"]), len(self.world.contract_specs))
+        # The contracts array carries both non-goal and goal contracts.
+        self.assertEqual(
+            len(d["contracts"]),
+            len(self.world.contract_specs) + len(self.world.goal_contract_specs))
+        # Goal contracts are flagged so UT can recategorize them.
+        self.assertEqual(
+            sum(1 for c in d["contracts"] if c.get("is_goal")),
+            len(self.world.goal_contract_specs))
         entry = d["contracts"][0]
         self.assertIn("parameters", entry)
         self.assertIn("schema", entry)

@@ -2245,7 +2245,8 @@ def _compute_capability(state: CollectionState, player: int) -> RocketCapability
         difficulty_name, start_with_clamps, world.mission_builder,
         rep_names=rep_names,
         progressive_launch_pad=bool(options.progressive_launch_pad.value),
-        contract_specs=tuple(getattr(world, "contract_specs", ())),
+        contract_specs=(*getattr(world, "contract_specs", ()),
+                        *getattr(world, "goal_contract_specs", ())),
     )
     return cap
 
