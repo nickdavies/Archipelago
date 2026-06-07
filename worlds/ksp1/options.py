@@ -406,7 +406,7 @@ class AllowMissionsHarderThanGoal(Toggle):
     Mun flag) never gets out-of-system contracts regardless of this setting.
     """
     display_name = "Allow Missions Harder Than Goal"
-    default = 1
+    default = 0
 
 
 @dataclass
