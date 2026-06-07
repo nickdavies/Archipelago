@@ -25,6 +25,7 @@ client release.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Optional, TYPE_CHECKING
@@ -48,6 +49,17 @@ CONTRACT_SCHEMA_VERSION = 1
 # tank (RadialOreTank holds 75), so a single tank suffices — 100 would force a
 # second tank for no logic benefit.
 MINE_ORE_UNITS = 50
+
+# Space Station contract: required crew CAPACITY (seats). Fixed (not random) so
+# the requirement is predictable; delivered as empty cabins to orbit.
+STATION_CREW = 5
+
+# Part categories already guaranteed reachable by a progression chain (or
+# standalone progression): power (Progressive Solar Panel + RTG), relay
+# (Progressive Relay), crew cabins (Progressive Capsule command pods). The
+# contract's category gate is satisfied by the chain rep, so promoting a
+# specific part for these is redundant and only adds inert pool pressure.
+_CHAIN_GUARANTEED_CATEGORIES = frozenset({"power", "relay", "crew_cabin"})
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +105,32 @@ class HasAnyPartParam:
         return {"kind": "has_any_part", "parts": list(self.parts), "label": self.label}
 
 
+@dataclass(frozen=True)
+class CrewCapacityParam:
+    """Vessel must have crew CAPACITY (seats, occupied or not) >= ``minimum``.
+    Wraps stock CrewCapacityParameter on the client."""
+    minimum: int
+
+    def to_json(self) -> dict:
+        return {"kind": "crew_capacity", "min": self.minimum}
+
+
+def _min_crew_combo(crew_parts, min_crew: int):
+    """Cheapest (least-mass) set of crew parts whose seats total >= min_crew, as
+    a tuple of parts. Considers single part types (ceil(min/seats) copies); a
+    mixed combo could be marginally lighter, so this slightly OVERestimates —
+    conservative (golden rule). None if no crew part is available."""
+    best = None  # (total_mass, parts_tuple)
+    for p in crew_parts:
+        if p.crew_capacity <= 0:
+            continue
+        n = math.ceil(min_crew / p.crew_capacity)
+        mass = n * p.mass
+        if best is None or mass < best[0]:
+            best = (mass, (p,) * n)
+    return best[1] if best else None
+
+
 # Union of all parameter primitives (extend as new primitives land).
 ContractParam = SituationParam  # | ResourceParam | HasAnyPartParam | ...
 
@@ -104,7 +142,8 @@ ContractParam = SituationParam  # | ResourceParam | HasAnyPartParam | ...
 class ContractType(StrEnum):
     MINE_ORE = "mine_ore"
     SURFACE_BASE = "surface_base"
-    # Phase 2/3 add: SPACE_STATION, FLAG_PLANT, SAMPLE_RETURN, ORBIT.
+    SPACE_STATION = "space_station"
+    # Phase 3 add: FLAG_PLANT, SAMPLE_RETURN, ORBIT (migrate from the event grid).
 
 
 @dataclass(frozen=True)
@@ -124,6 +163,7 @@ class ContractTypeDef:
     required_categories: tuple[str, ...]
     title_fmt: str
     synopsis_fmt: str
+    crew_requirement: int = 0        # >0 => the crew_cabin category must total N seats
 
     def requires_landing(self) -> bool:
         return self.base_mission_type == MissionType.LAND
@@ -150,14 +190,25 @@ class ContractTypeDef:
                 parts = tuple(sorted(CONTRACT_CATEGORY_MEMBERS.get(cat, frozenset())))
                 params.append(HasAnyPartParam(parts, label=cat))
             return params
+        if self.contract_type == ContractType.SPACE_STATION:
+            # In orbit with crew capacity >= N (stock CrewCapacityParameter, which
+            # implies the cabins) plus battery + power + relay parts present.
+            params = [SituationParam("orbiting", body),
+                      CrewCapacityParam(self.crew_requirement)]
+            for cat in ("battery", "power", "relay"):
+                parts = tuple(sorted(CONTRACT_CATEGORY_MEMBERS.get(cat, frozenset())))
+                params.append(HasAnyPartParam(parts, label=cat))
+            return params
         raise NotImplementedError(
             f"build_parameters not implemented for {self.contract_type}")
 
     def title(self, body: BodyName) -> str:
-        return self.title_fmt.format(body=body, units=MINE_ORE_UNITS)
+        return self.title_fmt.format(
+            body=body, units=MINE_ORE_UNITS, crew=self.crew_requirement)
 
     def synopsis(self, body: BodyName) -> str:
-        return self.synopsis_fmt.format(body=body, units=MINE_ORE_UNITS)
+        return self.synopsis_fmt.format(
+            body=body, units=MINE_ORE_UNITS, crew=self.crew_requirement)
 
 
 CONTRACT_TYPE_DEFS: dict[ContractType, ContractTypeDef] = {
@@ -178,6 +229,16 @@ CONTRACT_TYPE_DEFS: dict[ContractType, ContractTypeDef] = {
         required_categories=("science_lab", "battery", "power", "relay"),
         title_fmt="Build a surface base on {body}",
         synopsis_fmt="Land a science base (Mobile Lab + power + relay) on {body}.",
+    ),
+    ContractType.SPACE_STATION: ContractTypeDef(
+        contract_type=ContractType.SPACE_STATION,
+        location_noun="Space Station",
+        base_mission_type=MissionType.ORBIT,
+        crewed=None,                          # empty cabins delivered to orbit
+        required_categories=("crew_cabin", "battery", "power", "relay"),
+        crew_requirement=STATION_CREW,
+        title_fmt="Build a space station in orbit of {body}",
+        synopsis_fmt="Assemble a {crew}-crew station (power + relay) in {body} orbit.",
     ),
 }
 
@@ -263,10 +324,18 @@ def canonical_payload_parts(spec: ContractSpec) -> tuple:
     independent, so the sphere ladder can size the contract's delivery kit and
     Rule B can protect the contract location from bootstrap items."""
     from .parts import CONTRACT_CATEGORY_MEMBERS, PART_DB
+    td = spec.type_def
     parts = []
-    for cat in spec.type_def.required_categories:
+    for cat in td.required_categories:
         members = CONTRACT_CATEGORY_MEMBERS.get(cat, frozenset())
-        if members:
+        if not members:
+            continue
+        if cat == "crew_cabin" and td.crew_requirement:
+            # cheapest combo for N seats over all registered crew parts
+            combo = _min_crew_combo([PART_DB[n][0] for n in members], td.crew_requirement)
+            if combo:
+                parts.extend(combo)
+        else:
             lightest = min(members, key=lambda n: PART_DB[n][0].mass)
             parts.append(PART_DB[lightest][0])
     return tuple(parts)
@@ -279,15 +348,23 @@ def canonical_payload_parts(spec: ContractSpec) -> tuple:
 def required_part_manifest(
     spec: ContractSpec, flags: "EquipmentFlags",
 ) -> Optional[tuple[MiscEquipment, ...]]:
-    """The lightest available part for each required category, as the payload to
-    deliver. Returns None if any required category has no available part — the
-    contract is then infeasible (fail-closed, per the golden rule)."""
+    """The available parts to deliver — the lightest per required category, plus
+    for a crew contract the cheapest crew combo reaching the seat requirement.
+    Returns None if any required category has no available part — the contract is
+    then infeasible (fail-closed, per the golden rule)."""
+    td = spec.type_def
     parts: list[MiscEquipment] = []
-    for cat in spec.type_def.required_categories:
-        part = flags.category_lightest.get(cat)
-        if part is None:
-            return None
-        parts.append(part)
+    for cat in td.required_categories:
+        if cat == "crew_cabin" and td.crew_requirement:
+            combo = _min_crew_combo(flags.available_crew_parts, td.crew_requirement)
+            if combo is None:
+                return None
+            parts.extend(combo)
+        else:
+            part = flags.category_lightest.get(cat)
+            if part is None:
+                return None
+            parts.append(part)
     return tuple(parts)
 
 
@@ -337,12 +414,31 @@ def required_part_names_for(specs) -> frozenset[str]:
     disabled) — unused mining parts then keep their normal classification."""
     from .parts import PART_DB
     cats: set[str] = set()
+    crew_req = 0
     for s in specs:
         cats.update(s.type_def.required_categories)
+        crew_req = max(crew_req, s.type_def.crew_requirement)
+    # Categories already guaranteed reachable by a progression chain (solar/relay
+    # antennas, command pods). Promoting a *specific* part for them is redundant
+    # AND adds an inert progression item fill can strand on a hard location,
+    # increasing pool pressure for no gate benefit — the chain rep already
+    # satisfies category_lightest. Only promote contract-specific equipment with
+    # no chain (drill, ore tank, lab, battery).
+    cats -= _CHAIN_GUARANTEED_CATEGORIES
     reps: set[str] = set()
     for cat in cats:
         members = CONTRACT_CATEGORY_MEMBERS.get(cat, frozenset())
-        if members:
+        if not members:
+            continue
+        if cat == "crew_cabin" and crew_req:
+            # Promote the part the canonical crew combo uses (best mass-per-seat),
+            # NOT the lightest-by-mass crew part — otherwise the guaranteed part
+            # (a 1-seat pod -> 5x heavy station) wouldn't match the sphere-ladder
+            # signature (which sizes the combo), risking an unsolvable station.
+            combo = _min_crew_combo([PART_DB[n][0] for n in members], crew_req)
+            if combo:
+                reps.add(combo[0].name)
+        else:
             reps.add(min(members, key=lambda n: PART_DB[n][0].mass))
     return frozenset(reps)
 

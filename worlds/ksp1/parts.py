@@ -136,6 +136,7 @@ class MiscEquipment:
     name: str
     mass: float
     provides: frozenset[CapabilityFlag]  # see CapabilityFlag enum for valid values
+    crew_capacity: int = 0               # seats; >0 for pods/cabins/lab
 
 
 # ---------------------------------------------------------------------------
@@ -1140,6 +1141,7 @@ def _build_part(part_type: type, cfg: dict, overrides: dict, name: str) -> AnyPa
             name=cfg_name,
             mass=mass,
             provides=overrides.get("provides", frozenset()),
+            crew_capacity=int(cfg.get("crew_capacity", 0) or 0),
         )
 
     raise TypeError(f"Unknown part type: {part_type}")
@@ -1221,9 +1223,12 @@ class PartCategory:
     members: frozenset[str] = frozenset()                 # explicit cfg_names
     predicate: Optional[Callable[[dict], bool]] = None    # over raw cfg dict
     provides_any: frozenset[str] = frozenset()            # capability provides flags
+    exclude: frozenset[str] = frozenset()                 # cfg_names to never match
     description: str = ""
 
     def _matches(self, cfg_name: str, cfg: dict, provides: frozenset[str]) -> bool:
+        if cfg_name in self.exclude:
+            return False
         if cfg_name in self.members:
             return True
         if self.predicate is not None and self.predicate(cfg):
@@ -1278,6 +1283,13 @@ CONTRACT_PART_CATEGORIES: dict[str, PartCategory] = {
         "relay", provides_any=frozenset({
             "relay_t1", "relay_t2", "relay_t3", "relay_t4"}),
         description="antenna able to relay home"),
+    # Metadata-derived: any part with crew seats (pods/cabins/lab), minus the
+    # exposed external command seat — a "station" of lawn chairs is degenerate
+    # (and the capability system already excludes it from real capsules).
+    "crew_cabin": PartCategory(
+        "crew_cabin", predicate=lambda cfg: (cfg.get("crew_capacity") or 0) > 0,
+        exclude=frozenset({"seatExternalCmd"}),
+        description="crewed pod or cabin (provides seats)"),
 }
 
 # Resolved ksp_name membership per category, computed once over the full part

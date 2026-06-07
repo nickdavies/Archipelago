@@ -124,6 +124,15 @@ def extract_part(part_dict: dict) -> dict | None:
     except ValueError:
         result["mass"] = 0.0
 
+    # Crew capacity (seats) — drives crewed-station contracts. Only emitted when
+    # >0 so non-crew parts stay lean (mirrors the resources/engine pattern).
+    try:
+        crew = int(float(part_dict.get("CrewCapacity", "0")))
+    except ValueError:
+        crew = 0
+    if crew > 0:
+        result["crew_capacity"] = crew
+
     # Bulkhead profiles
     raw_profiles = part_dict.get("bulkheadProfiles", "")
     result["bulkhead_profiles"] = [p.strip() for p in raw_profiles.split(",") if p.strip()]

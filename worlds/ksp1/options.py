@@ -374,7 +374,7 @@ class ContractTypeWeights(OptionDict):
     """
     display_name = "Contract Type Weights"
     valid_keys = frozenset(str(ct) for ct in ContractType)
-    default = {str(ContractType.MINE_ORE): 1, str(ContractType.SURFACE_BASE): 1}
+    default = {str(ct): 1 for ct in ContractType}
 
 
 class NonGoalContractCount(NamedRange):

@@ -4,7 +4,7 @@
       "/home/nick/.local/share/Steam/steamapps/common/Kerbal Space Program/GameData/Squad/Parts",
       "/home/nick/.local/share/Steam/steamapps/common/Kerbal Space Program/GameData/SquadExpansion/MakingHistory/Parts"
     ],
-    "generated": "2026-04-12T16:29:10.518166+00:00",
+    "generated": "2026-06-07T00:39:37.387165+00:00",
     "part_count": 416
   },
   "AdvancedCanard": {
@@ -616,6 +616,7 @@
     "name": "Large_Crewed_Lab",
     "title": "Mobile Processing Lab MPL-LG-2",
     "mass": 3.5,
+    "crew_capacity": 2,
     "bulkhead_profiles": [
       "size2"
     ],
@@ -834,6 +835,7 @@
     "name": "MEMLander",
     "title": "Munar Excursion Module (M.E.M.)",
     "mass": 1.355,
+    "crew_capacity": 2,
     "bulkhead_profiles": [
       "size0",
       "size1",
@@ -854,6 +856,7 @@
     "name": "MK1CrewCabin",
     "title": "Mk1 Crew Cabin",
     "mass": 1.0,
+    "crew_capacity": 2,
     "bulkhead_profiles": [
       "size1"
     ],
@@ -911,6 +914,7 @@
     "name": "Mark1Cockpit",
     "title": "Mk1 Cockpit",
     "mass": 1.25,
+    "crew_capacity": 1,
     "bulkhead_profiles": [
       "size1"
     ],
@@ -927,6 +931,7 @@
     "name": "Mark2Cockpit",
     "title": "Mk1 Inline Cockpit",
     "mass": 1.0,
+    "crew_capacity": 1,
     "bulkhead_profiles": [
       "size1"
     ],
@@ -1032,6 +1037,7 @@
     "name": "Mk2Pod",
     "title": "Mk2 Command Pod",
     "mass": 1.56,
+    "crew_capacity": 2,
     "bulkhead_profiles": [
       "size1p5"
     ],
@@ -2705,6 +2711,7 @@
     "name": "crewCabin",
     "title": "PPD-10 Hitchhiker Storage Container",
     "mass": 2.25,
+    "crew_capacity": 4,
     "bulkhead_profiles": [
       "size2"
     ],
@@ -2717,6 +2724,7 @@
     "name": "cupola",
     "title": "PPD-12 Cupola Module",
     "mass": 0.94,
+    "crew_capacity": 1,
     "bulkhead_profiles": [
       "size2",
       "size1"
@@ -3427,6 +3435,7 @@
     "name": "kv1Pod",
     "title": "KV-1 'Onion' Reentry Module",
     "mass": 0.75,
+    "crew_capacity": 1,
     "bulkhead_profiles": [
       "size1"
     ],
@@ -3443,6 +3452,7 @@
     "name": "kv2Pod",
     "title": "KV-2 'Onion' Reentry Module",
     "mass": 1.5,
+    "crew_capacity": 2,
     "bulkhead_profiles": [
       "size1"
     ],
@@ -3459,6 +3469,7 @@
     "name": "kv3Pod",
     "title": "KV-3 'Tato' Reentry Module",
     "mass": 2.25,
+    "crew_capacity": 3,
     "bulkhead_profiles": [
       "size1"
     ],
@@ -3487,6 +3498,7 @@
     "name": "landerCabinSmall",
     "title": "Mk1 Lander Can",
     "mass": 0.6,
+    "crew_capacity": 1,
     "bulkhead_profiles": [
       "size1"
     ],
@@ -3858,6 +3870,7 @@
     "name": "mk1-3pod",
     "title": "Mk1-3 Command Pod",
     "mass": 2.6,
+    "crew_capacity": 3,
     "bulkhead_profiles": [
       "size2",
       "size1"
@@ -3875,6 +3888,7 @@
     "name": "mk1pod_v2",
     "title": "Mk1 Command Pod",
     "mass": 0.8,
+    "crew_capacity": 1,
     "bulkhead_profiles": [
       "size1",
       "size0"
@@ -3916,6 +3930,7 @@
     "name": "mk2Cockpit_Inline",
     "title": "Mk2 Inline Cockpit",
     "mass": 2.0,
+    "crew_capacity": 2,
     "bulkhead_profiles": [
       "mk2"
     ],
@@ -3932,6 +3947,7 @@
     "name": "mk2Cockpit_Standard",
     "title": "Mk2 Cockpit",
     "mass": 2.0,
+    "crew_capacity": 2,
     "bulkhead_profiles": [
       "mk2"
     ],
@@ -3948,6 +3964,7 @@
     "name": "mk2CrewCabin",
     "title": "MK2 Crew Cabin",
     "mass": 2.03,
+    "crew_capacity": 4,
     "bulkhead_profiles": [
       "mk2"
     ],
@@ -4072,6 +4089,7 @@
     "name": "mk2LanderCabin_v2",
     "title": "Mk2 Lander Can",
     "mass": 1.355,
+    "crew_capacity": 2,
     "bulkhead_profiles": [
       "size2"
     ],
@@ -4190,6 +4208,7 @@
     "name": "mk3Cockpit_Shuttle",
     "title": "Mk3 Cockpit",
     "mass": 3.5,
+    "crew_capacity": 4,
     "bulkhead_profiles": [
       "size1",
       "mk3"
@@ -4207,6 +4226,7 @@
     "name": "mk3CrewCabin",
     "title": "Mk3 Passenger Module",
     "mass": 7.9,
+    "crew_capacity": 16,
     "bulkhead_profiles": [
       "mk3"
     ],
@@ -4989,6 +5009,7 @@
     "name": "seatExternalCmd",
     "title": "EAS-1 External Command Seat",
     "mass": 0.05,
+    "crew_capacity": 1,
     "bulkhead_profiles": [
       "srf"
     ],

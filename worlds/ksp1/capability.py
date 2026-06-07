@@ -183,6 +183,10 @@ class EquipmentFlags:
     # hardcoded capability flag per part. Contracts read these to size the
     # required-equipment payload and to gate on part presence.
     category_lightest: dict[str, MiscEquipment] = field(default_factory=dict)
+    # All available crewed parts (crew_capacity > 0). The station contract needs
+    # the cheapest combination reaching N seats, so it needs the full list, not
+    # just the lightest.
+    available_crew_parts: list[MiscEquipment] = field(default_factory=list)
 
     # Solar distance for ION logic (set from the edge being evaluated)
     target_solar_au: float = 1.0
@@ -609,6 +613,8 @@ def _apply_misc(flags: EquipmentFlags, part: MiscEquipment, count: int) -> None:
         cur = flags.category_lightest.get(cat_key)
         if cur is None or part.mass < cur.mass:
             flags.category_lightest[cat_key] = part
+    if part.crew_capacity > 0:
+        flags.available_crew_parts.append(part)
     for flag in part.provides:
         if flag == CF.PROBE_CORE:
             flags.has_probe_core = True
