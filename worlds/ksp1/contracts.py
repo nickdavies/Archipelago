@@ -106,6 +106,21 @@ class HasAnyPartParam:
 
 
 @dataclass(frozen=True)
+class HasSystemParam:
+    """Vessel must carry a part providing ``system``, checked via KSP's native
+    contract-objective system (stock VesselSystemsParameter on the client).
+    ``system`` is a ContractObjectiveType (``"Generator"`` = any solar/RTG/fuel
+    cell) or a PartModule class name (``"ModuleScienceLab"``). Preferred over
+    has_any_part where a native objective exists — DLC/mod-robust and reads like
+    a stock contract. ``label`` is the human description."""
+    system: str
+    label: str = ""
+
+    def to_json(self) -> dict:
+        return {"kind": "has_system", "system": self.system, "label": self.label}
+
+
+@dataclass(frozen=True)
 class CrewCapacityParam:
     """Vessel must have crew CAPACITY (seats, occupied or not) >= ``minimum``.
     Wraps stock CrewCapacityParameter on the client."""
@@ -180,6 +195,27 @@ NON_GOAL_TYPES: tuple[ContractType, ...] = (
 )
 
 
+# Part categories with a native KSP contract-objective check. "Generator" covers
+# any solar panel / RTG / fuel cell; "ModuleScienceLab" matches the lab by module
+# class. Categories absent here (battery, relay) have no precise native objective
+# — battery is a plain resource, and "Antenna" would lose relay's range tiering —
+# so they stay explicit part lists.
+_CATEGORY_TO_SYSTEM: dict[str, tuple[str, str]] = {
+    "power": ("Generator", "power generation"),
+    "science_lab": ("ModuleScienceLab", "science lab"),
+}
+
+
+def _category_param(cat: str):
+    """The success-condition param for a required part category: a native
+    has_system check where one exists, else an explicit has_any_part list."""
+    if cat in _CATEGORY_TO_SYSTEM:
+        system, label = _CATEGORY_TO_SYSTEM[cat]
+        return HasSystemParam(system=system, label=label)
+    parts = tuple(sorted(CONTRACT_CATEGORY_MEMBERS.get(cat, frozenset())))
+    return HasAnyPartParam(parts, label=cat)
+
+
 @dataclass(frozen=True)
 class ContractTypeDef:
     """Static definition of a contract type.
@@ -197,6 +233,10 @@ class ContractTypeDef:
     required_categories: tuple[str, ...]
     title_fmt: str
     synopsis_fmt: str
+    # Preposition joining noun and body in the location name, e.g. "Orbit
+    # around Bop", "Sample Return from Dres", "Flyby of Jool". Default "on"
+    # suits surface contracts.
+    location_prep: str = "on"
     crew_requirement: int = 0        # >0 => the crew_cabin category must total N seats
 
     def requires_landing(self) -> bool:
@@ -218,22 +258,18 @@ class ContractTypeDef:
                 ResourceParam("Ore", MINE_ORE_UNITS),
             ]
         if self.contract_type == ContractType.SURFACE_BASE:
-            # Landed at the body with a part from every required category on the
-            # vessel (lab + battery + power + relay). Server resolves each
-            # category to an explicit part list; the client just checks presence.
+            # Landed at the body with each required system on the vessel (lab +
+            # battery + power + relay). Native objective checks where they exist
+            # (lab/power), explicit part lists otherwise (battery/relay).
             params = [SituationParam("landed", body)]
-            for cat in self.required_categories:
-                parts = tuple(sorted(CONTRACT_CATEGORY_MEMBERS.get(cat, frozenset())))
-                params.append(HasAnyPartParam(parts, label=cat))
+            params += [_category_param(cat) for cat in self.required_categories]
             return params
         if self.contract_type == ContractType.SPACE_STATION:
             # In orbit with crew capacity >= N (stock CrewCapacityParameter, which
-            # implies the cabins) plus battery + power + relay parts present.
+            # implies the cabins) plus battery + power + relay systems present.
             params = [SituationParam("orbiting", body),
                       CrewCapacityParam(self.crew_requirement)]
-            for cat in ("battery", "power", "relay"):
-                parts = tuple(sorted(CONTRACT_CATEGORY_MEMBERS.get(cat, frozenset())))
-                params.append(HasAnyPartParam(parts, label=cat))
+            params += [_category_param(cat) for cat in ("battery", "power", "relay")]
             return params
         if self.contract_type == ContractType.ORBIT:
             return [SituationParam("orbiting", body)]
@@ -279,6 +315,7 @@ CONTRACT_TYPE_DEFS: dict[ContractType, ContractTypeDef] = {
     ContractType.SPACE_STATION: ContractTypeDef(
         contract_type=ContractType.SPACE_STATION,
         location_noun="Space Station",
+        location_prep="around",
         base_mission_type=MissionType.ORBIT,
         crewed=None,                          # empty cabins delivered to orbit
         required_categories=("crew_cabin", "battery", "power", "relay"),
@@ -290,6 +327,7 @@ CONTRACT_TYPE_DEFS: dict[ContractType, ContractTypeDef] = {
     ContractType.ORBIT: ContractTypeDef(
         contract_type=ContractType.ORBIT,
         location_noun="Orbit",
+        location_prep="around",
         base_mission_type=MissionType.ORBIT,
         crewed=None,
         required_categories=(),
@@ -308,6 +346,7 @@ CONTRACT_TYPE_DEFS: dict[ContractType, ContractTypeDef] = {
     ContractType.SAMPLE_RETURN: ContractTypeDef(
         contract_type=ContractType.SAMPLE_RETURN,
         location_noun="Sample Return",
+        location_prep="from",
         base_mission_type=MissionType.SAMPLE_RETURN,
         crewed=True,
         required_categories=(),
@@ -318,6 +357,7 @@ CONTRACT_TYPE_DEFS: dict[ContractType, ContractTypeDef] = {
     ContractType.RETURN: ContractTypeDef(
         contract_type=ContractType.RETURN,
         location_noun="Return",
+        location_prep="from",
         base_mission_type=MissionType.RETURN,
         crewed=None,
         required_categories=(),
@@ -327,6 +367,7 @@ CONTRACT_TYPE_DEFS: dict[ContractType, ContractTypeDef] = {
     ContractType.FLYBY: ContractTypeDef(
         contract_type=ContractType.FLYBY,
         location_noun="Flyby",
+        location_prep="of",
         base_mission_type=MissionType.ESCAPE,
         crewed=None,
         required_categories=(),
@@ -354,7 +395,8 @@ class ContractSpec:
 
     @property
     def display_name(self) -> str:
-        return f"Contract: {self.type_def.location_noun} on {self.body}"
+        td = self.type_def
+        return f"Contract: {td.location_noun} {td.location_prep} {self.body}"
 
     # AP item and location share the same descriptive string (separate namespaces).
     @property
@@ -366,7 +408,10 @@ class ContractSpec:
         return self.display_name
 
     def to_slot_dict(self) -> dict:
-        """The self-describing manifest entry the dumb client actuates."""
+        """The self-describing manifest entry the dumb client actuates. Carries
+        ``contract_type``/``body`` structurally so UT regen reconstructs the
+        spec from fields, never by parsing the display name (the client ignores
+        these two extra keys)."""
         td = self.type_def
         return {
             "item": self.item_name,
@@ -375,40 +420,40 @@ class ContractSpec:
             "synopsis": td.synopsis(self.body),
             "schema": CONTRACT_SCHEMA_VERSION,
             "is_goal": self.is_goal,
+            "contract_type": str(self.contract_type),
+            "body": str(self.body),
             "parameters": [p.to_json() for p in td.build_parameters(self.body)],
         }
 
     @staticmethod
     def from_slot_dict(d: dict) -> "ContractSpec":
         """Rebuild a spec from a slot_data manifest entry (UT regen — never
-        re-randomize). The (type, body) pair is recovered from the location
-        name's ``Contract: <noun> on <body>`` form."""
-        name = d["location"]
-        body = BodyName(name.rsplit(" on ", 1)[1])
-        noun = name[len("Contract: "):].rsplit(" on ", 1)[0]
-        ct = _CONTRACT_TYPE_BY_NOUN[noun]
-        return ContractSpec(ct, body, is_goal=bool(d.get("is_goal", False)))
-
-
-_CONTRACT_TYPE_BY_NOUN: dict[str, ContractType] = {
-    td.location_noun: td.contract_type for td in CONTRACT_TYPE_DEFS.values()
-}
+        re-randomize). Reads the structured ``contract_type``/``body`` fields."""
+        return ContractSpec(
+            ContractType(d["contract_type"]),
+            BodyName(d["body"]),
+            is_goal=bool(d.get("is_goal", False)),
+        )
 
 
 def parse_contract_location_name(name: str) -> Optional[ContractSpec]:
     """Return the ContractSpec for a contract item/location name (they share the
-    "Contract: <noun> on <body>" string), or None if it isn't one. Used by the
-    sphere ladder to give contract locations a real signature."""
+    display string), or None if it isn't one. Used by the sphere ladder to give
+    contract locations a real signature. Matches by rebuilding each (type, body)
+    display name and comparing — no preposition/format coupling. (Removing this
+    in-generation parse entirely is bug 086.)"""
     if not name.startswith("Contract: "):
         return None
+    body_str = name.rsplit(None, 1)[-1]          # body is the final token
     try:
-        noun, body_str = name[len("Contract: "):].rsplit(" on ", 1)
-        ct = _CONTRACT_TYPE_BY_NOUN.get(noun)
-        if ct is None:
-            return None
-        return ContractSpec(ct, BodyName(body_str))
-    except (ValueError, KeyError):
+        body = BodyName(body_str)
+    except ValueError:
         return None
+    for ct in CONTRACT_TYPE_DEFS:
+        spec = ContractSpec(ct, body)
+        if spec.display_name == name:
+            return spec
+    return None
 
 
 def canonical_payload_parts(spec: ContractSpec) -> tuple:
