@@ -4,7 +4,7 @@ from BaseClasses import CollectionState, Item, MultiWorld, Tutorial
 from Options import OptionError
 from worlds.AutoWorld import LogicMixin, WebWorld, World
 
-from . import items, locations, regions, rules
+from . import contracts, items, locations, regions, rules
 from .rules import GoalSpec, resolve_goal_spec, goal_spec_location_names
 from .capability import CAPABILITY_ITEMS, RocketCapability
 from .data.feasibility import MODEL_INFEASIBLE_LOCATIONS
@@ -121,6 +121,23 @@ def _validate_goal_not_excluded(
     )
 
 
+# KSP upgradeable facility ids (must match the client's CareerUpgradesManager).
+# All are forced to max in the hacked career; per-building levels are emitted so
+# real facility progression can be reintroduced one building at a time later.
+_FACILITY_IDS: tuple[str, ...] = (
+    "SpaceCenter/VehicleAssemblyBuilding",
+    "SpaceCenter/SpaceplaneHangar",
+    "SpaceCenter/LaunchPad",
+    "SpaceCenter/Runway",
+    "SpaceCenter/TrackingStation",
+    "SpaceCenter/MissionControl",
+    "SpaceCenter/AstronautComplex",
+    "SpaceCenter/ResearchAndDevelopment",
+    "SpaceCenter/Administration",
+)
+_MAX_FACILITY_LEVEL = 2  # stock 0/1/2 (level-3 buildings)
+
+
 class KSP1World(World):
     """
     Kerbal Space Program is a space flight simulation game where you design and
@@ -174,6 +191,14 @@ class KSP1World(World):
     # Laythe's atmospheric Jool-system return, etc.).
     model_infeasible_locations: frozenset[str]
 
+    # Contracts generated for this seed (paced into the run as items). Non-goal
+    # vs goal-achievement contracts; both are ContractSpec. Set in generate_early.
+    contract_specs: list
+    goal_contract_specs: list
+    # Part ksp_names this seed's contracts require — promoted to progression in
+    # items.create_item so AP guarantees them reachable before the contract.
+    contract_required_part_names: frozenset[str]
+
     def generate_early(self) -> None:
         """Resolve goal spec and apply ExcludeLateTechTree."""
         self.capability_cache = {}
@@ -221,6 +246,19 @@ class KSP1World(World):
         _validate_goal_spec_has_targets(
             self.goal_spec, self.options, self.mission_builder.home,
         )
+
+        # Generate this seed's contracts (deterministic from the world seed).
+        # UT regen restores the exact set from slot_data instead of re-rolling.
+        ut_contracts = getattr(self, "_ut_contract_specs", None)
+        if ut_contracts is not None:
+            self.contract_specs = [s for s in ut_contracts if not s.is_goal]
+            self.goal_contract_specs = [s for s in ut_contracts if s.is_goal]
+        else:
+            self.contract_specs, self.goal_contract_specs = (
+                contracts.generate_contracts(self))
+        self.contract_required_part_names = contracts.required_part_names_for(
+            (*self.contract_specs, *self.goal_contract_specs))
+
         if self.options.exclude_late_tech_tree:
             late_tier_locs: set[str] = {
                 str(TechTreeLocation(node.display_name, slot))
@@ -331,6 +369,24 @@ class KSP1World(World):
                 cap if cap != float("inf") else -1.0
                 for cap in self.mission_builder.launch_pad_caps
             ]
+
+        # Hacked-career directives — server→client, always emitted, actuated
+        # verbatim by the dumb client. Career replaces the prior game mode; the
+        # client rejects non-Career saves. Per-building start levels let real
+        # facility progression be reintroduced piecemeal later (all maxed now).
+        d["career"] = {
+            "building_levels": {b: _MAX_FACILITY_LEVEL for b in _FACILITY_IDS},
+            "infinite_funds": True,
+            "infinite_reputation": True,
+            "unlimited_contracts": True,
+        }
+        # Contract manifest: each entry is self-describing; the client builds a
+        # native KSP contract from `parameters` and reports `location` on
+        # completion. Goal contracts (phase 3) ride the same array.
+        d["contracts"] = [
+            spec.to_slot_dict()
+            for spec in (*self.contract_specs, *self.goal_contract_specs)
+        ]
         return d
 
     # ------------------------------------------------------------------
@@ -387,6 +443,13 @@ class KSP1World(World):
             name: {int(t): rep for t, rep in reps.items()}
             for name, reps in slot_data.get("progressive_representatives", {}).items()
         }
+
+        # Stash contracts so generate_early reconstructs the exact set rather
+        # than re-randomizing (the contract pick is seed-RNG-derived).
+        self._ut_contract_specs = [
+            contracts.ContractSpec.from_slot_dict(entry)
+            for entry in slot_data.get("contracts", [])
+        ]
 
     def explain_rule(self, target_name: str, state: CollectionState) -> list[dict] | None:
         """UT hook: /explain <location> shows rocket design, /explain parts [filter] shows inventory."""

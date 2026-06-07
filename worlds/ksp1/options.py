@@ -1,8 +1,9 @@
 from dataclasses import dataclass
 
-from Options import Choice, ExcludeLocations, ItemsAccessibility, NamedRange, OptionSet, PerGameCommonOptions, Range, Toggle
+from Options import Choice, ExcludeLocations, ItemsAccessibility, NamedRange, OptionDict, OptionSet, PerGameCommonOptions, Range, Toggle
 
 from .bodies import ALL_BODIES, BodyName
+from .contracts import ContractType
 
 # All landable body names, derived from bodies.py (single source of truth).
 LANDABLE_BODY_NAMES: frozenset[str] = frozenset(
@@ -360,6 +361,54 @@ class ProgressiveLaunchPad(Toggle):
     default = 1
 
 
+class ContractTypeWeights(OptionDict):
+    """
+    Relative weight of each contract mission type in the non-goal contract pool.
+
+    Contracts are paced into the run as items; completing one (a native KSP
+    contract injected by the client) checks an AP location. A weight of 0
+    disables that type entirely. Weights are relative — {"mine_ore": 2} alone
+    behaves the same as {"mine_ore": 1}; mixing types biases the random pick.
+
+    Only ever-achievable (type, body) combinations are placed.
+    """
+    display_name = "Contract Type Weights"
+    valid_keys = frozenset(str(ct) for ct in ContractType)
+    default = {str(ContractType.MINE_ORE): 1}
+
+
+class NonGoalContractCount(NamedRange):
+    """
+    Total number of non-goal contracts placed into the seed.
+
+    auto  -- Derived from Difficulty (12/10/8/6).
+    0..40 -- Explicit override. Capped at the number of ever-achievable
+             (enabled-type, body) combinations available in the seed.
+    """
+    display_name = "Non-Goal Contract Count"
+    range_start = 0
+    range_end = 40
+    default = -1
+    special_range_names = {"auto": -1}
+
+
+class AllowMissionsHarderThanGoal(Toggle):
+    """
+    Allow contracts whose mission is harder than your goal mission.
+
+    On (default): the full ever-achievable contract range is eligible, so a
+    contract can be significantly harder than the goal and (once goals are
+    contracts) can even end up gating your goal. Off: contracts are capped at
+    the goal's difficulty — e.g. a Duna-return goal won't hand you a Tylo mining
+    contract. Difficulty is compared by intrinsic mission delta-v.
+
+    Independent of the home-system-local invariant: a home-local goal (e.g.
+    Mun flag) never gets out-of-system contracts regardless of this setting.
+    """
+    display_name = "Allow Missions Harder Than Goal"
+    default = 1
+
+
 @dataclass
 class KSP1Options(PerGameCommonOptions):
     goal: Goal
@@ -374,6 +423,9 @@ class KSP1Options(PerGameCommonOptions):
     exclude_locations: KSP1ExcludeLocations
     exclude_late_tech_tree: ExcludeLateTechTree
     progressive_launch_pad: ProgressiveLaunchPad
+    contract_type_weights: ContractTypeWeights
+    non_goal_contract_count: NonGoalContractCount
+    allow_missions_harder_than_goal: AllowMissionsHarderThanGoal
     flag_bodies: FlagBodies
     return_bodies: ReturnBodies
     sample_return_bodies: SampleReturnBodies

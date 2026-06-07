@@ -178,6 +178,7 @@ def set_all_rules(world: KSP1World) -> None:
     _set_ksc_biome_rules(world, player)
     _set_home_rules(world, player)
     _set_mission_rules(world, player)
+    _set_contract_rules(world, player)
     _apply_home_system_local_exclusions(world)
     # Tech tree rules are now region entrance rules (see regions.py).
     _set_item_pacing_rules(world, player, difficulty)
@@ -338,6 +339,34 @@ def _mission_rule_for_event(
     def rule(state: CollectionState) -> bool:
         return get_capability(state, player).bodies[body_name].access[event]
     return rule
+
+
+def _set_contract_rules(world: KSP1World, player: int) -> None:
+    """
+    Apply access rules to contract completion locations.
+
+    A contract location is reachable only when all three gates hold: the player
+    holds the contract item, has the required parts, and can deliver the
+    contract's equipment payload to the body. The latter two are folded into the
+    cached ``contract_access[contract_id]`` boolean (computed once per state by
+    get_capability), so the rule is ``state.has(item) AND O(1) lookup``.
+
+    Contract locations are among the HARDEST in the seed (they need the full
+    delivery capability + input parts). The sphere ladder gives them a real
+    signature (see sphere_ladder._parse_location / _evaluate) so its Rule B bans
+    only items BELOW the contract's sphere — keeping bootstrap items off them
+    (which would otherwise deadlock: a launch engine placed at "Contract: Mine
+    Ore on Eve" is unreachable without the very engine it gates) while still
+    letting LATE progression land there, so contracts remain real pacing gates.
+    """
+    for spec in (*world.contract_specs, *world.goal_contract_specs):
+        loc = world.get_location(spec.location_name)
+
+        def rule(state: CollectionState, cid=spec.contract_id,
+                 item=spec.item_name) -> bool:
+            return (state.has(item, player)
+                    and get_capability(state, player).contract_access.get(cid, False))
+        loc.access_rule = rule
 
 
 def _set_mission_rules(world: KSP1World, player: int) -> None:

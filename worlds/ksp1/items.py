@@ -34,6 +34,7 @@ from .parts import (
     LandingLeg, Decoupler, MiscEquipment,
     PROGRESSIVE_PART_NAMES, PROGRESSIVE_PART_COUNTS, PROGRESSIVE_PART_TIERS,
 )
+from .contracts import all_possible_contract_specs
 
 if TYPE_CHECKING:
     from .world import KSP1World
@@ -305,6 +306,19 @@ PROGRESSIVE_PART_ITEM_NAMES: frozenset[str] = frozenset(
     name for name in _PROGRESSIVE_ITEMS if name != PROGRESSIVE_RD_NAME
 )
 
+# Contract items: a large dedicated block at offset 10_000+ (well clear of the
+# cramped legacy ranges). One stable id per possible (type, body) — the universe
+# is fixed even though any given seed places only a subset. Every contract item
+# is progression (it self-gates its location and paces the run). Item and
+# location ids share a base, so the two blocks must not overlap: items live at
+# 10_000+, contract locations at 20_000+ (see locations.py / test_parts_data).
+_CONTRACT_ITEM_BASE_OFFSET = 10_000
+_CONTRACT_ITEMS: dict[str, tuple[int, ItemClassification]] = {
+    spec.item_name: (_CONTRACT_ITEM_BASE_OFFSET + i, ItemClassification.progression)
+    for i, spec in enumerate(
+        sorted(all_possible_contract_specs(), key=lambda s: s.contract_id))
+}
+
 ITEM_NAME_TO_ID: dict[str, int] = {
     name: KSP1_BASE_ID + offset
     for name, (offset, _) in {
@@ -312,6 +326,7 @@ ITEM_NAME_TO_ID: dict[str, int] = {
         **_FILLER_ITEMS,
         **_VICTORY_ITEM,
         **_PROGRESSIVE_ITEMS,
+        **_CONTRACT_ITEMS,
     }.items()
 }
 
@@ -332,12 +347,20 @@ CLAMP_PRECOLLECTED: tuple[str, ...] = ("launchClamp1",)
 def create_item(world: KSP1World, name: str) -> KSP1Item:
     if name in ITEM_TABLE:
         offset, classification = ITEM_TABLE[name]
+        # Per-seed promotion: a part required by some generated contract MUST be
+        # progression so AP guarantees it reachable before the contract location.
+        # Only this seed's contracts trigger it (mining parts stay filler/useful
+        # when no mine contract was placed).
+        if name in getattr(world, "contract_required_part_names", frozenset()):
+            classification = ItemClassification.progression
     elif name in _FILLER_ITEMS:
         offset, classification = _FILLER_ITEMS[name]
     elif name in _VICTORY_ITEM:
         offset, classification = _VICTORY_ITEM[name]
     elif name in _PROGRESSIVE_ITEMS:
         offset, classification = _PROGRESSIVE_ITEMS[name]
+    elif name in _CONTRACT_ITEMS:
+        offset, classification = _CONTRACT_ITEMS[name]
     else:
         raise KeyError(f"Unknown KSP1 item: {name!r}")
     return KSP1Item(name, classification, KSP1_BASE_ID + offset, world.player)
@@ -451,6 +474,12 @@ def create_all_items(world: KSP1World) -> None:
             item = create_item(world, PROGRESSIVE_LAUNCH_PAD_NAME)
             item._sphere_tier = tier
             pool.append(item)
+
+    # Contract items (one per generated contract; goal contracts are phase 3).
+    # Each is progression and net-neutral on the pool (it adds a matching
+    # contract completion location too).
+    for spec in (*world.contract_specs, *world.goal_contract_specs):
+        pool.append(create_item(world, spec.item_name))
 
     # Pad the pool with filler items so item count == location count.
     # create_regions() runs before create_items(), so all locations exist.

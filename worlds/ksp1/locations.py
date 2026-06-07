@@ -43,6 +43,7 @@ from .bodies import (
     ALL_BODIES, BODY_BY_NAME, BodyName, MissionType,
     home_altitude_milestones,
 )
+from .contracts import all_possible_contract_specs
 from .tech_tree import TECH_NODES
 
 if TYPE_CHECKING:
@@ -58,6 +59,7 @@ _HOME_OFFSET_START = 2100          # Kerbin home specials: 2100-2199 (11 used, r
 _MISSION_OFFSET_START = 2200       # Per-body mission events: 2200-2999
 _TECH_OFFSET_START = 3000          # Tech tree: 3000-3999
 _ALT_HOME_OFFSET_START = 4000      # Non-Kerbin home specials: 4000-4153 (14 bodies × 11 = 154)
+_CONTRACT_OFFSET_START = 20_000     # Contract completion locations: large dedicated block, 20_000+
 
 
 class KSP1Location(Location):
@@ -467,7 +469,24 @@ def _build_location_table() -> dict[str, int]:
             table[loc.name] = offset
             offset += 1
 
+    # Contract completion locations (one per possible (type, body)). Same sort
+    # order as the contract items in items.py so the two stay aligned.
+    offset = _CONTRACT_OFFSET_START
+    for name in CONTRACT_LOCATION_NAMES:
+        table[name] = offset
+        offset += 1
+
     return table
+
+
+# All possible contract location names, sorted to match the contract item ids.
+CONTRACT_LOCATION_NAMES: tuple[str, ...] = tuple(
+    spec.location_name
+    for spec in sorted(all_possible_contract_specs(), key=lambda s: s.contract_id)
+)
+
+#: Set form for O(1) "is this a contract location?" checks (UT / sphere ladder).
+CONTRACT_LOCATION_NAME_SET: frozenset[str] = frozenset(CONTRACT_LOCATION_NAMES)
 
 
 LOCATION_TABLE: dict[str, int] = _build_location_table()
@@ -546,3 +565,10 @@ def create_all_locations(world: KSP1World) -> None:
             name = str(TechTreeLocation(node.display_name, slot))
             node_locs[name] = LOCATION_NAME_TO_ID[name]
         region.add_locations(node_locs, KSP1Location)
+
+    # Contract completion locations (only the contracts this seed generated).
+    contract_locs = {
+        spec.location_name: LOCATION_NAME_TO_ID[spec.location_name]
+        for spec in (*world.contract_specs, *world.goal_contract_specs)
+    }
+    menu.add_locations(contract_locs, KSP1Location)

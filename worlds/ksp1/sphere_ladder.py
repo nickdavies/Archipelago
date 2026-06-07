@@ -38,6 +38,7 @@ from .locations import (
     EVENT_BY_NAME, EventName, LocationBuilder, MissionLocation,
     KSC_BIOME_NAMES, KSC_LOCATION_PREFIX,
 )
+from .contracts import parse_contract_location_name, canonical_payload_parts
 from .items import (
     PROGRESSIVE_LAUNCH_PAD_COUNT, PROGRESSIVE_LAUNCH_PAD_NAME,
     PROGRESSIVE_RD_COUNT, PROGRESSIVE_RD_NAME,
@@ -556,6 +557,11 @@ class _LocationMissionInfo:
     mission_type: MissionType
     crewed: Optional[bool]
     threshold_km: Optional[float]
+    # Contract delivery payload — the required-equipment parts a contract must
+    # carry to the body (drill + ore tank, …). Empty for ordinary missions.
+    # When set, the ladder sizes the rocket for the heavier payload, so the
+    # contract location's signature reflects its true (harder) requirement.
+    extra_payload_parts: tuple = ()
 
 
 def _parse_location(name: str) -> Optional[_LocationMissionInfo]:
@@ -589,6 +595,18 @@ def _parse_location(name: str) -> Optional[_LocationMissionInfo]:
             crewed=event_def.crewed,
             threshold_km=None,
         )
+    # Contract completion locations: physics-gated like a mission of the
+    # contract's base type, but with the required equipment as delivered payload.
+    spec = parse_contract_location_name(name)
+    if spec is not None:
+        td = spec.type_def
+        return _LocationMissionInfo(
+            body=spec.body,
+            mission_type=td.base_mission_type,
+            crewed=td.crewed,
+            threshold_km=None,
+            extra_payload_parts=canonical_payload_parts(spec),
+        )
     # Tech tree / KSC / starting inventory: not capability-gated.
     return None
 
@@ -608,6 +626,7 @@ def _evaluate(
         info.body, info.mission_type, info.crewed,
         mission_builder,
         threshold_km=info.threshold_km,
+        extra_payload_parts=info.extra_payload_parts,
     )
 
 
@@ -928,6 +947,7 @@ def _construct_warm_start_kit(
     result = evaluate_mission_detailed(
         max_flags, diff, info.body, info.mission_type, info.crewed,
         mission_builder, threshold_km=info.threshold_km or 0.0,
+        extra_payload_parts=info.extra_payload_parts,
     )
     if not result.feasible:
         # Max kit can't reach this location at all — no warm start to give.
@@ -1096,6 +1116,7 @@ def minimal_rocket_for(
 
     key = (
         info.body, info.mission_type, info.crewed, info.threshold_km,
+        tuple(p.name for p in info.extra_payload_parts),  # distinguishes contract payloads
         rep_names,
         difficulty,
         progressive_launch_pad,
