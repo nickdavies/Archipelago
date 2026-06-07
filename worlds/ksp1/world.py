@@ -5,6 +5,7 @@ from Options import OptionError
 from worlds.AutoWorld import LogicMixin, WebWorld, World
 
 from . import contracts, items, locations, regions, rules
+from .ksc_sites import ksc_site_slot_data
 from .rules import GoalSpec, resolve_goal_spec, goal_spec_location_names
 from .capability import CAPABILITY_ITEMS, RocketCapability
 from .data.feasibility import MODEL_INFEASIBLE_LOCATIONS
@@ -303,6 +304,13 @@ class KSP1World(World):
         # comparison (KSC biome prefixes, altitude polling guard, splashdown
         # detection, first-launch / first-landing / first-crash events).
         d["starting_body"] = self.mission_builder.home.value
+        # KSC site row for an alien starting body: the landing coordinate
+        # (lat/lon/terrain alt) + map-decal flag where the cloned KSC cluster
+        # is placed.  The client materialises the alien KSC from this instead
+        # of carrying a per-body table.  Absent for a Kerbin start (stock KSC).
+        ksc_site = ksc_site_slot_data(self.mission_builder.home)
+        if ksc_site is not None:
+            d["ksc_site"] = ksc_site
         d["tech_slots_per_node"] = effective_tech_slots_per_node(
             self.options, self.options.difficulty.value
         )

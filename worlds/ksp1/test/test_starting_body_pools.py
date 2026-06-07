@@ -102,5 +102,42 @@ class TestPoolSlotDataRoundTrip(unittest.TestCase):
         self.assertIn(BodyName(sd["starting_body"]), STARTING_BODY_POOLS["planets"])
 
 
+class TestKscSiteSlotData(unittest.TestCase):
+    """The ``ksc_site`` row carries the chosen body's landing coordinate so
+    the C# client doesn't need a per-body table (the table lives only in
+    ``ksc_sites.py`` now)."""
+
+    def test_alien_start_emits_matching_site_row(self):
+        from worlds.ksp1.ksc_sites import KSC_SITES
+        w = _gen(seed=7, starting_body="duna")
+        sd = w.fill_slot_data()
+        self.assertIn("ksc_site", sd)
+        lat, lon, alt, skip = KSC_SITES[BodyName.DUNA]
+        self.assertEqual(
+            sd["ksc_site"],
+            {"lat": lat, "lon": lon, "terrain_alt": alt, "skip_decal": skip},
+        )
+
+    def test_kerbin_start_omits_site_row(self):
+        # Kerbin uses the stock KSC — no row, so the client knows to leave
+        # stock alone.
+        w = _gen(seed=7, starting_body="kerbin")
+        sd = w.fill_slot_data()
+        self.assertNotIn("ksc_site", sd)
+
+    def test_every_landable_body_has_a_site(self):
+        # Any body the StartingBody option can resolve to (every landable
+        # body except gas giants / the sun) must have a site row, or an
+        # alien start would emit no ksc_site and the client would reject it.
+        from worlds.ksp1.bodies import ALL_BODIES
+        from worlds.ksp1.ksc_sites import KSC_SITES
+        for b in ALL_BODIES:
+            if b.can_land and b.name != BodyName.KERBIN:
+                self.assertIn(
+                    BodyName(b.name), KSC_SITES,
+                    f"{b.name} is landable but has no KSC site row",
+                )
+
+
 if __name__ == "__main__":
     unittest.main()
