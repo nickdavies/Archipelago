@@ -382,18 +382,40 @@ def _set_mission_rules(world: KSP1World, player: int) -> None:
     """
     from .bodies import ALL_BODIES
     from .locations import get_body_events
+    from .contracts import ContractType
 
     infeasible = world.model_infeasible_locations
     proxy_rule = _make_all_parts_rule(player)
 
+    # Migrated-type contracts gate their MATCHING event equal-or-after the
+    # contract item, so a player who has the contract does one mission for both
+    # (never forced to double-run) and can't clear the event before the contract.
+    # Keyed by the specific event (Orbit, not EVA-in-orbit; not LAND for a mine
+    # contract whose base mission merely happens to be LAND).
+    _migrated_event = {
+        ContractType.FLAG_PLANT: EventName.FLAG_PLANT,
+        ContractType.SAMPLE_RETURN: EventName.SAMPLE_RETURN,
+        ContractType.ORBIT: EventName.ORBIT,
+    }
+    gate_item: dict[tuple[str, str], str] = {}
+    for spec in world.contract_specs:
+        ev = _migrated_event.get(spec.contract_type)
+        if ev is not None:
+            gate_item[(spec.body, ev)] = spec.item_name
+
     for body in ALL_BODIES:
         for event in get_body_events(body):
             cap_rule = _mission_rule_for_event(player, body.name, event)
+            item = gate_item.get((body.name, event))
             for loc in event_locations(body.name, event):
                 name = str(loc)
-                world.get_location(name).access_rule = (
-                    proxy_rule if name in infeasible else cap_rule
-                )
+                base_rule = proxy_rule if name in infeasible else cap_rule
+                if item is None:
+                    world.get_location(name).access_rule = base_rule
+                else:
+                    def rule(state: CollectionState, _base=base_rule, _item=item) -> bool:
+                        return state.has(_item, player) and _base(state)
+                    world.get_location(name).access_rule = rule
 
 
 def _apply_home_system_local_exclusions(world: KSP1World) -> None:

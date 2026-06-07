@@ -115,6 +115,26 @@ class CrewCapacityParam:
         return {"kind": "crew_capacity", "min": self.minimum}
 
 
+@dataclass(frozen=True)
+class PlantFlagParam:
+    """Plant a flag on ``body``. Wraps stock PlantFlag on the client.
+    (Needs a client primitive — orbit uses the existing 'situation'.)"""
+    body: str
+
+    def to_json(self) -> dict:
+        return {"kind": "plant_flag", "body": str(self.body)}
+
+
+@dataclass(frozen=True)
+class SampleReturnParam:
+    """Recover a surface sample from ``body`` back at the home world. Wraps a
+    recover/collect-science parameter on the client (new primitive)."""
+    body: str
+
+    def to_json(self) -> dict:
+        return {"kind": "sample_return", "body": str(self.body)}
+
+
 def _min_crew_combo(crew_parts, min_crew: int):
     """Cheapest (least-mass) set of crew parts whose seats total >= min_crew, as
     a tuple of parts. Considers single part types (ceil(min/seats) copies); a
@@ -143,7 +163,10 @@ class ContractType(StrEnum):
     MINE_ORE = "mine_ore"
     SURFACE_BASE = "surface_base"
     SPACE_STATION = "space_station"
-    # Phase 3 add: FLAG_PLANT, SAMPLE_RETURN, ORBIT (migrate from the event grid).
+    # Migrated mission types (additive non-goal pacing contracts; no extra kit).
+    FLAG_PLANT = "flag_plant"
+    SAMPLE_RETURN = "sample_return"
+    ORBIT = "orbit"
 
 
 @dataclass(frozen=True)
@@ -166,7 +189,8 @@ class ContractTypeDef:
     crew_requirement: int = 0        # >0 => the crew_cabin category must total N seats
 
     def requires_landing(self) -> bool:
-        return self.base_mission_type == MissionType.LAND
+        return self.base_mission_type in (
+            MissionType.LAND, MissionType.FLAG_PLANT, MissionType.SAMPLE_RETURN)
 
     def body_compatible(self, body) -> bool:
         """True if this type can target ``body`` at all (before feasibility)."""
@@ -199,6 +223,12 @@ class ContractTypeDef:
                 parts = tuple(sorted(CONTRACT_CATEGORY_MEMBERS.get(cat, frozenset())))
                 params.append(HasAnyPartParam(parts, label=cat))
             return params
+        if self.contract_type == ContractType.ORBIT:
+            return [SituationParam("orbiting", body)]
+        if self.contract_type == ContractType.FLAG_PLANT:
+            return [PlantFlagParam(body)]
+        if self.contract_type == ContractType.SAMPLE_RETURN:
+            return [SampleReturnParam(body)]
         raise NotImplementedError(
             f"build_parameters not implemented for {self.contract_type}")
 
@@ -239,6 +269,34 @@ CONTRACT_TYPE_DEFS: dict[ContractType, ContractTypeDef] = {
         crew_requirement=STATION_CREW,
         title_fmt="Build a space station in orbit of {body}",
         synopsis_fmt="Assemble a {crew}-crew station (power + relay) in {body} orbit.",
+    ),
+    # Migrated mission types — no extra kit; feasibility == the base mission.
+    ContractType.ORBIT: ContractTypeDef(
+        contract_type=ContractType.ORBIT,
+        location_noun="Orbit",
+        base_mission_type=MissionType.ORBIT,
+        crewed=None,
+        required_categories=(),
+        title_fmt="Reach orbit of {body}",
+        synopsis_fmt="Establish a stable orbit around {body}.",
+    ),
+    ContractType.FLAG_PLANT: ContractTypeDef(
+        contract_type=ContractType.FLAG_PLANT,
+        location_noun="Flag Plant",
+        base_mission_type=MissionType.FLAG_PLANT,
+        crewed=True,
+        required_categories=(),
+        title_fmt="Plant a flag on {body}",
+        synopsis_fmt="Land a kerbal on {body} and plant a flag.",
+    ),
+    ContractType.SAMPLE_RETURN: ContractTypeDef(
+        contract_type=ContractType.SAMPLE_RETURN,
+        location_noun="Sample Return",
+        base_mission_type=MissionType.SAMPLE_RETURN,
+        crewed=True,
+        required_categories=(),
+        title_fmt="Return a surface sample from {body}",
+        synopsis_fmt="Collect a surface sample from {body} and bring it home.",
     ),
 }
 
@@ -510,6 +568,17 @@ def _intrinsic_dv(mission_builder: MissionBuilder, body: BodyName,
     return min(sum(e.base_dv for e in profile) for profile in profiles)
 
 
+def _goal_achievements(goal_spec) -> set:
+    """The (body, mission_type) pairs the goal already requires. Migrated-type
+    contracts skip these so the goal stays untouched (no contract gating the goal
+    mission, no redundant contract on a goal body)."""
+    out = set()
+    for attr, mtype in _GOAL_BODY_LISTS:
+        for body in getattr(goal_spec, attr, ()):
+            out.add((body, mtype))
+    return out
+
+
 def _goal_max_dv(goal_spec, mission_builder: MissionBuilder) -> float:
     """The hardest goal mission's intrinsic dv. 0.0 when the goal has no body
     missions (e.g. complete_tech_tree) — callers then skip the harder-than-goal
@@ -553,6 +622,7 @@ def generate_contracts(world: "KSP1World") -> tuple[list[ContractSpec], list[Con
     # goal_dv == 0 (e.g. complete_tech_tree, no body missions) disables the cap.
     allow_harder = bool(world.options.allow_missions_harder_than_goal.value)
     goal_dv = 0.0 if allow_harder else _goal_max_dv(world.goal_spec, mb)
+    goal_achievements = _goal_achievements(world.goal_spec)
 
     candidates: list[ContractSpec] = []
     for ct in ContractType:
@@ -561,6 +631,10 @@ def generate_contracts(world: "KSP1World") -> tuple[list[ContractSpec], list[Con
         td = CONTRACT_TYPE_DEFS[ct]
         for body in eligible_bodies:
             if body.name == home or not td.body_compatible(body):
+                continue
+            # Migrated types: don't contractize a mission the goal already
+            # requires — keeps goals/victory untouched (additive model).
+            if (body.name, td.base_mission_type) in goal_achievements:
                 continue
             if goal_dv > 0 and _intrinsic_dv(mb, body.name, td.base_mission_type) > goal_dv:
                 continue  # harder than the goal mission (option-gated)
