@@ -143,17 +143,6 @@ class TestContractWorldIntegration(KSP1TestBase):
         loc = self.multiworld.get_location(spec.location_name, self.player)
         self.assertIsNotNone(loc)
 
-    def test_required_parts_promoted_to_progression(self):
-        from BaseClasses import ItemClassification
-        names = self.world.contract_required_part_names
-        self.assertTrue(names)
-        by_name = {i.name: i for i in self.multiworld.itempool}
-        for n in names:
-            if n in by_name:  # rep parts are removed from the pool
-                self.assertEqual(by_name[n].classification,
-                                 ItemClassification.progression,
-                                 f"{n} should be progression for this seed")
-
     def test_location_gated_by_contract_item(self):
         spec = self.world.contract_specs[0]
         # Everything EXCEPT the contract item: capability is fully satisfied,
@@ -184,6 +173,28 @@ class TestContractWorldIntegration(KSP1TestBase):
         entry = d["contracts"][0]
         self.assertIn("parameters", entry)
         self.assertIn("schema", entry)
+
+
+class TestContractRequiredParts(KSP1TestBase):
+    """mine_ore weighted to dominate the pool so a part-requiring contract is
+    guaranteed (default options occasionally roll a contract set with no
+    part-requiring type, which left this assertion seed-flaky). Verifies those
+    required parts are promoted to progression."""
+    options = {
+        "contract_type_weights": {"mine_ore": 10},
+        "non_goal_contract_count": 8,
+    }
+
+    def test_required_parts_promoted_to_progression(self):
+        from BaseClasses import ItemClassification
+        names = self.world.contract_required_part_names
+        self.assertTrue(names)
+        by_name = {i.name: i for i in self.multiworld.itempool}
+        for n in names:
+            if n in by_name:  # rep parts are removed from the pool
+                self.assertEqual(by_name[n].classification,
+                                 ItemClassification.progression,
+                                 f"{n} should be progression for this seed")
 
 
 class TestParamWireFormat(unittest.TestCase):
