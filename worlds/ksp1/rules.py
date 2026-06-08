@@ -193,6 +193,25 @@ def set_completion_condition(world: KSP1World, goal_spec: GoalSpec) -> None:
     safety = effective_science_safety(world.options, difficulty)
 
     _set_victory_rules(world, player, goal_spec, safety)
+    _set_goal_locations_local_only(world, player, goal_spec)
+
+
+def _set_goal_locations_local_only(
+    world: KSP1World, player: int, goal_spec: GoalSpec
+) -> None:
+    """Force every goal-sentinel location to hold only this player's own items.
+
+    The client declares victory when these locations are checked. Without the
+    constraint a goal location could hold a *remote* player's item — and that
+    player running ``!collect`` (which checks their items out of every world,
+    yours included) would mark your goal location complete and end your game for
+    you. Local-only means the only way to check a goal location is to actually
+    fly the mission.
+    """
+    from worlds.generic.Rules import add_item_rule
+    local_only = lambda item, p=player: item.player == p
+    for name in goal_spec_location_names(goal_spec):
+        add_item_rule(world.get_location(name), local_only)
 
 
 # ---------------------------------------------------------------------------
@@ -398,6 +417,15 @@ def _set_contract_rules(world: KSP1World, player: int) -> None:
                 return (state.has(item, player)
                         and get_capability(state, player).contract_access.get(cid, False))
         loc.access_rule = rule
+
+        # A goal contract's matching mission event(s) share its EXACT rule, so
+        # the (now ordinary) event is reachable iff the goal contract is
+        # completable — logically equal, not merely gated after. Runs after
+        # _set_mission_rules, overwriting that event's separately-computed
+        # capability rule (which could drift from the contract's feasibility).
+        if spec.is_goal and ev is not None:
+            for ev_loc in event_locations(spec.body, ev):
+                world.get_location(str(ev_loc)).access_rule = rule
 
 
 def _set_mission_rules(world: KSP1World, player: int) -> None:
@@ -872,18 +900,16 @@ def _validate_home_system_local(spec: GoalSpec) -> None:
 
 
 def goal_spec_location_names(spec: GoalSpec) -> list[str]:
-    """Return sentinel location names whose checks indicate goal completion."""
-    names: list[str] = []
-    for b in spec.flag_bodies:
-        names.append(str(MissionLocation(b, EventName.FLAG_PLANT, 1)))
-    for b in spec.return_bodies:
-        names.append(str(MissionLocation(b, EventName.RETURN, 1)))
-    for b in spec.sample_return_bodies:
-        names.append(str(MissionLocation(b, EventName.SAMPLE_RETURN, 1)))
-    for b in spec.orbit_bodies:
-        names.append(str(MissionLocation(b, EventName.ORBIT, 1)))
-    for b in spec.flyby_bodies:
-        names.append(str(MissionLocation(b, EventName.FLYBY, 1)))
+    """Return the location names whose checks indicate goal completion: the goal
+    **contract** locations (one per goal achievement).
+
+    The goal mission events themselves (``Mun Flag Plant 1`` etc.) are ordinary
+    checks — ``_set_mission_rules`` gates each equal-or-after its contract item,
+    so they can never be required before the contract, but they no longer signal
+    victory. The leaf tech-tree nodes remain the sentinels for the tech-tree goal
+    (it has no body-achievement contracts)."""
+    from .contracts import _goal_contract_specs
+    names = [s.location_name for s in _goal_contract_specs(spec)]
     if spec.complete_tech_tree:
         for n in LEAF_TECH_NODES:
             names.append(str(TechTreeLocation(n.display_name, 1)))
