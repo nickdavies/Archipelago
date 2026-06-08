@@ -199,6 +199,10 @@ class KSP1World(World):
     # Part ksp_names this seed's contracts require — promoted to progression in
     # items.create_item so AP guarantees them reachable before the contract.
     contract_required_part_names: frozenset[str]
+    # contract_ids whose access rule routes through the all-parts proxy (vs the
+    # physics gate). Recorded by rules._set_contract_rules at rule-set time; read
+    # by /explain so the reported gate is the one actually set, never re-derived.
+    _proxy_contract_ids: set[str]
 
     def generate_early(self) -> None:
         """Resolve goal spec and apply ExcludeLateTechTree."""
@@ -554,13 +558,9 @@ class KSP1World(World):
     def _contract_uses_proxy(self, spec) -> bool:
         """True if this contract's access rule routes through the all-parts proxy
         instead of the physics gate (a goal contract on a model-infeasible body).
-        Mirrors rules._set_contract_rules so /explain reports the real gate."""
-        if not spec.is_goal:
-            return False
-        from .rules import _migrated_event_map, _all_locations_infeasible
-        ev = _migrated_event_map().get(spec.contract_type)
-        return ev is not None and _all_locations_infeasible(
-            spec.body, ev, self.model_infeasible_locations)
+        Reads the set rules._set_contract_rules records when it sets the rule —
+        the single source of truth — so /explain can't drift from the real gate."""
+        return spec.contract_id in self._proxy_contract_ids
 
     def custom_ut_sort(self, region_label: str, location_label: str) -> str:
         """UT hook: sort by body order (ALL_BODIES), then tech tree, then KSC."""

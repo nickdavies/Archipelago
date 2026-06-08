@@ -396,6 +396,10 @@ def _set_contract_rules(world: KSP1World, player: int) -> None:
     infeasible = world.model_infeasible_locations
     proxy_rule = _make_all_parts_rule(player)
     event_of = _migrated_event_map()
+    # The single record of which contracts route through the all-parts proxy.
+    # /explain reads this set (world._contract_uses_proxy) rather than re-deriving
+    # the predicate, so the reported gate can't drift from the rule actually set.
+    world._proxy_contract_ids = set()
     for spec in (*world.contract_specs, *world.goal_contract_specs):
         loc = world.get_location(spec.location_name)
         ev = event_of.get(spec.contract_type)
@@ -406,8 +410,10 @@ def _set_contract_rules(world: KSP1World, player: int) -> None:
         # whenever its achievement is, rather than a dead filler-only slot.
         # Non-goal contracts are feasibility-filtered at generation, so they
         # never land on a model-infeasible body and keep the capability gate.
-        if (spec.is_goal and ev is not None
-                and _all_locations_infeasible(spec.body, ev, infeasible)):
+        uses_proxy = (spec.is_goal and ev is not None
+                      and _all_locations_infeasible(spec.body, ev, infeasible))
+        if uses_proxy:
+            world._proxy_contract_ids.add(spec.contract_id)
             def rule(state: CollectionState, item=spec.item_name,
                      _proxy=proxy_rule) -> bool:
                 return state.has(item, player) and _proxy(state)
