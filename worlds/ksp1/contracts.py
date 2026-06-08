@@ -507,6 +507,28 @@ def required_part_manifest(
     return tuple(parts)
 
 
+def evaluate_contract(
+    spec: ContractSpec,
+    flags: "EquipmentFlags",
+    diff: DifficultyProfile,
+    mission_builder: MissionBuilder,
+):
+    """Full-kit mission evaluation for a contract with its required-part payload
+    on the manifest, or None if a required category has no available part.
+    Shared by the feasibility check and the harder-than-goal launch-mass cap, so
+    they read the same numbers."""
+    manifest = required_part_manifest(spec, flags)
+    if manifest is None:
+        return None
+    # Local import keeps the contracts <-> capability cycle one-directional.
+    from .capability import evaluate_mission_detailed
+    td = spec.type_def
+    return evaluate_mission_detailed(
+        flags, diff, spec.body, td.base_mission_type, td.crewed,
+        mission_builder, extra_payload_parts=manifest,
+    )
+
+
 def can_complete_contract(
     spec: ContractSpec,
     flags: "EquipmentFlags",
@@ -515,17 +537,8 @@ def can_complete_contract(
 ) -> bool:
     """The single shared feasibility check. Used by BOTH the generator's
     ever-achievable filter and the runtime access rule, so they cannot drift."""
-    manifest = required_part_manifest(spec, flags)
-    if manifest is None:
-        return False
-    # Local import keeps the contracts <-> capability cycle one-directional.
-    from .capability import evaluate_mission_detailed
-    td = spec.type_def
-    result = evaluate_mission_detailed(
-        flags, diff, spec.body, td.base_mission_type, td.crewed,
-        mission_builder, extra_payload_parts=manifest,
-    )
-    return result.feasible
+    result = evaluate_contract(spec, flags, diff, mission_builder)
+    return result is not None and result.feasible
 
 
 def compute_contract_access(
@@ -639,16 +652,6 @@ _GOAL_BODY_LISTS: tuple[tuple[str, MissionType], ...] = (
 )
 
 
-def _intrinsic_dv(mission_builder: MissionBuilder, body: BodyName,
-                  mission_type: MissionType) -> float:
-    """Cheapest-profile delta-v for a (body, mission_type) — the sphere ladder's
-    own difficulty scalar. 0.0 if no profile exists."""
-    profiles = mission_builder.profiles_for(body, mission_type)
-    if not profiles:
-        return 0.0
-    return min(sum(e.base_dv for e in profile) for profile in profiles)
-
-
 def _goal_achievements(goal_spec) -> set:
     """The (body, mission_type) pairs the goal already requires. Migrated-type
     contracts skip these so the goal stays untouched (no contract gating the goal
@@ -682,15 +685,36 @@ def _goal_contract_specs(goal_spec) -> list:
     return out
 
 
-def _goal_max_dv(goal_spec, mission_builder: MissionBuilder) -> float:
-    """The hardest goal mission's intrinsic dv. 0.0 when the goal has no body
-    missions (e.g. complete_tech_tree) — callers then skip the harder-than-goal
-    filter (there is no goal mission to compare against)."""
-    dv = 0.0
-    for attr, mtype in _GOAL_BODY_LISTS:
+def _goal_max_mass(goal_spec, flags, diff: DifficultyProfile,
+                   mission_builder: MissionBuilder) -> float:
+    """The hardest goal mission's full-kit launch mass — the difficulty ceiling
+    for the harder-than-goal cap. Payload-aware (unlike bare trajectory dv): each
+    goal achievement is evaluated as its equivalent goal contract, so candidate
+    contracts compare apples-to-apples (a crewed station's payload counts toward
+    difficulty). 0.0 when the goal has no body missions (e.g. complete_tech_tree)
+    — callers then skip the cap (nothing to compare against)."""
+    mass = 0.0
+    for spec in _goal_contract_specs(goal_spec):
+        result = evaluate_contract(spec, flags, diff, mission_builder)
+        if result is not None and result.feasible:
+            mass = max(mass, result.launch_mass)
+    return mass
+
+
+def _goal_max_relay_tier(goal_spec, mission_builder: MissionBuilder) -> int:
+    """The highest relay tier any goal body needs to reach home — the remoteness
+    ceiling for the harder-than-goal cap. A relay-requiring contract (station,
+    base) at a body beyond this tier would need comms infrastructure the goal
+    never does (a return mission brings everything home; an unattended station
+    must phone home), so it's 'harder than goal' on the remoteness axis even when
+    its launch mass is not. Distinct from mass: it catches far airless bodies
+    (e.g. Eeloo) that carry no aerobrake/dv penalty."""
+    rt = mission_builder.relay_tier_by_body
+    tier = 0
+    for attr, _mtype in _GOAL_BODY_LISTS:
         for body in getattr(goal_spec, attr, ()):
-            dv = max(dv, _intrinsic_dv(mission_builder, body, mtype))
-    return dv
+            tier = max(tier, rt.get(body, 0))
+    return tier
 
 
 def generate_contracts(world: "KSP1World") -> tuple[list[ContractSpec], list[ContractSpec]]:
@@ -720,11 +744,19 @@ def generate_contracts(world: "KSP1World") -> tuple[list[ContractSpec], list[Con
         if world.goal_spec.is_home_system_only(home) else ALL_BODIES
     )
 
-    # Harder-than-goal cap (option, default ON = no cap): when off, contracts
-    # whose intrinsic mission dv exceeds the goal's hardest mission are excluded.
-    # goal_dv == 0 (e.g. complete_tech_tree, no body missions) disables the cap.
+    # Harder-than-goal cap (option, default ON = no cap), on two independent axes:
+    #  - launch mass: a contract whose full-kit launch mass exceeds the goal's
+    #    hardest mission is too heavy (payload-aware, not bare trajectory dv, so a
+    #    crewed station's mass counts). Catches heavy-at-similar-distance.
+    #  - relay tier: a relay-requiring contract (station/base) at a body more
+    #    remote than the goal's farthest needs comms infrastructure the goal never
+    #    does. Catches too-far — including airless bodies (Eeloo) that carry no
+    #    mass penalty. goal_mass == 0 (e.g. complete_tech_tree, no body missions)
+    #    disables both (nothing to compare against).
     allow_harder = bool(world.options.allow_missions_harder_than_goal.value)
-    goal_dv = 0.0 if allow_harder else _goal_max_dv(world.goal_spec, mb)
+    goal_mass = 0.0 if allow_harder else _goal_max_mass(world.goal_spec, full, diff, mb)
+    goal_relay_tier = (_goal_max_relay_tier(world.goal_spec, mb)
+                       if goal_mass > 0 else None)
     goal_achievements = _goal_achievements(world.goal_spec)
 
     candidates: list[ContractSpec] = []
@@ -740,11 +772,17 @@ def generate_contracts(world: "KSP1World") -> tuple[list[ContractSpec], list[Con
             # contract here would collide / double up.
             if (body.name, td.base_mission_type) in goal_achievements:
                 continue
-            if goal_dv > 0 and _intrinsic_dv(mb, body.name, td.base_mission_type) > goal_dv:
-                continue  # harder than the goal mission (option-gated)
+            # Remoteness cap (cheap, so it gates before the optimizer eval).
+            if (goal_relay_tier is not None and "relay" in td.required_categories
+                    and mb.relay_tier_by_body.get(body.name, 0) > goal_relay_tier):
+                continue  # needs comms beyond the goal's reach (option-gated)
             spec = ContractSpec(ct, body.name)
-            if can_complete_contract(spec, full, diff, mb):
-                candidates.append(spec)
+            result = evaluate_contract(spec, full, diff, mb)
+            if result is None or not result.feasible:
+                continue  # missing a required part, or can't be delivered at all
+            if goal_mass > 0 and result.launch_mass > goal_mass:
+                continue  # harder than the goal mission, by launch mass (option-gated)
+            candidates.append(spec)
 
     chosen = _weighted_sample_without_replacement(
         rng, candidates, weights, _resolve_count(world))
