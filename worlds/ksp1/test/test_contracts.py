@@ -270,15 +270,28 @@ class TestStockBackedContractTypes(KSP1TestBase):
         for loc in new_locs:
             self.assertTrue(loc.can_reach(state), f"{loc.name} unreachable")
 
+
+class TestHomeBodyOrbitalContract(KSP1TestBase):
+    """home_safe orbital contracts are allowed on the home body (good early
+    content). Forcing a single home_safe orbital type at max count draws every
+    candidate of that type (weighted sample-without-replacement), so the
+    home-body instance is guaranteed regardless of seed — the un-pinned
+    multi-type config sampled it only by luck."""
+    options = {
+        "contract_type_weights": {"equatorial_orbit": 1},
+        "non_goal_contract_count": 40,
+        "allow_missions_harder_than_goal": True,
+    }
+
     def test_home_safe_orbital_contracts_on_home(self):
-        # home_safe orbit types are allowed on the home body (good early content).
         home = self.world.mission_builder.home.value
         home_orbitals = [
-            loc.name for loc in self.multiworld.get_locations(self.player)
-            if loc.name.startswith(self._NEW) and loc.name.endswith(home)
+            spec for spec in self.world.contract_specs
+            if spec.contract_type == C.ContractType.EQUATORIAL_ORBIT
+            and spec.body == home
         ]
         self.assertTrue(
-            home_orbitals, f"no home-body ({home}) orbital contracts generated")
+            home_orbitals, f"no home-body ({home}) orbital contract generated")
 
 
 class TestStationaryFeasibility(unittest.TestCase):
