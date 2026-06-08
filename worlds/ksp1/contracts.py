@@ -31,8 +31,8 @@ from enum import StrEnum
 from typing import Optional, TYPE_CHECKING
 
 from .bodies import (
-    ALL_BODIES, BodyName, MissionType, DifficultyProfile, DIFFICULTY_PROFILES,
-    MissionBuilder,
+    ALL_BODIES, BODY_BY_NAME, BodyName, MissionType, DifficultyProfile,
+    DIFFICULTY_PROFILES, MissionBuilder,
 )
 from .parts import CONTRACT_CATEGORY_MEMBERS, MiscEquipment
 
@@ -43,7 +43,7 @@ if TYPE_CHECKING:
 
 # Bumped when the parameter wire format or primitive vocabulary changes. The
 # client rejects contracts whose schema it doesn't understand.
-CONTRACT_SCHEMA_VERSION = 1
+CONTRACT_SCHEMA_VERSION = 2
 
 # Mine Ore contract: fixed ore quantity to extract. 50 fits in the smallest ore
 # tank (RadialOreTank holds 75), so a single tank suffices — 100 would force a
@@ -53,6 +53,11 @@ MINE_ORE_UNITS = 50
 # Space Station contract: required crew CAPACITY (seats). Fixed (not random) so
 # the requirement is predictable; delivered as empty cabins to orbit.
 STATION_CREW = 5
+
+# Orbit-variant contracts: orbit-match tolerance passed to stock
+# SpecificOrbitParameter (degrees / the param's deviation window). 10 is the stock
+# satellite-contract default — generous enough to be achievable by hand.
+ORBIT_DEVIATION = 10.0
 
 # Part categories already guaranteed reachable by a progression chain (or
 # standalone progression): power (Progressive Solar Panel + RTG), relay
@@ -150,6 +155,44 @@ class SampleReturnParam:
         return {"kind": "sample_return", "body": str(self.body)}
 
 
+@dataclass(frozen=True)
+class SpecificOrbitParam:
+    """Match a specific target orbit around ``body``. Wraps stock
+    SpecificOrbitParameter (the satellite-contract orbit param) on the client; the
+    client renders the blue target orbit and completes when the active vessel
+    matches within ``deviation``. The orbit is a deterministic function of
+    (orbit_type, body) — circular at the body's low-orbit altitude — so nothing
+    random crosses the wire. ``lan``/``arg_pe``/``mna``/``epoch`` are 0 for a
+    circular orbit and defaulted client-side, so they're not sent."""
+    body: str
+    orbit_type: str          # FinePrint.Utilities.OrbitType name, e.g. "EQUATORIAL"
+    inclination: float
+    eccentricity: float
+    sma: float               # semi-major axis, metres
+    deviation: float
+
+    def to_json(self) -> dict:
+        return {
+            "kind": "specific_orbit", "body": str(self.body),
+            "orbit_type": self.orbit_type, "inclination": self.inclination,
+            "eccentricity": self.eccentricity, "sma": self.sma,
+            "deviation": self.deviation,
+        }
+
+
+@dataclass(frozen=True)
+class CollectScienceParam:
+    """Recover OR transmit science from ``body`` at ``location`` (space|surface).
+    Wraps stock CollectScience on the client, which credits on transmit *or*
+    recovery (GameEvents.OnScienceRecieved / OnTriggeredDataTransmission) — so the
+    space variant is the cheap 'phone home' contract, no round trip."""
+    body: str
+    location: str            # "space" | "surface"
+
+    def to_json(self) -> dict:
+        return {"kind": "collect_science", "body": str(self.body), "location": self.location}
+
+
 def _min_crew_combo(crew_parts, min_crew: int):
     """Cheapest (least-mass) set of crew parts whose seats total >= min_crew, as
     a tuple of parts. Considers single part types (ceil(min/seats) copies); a
@@ -182,6 +225,12 @@ class ContractType(StrEnum):
     FLAG_PLANT = "flag_plant"
     SAMPLE_RETURN = "sample_return"
     ORBIT = "orbit"
+    # Orbit-variant contracts (all wrap stock SpecificOrbitParameter; differ in
+    # target orbit + the extra-dv their mission transform injects at the home body).
+    EQUATORIAL_ORBIT = "equatorial_orbit"   # circular low equatorial orbit
+    POLAR_ORBIT = "polar_orbit"             # circular low polar orbit (+v_rot ascent at home)
+    STATIONARY_ORBIT = "stationary_orbit"   # synchronous orbit (+raise dv at home)
+    TRANSMIT_SCIENCE = "transmit_science"   # phone home from a body's space (CollectScience)
     # Goal-only types — used when a goal achievement is one of these missions.
     RETURN = "return"
     FLYBY = "flyby"
@@ -192,6 +241,8 @@ class ContractType(StrEnum):
 NON_GOAL_TYPES: tuple[ContractType, ...] = (
     ContractType.MINE_ORE, ContractType.SURFACE_BASE, ContractType.SPACE_STATION,
     ContractType.FLAG_PLANT, ContractType.SAMPLE_RETURN, ContractType.ORBIT,
+    ContractType.EQUATORIAL_ORBIT, ContractType.POLAR_ORBIT,
+    ContractType.STATIONARY_ORBIT, ContractType.TRANSMIT_SCIENCE,
 )
 
 
@@ -238,6 +289,11 @@ class ContractTypeDef:
     # suits surface contracts.
     location_prep: str = "on"
     crew_requirement: int = 0        # >0 => the crew_cabin category must total N seats
+    # True if this type makes sense on the HOME body. Orbit / station / satellite
+    # content around home is good early-game; "go land/mine elsewhere" types are
+    # silly at home. Generation only places a contract on the home body when this
+    # is True (see the candidates loop).
+    home_safe: bool = False
 
     def requires_landing(self) -> bool:
         return self.base_mission_type in (
@@ -248,8 +304,32 @@ class ContractTypeDef:
         """True if this type can target ``body`` at all (before feasibility)."""
         if self.requires_landing():
             return body.can_land
+        if self.contract_type == ContractType.STATIONARY_ORBIT:
+            # A synchronous orbit must exist above the surface and inside the
+            # SOI — false for tidally-locked moons whose sync altitude is beyond
+            # their SOI (no geostationary orbit there).
+            return body.has_stationary_orbit
         # Orbital types: any body that can be orbited (Kerbol/Sun excluded).
         return body.can_land or body.name == BodyName.JOOL
+
+    def transform_mission(self, target_body, home_body, edges, mission_builder):
+        """Contract-specific mission modifier — rewrite the base mission's edge
+        sequence (the profile-level hook passed to evaluate_mission_detailed).
+        Default identity. Orbit variants inject their extra delta-v here, and
+        only at the HOME body: POLAR pays the rotation-assist loss as an ascent
+        penalty; STATIONARY appends the low-orbit→sync raise burn. Both are free
+        at remote bodies (capture straight into the polar plane / a high orbit),
+        so they return ``edges`` unchanged off home."""
+        if target_body != home_body:
+            return edges
+        home = BODY_BY_NAME[home_body]
+        if self.contract_type == ContractType.POLAR_ORBIT:
+            return mission_builder.add_ascent_penalty(
+                edges, home_body, home.surface_rotation_velocity)
+        if self.contract_type == ContractType.STATIONARY_ORBIT:
+            return list(edges) + [
+                mission_builder.make_raise_edge(home_body, home.stationary_raise_dv)]
+        return edges
 
     def build_parameters(self, body: BodyName) -> list:
         if self.contract_type == ContractType.MINE_ORE:
@@ -273,6 +353,31 @@ class ContractTypeDef:
             return params
         if self.contract_type == ContractType.ORBIT:
             return [SituationParam("orbiting", body)]
+        if self.contract_type in (ContractType.EQUATORIAL_ORBIT,
+                                  ContractType.POLAR_ORBIT,
+                                  ContractType.STATIONARY_ORBIT):
+            # A circular target orbit, deterministic per (type, body). Equatorial
+            # / polar at the body's low orbit (inc 0 / 90); stationary at the
+            # synchronous radius. The mission transform (not here) adds the extra
+            # delta-v polar/stationary need at the home body.
+            b = BODY_BY_NAME[body]
+            if self.contract_type == ContractType.STATIONARY_ORBIT:
+                # A circular equatorial orbit at the synchronous radius IS a
+                # stationary orbit; send EQUATORIAL + the explicit sync SMA so the
+                # stock param can't recompute the altitude from an OrbitType.
+                sma, inc, otype = b.sync_orbit_radius_m, 0.0, "EQUATORIAL"
+            elif self.contract_type == ContractType.POLAR_ORBIT:
+                sma, inc, otype = b.lo_radius_m, 90.0, "POLAR"
+            else:
+                sma, inc, otype = b.lo_radius_m, 0.0, "EQUATORIAL"
+            return [SpecificOrbitParam(
+                body=body, orbit_type=otype, inclination=inc,
+                eccentricity=0.0, sma=sma, deviation=ORBIT_DEVIATION)]
+        if self.contract_type == ContractType.TRANSMIT_SCIENCE:
+            # Gather + phone home science from the body's space. CollectScience
+            # credits on transmit OR recover; the relay category is the antenna +
+            # the range gate (remoteness cap keys on "relay" in required_categories).
+            return [CollectScienceParam(body, "space"), _category_param("relay")]
         if self.contract_type == ContractType.FLAG_PLANT:
             return [PlantFlagParam(body)]
         if self.contract_type == ContractType.SAMPLE_RETURN:
@@ -320,6 +425,7 @@ CONTRACT_TYPE_DEFS: dict[ContractType, ContractTypeDef] = {
         crewed=None,                          # empty cabins delivered to orbit
         required_categories=("crew_cabin", "battery", "power", "relay"),
         crew_requirement=STATION_CREW,
+        home_safe=True,
         title_fmt="Build a space station in orbit of {body}",
         synopsis_fmt="Assemble a {crew}-crew station (power + relay) in {body} orbit.",
     ),
@@ -331,8 +437,53 @@ CONTRACT_TYPE_DEFS: dict[ContractType, ContractTypeDef] = {
         base_mission_type=MissionType.ORBIT,
         crewed=None,
         required_categories=(),
+        home_safe=True,
         title_fmt="Reach orbit of {body}",
         synopsis_fmt="Establish a stable orbit around {body}.",
+    ),
+    ContractType.EQUATORIAL_ORBIT: ContractTypeDef(
+        contract_type=ContractType.EQUATORIAL_ORBIT,
+        location_noun="Equatorial Orbit",
+        location_prep="around",
+        base_mission_type=MissionType.ORBIT,
+        crewed=None,
+        required_categories=(),
+        home_safe=True,
+        title_fmt="Reach an equatorial orbit of {body}",
+        synopsis_fmt="Circularise an equatorial orbit around {body}.",
+    ),
+    ContractType.POLAR_ORBIT: ContractTypeDef(
+        contract_type=ContractType.POLAR_ORBIT,
+        location_noun="Polar Orbit",
+        location_prep="around",
+        base_mission_type=MissionType.ORBIT,
+        crewed=None,
+        required_categories=(),
+        home_safe=True,
+        title_fmt="Reach a polar orbit of {body}",
+        synopsis_fmt="Circularise a polar orbit around {body}.",
+    ),
+    ContractType.STATIONARY_ORBIT: ContractTypeDef(
+        contract_type=ContractType.STATIONARY_ORBIT,
+        location_noun="Stationary Orbit",
+        location_prep="around",
+        base_mission_type=MissionType.ORBIT,
+        crewed=None,
+        required_categories=(),
+        home_safe=True,
+        title_fmt="Reach a stationary orbit of {body}",
+        synopsis_fmt="Establish a synchronous (stationary) orbit around {body}.",
+    ),
+    ContractType.TRANSMIT_SCIENCE: ContractTypeDef(
+        contract_type=ContractType.TRANSMIT_SCIENCE,
+        location_noun="Transmit Science",
+        location_prep="from",
+        base_mission_type=MissionType.ORBIT,
+        crewed=None,
+        required_categories=("relay",),
+        home_safe=True,
+        title_fmt="Transmit science from {body}",
+        synopsis_fmt="Gather and transmit science from space around {body}.",
     ),
     ContractType.FLAG_PLANT: ContractTypeDef(
         contract_type=ContractType.FLAG_PLANT,
@@ -526,6 +677,11 @@ def evaluate_contract(
     return evaluate_mission_detailed(
         flags, diff, spec.body, td.base_mission_type, td.crewed,
         mission_builder, extra_payload_parts=manifest,
+        # Per-contract mission modifier (polar ascent penalty / stationary raise
+        # edge). Pure — returns a new edge list, never mutating the shared base
+        # profiles — so it's safe under the once-per-state contract_access cache.
+        mission_transform=lambda edges: td.transform_mission(
+            spec.body, mission_builder.home, edges, mission_builder),
     )
 
 
@@ -765,7 +921,9 @@ def generate_contracts(world: "KSP1World") -> tuple[list[ContractSpec], list[Con
             continue
         td = CONTRACT_TYPE_DEFS[ct]
         for body in eligible_bodies:
-            if body.name == home or not td.body_compatible(body):
+            # The home body is eligible only for home-safe types (orbital /
+            # satellite / station content); "go land/mine elsewhere" types skip it.
+            if (body.name == home and not td.home_safe) or not td.body_compatible(body):
                 continue
             # Don't contractize a mission the goal already requires — the goal
             # mission becomes a GOAL-contract instead (below), so a non-goal

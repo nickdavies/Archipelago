@@ -93,7 +93,11 @@ class TestContractWorldIntegration(KSP1TestBase):
                         "default options should generate at least one contract")
         for spec in self.world.contract_specs:
             self.assertIn(spec.contract_type, set(C.ContractType))
-            self.assertNotEqual(spec.body, self.world.mission_builder.home)
+            # The home body is only allowed for home_safe types (orbital content).
+            if spec.body == self.world.mission_builder.home:
+                self.assertTrue(
+                    spec.type_def.home_safe,
+                    f"{spec.contract_type} targets home but isn't home_safe")
 
     def test_contract_item_and_location_exist(self):
         spec = self.world.contract_specs[0]
@@ -144,6 +148,58 @@ class TestContractWorldIntegration(KSP1TestBase):
         entry = d["contracts"][0]
         self.assertIn("parameters", entry)
         self.assertIn("schema", entry)
+
+
+class TestStockBackedContractTypes(KSP1TestBase):
+    """The stock-parameter orbit-variant + transmit-science contracts must
+    generate (including on the home body) and stay reachable when weighted to
+    dominate the pool."""
+    options = {
+        "goal": "standard_sample_returns",
+        "difficulty": "normal",
+        "contract_type_weights": {
+            "equatorial_orbit": 5, "polar_orbit": 5,
+            "stationary_orbit": 5, "transmit_science": 5,
+        },
+        "non_goal_contract_count": 20,
+    }
+    needs_real_pre_fill = True
+
+    _NEW = ("Contract: Equatorial Orbit", "Contract: Polar Orbit",
+            "Contract: Stationary Orbit", "Contract: Transmit Science")
+
+    def test_new_types_generate_and_are_reachable(self):
+        new_locs = [
+            loc for loc in self.multiworld.get_locations(self.player)
+            if loc.name.startswith(self._NEW)
+        ]
+        self.assertTrue(new_locs, "orbit-variant contracts not generated")
+        state = self.multiworld.get_all_state(False)
+        for loc in new_locs:
+            self.assertTrue(loc.can_reach(state), f"{loc.name} unreachable")
+
+    def test_home_safe_orbital_contracts_on_home(self):
+        # home_safe orbit types are allowed on the home body (good early content).
+        home = self.world.mission_builder.home.value
+        home_orbitals = [
+            loc.name for loc in self.multiworld.get_locations(self.player)
+            if loc.name.startswith(self._NEW) and loc.name.endswith(home)
+        ]
+        self.assertTrue(
+            home_orbitals, f"no home-body ({home}) orbital contracts generated")
+
+
+class TestStationaryFeasibility(unittest.TestCase):
+    def test_tidally_locked_moons_have_no_stationary_orbit(self):
+        from worlds.ksp1.bodies import BODY_BY_NAME
+        from worlds.ksp1.bodies import BodyName as BN
+        td = C.CONTRACT_TYPE_DEFS[C.ContractType.STATIONARY_ORBIT]
+        # Mun/Tylo (tidally locked) have sync altitude beyond their SOI.
+        for bn in (BN.MUN, BN.TYLO, BN.IKE):
+            self.assertFalse(td.body_compatible(BODY_BY_NAME[bn]),
+                             f"{bn} should have no stationary orbit")
+        # Kerbin's keostationary sits well inside its SOI.
+        self.assertTrue(td.body_compatible(BODY_BY_NAME[BN.KERBIN]))
 
 
 if __name__ == "__main__":
