@@ -635,6 +635,26 @@ def canonical_payload_parts(spec: ContractSpec) -> tuple:
 # Part requirements & feasibility (shared by generation and access rules)
 # ---------------------------------------------------------------------------
 
+def required_part_breakdown(
+    spec: ContractSpec, flags: "EquipmentFlags",
+) -> list[tuple[str, Optional[tuple[MiscEquipment, ...]]]]:
+    """Per required category, the available parts to deliver (the lightest part,
+    or for a crew contract the cheapest combo reaching the seat count), or None
+    for a category with no available part. Generic over contract types — a single
+    iteration of ``required_categories`` that BOTH the delivery manifest and the
+    ``/explain`` Gate-2 breakdown read, so they cannot diverge."""
+    td = spec.type_def
+    out: list[tuple[str, Optional[tuple[MiscEquipment, ...]]]] = []
+    for cat in td.required_categories:
+        if cat == "crew_cabin" and td.crew_requirement:
+            combo = _min_crew_combo(flags.available_crew_parts, td.crew_requirement)
+            out.append((cat, combo))
+        else:
+            part = flags.category_lightest.get(cat)
+            out.append((cat, (part,) if part is not None else None))
+    return out
+
+
 def required_part_manifest(
     spec: ContractSpec, flags: "EquipmentFlags",
 ) -> Optional[tuple[MiscEquipment, ...]]:
@@ -642,19 +662,11 @@ def required_part_manifest(
     for a crew contract the cheapest crew combo reaching the seat requirement.
     Returns None if any required category has no available part — the contract is
     then infeasible (fail-closed, per the golden rule)."""
-    td = spec.type_def
     parts: list[MiscEquipment] = []
-    for cat in td.required_categories:
-        if cat == "crew_cabin" and td.crew_requirement:
-            combo = _min_crew_combo(flags.available_crew_parts, td.crew_requirement)
-            if combo is None:
-                return None
-            parts.extend(combo)
-        else:
-            part = flags.category_lightest.get(cat)
-            if part is None:
-                return None
-            parts.append(part)
+    for _cat, got in required_part_breakdown(spec, flags):
+        if got is None:
+            return None
+        parts.extend(got)
     return tuple(parts)
 
 

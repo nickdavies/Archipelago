@@ -9,7 +9,7 @@ import unittest
 
 from worlds.ksp1 import contracts as C
 from worlds.ksp1.bodies import (
-    BodyName, MissionBuilder, DIFFICULTY_PROFILES,
+    ALL_BODIES, BodyName, MissionBuilder, DIFFICULTY_PROFILES,
 )
 from worlds.ksp1.capability import _pre_pass
 from worlds.ksp1.test.base import KSP1TestBase
@@ -200,6 +200,68 @@ class TestStationaryFeasibility(unittest.TestCase):
                              f"{bn} should have no stationary orbit")
         # Kerbin's keostationary sits well inside its SOI.
         self.assertTrue(td.body_compatible(BODY_BY_NAME[BN.KERBIN]))
+
+
+class TestExplainContractGeneric(unittest.TestCase):
+    """`/explain Contract:` must work for EVERY contract type with no per-type
+    handling — a future type that breaks the formatter fails here. Drives the
+    formatter over each CONTRACT_TYPE_DEFS entry on a compatible body, with both
+    a full kit and an empty kit, asserting it never raises and always renders the
+    three gates and the parameter tree."""
+
+    def _first_compatible_body(self, td):
+        for body in ALL_BODIES:
+            if td.body_compatible(body):
+                return body.name
+        return None
+
+    def test_every_contract_type_renders(self):
+        from worlds.ksp1.capability_format import format_contract_output
+        for ct, td in C.CONTRACT_TYPE_DEFS.items():
+            body = self._first_compatible_body(td)
+            self.assertIsNotNone(body, f"{ct} has no compatible body")
+            spec = C.ContractSpec(ct, body)
+            for label, flags in (("full", FULL), ("empty", EMPTY)):
+                with self.subTest(contract_type=ct, kit=label):
+                    lines = format_contract_output(
+                        spec, in_logic=False, item_held=False,
+                        flags=flags, diff=DIFF, difficulty_name="normal",
+                        mission_builder=MB, proxy=False,
+                    )
+                    text = "\n".join(lines)
+                    self.assertIn(spec.display_name, text)
+                    self.assertIn("Gate 1", text)
+                    self.assertIn("Gate 2", text)
+                    self.assertIn("Gate 3", text)
+                    self.assertIn("Contract parameters", text)
+                    # Every emitted parameter primitive must show its kind.
+                    for p in td.build_parameters(body):
+                        self.assertIn(p.to_json()["kind"], text)
+
+    def test_full_kit_mine_shows_required_parts_and_rocket(self):
+        from worlds.ksp1.capability_format import format_contract_output
+        text = "\n".join(format_contract_output(
+            MUN_MINE, in_logic=True, item_held=True,
+            flags=FULL, diff=DIFF, difficulty_name="normal",
+            mission_builder=MB, proxy=False,
+        ))
+        # Gate 2 lists the lightest part per required category.
+        self.assertIn("drill: HAVE", text)
+        self.assertIn("MiniDrill", text)
+        self.assertIn("ore_tank: HAVE", text)
+        # Feasible -> the delivery rocket is rendered with the contract part on it.
+        self.assertIn("Gate 3 - physics delivery: YES", text)
+        self.assertIn("Delivery rocket", text)
+
+    def test_empty_kit_mine_reports_missing_and_infeasible(self):
+        from worlds.ksp1.capability_format import format_contract_output
+        text = "\n".join(format_contract_output(
+            MUN_MINE, in_logic=False, item_held=False,
+            flags=EMPTY, diff=DIFF, difficulty_name="normal",
+            mission_builder=MB, proxy=False,
+        ))
+        self.assertIn("drill: MISSING", text)
+        self.assertIn("Gate 3 - physics delivery: NO", text)
 
 
 if __name__ == "__main__":

@@ -465,7 +465,7 @@ class KSP1World(World):
         from .capability import compute_capability_from_items, evaluate_mission_detailed
         from .capability_format import (
             CHECK_MAP, format_rocket_output, format_parts_list,
-            format_progressive_chains,
+            format_progressive_chains, format_contract_output,
         )
 
         # Sub-command: /explain parts [filter]
@@ -520,6 +520,20 @@ class KSP1World(World):
             rep_names=rep_names,
         )
 
+        # Contract locations aren't in CHECK_MAP — their feasibility needs the
+        # extra-payload + mission-transform eval, not the bare milestone path — so
+        # render them generically from the spec. Works for any contract type,
+        # current or future, with no per-type handling here.
+        contract_spec = self._contract_spec_for_name(target_name)
+        if contract_spec is not None:
+            lines = format_contract_output(
+                contract_spec, in_logic,
+                state.has(contract_spec.item_name, self.player),
+                flags, DIFFICULTY_PROFILES[difficulty_name], difficulty_name,
+                self.mission_builder, proxy=self._contract_uses_proxy(contract_spec),
+            )
+            return [{"type": "text", "text": "\n".join(lines)}]
+
         result = None
         if info is not None:
             diff = DIFFICULTY_PROFILES[difficulty_name]
@@ -535,6 +549,26 @@ class KSP1World(World):
             sounding_altitude_km=cap.sounding_altitude_km,
         )
         return [{"type": "text", "text": "\n".join(lines)}]
+
+    def _contract_spec_for_name(self, name: str):
+        """The ContractSpec whose location matches ``name``, or None. Looks up the
+        world's own specs (the source of truth) rather than parsing the display
+        name, so /explain covers every contract type without per-type handling."""
+        for spec in (*self.contract_specs, *self.goal_contract_specs):
+            if spec.location_name == name:
+                return spec
+        return None
+
+    def _contract_uses_proxy(self, spec) -> bool:
+        """True if this contract's access rule routes through the all-parts proxy
+        instead of the physics gate (a goal contract on a model-infeasible body).
+        Mirrors rules._set_contract_rules so /explain reports the real gate."""
+        if not spec.is_goal:
+            return False
+        from .rules import _migrated_event_map, _all_locations_infeasible
+        ev = _migrated_event_map().get(spec.contract_type)
+        return ev is not None and _all_locations_infeasible(
+            spec.body, ev, self.model_infeasible_locations)
 
     def custom_ut_sort(self, region_label: str, location_label: str) -> str:
         """UT hook: sort by body order (ALL_BODIES), then tech tree, then KSC."""
