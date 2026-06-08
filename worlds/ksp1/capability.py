@@ -1909,6 +1909,7 @@ def evaluate_mission_detailed(
     mission_builder: MissionBuilder,
     threshold_km: float | None = None,
     extra_payload_parts: tuple[MiscEquipment, ...] = (),
+    mission_transform: Optional[Callable[[list], list]] = None,
 ) -> ProfileResult:
     """
     Evaluate a specific mission and return the winning ProfileResult
@@ -2027,6 +2028,13 @@ def evaluate_mission_detailed(
         body = BODY_BY_NAME[body_name]
         if body.eva_jetpack_twr < _MIN_EVA_JETPACK_TWR:
             profiles = _inject_ladder(profiles)
+
+    # Contract-supplied mission modifier: rewrite each profile's edge list
+    # (insert/append/modify maneuvers) before sizing. Used by orbit-variant
+    # contracts (polar ascent penalty, stationary raise edge). Identity for
+    # ordinary missions. See ContractTypeDef.transform_mission.
+    if mission_transform is not None:
+        profiles = [mission_transform(p) for p in profiles]
 
     all_blocking: list[BlockingInfo] = []
     seen: set[str] = set()
