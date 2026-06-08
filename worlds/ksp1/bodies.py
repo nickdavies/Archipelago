@@ -245,6 +245,14 @@ class Body:
                 / (4.0 * math.pi * math.pi)) ** (1.0 / 3.0)
 
     @property
+    def is_orbitable(self) -> bool:
+        """True if a craft can establish orbit / fly by here — every body except
+        the star (Kerbol). Gas giants (Jool) qualify: you orbit or fly by them
+        even though you can't land. The star is not a mission destination, so it
+        has no orbit/flyby/stationary contracts or locations."""
+        return self.name != BodyName.KERBOL
+
+    @property
     def has_stationary_orbit(self) -> bool:
         """True iff a synchronous orbit sits above the surface and inside the
         SOI. False for tidally-locked moons whose sync altitude is beyond their

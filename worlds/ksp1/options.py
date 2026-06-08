@@ -10,7 +10,12 @@ LANDABLE_BODY_NAMES: frozenset[str] = frozenset(
     b.name for b in ALL_BODIES if b.can_land
 )
 
-ALL_BODY_NAMES: frozenset[str] = frozenset(b.name for b in ALL_BODIES)
+# Bodies that can be orbited / flown by: every body except the star (Kerbol).
+# The star is not a mission destination, so orbit/flyby goal lists must exclude
+# it — a goal contract there has no registered location (KeyError at gen).
+ORBITABLE_BODY_NAMES: frozenset[str] = frozenset(
+    b.name for b in ALL_BODIES if b.is_orbitable
+)
 
 # Pre-canned random pools for StartingBody.  Each key is the lowercase
 # option_<name> stem; the value is the pool the option resolves to.
@@ -95,13 +100,13 @@ class SampleReturnBodies(OptionSet):
 class OrbitBodies(OptionSet):
     """Bodies to reach orbit around (custom goal). Leave empty for preset goals."""
     display_name = "Orbit Bodies"
-    valid_keys = ALL_BODY_NAMES
+    valid_keys = ORBITABLE_BODY_NAMES
 
 
 class FlybyBodies(OptionSet):
     """Bodies to perform a flyby of (custom goal). Leave empty for preset goals."""
     display_name = "Flyby Bodies"
-    valid_keys = ALL_BODY_NAMES
+    valid_keys = ORBITABLE_BODY_NAMES
 
 
 class StartingBody(Choice):

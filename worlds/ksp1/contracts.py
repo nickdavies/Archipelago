@@ -304,13 +304,16 @@ class ContractTypeDef:
         """True if this type can target ``body`` at all (before feasibility)."""
         if self.requires_landing():
             return body.can_land
+        # All remaining types are orbital — they need a body that can be orbited
+        # at all, which excludes the star (Kerbol). Gas giants (Jool) qualify.
+        if not body.is_orbitable:
+            return False
         if self.contract_type == ContractType.STATIONARY_ORBIT:
             # A synchronous orbit must exist above the surface and inside the
             # SOI — false for tidally-locked moons whose sync altitude is beyond
             # their SOI (no geostationary orbit there).
             return body.has_stationary_orbit
-        # Orbital types: any body that can be orbited (Kerbol/Sun excluded).
-        return body.can_land or body.name == BodyName.JOOL
+        return True
 
     def transform_mission(self, target_body, home_body, edges, mission_builder):
         """Contract-specific mission modifier — rewrite the base mission's edge

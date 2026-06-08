@@ -122,6 +122,31 @@ def _validate_goal_not_excluded(
     )
 
 
+def _validate_goal_contracts_registrable(goal_contract_specs) -> None:
+    """Raise ``OptionError`` if any goal contract lacks a registered location.
+
+    Goal contracts are emitted for every goal achievement unconditionally — no
+    ``body_compatible`` filter (see ``_goal_contract_specs``) — so a goal body
+    that can't host its mission type would produce a ``ContractSpec`` whose
+    location was never registered, and the lookup would ``KeyError`` deep in
+    ``create_regions``.  The orbit/flyby body lists are option-validated against
+    ``ORBITABLE_BODY_NAMES`` (the star has no missions), so this is defense in
+    depth: fail fast with a clear message if any path ever slips one through.
+    """
+    from .locations import CONTRACT_LOCATION_NAME_SET
+    bad = sorted(
+        s.location_name for s in goal_contract_specs
+        if s.location_name not in CONTRACT_LOCATION_NAME_SET
+    )
+    if not bad:
+        return
+    raise OptionError(
+        f"KSP1: goal targets a body that can't host its mission type — no "
+        f"registered location for {bad!r}.  The star (Sun) has no "
+        "orbit/flyby/landing missions; remove it from your goal body lists."
+    )
+
+
 # KSP upgradeable facility ids (must match the client's CareerUpgradesManager).
 # All are forced to max in the hacked career; per-building levels are emitted so
 # real facility progression can be reintroduced one building at a time later.
@@ -263,6 +288,7 @@ class KSP1World(World):
                 contracts.generate_contracts(self))
         self.contract_required_part_names = contracts.required_part_names_for(
             (*self.contract_specs, *self.goal_contract_specs))
+        _validate_goal_contracts_registrable(self.goal_contract_specs)
 
         if self.options.exclude_late_tech_tree:
             late_tier_locs: set[str] = {

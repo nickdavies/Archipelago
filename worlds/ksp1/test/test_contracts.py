@@ -294,6 +294,50 @@ class TestStationaryFeasibility(unittest.TestCase):
         self.assertTrue(td.body_compatible(BODY_BY_NAME[BN.KERBIN]))
 
 
+class TestStarNotAMissionDestination(unittest.TestCase):
+    """The star (Kerbol/Sun) is not a mission destination: no contract type can
+    target it, it has no registered locations, and the orbit/flyby goal lists
+    reject it at option validation and as defense-in-depth at gen time."""
+
+    def test_no_contract_type_targets_the_star(self):
+        from worlds.ksp1.bodies import BODY_BY_NAME
+        sun = BODY_BY_NAME[BodyName.KERBOL]
+        self.assertFalse(sun.is_orbitable)
+        for ct in C.ContractType:
+            self.assertFalse(
+                C.CONTRACT_TYPE_DEFS[ct].body_compatible(sun),
+                f"{ct} must not target the star")
+        sun_specs = [s for s in C.all_possible_contract_specs()
+                     if s.body == BodyName.KERBOL]
+        self.assertEqual(sun_specs, [], f"star has contracts: {sun_specs}")
+
+    def test_star_has_no_registered_locations(self):
+        from worlds.ksp1.locations import LOCATION_NAME_TO_ID
+        sun_locs = [n for n in LOCATION_NAME_TO_ID if BodyName.KERBOL in n]
+        self.assertEqual(sun_locs, [], f"star has location checks: {sun_locs}")
+
+    def test_orbit_flyby_options_reject_the_star(self):
+        from worlds.ksp1.options import OrbitBodies, FlybyBodies
+        from Options import OptionError
+        for opt_cls in (OrbitBodies, FlybyBodies):
+            with self.assertRaises(OptionError):
+                opt_cls({BodyName.KERBOL, BodyName.MUN}).verify_keys()
+        # A real orbitable body (incl. the gas giant) is accepted.
+        OrbitBodies({BodyName.MUN, BodyName.JOOL}).verify_keys()
+
+    def test_star_goal_body_fails_fast_not_keyerror(self):
+        # Defense-in-depth: even if the star slips past option validation, gen
+        # raises a clear OptionError, not a KeyError on the missing location.
+        from test.general import setup_multiworld, call_all
+        from worlds.ksp1.world import KSP1World
+        from Options import OptionError
+        mw = setup_multiworld(
+            KSP1World, steps=(), seed=1,
+            options={"goal": "custom", "orbit_bodies": {BodyName.KERBOL}})
+        with self.assertRaises(OptionError):
+            call_all(mw, "generate_early")
+
+
 class TestExplainContractGeneric(unittest.TestCase):
     """`/explain Contract:` must work for EVERY contract type with no per-type
     handling — a future type that breaks the formatter fails here. Drives the
