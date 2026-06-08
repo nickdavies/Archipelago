@@ -892,8 +892,9 @@ def generate_contracts(world: "KSP1World") -> tuple[list[ContractSpec], list[Con
     without replacement by the per-type weight (0 disables), up to the configured
     count, deterministically from the world seed.
 
-    Goal contracts are phase 3 — returns [] for now (the existing goal/victory
-    system is untouched).
+    Goal: one mandatory goal-contract per goal achievement (see
+    _goal_contract_specs) — always generated, no ever-achievable filter, so the
+    goal/victory missions are contract locations the player must complete.
     """
     rng = world.random
     diff = _difficulty(world)

@@ -390,7 +390,7 @@ class KSP1World(World):
         }
         # Contract manifest: each entry is self-describing; the client builds a
         # native KSP contract from `parameters` and reports `location` on
-        # completion. Goal contracts (phase 3) ride the same array.
+        # completion. Goal contracts ride the same array.
         d["contracts"] = [
             spec.to_slot_dict()
             for spec in (*self.contract_specs, *self.goal_contract_specs)

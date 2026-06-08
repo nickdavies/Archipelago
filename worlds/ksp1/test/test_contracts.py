@@ -34,6 +34,15 @@ NO_TANK = _flags(lambda n: 0 if n in ("RadialOreTank", "SmallTank", "LargeTank")
 MUN_MINE = C.ContractSpec(C.ContractType.MINE_ORE, BodyName.MUN)
 
 
+def _first_compatible_body(td):
+    """A body the contract type can target — for tests that must instantiate
+    every type without caring which body."""
+    for body in ALL_BODIES:
+        if td.body_compatible(body):
+            return body.name
+    return None
+
+
 class TestRequiredPartManifest(unittest.TestCase):
     def test_full_kit_returns_lightest_per_category(self):
         manifest = C.required_part_manifest(MUN_MINE, FULL)
@@ -73,6 +82,33 @@ class TestSlotDataRoundTrip(unittest.TestCase):
         kinds = [p["kind"] for p in d["parameters"]]
         self.assertEqual(kinds, ["situation", "resource"])
         self.assertEqual(C.ContractSpec.from_slot_dict(d), MUN_MINE)
+
+    def test_every_type_round_trips(self):
+        # to_slot_dict/from_slot_dict must rebuild an identical spec for EVERY
+        # contract type (UT regen reconstructs from fields, never re-randomizes),
+        # and to_slot_dict must build a non-empty parameter tree for each type
+        # without raising NotImplementedError.
+        for ct, td in C.CONTRACT_TYPE_DEFS.items():
+            with self.subTest(contract_type=ct):
+                body = _first_compatible_body(td)
+                self.assertIsNotNone(body, f"{ct} has no compatible body")
+                spec = C.ContractSpec(ct, body)
+                d = spec.to_slot_dict()
+                self.assertTrue(d["parameters"], f"{ct} emitted no parameters")
+                self.assertEqual(C.ContractSpec.from_slot_dict(d), spec)
+
+    def test_is_goal_flag_round_trips(self):
+        # is_goal is the only field that distinguishes a goal contract in
+        # slot_data (UT recategorizes on it), so it must survive the wire.
+        goal = C.ContractSpec(C.ContractType.RETURN, BodyName.DUNA, is_goal=True)
+        d = goal.to_slot_dict()
+        self.assertTrue(d["is_goal"])
+        restored = C.ContractSpec.from_slot_dict(d)
+        self.assertTrue(restored.is_goal)
+        self.assertEqual(restored, goal)
+        # A non-goal spec stays non-goal across the round-trip.
+        self.assertFalse(MUN_MINE.to_slot_dict()["is_goal"])
+        self.assertFalse(C.ContractSpec.from_slot_dict(MUN_MINE.to_slot_dict()).is_goal)
 
     def test_required_part_names_per_seed(self):
         # One representative (the lightest) per required category when a mine
@@ -150,6 +186,51 @@ class TestContractWorldIntegration(KSP1TestBase):
         self.assertIn("schema", entry)
 
 
+class TestParamWireFormat(unittest.TestCase):
+    """Lock the slot_data wire form of each non-trivial parameter primitive. The
+    dumb client decodes these dicts by exact key, so a silent field rename or
+    type change here breaks contract actuation with no Python-side error.
+    (situation/resource are exercised by TestSlotDataRoundTrip.)"""
+
+    def test_has_any_part(self):
+        self.assertEqual(
+            C.HasAnyPartParam(("MiniDrill", "RadialDrill"), label="drill").to_json(),
+            {"kind": "has_any_part",
+             "parts": ["MiniDrill", "RadialDrill"], "label": "drill"})
+
+    def test_has_system(self):
+        self.assertEqual(
+            C.HasSystemParam("Generator", label="power generation").to_json(),
+            {"kind": "has_system", "system": "Generator",
+             "label": "power generation"})
+
+    def test_crew_capacity(self):
+        self.assertEqual(C.CrewCapacityParam(5).to_json(),
+                         {"kind": "crew_capacity", "min": 5})
+
+    def test_plant_flag(self):
+        self.assertEqual(C.PlantFlagParam(BodyName.MUN).to_json(),
+                         {"kind": "plant_flag", "body": "Mun"})
+
+    def test_sample_return(self):
+        self.assertEqual(C.SampleReturnParam(BodyName.DUNA).to_json(),
+                         {"kind": "sample_return", "body": "Duna"})
+
+    def test_specific_orbit(self):
+        self.assertEqual(
+            C.SpecificOrbitParam(
+                body=BodyName.KERBIN, orbit_type="EQUATORIAL", inclination=0.0,
+                eccentricity=0.0, sma=700000.0, deviation=10.0).to_json(),
+            {"kind": "specific_orbit", "body": "Kerbin",
+             "orbit_type": "EQUATORIAL", "inclination": 0.0, "eccentricity": 0.0,
+             "sma": 700000.0, "deviation": 10.0})
+
+    def test_collect_science(self):
+        self.assertEqual(C.CollectScienceParam(BodyName.MUN, "space").to_json(),
+                         {"kind": "collect_science", "body": "Mun",
+                          "location": "space"})
+
+
 class TestStockBackedContractTypes(KSP1TestBase):
     """The stock-parameter orbit-variant + transmit-science contracts must
     generate (including on the home body) and stay reachable when weighted to
@@ -209,16 +290,10 @@ class TestExplainContractGeneric(unittest.TestCase):
     a full kit and an empty kit, asserting it never raises and always renders the
     three gates and the parameter tree."""
 
-    def _first_compatible_body(self, td):
-        for body in ALL_BODIES:
-            if td.body_compatible(body):
-                return body.name
-        return None
-
     def test_every_contract_type_renders(self):
         from worlds.ksp1.capability_format import format_contract_output
         for ct, td in C.CONTRACT_TYPE_DEFS.items():
-            body = self._first_compatible_body(td)
+            body = _first_compatible_body(td)
             self.assertIsNotNone(body, f"{ct} has no compatible body")
             spec = C.ContractSpec(ct, body)
             for label, flags in (("full", FULL), ("empty", EMPTY)):
