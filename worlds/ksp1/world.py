@@ -16,12 +16,12 @@ from .bodies import (
 from .items import ITEM_NAME_TO_ID, PROGRESSIVE_LAUNCH_PAD_CAPS, _FILLER_ITEMS
 from .parts import PROGRESSIVE_PART_TIERS
 from .locations import (
-    ALL_EVENTS, EventName, KSC_BIOMES, KSC_LOCATION_PREFIX,
-    LOCATION_NAME_TO_ID, LocationBuilder, MAX_TECH_SLOTS, MissionLocation,
+    ALL_EVENTS, KSC_BIOMES, KSC_LOCATION_PREFIX,
+    LOCATION_NAME_TO_ID, LocationBuilder, MAX_TECH_SLOTS,
     TechTreeLocation,
     effective_starting_inv_count, effective_tech_slots_per_node,
 )
-from .options import KSP1Options, STARTING_BODY_POOLS, StartingBody
+from .options import Goal, KSP1Options, STARTING_BODY_POOLS, StartingBody
 from .tech_tree import MAX_TIER, NODES_BY_TIER, TECH_NODES, TIER_TO_BAND
 
 
@@ -428,36 +428,28 @@ class KSP1World(World):
                 self.mission_builder = MissionBuilder(home=new_home)
                 self.location_builder = LocationBuilder(home=new_home)
 
-        if slot_data["goal"] == 99:  # Goal.option_custom
-            flag_bodies: set[str] = set()
-            return_bodies: set[str] = set()
-            sample_return_bodies: set[str] = set()
-            for loc_str in slot_data.get("goal_locations", []):
-                parsed = MissionLocation.parse(loc_str)
-                if parsed is None:
-                    continue
-                if parsed.event == EventName.FLAG_PLANT:
-                    flag_bodies.add(parsed.body)
-                elif parsed.event == EventName.SAMPLE_RETURN:
-                    sample_return_bodies.add(parsed.body)
-                elif parsed.event == EventName.RETURN:
-                    return_bodies.add(parsed.body)
-            self.options.flag_bodies.value = flag_bodies
-            self.options.return_bodies.value = return_bodies
-            self.options.sample_return_bodies.value = sample_return_bodies
-
-        # Stash progressive reps so create_items() uses them instead of re-randomizing.
-        self._ut_progressive_representatives = {
-            name: {int(t): rep for t, rep in reps.items()}
-            for name, reps in slot_data.get("progressive_representatives", {}).items()
-        }
-
         # Stash contracts so generate_early reconstructs the exact set rather
         # than re-randomizing (the contract pick is seed-RNG-derived).
         self._ut_contract_specs = [
             contracts.ContractSpec.from_slot_dict(entry)
             for entry in slot_data.get("contracts", [])
         ]
+
+        # A custom goal isn't a single enum value — its body lists ARE the goal,
+        # and resolve_goal_spec rebuilds the spec from those option values during
+        # regen. Recover them from the goal *contracts* (the victory sentinels),
+        # which carry (contract_type, body) structurally; goal_locations holds
+        # contract display names that don't round-trip back to a body list.
+        if slot_data["goal"] == Goal.option_custom:
+            for attr, bodies in contracts.goal_body_lists_from_specs(
+                    self._ut_contract_specs).items():
+                getattr(self.options, attr).value = bodies
+
+        # Stash progressive reps so create_items() uses them instead of re-randomizing.
+        self._ut_progressive_representatives = {
+            name: {int(t): rep for t, rep in reps.items()}
+            for name, reps in slot_data.get("progressive_representatives", {}).items()
+        }
 
     def explain_rule(self, target_name: str, state: CollectionState) -> list[dict] | None:
         """UT hook: /explain <location> shows rocket design, /explain parts [filter] shows inventory."""

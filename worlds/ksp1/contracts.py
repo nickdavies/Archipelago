@@ -853,6 +853,33 @@ def _goal_contract_specs(goal_spec) -> list:
     return out
 
 
+# Inverse of (_GOAL_BODY_LISTS composed with _GOAL_MISSION_TO_CONTRACT): a goal
+# contract's type -> the custom-goal body-list option attribute it came from.
+_CONTRACT_TO_GOAL_BODY_LIST: dict[ContractType, str] = {
+    _GOAL_MISSION_TO_CONTRACT[mtype]: attr
+    for attr, mtype in _GOAL_BODY_LISTS
+}
+
+
+def goal_body_lists_from_specs(specs) -> dict[str, set[str]]:
+    """Invert ``_goal_contract_specs``: recover the custom-goal body-list option
+    values (``{option_attr: {body_name, ...}}``) from a list of goal ContractSpecs.
+
+    UT regen restores a custom goal with this — the goal contracts are the only
+    structured record of the body lists that survives slot_data (``goal_locations``
+    holds contract *display* names, which don't round-trip to a body+mission-type).
+    Non-goal specs are ignored. Every option attr is present (empty set when
+    unused) so the caller can assign unconditionally."""
+    out: dict[str, set[str]] = {attr: set() for attr, _ in _GOAL_BODY_LISTS}
+    for spec in specs:
+        if not spec.is_goal:
+            continue
+        attr = _CONTRACT_TO_GOAL_BODY_LIST.get(spec.contract_type)
+        if attr is not None:
+            out[attr].add(str(spec.body))
+    return out
+
+
 def _goal_max_mass(goal_spec, flags, diff: DifficultyProfile,
                    mission_builder: MissionBuilder) -> float:
     """The hardest goal mission's full-kit launch mass — the difficulty ceiling

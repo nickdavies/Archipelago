@@ -75,6 +75,8 @@ class TestUTRegen(unittest.TestCase):
             "flag_bodies": {BodyName.MUN, BodyName.DUNA},
             "return_bodies": {BodyName.MINMUS},
             "sample_return_bodies": {BodyName.IKE},
+            "orbit_bodies": {BodyName.EVE},
+            "flyby_bodies": {BodyName.JOOL},
         }
         world1, world2, _ = self._regen_from_slot_data(seed=99, options=opts)
         self.assertEqual(
@@ -85,6 +87,12 @@ class TestUTRegen(unittest.TestCase):
         )
         self.assertEqual(
             world1.goal_spec.sample_return_bodies, world2.goal_spec.sample_return_bodies,
+        )
+        self.assertEqual(
+            world1.goal_spec.orbit_bodies, world2.goal_spec.orbit_bodies,
+        )
+        self.assertEqual(
+            world1.goal_spec.flyby_bodies, world2.goal_spec.flyby_bodies,
         )
 
 
