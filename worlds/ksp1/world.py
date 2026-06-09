@@ -4,7 +4,8 @@ from BaseClasses import CollectionState, Item, MultiWorld, Tutorial
 from Options import OptionError
 from worlds.AutoWorld import LogicMixin, WebWorld, World
 
-from . import items, locations, regions, rules
+from . import contracts, items, locations, regions, rules
+from .ksc_sites import ksc_site_slot_data
 from .rules import GoalSpec, resolve_goal_spec, goal_spec_location_names
 from .capability import CAPABILITY_ITEMS, RocketCapability
 from .data.feasibility import MODEL_INFEASIBLE_LOCATIONS
@@ -15,12 +16,12 @@ from .bodies import (
 from .items import ITEM_NAME_TO_ID, PROGRESSIVE_LAUNCH_PAD_CAPS, _FILLER_ITEMS
 from .parts import PROGRESSIVE_PART_TIERS
 from .locations import (
-    ALL_EVENTS, EventName, KSC_BIOMES, KSC_LOCATION_PREFIX,
-    LOCATION_NAME_TO_ID, LocationBuilder, MAX_TECH_SLOTS, MissionLocation,
+    ALL_EVENTS, KSC_BIOMES, KSC_LOCATION_PREFIX,
+    LOCATION_NAME_TO_ID, LocationBuilder, MAX_TECH_SLOTS,
     TechTreeLocation,
     effective_starting_inv_count, effective_tech_slots_per_node,
 )
-from .options import KSP1Options, STARTING_BODY_POOLS, StartingBody
+from .options import Goal, KSP1Options, STARTING_BODY_POOLS, StartingBody
 from .tech_tree import MAX_TIER, NODES_BY_TIER, TECH_NODES, TIER_TO_BAND
 
 
@@ -121,6 +122,48 @@ def _validate_goal_not_excluded(
     )
 
 
+def _validate_goal_contracts_registrable(goal_contract_specs) -> None:
+    """Raise ``OptionError`` if any goal contract lacks a registered location.
+
+    Goal contracts are emitted for every goal achievement unconditionally — no
+    ``body_compatible`` filter (see ``_goal_contract_specs``) — so a goal body
+    that can't host its mission type would produce a ``ContractSpec`` whose
+    location was never registered, and the lookup would ``KeyError`` deep in
+    ``create_regions``.  The orbit/flyby body lists are option-validated against
+    ``ORBITABLE_BODY_NAMES`` (the star has no missions), so this is defense in
+    depth: fail fast with a clear message if any path ever slips one through.
+    """
+    from .locations import CONTRACT_LOCATION_NAME_SET
+    bad = sorted(
+        s.location_name for s in goal_contract_specs
+        if s.location_name not in CONTRACT_LOCATION_NAME_SET
+    )
+    if not bad:
+        return
+    raise OptionError(
+        f"KSP1: goal targets a body that can't host its mission type — no "
+        f"registered location for {bad!r}.  The star (Sun) has no "
+        "orbit/flyby/landing missions; remove it from your goal body lists."
+    )
+
+
+# KSP upgradeable facility ids (must match the client's CareerUpgradesManager).
+# All are forced to max in the hacked career; per-building levels are emitted so
+# real facility progression can be reintroduced one building at a time later.
+_FACILITY_IDS: tuple[str, ...] = (
+    "SpaceCenter/VehicleAssemblyBuilding",
+    "SpaceCenter/SpaceplaneHangar",
+    "SpaceCenter/LaunchPad",
+    "SpaceCenter/Runway",
+    "SpaceCenter/TrackingStation",
+    "SpaceCenter/MissionControl",
+    "SpaceCenter/AstronautComplex",
+    "SpaceCenter/ResearchAndDevelopment",
+    "SpaceCenter/Administration",
+)
+_MAX_FACILITY_LEVEL = 2  # stock 0/1/2 (level-3 buildings)
+
+
 class KSP1World(World):
     """
     Kerbal Space Program is a space flight simulation game where you design and
@@ -174,6 +217,18 @@ class KSP1World(World):
     # Laythe's atmospheric Jool-system return, etc.).
     model_infeasible_locations: frozenset[str]
 
+    # Contracts generated for this seed (paced into the run as items). Non-goal
+    # vs goal-achievement contracts; both are ContractSpec. Set in generate_early.
+    contract_specs: list
+    goal_contract_specs: list
+    # Part ksp_names this seed's contracts require — promoted to progression in
+    # items.create_item so AP guarantees them reachable before the contract.
+    contract_required_part_names: frozenset[str]
+    # contract_ids whose access rule routes through the all-parts proxy (vs the
+    # physics gate). Recorded by rules._set_contract_rules at rule-set time; read
+    # by /explain so the reported gate is the one actually set, never re-derived.
+    _proxy_contract_ids: set[str]
+
     def generate_early(self) -> None:
         """Resolve goal spec and apply ExcludeLateTechTree."""
         self.capability_cache = {}
@@ -221,6 +276,20 @@ class KSP1World(World):
         _validate_goal_spec_has_targets(
             self.goal_spec, self.options, self.mission_builder.home,
         )
+
+        # Generate this seed's contracts (deterministic from the world seed).
+        # UT regen restores the exact set from slot_data instead of re-rolling.
+        ut_contracts = getattr(self, "_ut_contract_specs", None)
+        if ut_contracts is not None:
+            self.contract_specs = [s for s in ut_contracts if not s.is_goal]
+            self.goal_contract_specs = [s for s in ut_contracts if s.is_goal]
+        else:
+            self.contract_specs, self.goal_contract_specs = (
+                contracts.generate_contracts(self))
+        self.contract_required_part_names = contracts.required_part_names_for(
+            (*self.contract_specs, *self.goal_contract_specs))
+        _validate_goal_contracts_registrable(self.goal_contract_specs)
+
         if self.options.exclude_late_tech_tree:
             late_tier_locs: set[str] = {
                 str(TechTreeLocation(node.display_name, slot))
@@ -265,6 +334,13 @@ class KSP1World(World):
         # comparison (KSC biome prefixes, altitude polling guard, splashdown
         # detection, first-launch / first-landing / first-crash events).
         d["starting_body"] = self.mission_builder.home.value
+        # KSC site row for an alien starting body: the landing coordinate
+        # (lat/lon/terrain alt) + map-decal flag where the cloned KSC cluster
+        # is placed.  The client materialises the alien KSC from this instead
+        # of carrying a per-body table.  Absent for a Kerbin start (stock KSC).
+        ksc_site = ksc_site_slot_data(self.mission_builder.home)
+        if ksc_site is not None:
+            d["ksc_site"] = ksc_site
         d["tech_slots_per_node"] = effective_tech_slots_per_node(
             self.options, self.options.difficulty.value
         )
@@ -331,6 +407,24 @@ class KSP1World(World):
                 cap if cap != float("inf") else -1.0
                 for cap in self.mission_builder.launch_pad_caps
             ]
+
+        # Hacked-career directives — server→client, always emitted, actuated
+        # verbatim by the dumb client. Career replaces the prior game mode; the
+        # client rejects non-Career saves. Per-building start levels let real
+        # facility progression be reintroduced piecemeal later (all maxed now).
+        d["career"] = {
+            "building_levels": {b: _MAX_FACILITY_LEVEL for b in _FACILITY_IDS},
+            "infinite_funds": True,
+            "infinite_reputation": True,
+            "unlimited_contracts": True,
+        }
+        # Contract manifest: each entry is self-describing; the client builds a
+        # native KSP contract from `parameters` and reports `location` on
+        # completion. Goal contracts ride the same array.
+        d["contracts"] = [
+            spec.to_slot_dict()
+            for spec in (*self.contract_specs, *self.goal_contract_specs)
+        ]
         return d
 
     # ------------------------------------------------------------------
@@ -364,23 +458,22 @@ class KSP1World(World):
                 self.mission_builder = MissionBuilder(home=new_home)
                 self.location_builder = LocationBuilder(home=new_home)
 
-        if slot_data["goal"] == 99:  # Goal.option_custom
-            flag_bodies: set[str] = set()
-            return_bodies: set[str] = set()
-            sample_return_bodies: set[str] = set()
-            for loc_str in slot_data.get("goal_locations", []):
-                parsed = MissionLocation.parse(loc_str)
-                if parsed is None:
-                    continue
-                if parsed.event == EventName.FLAG_PLANT:
-                    flag_bodies.add(parsed.body)
-                elif parsed.event == EventName.SAMPLE_RETURN:
-                    sample_return_bodies.add(parsed.body)
-                elif parsed.event == EventName.RETURN:
-                    return_bodies.add(parsed.body)
-            self.options.flag_bodies.value = flag_bodies
-            self.options.return_bodies.value = return_bodies
-            self.options.sample_return_bodies.value = sample_return_bodies
+        # Stash contracts so generate_early reconstructs the exact set rather
+        # than re-randomizing (the contract pick is seed-RNG-derived).
+        self._ut_contract_specs = [
+            contracts.ContractSpec.from_slot_dict(entry)
+            for entry in slot_data.get("contracts", [])
+        ]
+
+        # A custom goal isn't a single enum value — its body lists ARE the goal,
+        # and resolve_goal_spec rebuilds the spec from those option values during
+        # regen. Recover them from the goal *contracts* (the victory sentinels),
+        # which carry (contract_type, body) structurally; goal_locations holds
+        # contract display names that don't round-trip back to a body list.
+        if slot_data["goal"] == Goal.option_custom:
+            for attr, bodies in contracts.goal_body_lists_from_specs(
+                    self._ut_contract_specs).items():
+                getattr(self.options, attr).value = bodies
 
         # Stash progressive reps so create_items() uses them instead of re-randomizing.
         self._ut_progressive_representatives = {
@@ -394,7 +487,7 @@ class KSP1World(World):
         from .capability import compute_capability_from_items, evaluate_mission_detailed
         from .capability_format import (
             CHECK_MAP, format_rocket_output, format_parts_list,
-            format_progressive_chains,
+            format_progressive_chains, format_contract_output,
         )
 
         # Sub-command: /explain parts [filter]
@@ -449,6 +542,20 @@ class KSP1World(World):
             rep_names=rep_names,
         )
 
+        # Contract locations aren't in CHECK_MAP — their feasibility needs the
+        # extra-payload + mission-transform eval, not the bare milestone path — so
+        # render them generically from the spec. Works for any contract type,
+        # current or future, with no per-type handling here.
+        contract_spec = self._contract_spec_for_name(target_name)
+        if contract_spec is not None:
+            lines = format_contract_output(
+                contract_spec, in_logic,
+                state.has(contract_spec.item_name, self.player),
+                flags, DIFFICULTY_PROFILES[difficulty_name], difficulty_name,
+                self.mission_builder, proxy=self._contract_uses_proxy(contract_spec),
+            )
+            return [{"type": "text", "text": "\n".join(lines)}]
+
         result = None
         if info is not None:
             diff = DIFFICULTY_PROFILES[difficulty_name]
@@ -464,6 +571,22 @@ class KSP1World(World):
             sounding_altitude_km=cap.sounding_altitude_km,
         )
         return [{"type": "text", "text": "\n".join(lines)}]
+
+    def _contract_spec_for_name(self, name: str):
+        """The ContractSpec whose location matches ``name``, or None. Looks up the
+        world's own specs (the source of truth) rather than parsing the display
+        name, so /explain covers every contract type without per-type handling."""
+        for spec in (*self.contract_specs, *self.goal_contract_specs):
+            if spec.location_name == name:
+                return spec
+        return None
+
+    def _contract_uses_proxy(self, spec) -> bool:
+        """True if this contract's access rule routes through the all-parts proxy
+        instead of the physics gate (a goal contract on a model-infeasible body).
+        Reads the set rules._set_contract_rules records when it sets the rule —
+        the single source of truth — so /explain can't drift from the real gate."""
+        return spec.contract_id in self._proxy_contract_ids
 
     def custom_ut_sort(self, region_label: str, location_label: str) -> str:
         """UT hook: sort by body order (ALL_BODIES), then tech tree, then KSC."""

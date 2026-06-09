@@ -178,6 +178,7 @@ def set_all_rules(world: KSP1World) -> None:
     _set_ksc_biome_rules(world, player)
     _set_home_rules(world, player)
     _set_mission_rules(world, player)
+    _set_contract_rules(world, player)
     _apply_home_system_local_exclusions(world)
     # Tech tree rules are now region entrance rules (see regions.py).
     _set_item_pacing_rules(world, player, difficulty)
@@ -192,6 +193,25 @@ def set_completion_condition(world: KSP1World, goal_spec: GoalSpec) -> None:
     safety = effective_science_safety(world.options, difficulty)
 
     _set_victory_rules(world, player, goal_spec, safety)
+    _set_goal_locations_local_only(world, player, goal_spec)
+
+
+def _set_goal_locations_local_only(
+    world: KSP1World, player: int, goal_spec: GoalSpec
+) -> None:
+    """Force every goal-sentinel location to hold only this player's own items.
+
+    The client declares victory when these locations are checked. Without the
+    constraint a goal location could hold a *remote* player's item — and that
+    player running ``!collect`` (which checks their items out of every world,
+    yours included) would mark your goal location complete and end your game for
+    you. Local-only means the only way to check a goal location is to actually
+    fly the mission.
+    """
+    from worlds.generic.Rules import add_item_rule
+    local_only = lambda item, p=player: item.player == p
+    for name in goal_spec_location_names(goal_spec):
+        add_item_rule(world.get_location(name), local_only)
 
 
 # ---------------------------------------------------------------------------
@@ -340,6 +360,80 @@ def _mission_rule_for_event(
     return rule
 
 
+def _migrated_event_map() -> dict:
+    """ContractType -> the matching milestone EventName it 'migrates' (gates
+    equal-or-after, and shares model-infeasible proxy routing with). Shared by
+    _set_mission_rules and _set_contract_rules so the milestone gating and the
+    contract-location routing can't drift. (Local import dodges a cycle.)"""
+    from .contracts import ContractType
+    return {
+        ContractType.FLAG_PLANT: EventName.FLAG_PLANT,
+        ContractType.SAMPLE_RETURN: EventName.SAMPLE_RETURN,
+        ContractType.ORBIT: EventName.ORBIT,
+        ContractType.RETURN: EventName.RETURN,
+        ContractType.FLYBY: EventName.FLYBY,
+    }
+
+
+def _set_contract_rules(world: KSP1World, player: int) -> None:
+    """
+    Apply access rules to contract completion locations.
+
+    A contract location is reachable only when all three gates hold: the player
+    holds the contract item, has the required parts, and can deliver the
+    contract's equipment payload to the body. The latter two are folded into the
+    cached ``contract_access[contract_id]`` boolean (computed once per state by
+    get_capability), so the rule is ``state.has(item) AND O(1) lookup``.
+
+    Contract locations are among the HARDEST in the seed (they need the full
+    delivery capability + input parts). The sphere ladder gives them a real
+    signature (see sphere_ladder._parse_location / _evaluate) so its Rule B bans
+    only items BELOW the contract's sphere — keeping bootstrap items off them
+    (which would otherwise deadlock: a launch engine placed at "Contract: Mine
+    Ore on Eve" is unreachable without the very engine it gates) while still
+    letting LATE progression land there, so contracts remain real pacing gates.
+    """
+    infeasible = world.model_infeasible_locations
+    proxy_rule = _make_all_parts_rule(player)
+    event_of = _migrated_event_map()
+    # The single record of which contracts route through the all-parts proxy.
+    # /explain reads this set (world._contract_uses_proxy) rather than re-deriving
+    # the predicate, so the reported gate can't drift from the rule actually set.
+    world._proxy_contract_ids = set()
+    for spec in (*world.contract_specs, *world.goal_contract_specs):
+        loc = world.get_location(spec.location_name)
+        ev = event_of.get(spec.contract_type)
+        # A goal contract on a model-infeasible achievement (e.g. Eve/Laythe
+        # return from a far home, which the dv model can't verify) routes to the
+        # all-parts proxy, exactly as the matching milestone event and the
+        # victory rule do — keeping the contract location reachable-in-logic
+        # whenever its achievement is, rather than a dead filler-only slot.
+        # Non-goal contracts are feasibility-filtered at generation, so they
+        # never land on a model-infeasible body and keep the capability gate.
+        uses_proxy = (spec.is_goal and ev is not None
+                      and _all_locations_infeasible(spec.body, ev, infeasible))
+        if uses_proxy:
+            world._proxy_contract_ids.add(spec.contract_id)
+            def rule(state: CollectionState, item=spec.item_name,
+                     _proxy=proxy_rule) -> bool:
+                return state.has(item, player) and _proxy(state)
+        else:
+            def rule(state: CollectionState, cid=spec.contract_id,
+                     item=spec.item_name) -> bool:
+                return (state.has(item, player)
+                        and get_capability(state, player).contract_access.get(cid, False))
+        loc.access_rule = rule
+
+        # A goal contract's matching mission event(s) share its EXACT rule, so
+        # the (now ordinary) event is reachable iff the goal contract is
+        # completable — logically equal, not merely gated after. Runs after
+        # _set_mission_rules, overwriting that event's separately-computed
+        # capability rule (which could drift from the contract's feasibility).
+        if spec.is_goal and ev is not None:
+            for ev_loc in event_locations(spec.body, ev):
+                world.get_location(str(ev_loc)).access_rule = rule
+
+
 def _set_mission_rules(world: KSP1World, player: int) -> None:
     """
     Apply access rules to all per-body mission event locations.
@@ -357,14 +451,35 @@ def _set_mission_rules(world: KSP1World, player: int) -> None:
     infeasible = world.model_infeasible_locations
     proxy_rule = _make_all_parts_rule(player)
 
+    # Migrated-type contracts gate their MATCHING event equal-or-after the
+    # contract item, so a player who has the contract does one mission for both
+    # (never forced to double-run) and can't clear the event before the contract.
+    # Keyed by the specific event (Orbit, not EVA-in-orbit; not LAND for a mine
+    # contract whose base mission merely happens to be LAND).
+    _migrated_event = _migrated_event_map()
+    gate_item: dict[tuple[str, str], str] = {}
+    # Both non-goal and goal contracts gate their matching event: you can't clear
+    # the event before holding the contract item, so by the time the goal mission
+    # is done the goal-contract item is in hand (keeps client events and the
+    # server victory condition aligned).
+    for spec in (*world.contract_specs, *world.goal_contract_specs):
+        ev = _migrated_event.get(spec.contract_type)
+        if ev is not None:
+            gate_item[(spec.body, ev)] = spec.item_name
+
     for body in ALL_BODIES:
         for event in get_body_events(body):
             cap_rule = _mission_rule_for_event(player, body.name, event)
+            item = gate_item.get((body.name, event))
             for loc in event_locations(body.name, event):
                 name = str(loc)
-                world.get_location(name).access_rule = (
-                    proxy_rule if name in infeasible else cap_rule
-                )
+                base_rule = proxy_rule if name in infeasible else cap_rule
+                if item is None:
+                    world.get_location(name).access_rule = base_rule
+                else:
+                    def rule(state: CollectionState, _base=base_rule, _item=item) -> bool:
+                        return state.has(_item, player) and _base(state)
+                    world.get_location(name).access_rule = rule
 
 
 def _apply_home_system_local_exclusions(world: KSP1World) -> None:
@@ -791,18 +906,16 @@ def _validate_home_system_local(spec: GoalSpec) -> None:
 
 
 def goal_spec_location_names(spec: GoalSpec) -> list[str]:
-    """Return sentinel location names whose checks indicate goal completion."""
-    names: list[str] = []
-    for b in spec.flag_bodies:
-        names.append(str(MissionLocation(b, EventName.FLAG_PLANT, 1)))
-    for b in spec.return_bodies:
-        names.append(str(MissionLocation(b, EventName.RETURN, 1)))
-    for b in spec.sample_return_bodies:
-        names.append(str(MissionLocation(b, EventName.SAMPLE_RETURN, 1)))
-    for b in spec.orbit_bodies:
-        names.append(str(MissionLocation(b, EventName.ORBIT, 1)))
-    for b in spec.flyby_bodies:
-        names.append(str(MissionLocation(b, EventName.FLYBY, 1)))
+    """Return the location names whose checks indicate goal completion: the goal
+    **contract** locations (one per goal achievement).
+
+    The goal mission events themselves (``Mun Flag Plant 1`` etc.) are ordinary
+    checks — ``_set_mission_rules`` gates each equal-or-after its contract item,
+    so they can never be required before the contract, but they no longer signal
+    victory. The leaf tech-tree nodes remain the sentinels for the tech-tree goal
+    (it has no body-achievement contracts)."""
+    from .contracts import _goal_contract_specs
+    names = [s.location_name for s in _goal_contract_specs(spec)]
     if spec.complete_tech_tree:
         for n in LEAF_TECH_NODES:
             names.append(str(TechTreeLocation(n.display_name, 1)))
@@ -838,13 +951,25 @@ def _all_locations_infeasible(
 def _set_victory_rules(
     world: KSP1World, player: int, spec: GoalSpec, safety: float
 ) -> None:
-    """Set the access rule and completion condition on the Victory event."""
-    victory_location = world.get_location("Victory")
-    victory_location.access_rule = _make_goal_spec_rule(
+    """Set the access rule and completion condition on the Victory event.
+
+    Goals are contracts: on top of the capability/tech check (which keeps the
+    proxy fallback for model-infeasible bodies and the tech-tree science budget),
+    victory also requires every goal-contract ITEM to be collected. Combined with
+    the event gating (a goal event is reachable only with its goal-contract item),
+    you cannot complete a goal mission without first finding its contract.
+    """
+    base_rule = _make_goal_spec_rule(
         player, spec, safety, world.model_infeasible_locations,
         world.mission_builder.home,
     )
+    goal_items = tuple(s.item_name for s in world.goal_contract_specs)
 
+    def victory_rule(state: CollectionState) -> bool:
+        return (all(state.has(item, player) for item in goal_items)
+                and base_rule(state))
+
+    world.get_location("Victory").access_rule = victory_rule
     world.multiworld.completion_condition[player] = (
         lambda state: state.can_reach("Victory", "Location", player)
     )

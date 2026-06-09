@@ -178,19 +178,20 @@ class TestResolveGoalSpec(unittest.TestCase):
 class TestGoalSpecLocationNames(unittest.TestCase):
 
     def test_single_return(self):
+        # Goal sentinels are the goal CONTRACTS, not the mission events.
         spec = GoalSpec(display_name="test", return_bodies=(BodyName.DUNA,))
         names = goal_spec_location_names(spec)
-        self.assertEqual(names, ["Duna Return 1"])
+        self.assertEqual(names, ["Contract: Return from Duna"])
 
     def test_single_flag(self):
         spec = GoalSpec(display_name="test", flag_bodies=(BodyName.MUN,))
         names = goal_spec_location_names(spec)
-        self.assertEqual(names, ["Mun Flag Plant 1"])
+        self.assertEqual(names, ["Contract: Flag Plant on Mun"])
 
     def test_single_sample_return(self):
         spec = GoalSpec(display_name="test", sample_return_bodies=(BodyName.MUN,))
         names = goal_spec_location_names(spec)
-        self.assertEqual(names, ["Mun Sample Return 1"])
+        self.assertEqual(names, ["Contract: Sample Return from Mun"])
 
     def test_complete_tech_tree_uses_leaves(self):
         spec = GoalSpec(display_name="test", complete_tech_tree=True)
@@ -230,9 +231,9 @@ class TestGoalSpecLocationNames(unittest.TestCase):
         )
         names = goal_spec_location_names(spec)
         self.assertEqual(len(names), 3)
-        self.assertIn("Mun Flag Plant 1", names)
-        self.assertIn("Duna Return 1", names)
-        self.assertIn("Eeloo Sample Return 1", names)
+        self.assertIn("Contract: Flag Plant on Mun", names)
+        self.assertIn("Contract: Return from Duna", names)
+        self.assertIn("Contract: Sample Return from Eeloo", names)
 
 
 # ---------------------------------------------------------------------------
@@ -301,7 +302,8 @@ class TestDunaReturnGoalSlotData(KSP1TestBase):
 
     def test_slot_data_goal_locations(self):
         slot_data = self.world.fill_slot_data()
-        self.assertEqual(slot_data["goal_locations"], ["Duna Return 1"])
+        # The goal sentinel is the goal contract, not the mission event.
+        self.assertEqual(slot_data["goal_locations"], ["Contract: Return from Duna"])
         self.assertEqual(slot_data["goal_display_name"], "Duna Return")
 
 

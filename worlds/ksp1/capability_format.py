@@ -290,9 +290,29 @@ def format_rocket_output(
     if not result.feasible:
         return lines
 
+    lines.extend(format_stage_breakdown(result, flags, info.mission_type))
+    return lines
+
+
+def format_stage_breakdown(
+    result: ProfileResult,
+    flags: EquipmentFlags,
+    mission_type: MissionType,
+) -> list[str]:
+    """Per-stage parts/edges/stats breakdown for a feasible mission ``result``.
+
+    Shared by the mission view (``format_rocket_output``) and the contract view
+    (``format_contract_output``) so they render stages identically. Returns ``[]``
+    for non-profile mission types (sounding etc.) and a single note line for a
+    trivial (no-propulsion) mission. Contract-required parts ride
+    ``result.terminal_parts`` (the capability layer appends ``extra_payload_parts``
+    there), so they show on the terminal stage with no special-casing here.
+    """
+    lines: list[str] = []
+
     # Non-profile mission types (sounding, first_launch, etc.) have no stage breakdown
     _NON_PROFILE_TYPES = {MissionType.SOUNDING, MissionType.FIRST_LAUNCH, MissionType.FIRST_LANDING, MissionType.FIRST_STAGING, MissionType.SPLASHDOWN}
-    if info.mission_type in _NON_PROFILE_TYPES:
+    if mission_type in _NON_PROFILE_TYPES:
         return lines
 
     if not result.stage_results:
@@ -345,6 +365,102 @@ def format_rocket_output(
         ksp_stage_num = num_stages - 1 - i
         for edge in group:
             lines.append(f"    {edge.source} -> {edge.destination}: Stage {ksp_stage_num}")
+
+    return lines
+
+
+# ---------------------------------------------------------------------------
+# Contract output formatting
+# ---------------------------------------------------------------------------
+
+def format_contract_output(
+    spec,                       # contracts.ContractSpec
+    in_logic: bool,
+    item_held: bool,
+    flags: EquipmentFlags,
+    diff,                       # bodies.DifficultyProfile
+    difficulty_name: str,
+    mission_builder: MissionBuilder,
+    proxy: bool = False,
+) -> list[str]:
+    """Render the ``/explain`` breakdown for a contract location.
+
+    GENERIC over contract types: everything shown is derived from the
+    ``ContractSpec`` / ``ContractTypeDef`` data (required categories, base
+    mission, parameter tree) and the shared feasibility eval — adding a new
+    contract type or parameter primitive needs NO change here. Shows the three
+    access gates (item held / required parts / physics delivery), the
+    client-facing parameter tree, and, when feasible, the delivery rocket with
+    the contract parts on the terminal stage.
+
+    ``proxy`` flags a goal contract whose access rule substitutes the
+    all-progression-items proxy for the physics gate (a model-infeasible body).
+    """
+    # Local import keeps the capability_format <-> contracts edge one-directional.
+    from worlds.ksp1.contracts import evaluate_contract, required_part_breakdown
+
+    td = spec.type_def
+    lines: list[str] = []
+
+    lines.append(f"\n{'=' * 60}")
+    lines.append(f"  {spec.display_name}")
+    lines.append(f"  Type: {td.contract_type} | Body: {spec.body} | "
+                 f"Difficulty: {difficulty_name} | Goal: {'yes' if spec.is_goal else 'no'}")
+    lines.append(f"  In logic: {'YES' if in_logic else 'NO'}")
+    lines.append(f"{'=' * 60}")
+
+    # Gate 1 — the AP item itself (a hard state.has gate).
+    lines.append(f"  Gate 1 - contract item held: {'YES' if item_held else 'NO'}")
+
+    # Gate 2 — required part categories (clean booleans, immune to skill).
+    breakdown = required_part_breakdown(spec, flags)
+    if not breakdown:
+        lines.append("  Gate 2 - required parts: (none)")
+    else:
+        lines.append("  Gate 2 - required parts:")
+        for cat, got in breakdown:
+            if got is None:
+                lines.append(f"      {cat}: MISSING")
+            else:
+                lines.append(f"      {cat}: HAVE  {', '.join(titled(p.name) for p in got)}")
+
+    # Gate 3 — physics can deliver the contract kit. Recomputed via the SAME
+    # evaluate_contract the access rule's contract_access uses, so this verdict
+    # matches the rule exactly. None = a required category has no part (Gate 2).
+    result = evaluate_contract(spec, flags, diff, mission_builder)
+    feasible = result is not None and result.feasible
+    lines.append(f"  Gate 3 - physics delivery: {'YES' if feasible else 'NO'}")
+    if result is None:
+        lines.append("      (a required part category is unavailable -- see Gate 2)")
+    elif not result.feasible and result.failure_reasons:
+        if len(result.failure_reasons) == 1:
+            lines.append(f"      reason: {result.failure_reasons[0]}")
+        else:
+            for r in result.failure_reasons:
+                lines.append(f"      - {r}")
+
+    if proxy:
+        lines.append("")
+        lines.append("  NOTE: goal contract on a model-infeasible body -- the access rule")
+        lines.append("        substitutes the all-progression-items proxy for Gate 3 (the")
+        lines.append("        physics verdict above is shown for reference only).")
+
+    # Client-facing parameter tree (what the dumb client actuates). Rendered
+    # generically from each primitive's wire form so new primitives need no
+    # change here -- every parameter dataclass has a to_json().
+    lines.append("")
+    lines.append("  Contract parameters (client builds a native KSP contract):")
+    for p in td.build_parameters(spec.body):
+        j = dict(p.to_json())
+        kind = j.pop("kind", "?")
+        detail = ", ".join(f"{k}={v}" for k, v in j.items())
+        lines.append(f"      - {kind}" + (f": {detail}" if detail else ""))
+
+    # Delivery rocket — only when feasible; the contract parts ride
+    # result.terminal_parts onto the terminal stage.
+    if feasible:
+        lines.append(f"\n  --- Delivery rocket (launch mass {result.launch_mass:.2f} t) ---")
+        lines.extend(format_stage_breakdown(result, flags, td.base_mission_type))
 
     return lines
 

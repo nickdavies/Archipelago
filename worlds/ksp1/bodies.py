@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum, StrEnum, auto
 from functools import lru_cache
 from typing import Optional
@@ -155,6 +155,13 @@ class Body:
     eva_jetpack_twr: float          # precomputed: 0.5/(0.09375*surface_gravity)
     dv: BodyDeltaV
     radius_km: float                # body equatorial radius (KSP wiki value)
+    # Sidereal rotation period (s) and SOI radius (km), KSP wiki values (same
+    # provenance as radius_km). Drive the polar ascent penalty
+    # (surface_rotation_velocity) and synchronous-orbit physics (stationary
+    # feasibility + raise dv). A future runtime body dumper (planet-pack support)
+    # replaces these. VERIFY the less-common bodies' exact values vs the wiki.
+    rotation_period_s: float        # sidereal day, seconds
+    soi_radius_km: float            # sphere-of-influence radius
 
     # --- Suborbital altitude ladder ---
     # Top of the home-body altitude-record milestone ladder (km).  For
@@ -215,6 +222,62 @@ class Body:
     def lo_escape_velocity(self) -> float:
         """Escape velocity at low orbit (m/s) — used in Oberth-combined burns."""
         return math.sqrt(2.0 * self.gm / self.lo_radius_m)
+
+    # ------------------------------------------------------------------
+    # Rotation / synchronous-orbit physics
+    # ------------------------------------------------------------------
+    @property
+    def surface_rotation_velocity(self) -> float:
+        """Equatorial surface rotation speed (m/s) — the eastward assist a
+        prograde equatorial launch gets free and a polar launch forgoes.
+        ``2πR / sidereal_period``; 0 if the period is unknown."""
+        if self.rotation_period_s <= 0.0:
+            return 0.0
+        return 2.0 * math.pi * self.radius_km * 1000.0 / self.rotation_period_s
+
+    @property
+    def sync_orbit_radius_m(self) -> float:
+        """Synchronous (stationary) orbit radius from body centre (m):
+        ``(GM·T² / 4π²)^(1/3)``. inf if the rotation period is unknown."""
+        if self.rotation_period_s <= 0.0:
+            return float("inf")
+        return (self.gm * self.rotation_period_s ** 2
+                / (4.0 * math.pi * math.pi)) ** (1.0 / 3.0)
+
+    @property
+    def is_orbitable(self) -> bool:
+        """True if a craft can establish orbit / fly by here — every body except
+        the star (Kerbol). Gas giants (Jool) qualify: you orbit or fly by them
+        even though you can't land. The star is not a mission destination, so it
+        has no orbit/flyby/stationary contracts or locations."""
+        return self.name != BodyName.KERBOL
+
+    @property
+    def has_stationary_orbit(self) -> bool:
+        """True iff a synchronous orbit sits above the surface and inside the
+        SOI. False for tidally-locked moons whose sync altitude is beyond their
+        SOI (no geostationary orbit exists there)."""
+        soi_m = self.soi_radius_km * 1000.0
+        if soi_m <= 0.0:
+            return False
+        r_sync = self.sync_orbit_radius_m
+        return self.radius_km * 1000.0 < r_sync < soi_m
+
+    @property
+    def stationary_raise_dv(self) -> float:
+        """Hohmann delta-v to raise from low orbit to synchronous orbit (m/s).
+        0 if sync is at/below low orbit (very fast rotators) or unknown."""
+        mu = self.gm
+        r_lo = self.lo_radius_m
+        r_sync = self.sync_orbit_radius_m
+        if math.isinf(r_sync) or r_sync <= r_lo:
+            return 0.0
+        a_t = (r_lo + r_sync) / 2.0
+        v_lo = math.sqrt(mu / r_lo)
+        v_peri = math.sqrt(mu * (2.0 / r_lo - 1.0 / a_t))
+        v_apo = math.sqrt(mu * (2.0 / r_sync - 1.0 / a_t))
+        v_sync = math.sqrt(mu / r_sync)
+        return (v_peri - v_lo) + (v_sync - v_apo)
 
     # ------------------------------------------------------------------
     # Suborbital ascent physics
@@ -307,6 +370,7 @@ class MissionEdge:
 
 KERBIN = Body(
     name=BodyName.KERBIN, parent=None,
+    rotation_period_s=21549.425, soi_radius_km=84159.286,
     surface_gravity=9.81, has_atmosphere=True,
     atm_pressure_kpa=101.325, atm_density_kg_m3=1.225,
     can_land=True, low_orbit_alt_km=80,
@@ -341,6 +405,7 @@ KERBIN = Body(
 
 MUN = Body(
     name=BodyName.MUN, parent=BodyName.KERBIN,
+    rotation_period_s=138984.38, soi_radius_km=2429.559,   # tidally locked
     surface_gravity=1.63, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=14,
@@ -363,6 +428,7 @@ MUN = Body(
 
 MINMUS = Body(
     name=BodyName.MINMUS, parent=BodyName.KERBIN,
+    rotation_period_s=40400.0, soi_radius_km=2247.428,
     surface_gravity=0.491, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=10,
@@ -385,6 +451,7 @@ MINMUS = Body(
 
 MOHO = Body(
     name=BodyName.MOHO, parent=None,
+    rotation_period_s=1210000.0, soi_radius_km=9646.663,
     surface_gravity=2.70, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=20,
@@ -407,6 +474,7 @@ MOHO = Body(
 
 EVE = Body(
     name=BodyName.EVE, parent=None,
+    rotation_period_s=80500.0, soi_radius_km=85109.365,
     surface_gravity=16.7, has_atmosphere=True,
     atm_pressure_kpa=506.625, atm_density_kg_m3=5.0,
     can_land=True, low_orbit_alt_km=90,
@@ -433,6 +501,7 @@ EVE = Body(
 
 GILLY = Body(
     name=BodyName.GILLY, parent=BodyName.EVE,
+    rotation_period_s=28255.0, soi_radius_km=126.123,
     surface_gravity=0.049, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=6,
@@ -455,6 +524,7 @@ GILLY = Body(
 
 DUNA = Body(
     name=BodyName.DUNA, parent=None,
+    rotation_period_s=65517.859, soi_radius_km=47921.949,
     surface_gravity=2.94, has_atmosphere=True,
     atm_pressure_kpa=6.755, atm_density_kg_m3=0.096,
     can_land=True, low_orbit_alt_km=50,
@@ -478,6 +548,7 @@ DUNA = Body(
 
 IKE = Body(
     name=BodyName.IKE, parent=BodyName.DUNA,
+    rotation_period_s=65517.862, soi_radius_km=1049.599,   # tidally locked
     surface_gravity=1.10, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=10,
@@ -500,6 +571,7 @@ IKE = Body(
 
 DRES = Body(
     name=BodyName.DRES, parent=None,
+    rotation_period_s=34800.0, soi_radius_km=32832.840,
     surface_gravity=2.94, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=25,
@@ -522,6 +594,7 @@ DRES = Body(
 
 JOOL = Body(
     name=BodyName.JOOL, parent=None,
+    rotation_period_s=36000.0, soi_radius_km=2455985.2,
     surface_gravity=7.85, has_atmosphere=True,
     atm_pressure_kpa=1519.88, atm_density_kg_m3=10.0,
     can_land=False, low_orbit_alt_km=210,
@@ -549,6 +622,7 @@ JOOL = Body(
 
 LAYTHE = Body(
     name=BodyName.LAYTHE, parent=BodyName.JOOL,
+    rotation_period_s=52980.879, soi_radius_km=3723.646,   # tidally locked
     surface_gravity=7.85, has_atmosphere=True,
     atm_pressure_kpa=60.795, atm_density_kg_m3=0.73,
     can_land=True, low_orbit_alt_km=60,
@@ -573,6 +647,7 @@ LAYTHE = Body(
 
 VALL = Body(
     name=BodyName.VALL, parent=BodyName.JOOL,
+    rotation_period_s=105962.09, soi_radius_km=2406.401,   # tidally locked
     surface_gravity=2.31, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=15,
@@ -595,6 +670,7 @@ VALL = Body(
 
 TYLO = Body(
     name=BodyName.TYLO, parent=BodyName.JOOL,
+    rotation_period_s=211926.36, soi_radius_km=10856.51,   # tidally locked
     surface_gravity=7.85, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=30,
@@ -617,6 +693,7 @@ TYLO = Body(
 
 BOP = Body(
     name=BodyName.BOP, parent=BodyName.JOOL,
+    rotation_period_s=544507.43, soi_radius_km=1221.061,   # tidally locked
     surface_gravity=0.589, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=10,
@@ -639,6 +716,7 @@ BOP = Body(
 
 POL = Body(
     name=BodyName.POL, parent=BodyName.JOOL,
+    rotation_period_s=901902.62, soi_radius_km=1042.139,   # tidally locked
     surface_gravity=0.373, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=6,
@@ -661,6 +739,7 @@ POL = Body(
 
 EELOO = Body(
     name=BodyName.EELOO, parent=None,
+    rotation_period_s=19460.0, soi_radius_km=119082.94,
     surface_gravity=1.72, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=10,
@@ -683,6 +762,7 @@ EELOO = Body(
 
 KERBOL = Body(
     name=BodyName.KERBOL, parent=None,
+    rotation_period_s=432000.0, soi_radius_km=float("inf"),
     surface_gravity=17.1, has_atmosphere=True,
     atm_pressure_kpa=16200.0, atm_density_kg_m3=350.0,
     can_land=False, low_orbit_alt_km=1000,
@@ -923,6 +1003,40 @@ class MissionBuilder:
         Returned dict is the builder's live state — callers must not mutate it.
         """
         return self._profiles
+
+    # ------------------------------------------------------------------
+    # Contract mission-profile builders. Contracts inject extra maneuvers
+    # into a base profile via ``ContractTypeDef.transform_mission``; these
+    # keep the node-name + edge-type conventions owned by the graph builder.
+    # Each returns a NEW edge list (the input is never mutated).
+    # ------------------------------------------------------------------
+    def add_ascent_penalty(
+        self, edges: list[MissionEdge], body: BodyName, extra_dv: float
+    ) -> list[MissionEdge]:
+        """Return ``edges`` with ``body``'s surface→low-orbit ascent edge's dv
+        increased by ``extra_dv`` (e.g. the rotation-assist loss of a polar
+        launch). Charged on the ascent edge so it is paid at the low
+        (atmospheric) Isp launch stage — conservative. No-op if ``extra_dv`` is
+        non-positive or the ascent edge isn't in the profile."""
+        if extra_dv <= 0.0:
+            return edges
+        bnl = body.value.lower()
+        src, dst = f"{bnl}_surface", f"{bnl}_low_orbit"
+        return [
+            replace(e, base_dv=e.base_dv + extra_dv)
+            if (e.source == src and e.destination == dst) else e
+            for e in edges
+        ]
+
+    def make_raise_edge(self, body: BodyName, dv: float) -> MissionEdge:
+        """A pure-vacuum low-orbit → synchronous-orbit raise edge (the Hohmann
+        burn a stationary-orbit contract adds at the home body). Append it to a
+        base orbit profile via ``transform_mission``."""
+        bnl = body.value.lower()
+        return self._edge(
+            f"{bnl}_low_orbit", f"{bnl}_sync_orbit", self._PV, dv, body,
+            attitude=True,
+        )
 
     # ------------------------------------------------------------------
     # Edge construction helpers (private)

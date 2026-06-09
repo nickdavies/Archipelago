@@ -31,6 +31,7 @@ from .parts import (
     PART_DB, CapabilityFlag, Engine, FuelTank, SolidBooster, HeatShield,
     Parachute, LandingLeg, Decoupler, MiscEquipment,
     MultiMount, MULTI_MOUNT_TABLE,
+    PART_TO_CONTRACT_CATEGORIES,
     PROGRESSIVE_PART_TIERS, PROGRESSIVE_PART_NAMES, PROGRESSIVE_PART_COUNTS,
     usable_fuel_mass,
 )
@@ -177,6 +178,17 @@ class EquipmentFlags:
     lightest_rcs_thruster: Optional[MiscEquipment] = None
     lightest_monoprop_tank: Optional[FuelTank] = None
 
+    # Lightest available part per contract part-category (e.g. "drill",
+    # "ore_tank"). Populated generically from PART_TO_CONTRACT_CATEGORIES — no
+    # hardcoded capability flag per part. Contracts read these to size the
+    # required-equipment payload and to gate on part presence.
+    category_lightest: dict[str, MiscEquipment] = field(default_factory=dict)
+    # All available crew_cabin parts (real pressurized pods/cabins — excludes
+    # the external command seat). The station contract needs the cheapest
+    # combination reaching N seats, so it needs the full list, not just the
+    # lightest.
+    available_crew_parts: list[MiscEquipment] = field(default_factory=list)
+
     # Solar distance for ION logic (set from the edge being evaluated)
     target_solar_au: float = 1.0
 
@@ -270,6 +282,12 @@ class RocketCapability:
 
     # Per-body assessments
     bodies: dict[BodyName, BodyAccessProfile] = field(default_factory=dict)
+
+    # Contract feasibility, computed once per state (keyed by ContractSpec.contract_id):
+    # True iff the player has the required parts AND can deliver the contract's
+    # equipment payload to the body for its base mission. Access rules read this
+    # as an O(1) dict lookup. Empty when the world has no contracts.
+    contract_access: dict[str, bool] = field(default_factory=dict)
 
     # Stage detail list (last computed profile, for debugging)
     stage_results: list[StageResult] = field(default_factory=list)
@@ -589,6 +607,19 @@ def _compute_relay_tier(flags: EquipmentFlags) -> int:
 
 def _apply_misc(flags: EquipmentFlags, part: MiscEquipment, count: int) -> None:
     CF = CapabilityFlag
+    # Generic contract-category membership — tracked by part name, independent
+    # of the provides flags (drills/ore tanks carry no provides). Keeps the
+    # lightest available part per category for contract payload sizing.
+    for cat_key in PART_TO_CONTRACT_CATEGORIES.get(part.name, ()):
+        cur = flags.category_lightest.get(cat_key)
+        if cur is None or part.mass < cur.mass:
+            flags.category_lightest[cat_key] = part
+    # A station's crew rides real pressurized cabins, not exposed external
+    # seats: gate on crew_cabin category membership (which excludes
+    # seatExternalCmd), matching category_lightest above. A raw crew_capacity
+    # test admits a "station" of 5 lawn chairs (~0.25t), wrecking the mass model.
+    if "crew_cabin" in PART_TO_CONTRACT_CATEGORIES.get(part.name, ()):
+        flags.available_crew_parts.append(part)
     for flag in part.provides:
         if flag == CF.PROBE_CORE:
             flags.has_probe_core = True
@@ -855,6 +886,7 @@ def _evaluate_profile(
     mission_type: MissionType,
     is_crewed: bool,
     home: BodyName,
+    extra_payload_parts: tuple[MiscEquipment, ...] = (),
 ) -> ProfileResult:
     """
     Run the two-pass evaluation on a single mission profile alternative.
@@ -865,6 +897,11 @@ def _evaluate_profile(
     ``home`` is the player's starting body; used by the relay-tier gate
     (heliocentric distance to each edge body).  Test callers can rely on
     the Kerbin default.
+
+    ``extra_payload_parts`` is contract-required equipment (e.g. a drill + ore
+    tank) that must be *delivered* to the destination. Their summed mass is
+    added to the terminal payload — so every stage below carries it — and the
+    parts are listed on the terminal manifest. Default empty = ordinary mission.
     """
     # ------------------------------------------------------------------
     # Forward pass — broad gate checks
@@ -1057,7 +1094,10 @@ def _evaluate_profile(
     # Add equipment mass for the terminal stage
     # (legs, ladder, heat shield on the last edge in the profile)
     terminal_equip = _terminal_equipment_mass(profile, flags, home=home)
-    payload = terminal_mass + terminal_equip
+    # Contract-required equipment delivered to the destination (drill, ore tank,
+    # …). Added to the terminal payload so all stages below carry it.
+    extra_payload_mass = sum(p.mass for p in extra_payload_parts)
+    payload = terminal_mass + terminal_equip + extra_payload_mass
 
     # Global attitude strategy. One reaction wheel or RCS bundle covers
     # every stage that flies under it: place it on the *last* (highest
@@ -1371,6 +1411,9 @@ def _evaluate_profile(
         terminal_parts.append((1, flags.lightest_probe.name))
     support_mass, support_parts = _support_equipment_mass(flags, profile, home=home)
     terminal_parts.extend(support_parts)
+    # Contract equipment is part of the delivered terminal payload — list it on
+    # the manifest so /explain shows the real parts whose mass was charged.
+    terminal_parts.extend((1, p.name) for p in extra_payload_parts)
 
     if payload > flags.launch_pad_mass_cap:
         return ProfileResult(
@@ -1807,6 +1850,7 @@ def _try_profiles(
     mission_type: MissionType,
     crewed: bool | None,
     home: BodyName,
+    extra_payload_parts: tuple[MiscEquipment, ...] = (),
 ) -> bool:
     """Return True if any profile alternative is feasible.
 
@@ -1816,7 +1860,8 @@ def _try_profiles(
     for is_crewed in _crewed_options(crewed, flags):
         for profile in profiles:
             result = _evaluate_profile(profile, flags, diff, mission_type,
-                                       is_crewed=is_crewed, home=home)
+                                       is_crewed=is_crewed, home=home,
+                                       extra_payload_parts=extra_payload_parts)
             if result.feasible:
                 return True
     return False
@@ -1829,6 +1874,7 @@ def _try_profiles_reason(
     mission_type: MissionType,
     crewed: bool | None,
     home: BodyName,
+    extra_payload_parts: tuple[MiscEquipment, ...] = (),
 ) -> tuple[bool, list[BlockingInfo]]:
     """
     Like _try_profiles but also returns deduplicated blocking entries
@@ -1842,7 +1888,8 @@ def _try_profiles_reason(
     for is_crewed in _crewed_options(crewed, flags):
         for profile in profiles:
             result = _evaluate_profile(profile, flags, diff, mission_type,
-                                       is_crewed=is_crewed, home=home)
+                                       is_crewed=is_crewed, home=home,
+                                       extra_payload_parts=extra_payload_parts)
             if result.feasible:
                 return True, []
             for b in result.blocking:
@@ -1861,6 +1908,8 @@ def evaluate_mission_detailed(
     crewed: bool | None,
     mission_builder: MissionBuilder,
     threshold_km: float | None = None,
+    extra_payload_parts: tuple[MiscEquipment, ...] = (),
+    mission_transform: Optional[Callable[[list], list]] = None,
 ) -> ProfileResult:
     """
     Evaluate a specific mission and return the winning ProfileResult
@@ -1980,13 +2029,21 @@ def evaluate_mission_detailed(
         if body.eva_jetpack_twr < _MIN_EVA_JETPACK_TWR:
             profiles = _inject_ladder(profiles)
 
+    # Contract-supplied mission modifier: rewrite each profile's edge list
+    # (insert/append/modify maneuvers) before sizing. Used by orbit-variant
+    # contracts (polar ascent penalty, stationary raise edge). Identity for
+    # ordinary missions. See ContractTypeDef.transform_mission.
+    if mission_transform is not None:
+        profiles = [mission_transform(p) for p in profiles]
+
     all_blocking: list[BlockingInfo] = []
     seen: set[str] = set()
     for is_crewed in _crewed_options(crewed, flags):
         for profile in profiles:
             result = _evaluate_profile(profile, flags, diff, mission_type,
                                        is_crewed=is_crewed,
-                                       home=mission_builder.home)
+                                       home=mission_builder.home,
+                                       extra_payload_parts=extra_payload_parts)
             if result.feasible:
                 return result
             for b in result.blocking:
@@ -2128,8 +2185,13 @@ def compute_capability_from_items(
     mission_builder: MissionBuilder,
     rep_names: frozenset[str] = frozenset(),
     progressive_launch_pad: bool = False,
+    contract_specs: tuple = (),
 ) -> tuple[RocketCapability, EquipmentFlags]:
-    """Compute capability without a CollectionState. For CLI/external tools."""
+    """Compute capability without a CollectionState. For CLI/external tools.
+
+    ``contract_specs`` (a tuple of ContractSpec) makes this also compute
+    per-contract feasibility into ``cap.contract_access``. Empty = no contracts.
+    """
     diff = DIFFICULTY_PROFILES[difficulty_name]
     flags = _pre_pass(item_count_fn, start_with_clamps, rep_names,
                       progressive_launch_pad,
@@ -2170,6 +2232,13 @@ def compute_capability_from_items(
         bodies=body_profiles,
     )
 
+    if contract_specs:
+        # Lazy import breaks the capability <-> contracts cycle (contracts.py
+        # imports this module for the physics primitive).
+        from .contracts import compute_contract_access
+        cap.contract_access = compute_contract_access(
+            contract_specs, flags, diff, mission_builder)
+
     return cap, flags
 
 
@@ -2189,6 +2258,8 @@ def _compute_capability(state: CollectionState, player: int) -> RocketCapability
         difficulty_name, start_with_clamps, world.mission_builder,
         rep_names=rep_names,
         progressive_launch_pad=bool(options.progressive_launch_pad.value),
+        contract_specs=(*getattr(world, "contract_specs", ()),
+                        *getattr(world, "goal_contract_specs", ())),
     )
     return cap
 
