@@ -652,6 +652,7 @@ def _evaluate(
         return _evaluate_sounding(flags, info.threshold_km or 0.0,
                                   mission_builder.home_body)
     extra_payload: tuple = ()
+    mission_transform = None
     if info.spec is not None:
         payload = contract_payload_parts(info.spec, flags)
         if payload is None:
@@ -660,12 +661,16 @@ def _evaluate(
             return ProfileResult(
                 False, blocking=_missing_payload_blocking(info.spec, flags))
         extra_payload = payload
+        # Same edge modifier the runtime rule applies — polar ascent penalty /
+        # stationary raise at home — so the signature isn't optimistic there.
+        mission_transform = info.spec.mission_transform(mission_builder)
     return evaluate_mission_detailed(
         flags, diff,
         info.body, info.mission_type, info.crewed,
         mission_builder,
         threshold_km=info.threshold_km,
         extra_payload_parts=extra_payload,
+        mission_transform=mission_transform,
     )
 
 
@@ -984,6 +989,7 @@ def _construct_warm_start_kit(
         precollected_names=precollected_names,
     )
     extra_payload: tuple = ()
+    mission_transform = None
     if info.spec is not None:
         # Size the payload from the maxed kit's reps; the chosen crew/relay/power
         # parts surface in terminal_parts below, so the warm start seeds the
@@ -992,10 +998,14 @@ def _construct_warm_start_kit(
         if payload is None:
             return {}  # max kit lacks a required chain part — no warm start
         extra_payload = payload
+        # Match the runtime rule's edge modifier so the warm start is sized for
+        # the real (transformed) mission, not the cheaper base orbit.
+        mission_transform = info.spec.mission_transform(mission_builder)
     result = evaluate_mission_detailed(
         max_flags, diff, info.body, info.mission_type, info.crewed,
         mission_builder, threshold_km=info.threshold_km or 0.0,
         extra_payload_parts=extra_payload,
+        mission_transform=mission_transform,
     )
     if not result.feasible:
         # Max kit can't reach this location at all — no warm start to give.
@@ -1488,6 +1498,11 @@ def _goal_dv(name: str, mission_builder: MissionBuilder) -> float:
     profiles = mission_builder.profiles_for(info.body, info.mission_type)
     if not profiles:
         return 0.0
+    if info.spec is not None:
+        # Apply the contract's edge modifier (polar/stationary at home) so the
+        # ordering dv matches the runtime rule, not the base orbit.
+        transform = info.spec.mission_transform(mission_builder)
+        profiles = [transform(profile) for profile in profiles]
     return min(sum(e.base_dv for e in profile) for profile in profiles)
 
 

@@ -552,6 +552,16 @@ class ContractSpec:
         td = self.type_def
         return f"Contract: {td.location_noun} {td.location_prep} {self.body}"
 
+    def mission_transform(self, mission_builder: MissionBuilder):
+        """The profile-level edge modifier for this contract (polar ascent
+        penalty / stationary raise), bound to this contract's body and home.
+        Pure — returns a new edge list per call, never mutating the shared base
+        profiles. Shared by the runtime feasibility check (``evaluate_contract``)
+        and the sphere-ladder signature so the two cannot drift."""
+        td = self.type_def
+        return lambda edges: td.transform_mission(
+            self.body, mission_builder.home, edges, mission_builder)
+
     # AP item and location share the same descriptive string (separate namespaces).
     @property
     def item_name(self) -> str:
@@ -705,11 +715,7 @@ def evaluate_contract(
     return evaluate_mission_detailed(
         flags, diff, spec.body, td.base_mission_type, td.crewed,
         mission_builder, extra_payload_parts=manifest,
-        # Per-contract mission modifier (polar ascent penalty / stationary raise
-        # edge). Pure — returns a new edge list, never mutating the shared base
-        # profiles — so it's safe under the once-per-state contract_access cache.
-        mission_transform=lambda edges: td.transform_mission(
-            spec.body, mission_builder.home, edges, mission_builder),
+        mission_transform=spec.mission_transform(mission_builder),
     )
 
 
