@@ -38,7 +38,10 @@ from .locations import (
     EVENT_BY_NAME, EventName, LocationBuilder, MissionLocation,
     KSC_BIOME_NAMES, KSC_LOCATION_PREFIX,
 )
-from .contracts import parse_contract_location_name, canonical_payload_parts
+from .contracts import (
+    parse_contract_location_name, contract_payload_parts, required_part_breakdown,
+    _CHAIN_GUARANTEED_CATEGORIES,
+)
 from .items import (
     PROGRESSIVE_LAUNCH_PAD_COUNT, PROGRESSIVE_LAUNCH_PAD_NAME,
     PROGRESSIVE_RD_COUNT, PROGRESSIVE_RD_NAME,
@@ -62,6 +65,7 @@ PROGRESSIVE_CAPS: dict[str, int] = {
 
 if TYPE_CHECKING:
     from .world import KSP1World
+    from .contracts import ContractSpec
 
 
 # Inverse map for warm-start construction: part_name -> [(chain, min_tier)].
@@ -557,11 +561,11 @@ class _LocationMissionInfo:
     mission_type: MissionType
     crewed: Optional[bool]
     threshold_km: Optional[float]
-    # Contract delivery payload — the required-equipment parts a contract must
-    # carry to the body (drill + ore tank, …). Empty for ordinary missions.
-    # When set, the ladder sizes the rocket for the heavier payload, so the
-    # contract location's signature reflects its true (harder) requirement.
-    extra_payload_parts: tuple = ()
+    # Contract-completion locations carry their ContractSpec; the delivery
+    # payload is then sized per-rung from that rung's flags (via
+    # ``contract_payload_parts``) so the ladder signature matches the runtime
+    # access rule. ``None`` for ordinary (non-contract) missions.
+    spec: Optional["ContractSpec"] = None
 
 
 def _parse_location(name: str) -> Optional[_LocationMissionInfo]:
@@ -605,10 +609,36 @@ def _parse_location(name: str) -> Optional[_LocationMissionInfo]:
             mission_type=td.base_mission_type,
             crewed=td.crewed,
             threshold_km=None,
-            extra_payload_parts=canonical_payload_parts(spec),
+            spec=spec,
         )
     # Tech tree / KSC / starting inventory: not capability-gated.
     return None
+
+
+# A chain-guaranteed contract category that has no part at the current kit maps
+# to the chain whose bump unlocks it, so the bumper knows what to add. Promoted
+# standalone categories never land here — contract_payload_parts supplies their
+# guaranteed representative directly.
+_PAYLOAD_CATEGORY_BLOCKING: dict[str, BlockingReason] = {
+    "crew_cabin": BlockingReason.NO_CAPSULE,
+    "relay": BlockingReason.RELAY_TIER_TOO_LOW,
+    "power": BlockingReason.INSUFFICIENT_POWER_SOLAR_OK,
+}
+assert set(_PAYLOAD_CATEGORY_BLOCKING) == _CHAIN_GUARANTEED_CATEGORIES, (
+    "every chain-guaranteed contract category needs a bump-chain mapping"
+)
+
+
+def _missing_payload_blocking(
+    spec: "ContractSpec", flags: EquipmentFlags,
+) -> list[BlockingInfo]:
+    """Blocking info for each chain-guaranteed required category with no part at
+    this kit — drives the bumper to add Progressive Capsule / Relay / Solar."""
+    return [
+        BlockingInfo(reason=_PAYLOAD_CATEGORY_BLOCKING[cat])
+        for cat, got in required_part_breakdown(spec, flags)
+        if got is None and cat in _CHAIN_GUARANTEED_CATEGORIES
+    ]
 
 
 def _evaluate(
@@ -621,12 +651,21 @@ def _evaluate(
     if info.mission_type == MissionType.SOUNDING:
         return _evaluate_sounding(flags, info.threshold_km or 0.0,
                                   mission_builder.home_body)
+    extra_payload: tuple = ()
+    if info.spec is not None:
+        payload = contract_payload_parts(info.spec, flags)
+        if payload is None:
+            # A chain-guaranteed delivery part (crew/relay/power) isn't unlocked
+            # at this kit — infeasible here; name the chain so the bumper bumps it.
+            return ProfileResult(
+                False, blocking=_missing_payload_blocking(info.spec, flags))
+        extra_payload = payload
     return evaluate_mission_detailed(
         flags, diff,
         info.body, info.mission_type, info.crewed,
         mission_builder,
         threshold_km=info.threshold_km,
-        extra_payload_parts=info.extra_payload_parts,
+        extra_payload_parts=extra_payload,
     )
 
 
@@ -944,10 +983,19 @@ def _construct_warm_start_kit(
         launch_pad_caps=mission_builder.launch_pad_caps,
         precollected_names=precollected_names,
     )
+    extra_payload: tuple = ()
+    if info.spec is not None:
+        # Size the payload from the maxed kit's reps; the chosen crew/relay/power
+        # parts surface in terminal_parts below, so the warm start seeds the
+        # Progressive Capsule / Relay / Solar chains the contract needs.
+        payload = contract_payload_parts(info.spec, max_flags)
+        if payload is None:
+            return {}  # max kit lacks a required chain part — no warm start
+        extra_payload = payload
     result = evaluate_mission_detailed(
         max_flags, diff, info.body, info.mission_type, info.crewed,
         mission_builder, threshold_km=info.threshold_km or 0.0,
-        extra_payload_parts=info.extra_payload_parts,
+        extra_payload_parts=extra_payload,
     )
     if not result.feasible:
         # Max kit can't reach this location at all — no warm start to give.
@@ -1116,7 +1164,7 @@ def minimal_rocket_for(
 
     key = (
         info.body, info.mission_type, info.crewed, info.threshold_km,
-        tuple(p.name for p in info.extra_payload_parts),  # distinguishes contract payloads
+        info.spec.contract_type if info.spec else None,  # distinguishes contract payloads
         rep_names,
         difficulty,
         progressive_launch_pad,

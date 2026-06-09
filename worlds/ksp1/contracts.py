@@ -610,30 +610,6 @@ def parse_contract_location_name(name: str) -> Optional[ContractSpec]:
     return None
 
 
-def canonical_payload_parts(spec: ContractSpec) -> tuple:
-    """The canonical required-equipment parts a contract must DELIVER — the
-    lightest registered part per required category (matches the progression
-    representative promoted for the seed). Deterministic and collection-state
-    independent, so the sphere ladder can size the contract's delivery kit and
-    Rule B can protect the contract location from bootstrap items."""
-    from .parts import CONTRACT_CATEGORY_MEMBERS, PART_DB
-    td = spec.type_def
-    parts = []
-    for cat in td.required_categories:
-        members = CONTRACT_CATEGORY_MEMBERS.get(cat, frozenset())
-        if not members:
-            continue
-        if cat == "crew_cabin" and td.crew_requirement:
-            # cheapest combo for N seats over all registered crew parts
-            combo = _min_crew_combo([PART_DB[n][0] for n in members], td.crew_requirement)
-            if combo:
-                parts.extend(combo)
-        else:
-            lightest = min(members, key=lambda n: PART_DB[n][0].mass)
-            parts.append(PART_DB[lightest][0])
-    return tuple(parts)
-
-
 # ---------------------------------------------------------------------------
 # Part requirements & feasibility (shared by generation and access rules)
 # ---------------------------------------------------------------------------
@@ -670,6 +646,43 @@ def required_part_manifest(
         if got is None:
             return None
         parts.extend(got)
+    return tuple(parts)
+
+
+def contract_payload_parts(
+    spec: ContractSpec, flags: "EquipmentFlags",
+) -> Optional[tuple[MiscEquipment, ...]]:
+    """The delivery payload the sphere ladder charges for a contract, sized from
+    ``flags`` so the ladder signature matches the runtime access rule.
+
+    For the CHAIN-GUARANTEED categories (crew / relay / power) this is exactly
+    ``required_part_manifest``: the parts come from this seed's progressive
+    representatives carried in ``flags``, so the signature can't be optimistic
+    about a lighter member the chain doesn't actually guarantee.
+
+    The ladder's progressive-only kit can't grant the PROMOTED standalone
+    categories (drill / ore_tank / battery / science_lab), so for those we fall
+    back to the guaranteed representative — the lightest member, which is exactly
+    what ``required_part_names_for`` promotes and what the runtime's
+    ``category_lightest`` resolves to once that item is collected. Folding them
+    in here (as pure payload mass) keeps the lab's crew seats and the drill's
+    ISRU flag from leaking into the ladder's capability flags.
+
+    Returns ``None`` if a chain-guaranteed category has no part at this kit — the
+    contract is infeasible at this rung and the bumper bumps the relevant chain.
+    """
+    from .parts import CONTRACT_CATEGORY_MEMBERS, PART_DB
+    parts: list[MiscEquipment] = []
+    for cat, got in required_part_breakdown(spec, flags):
+        if got is not None:
+            parts.extend(got)
+        elif cat in _CHAIN_GUARANTEED_CATEGORIES:
+            return None  # chain rep not yet unlocked at this kit
+        else:
+            members = CONTRACT_CATEGORY_MEMBERS.get(cat, frozenset())
+            if members:
+                parts.append(min((PART_DB[n][0] for n in members),
+                                 key=lambda p: p.mass))
     return tuple(parts)
 
 
@@ -737,10 +750,8 @@ def required_part_names_for(specs) -> frozenset[str]:
     disabled) — unused mining parts then keep their normal classification."""
     from .parts import PART_DB
     cats: set[str] = set()
-    crew_req = 0
     for s in specs:
         cats.update(s.type_def.required_categories)
-        crew_req = max(crew_req, s.type_def.crew_requirement)
     # Categories already guaranteed reachable by a progression chain (solar/relay
     # antennas, command pods). Promoting a *specific* part for them is redundant
     # AND adds an inert progression item fill can strand on a hard location,
@@ -751,17 +762,7 @@ def required_part_names_for(specs) -> frozenset[str]:
     reps: set[str] = set()
     for cat in cats:
         members = CONTRACT_CATEGORY_MEMBERS.get(cat, frozenset())
-        if not members:
-            continue
-        if cat == "crew_cabin" and crew_req:
-            # Promote the part the canonical crew combo uses (best mass-per-seat),
-            # NOT the lightest-by-mass crew part — otherwise the guaranteed part
-            # (a 1-seat pod -> 5x heavy station) wouldn't match the sphere-ladder
-            # signature (which sizes the combo), risking an unsolvable station.
-            combo = _min_crew_combo([PART_DB[n][0] for n in members], crew_req)
-            if combo:
-                reps.add(combo[0].name)
-        else:
+        if members:
             reps.add(min(members, key=lambda n: PART_DB[n][0].mass))
     return frozenset(reps)
 
