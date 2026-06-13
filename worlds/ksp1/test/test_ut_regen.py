@@ -115,6 +115,18 @@ class TestUTRegen(unittest.TestCase):
         world1, world2, _ = self._regen_from_slot_data(seed=11, options=opts)
         self.assertEqual(world1.contract_threshold_defs, world2.contract_threshold_defs)
 
+    def test_random_orbit_params_round_trip(self):
+        """RANDOM_ORBIT target orbits reconstruct identically after regen (a
+        re-roll would diverge and the sphere-ladder cost would drift)."""
+        opts = {"contract_type_weights": {"random_orbit": 5, "orbit": 1, "mine_ore": 1}}
+        world1, world2, original_sd = self._regen_from_slot_data(seed=21, options=opts)
+        self.assertEqual(
+            world1.mission_builder.random_orbit_params,
+            world2.mission_builder.random_orbit_params,
+        )
+        self.assertEqual(original_sd["random_orbit_params"],
+                         world2.fill_slot_data()["random_orbit_params"])
+
     def test_random_contracts_round_trip(self):
         """random_contracts goal (free flag-on-home) reconstructs after regen."""
         opts = {

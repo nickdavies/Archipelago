@@ -269,21 +269,26 @@ class Body:
         r_sync = self.sync_orbit_radius_m
         return self.radius_km * 1000.0 < r_sync < soi_m
 
+    def raise_dv(self, r_target_m: float) -> float:
+        """Hohmann two-burn delta-v (m/s) to raise from low orbit to a circular
+        orbit at ``r_target_m``. 0 if the target is at/below low orbit or unknown.
+        Used for the stationary-orbit raise and the random-orbit apoapsis raise."""
+        mu = self.gm
+        r_lo = self.lo_radius_m
+        if math.isinf(r_target_m) or r_target_m <= r_lo:
+            return 0.0
+        a_t = (r_lo + r_target_m) / 2.0
+        v_lo = math.sqrt(mu / r_lo)
+        v_peri = math.sqrt(mu * (2.0 / r_lo - 1.0 / a_t))
+        v_apo = math.sqrt(mu * (2.0 / r_target_m - 1.0 / a_t))
+        v_target = math.sqrt(mu / r_target_m)
+        return (v_peri - v_lo) + (v_target - v_apo)
+
     @property
     def stationary_raise_dv(self) -> float:
         """Hohmann delta-v to raise from low orbit to synchronous orbit (m/s).
         0 if sync is at/below low orbit (very fast rotators) or unknown."""
-        mu = self.gm
-        r_lo = self.lo_radius_m
-        r_sync = self.sync_orbit_radius_m
-        if math.isinf(r_sync) or r_sync <= r_lo:
-            return 0.0
-        a_t = (r_lo + r_sync) / 2.0
-        v_lo = math.sqrt(mu / r_lo)
-        v_peri = math.sqrt(mu * (2.0 / r_lo - 1.0 / a_t))
-        v_apo = math.sqrt(mu * (2.0 / r_sync - 1.0 / a_t))
-        v_sync = math.sqrt(mu / r_sync)
-        return (v_peri - v_lo) + (v_sync - v_apo)
+        return self.raise_dv(self.sync_orbit_radius_m)
 
     # ------------------------------------------------------------------
     # Suborbital ascent physics
@@ -901,6 +906,50 @@ def progressive_launch_pad_caps_for(home: BodyName) -> tuple[float, ...]:
 
 
 # ---------------------------------------------------------------------------
+# Random-orbit contracts
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class RandomOrbitParams:
+    """A seeded target orbit for a RANDOM_ORBIT contract — the client renders it
+    and the player matches it within the deviation window. Periapsis sits at the
+    body's low orbit; apoapsis (altitude), eccentricity, and inclination vary.
+    The extra delta-v cost is modelled at the home body in
+    ``ContractTypeDef.transform_mission`` (inclination rotation loss + apoapsis
+    raise); off-home it's free (capture into any orbit), so it's not modelled."""
+    inclination_deg: float
+    sma_m: float
+    eccentricity: float
+
+    @property
+    def apoapsis_m(self) -> float:
+        return self.sma_m * (1.0 + self.eccentricity)
+
+
+def generate_random_orbit_params(rng, bodies) -> dict[BodyName, RandomOrbitParams]:
+    """Seeded random target orbit per orbitable body. Periapsis pinned to low
+    orbit (always achievable); apoapsis up to ~3x low orbit, capped inside the
+    SOI; inclination 0-90 deg. Deterministic for a given ``rng`` so UT regen can
+    restore the same orbits from slot_data instead of re-rolling."""
+    out: dict[BodyName, RandomOrbitParams] = {}
+    for b in bodies:
+        if not b.is_orbitable:
+            continue
+        r_lo = b.lo_radius_m
+        soi_m = b.soi_radius_km * 1000.0
+        r_ap_cap = min(r_lo * 3.0, 0.7 * soi_m) if soi_m > 0 else r_lo * 3.0
+        r_ap_cap = max(r_ap_cap, r_lo * 1.05)   # always leave a little room
+        r_ap = rng.uniform(r_lo, r_ap_cap)
+        r_pe = r_lo
+        ecc = (r_ap - r_pe) / (r_ap + r_pe)
+        sma = (r_pe + r_ap) / 2.0
+        incl = rng.uniform(0.0, 90.0)
+        out[b.name] = RandomOrbitParams(
+            inclination_deg=incl, sma_m=sma, eccentricity=ecc)
+    return out
+
+
+# ---------------------------------------------------------------------------
 # MissionBuilder
 # ---------------------------------------------------------------------------
 
@@ -959,6 +1008,12 @@ class MissionBuilder:
 
     def __init__(self, home: BodyName):
         self.home: BodyName = home
+        # Per-body seeded target orbits for RANDOM_ORBIT contracts. Populated by
+        # the world in generate_early (fresh or UT-restored); empty until then.
+        # transform_mission reads these to model the home-orbit extra cost, so
+        # the sphere ladder (which calls spec.mission_transform(mission_builder))
+        # sees the same cost without any per-contract param threading.
+        self.random_orbit_params: dict[BodyName, "RandomOrbitParams"] = {}
         # Precomputed relay-tier table keyed by destination BodyName.
         # Built before edge construction so ``_edge`` can stamp the
         # value onto every ``MissionEdge.relay_tier`` directly — the

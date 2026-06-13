@@ -1,4 +1,5 @@
 import math
+import random
 from typing import Any
 
 from BaseClasses import CollectionState, Item, MultiWorld, Tutorial
@@ -11,8 +12,8 @@ from .rules import GoalSpec, resolve_goal_spec, goal_spec_location_names
 from .capability import CAPABILITY_ITEMS, RocketCapability
 from .data.feasibility import MODEL_INFEASIBLE_LOCATIONS
 from .bodies import (
-    ALL_BODIES, BodyName, MissionBuilder, MissionType,
-    home_relative_science_values,
+    ALL_BODIES, BodyName, MissionBuilder, MissionType, RandomOrbitParams,
+    generate_random_orbit_params, home_relative_science_values,
 )
 from .items import (
     ITEM_NAME_TO_ID, PROGRESSIVE_LAUNCH_PAD_CAPS, _FILLER_ITEMS,
@@ -286,6 +287,18 @@ class KSP1World(World):
         _validate_goal_spec_has_targets(
             self.goal_spec, self.options, self.mission_builder.home,
         )
+
+        # Seeded target orbits for RANDOM_ORBIT contracts — must exist before
+        # generate_contracts (the feasibility + harder-than-goal cap read the
+        # real orbit cost via mission_builder.transform_mission). A derived RNG
+        # keeps the draw count off the main sequence; UT regen restores the exact
+        # orbits from slot_data instead of re-rolling.
+        ut_orbits = getattr(self, "_ut_random_orbit_params", None)
+        if ut_orbits is not None:
+            self.mission_builder.random_orbit_params = ut_orbits
+        else:
+            self.mission_builder.random_orbit_params = generate_random_orbit_params(
+                random.Random(self.random.getrandbits(64)), ALL_BODIES)
 
         # Generate this seed's contracts (deterministic from the world seed).
         # UT regen restores the exact set from slot_data instead of re-rolling.
@@ -578,9 +591,20 @@ class KSP1World(World):
         # native KSP contract from `parameters` and reports `location` on
         # completion. Goal contracts ride the same array.
         d["contracts"] = [
-            spec.to_slot_dict()
+            spec.to_slot_dict(self.mission_builder)
             for spec in (*self.contract_specs, *self.goal_contract_specs)
         ]
+        # Seeded RANDOM_ORBIT target orbits, per body — carried so UT regen
+        # restores the exact orbits (the client also gets them via each
+        # contract's specific_orbit parameter; this is the server-side record).
+        d["random_orbit_params"] = {
+            str(body): {
+                "inclination": p.inclination_deg,
+                "sma": p.sma_m,
+                "eccentricity": p.eccentricity,
+            }
+            for body, p in self.mission_builder.random_orbit_params.items()
+        }
         # Goal contract mode. ``contract_thresholds`` is the client's watcher map
         # {completed-contract-count -> [threshold locations to report]}: when the
         # player's completed non-goal-contract count reaches a key, the client
@@ -643,6 +667,18 @@ class KSP1World(World):
         if "contracts_available" in slot_data:
             self.options.contracts_available.value = slot_data["contracts_available"]
         self._ut_contracts_required = slot_data.get("contracts_required")
+
+        # Restore the exact RANDOM_ORBIT target orbits (re-rolling would diverge).
+        rop = slot_data.get("random_orbit_params")
+        if rop:
+            self._ut_random_orbit_params = {
+                BodyName(body): RandomOrbitParams(
+                    inclination_deg=entry["inclination"],
+                    sma_m=entry["sma"],
+                    eccentricity=entry["eccentricity"],
+                )
+                for body, entry in rop.items()
+            }
 
         # A custom goal isn't a single enum value — its body lists ARE the goal,
         # and resolve_goal_spec rebuilds the spec from those option values during

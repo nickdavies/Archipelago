@@ -476,7 +476,7 @@ def format_contract_output(
     # change here -- every parameter dataclass has a to_json().
     lines.append("")
     lines.append("  Contract parameters (client builds a native KSP contract):")
-    for p in td.build_parameters(spec.body):
+    for p in td.build_parameters(spec.body, mission_builder):
         j = dict(p.to_json())
         kind = j.pop("kind", "?")
         detail = ", ".join(f"{k}={v}" for k, v in j.items())

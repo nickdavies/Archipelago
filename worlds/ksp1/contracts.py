@@ -241,6 +241,7 @@ class ContractType(StrEnum):
     EQUATORIAL_ORBIT = "equatorial_orbit"   # circular low equatorial orbit
     POLAR_ORBIT = "polar_orbit"             # circular low polar orbit (+v_rot ascent at home)
     STATIONARY_ORBIT = "stationary_orbit"   # synchronous orbit (+raise dv at home)
+    RANDOM_ORBIT = "random_orbit"           # seeded inclined/eccentric satellite orbit
     TRANSMIT_SCIENCE = "transmit_science"   # phone home from a body's space (CollectScience)
     # Goal-only types — used when a goal achievement is one of these missions.
     RETURN = "return"
@@ -253,7 +254,8 @@ NON_GOAL_TYPES: tuple[ContractType, ...] = (
     ContractType.MINE_ORE, ContractType.SURFACE_BASE, ContractType.SPACE_STATION,
     ContractType.FLAG_PLANT, ContractType.SAMPLE_RETURN, ContractType.ORBIT,
     ContractType.EQUATORIAL_ORBIT, ContractType.POLAR_ORBIT,
-    ContractType.STATIONARY_ORBIT, ContractType.TRANSMIT_SCIENCE,
+    ContractType.STATIONARY_ORBIT, ContractType.RANDOM_ORBIT,
+    ContractType.TRANSMIT_SCIENCE,
 )
 
 
@@ -365,8 +367,9 @@ class ContractTypeDef:
         sequence (the profile-level hook passed to evaluate_mission_detailed).
         Default identity. Orbit variants inject their extra delta-v here, and
         only at the HOME body: POLAR pays the rotation-assist loss as an ascent
-        penalty; STATIONARY appends the low-orbit→sync raise burn. Both are free
-        at remote bodies (capture straight into the polar plane / a high orbit),
+        penalty; STATIONARY appends the low-orbit→sync raise burn; RANDOM pays
+        the inclination rotation loss + a raise to its apoapsis. All are free at
+        remote bodies (capture straight into the target plane / a high orbit),
         so they return ``edges`` unchanged off home."""
         if target_body != home_body:
             return edges
@@ -377,9 +380,30 @@ class ContractTypeDef:
         if self.contract_type == ContractType.STATIONARY_ORBIT:
             return list(edges) + [
                 mission_builder.make_raise_edge(home_body, home.stationary_raise_dv)]
+        if self.contract_type == ContractType.RANDOM_ORBIT:
+            params = mission_builder.random_orbit_params.get(target_body)
+            if params is None:
+                return edges  # defensive: no orbit assigned -> base orbit
+            # Inclination rotation loss: the eastward assist you forgo, scaling
+            # from 0 (equatorial) to the full surface-rotation velocity (polar),
+            # i.e. v_rot * (1 - cos i). Charged on the ascent edge like POLAR.
+            incl_penalty = home.surface_rotation_velocity * (
+                1.0 - math.cos(math.radians(params.inclination_deg)))
+            edges = mission_builder.add_ascent_penalty(
+                edges, home_body, incl_penalty)
+            # Apoapsis raise: conservatively model the eccentric orbit as a
+            # circular orbit at its apoapsis (>= the actual eccentric orbit's
+            # cost). raise_dv is 0 when apoapsis sits at low orbit.
+            raise_dv = home.raise_dv(params.apoapsis_m)
+            if raise_dv > 0.0:
+                edges = list(edges) + [
+                    mission_builder.make_raise_edge(home_body, raise_dv)]
+            return edges
         return edges
 
-    def build_parameters(self, body: BodyName) -> list:
+    def build_parameters(self, body: BodyName, mission_builder=None) -> list:
+        # ``mission_builder`` is required only for RANDOM_ORBIT (it owns the
+        # per-body seeded target orbit); other types ignore it.
         if self.contract_type == ContractType.MINE_ORE:
             return [
                 SituationParam("landed", body),
@@ -421,6 +445,20 @@ class ContractTypeDef:
             return [SpecificOrbitParam(
                 body=body, orbit_type=otype, inclination=inc,
                 eccentricity=0.0, sma=sma, deviation=ORBIT_DEVIATION)]
+        if self.contract_type == ContractType.RANDOM_ORBIT:
+            # The seeded target orbit (inclination / apoapsis / eccentricity)
+            # lives on the mission_builder; the client renders it via the stock
+            # SpecificOrbitParameter and the player matches it within deviation.
+            if mission_builder is None:
+                raise ValueError("RANDOM_ORBIT build_parameters needs mission_builder")
+            params = mission_builder.random_orbit_params.get(body)
+            if params is None:
+                raise ValueError(f"RANDOM_ORBIT on {body} has no assigned orbit")
+            return [SpecificOrbitParam(
+                body=body, orbit_type="EQUATORIAL",
+                inclination=params.inclination_deg,
+                eccentricity=params.eccentricity, sma=params.sma_m,
+                deviation=ORBIT_DEVIATION)]
         if self.contract_type == ContractType.TRANSMIT_SCIENCE:
             # Gather + phone home science from the body's space. CollectScience
             # credits on transmit OR recover; the relay category is the antenna +
@@ -521,6 +559,17 @@ CONTRACT_TYPE_DEFS: dict[ContractType, ContractTypeDef] = {
         home_safe=True,
         title_fmt="Reach a stationary orbit of {body}",
         synopsis_fmt="Establish a synchronous (stationary) orbit around {body}.",
+    ),
+    ContractType.RANDOM_ORBIT: ContractTypeDef(
+        contract_type=ContractType.RANDOM_ORBIT,
+        location_noun="Satellite Orbit",
+        location_prep="around",
+        base_mission_type=MissionType.ORBIT,
+        crewed=None,
+        required_categories=(),
+        home_safe=True,
+        title_fmt="Deploy a satellite around {body}",
+        synopsis_fmt="Place a satellite into the assigned orbit around {body}.",
     ),
     ContractType.TRANSMIT_SCIENCE: ContractTypeDef(
         contract_type=ContractType.TRANSMIT_SCIENCE,
@@ -637,12 +686,14 @@ class ContractSpec:
         access rule."""
         return self.location_names[0]
 
-    def to_slot_dict(self) -> dict:
+    def to_slot_dict(self, mission_builder=None) -> dict:
         """The self-describing manifest entry the dumb client actuates. Carries
         ``contract_type``/``body`` structurally so UT regen reconstructs the
         spec from fields, never by parsing the display name (the client ignores
         these two extra keys). ``locations`` is the full slot list (1 for goal,
-        2 for non-goal); the client reports every entry on completion."""
+        2 for non-goal); the client reports every entry on completion.
+        ``mission_builder`` is required only for RANDOM_ORBIT (it owns the seeded
+        target orbit the client renders)."""
         td = self.type_def
         d = {
             "item": self.item_name,
@@ -653,7 +704,8 @@ class ContractSpec:
             "is_goal": self.is_goal,
             "contract_type": str(self.contract_type),
             "body": str(self.body),
-            "parameters": [p.to_json() for p in td.build_parameters(self.body)],
+            "parameters": [p.to_json()
+                           for p in td.build_parameters(self.body, mission_builder)],
         }
         if self.title_override:
             # Round-trips through UT regen so the flavour title survives.

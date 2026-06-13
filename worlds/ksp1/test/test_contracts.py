@@ -7,14 +7,20 @@ slot_data round-trip, and the three-gate access rule under a full world setup.
 """
 import unittest
 
+import random as _random
+
 from worlds.ksp1 import contracts as C
 from worlds.ksp1.bodies import (
     ALL_BODIES, BodyName, MissionBuilder, DIFFICULTY_PROFILES,
+    generate_random_orbit_params,
 )
 from worlds.ksp1.capability import _pre_pass
 from worlds.ksp1.test.base import KSP1TestBase
 
 MB = MissionBuilder(home=BodyName.KERBIN)
+# RANDOM_ORBIT contracts read their seeded target orbit off the mission_builder;
+# populate it so every type can build parameters / render in tests.
+MB.random_orbit_params = generate_random_orbit_params(_random.Random(0), ALL_BODIES)
 DIFF = DIFFICULTY_PROFILES["normal"]
 
 
@@ -114,14 +120,53 @@ class TestSlotDataRoundTrip(unittest.TestCase):
         # contract type (UT regen reconstructs from fields, never re-randomizes),
         # and to_slot_dict must build a non-empty parameter tree for each type
         # without raising NotImplementedError.
+        from worlds.ksp1.bodies import (
+            ALL_BODIES, MissionBuilder, BodyName, generate_random_orbit_params,
+        )
+        import random as _random
+        mb = MissionBuilder(home=BodyName.KERBIN)
+        # RANDOM_ORBIT reads its seeded target orbit off the mission_builder.
+        mb.random_orbit_params = generate_random_orbit_params(
+            _random.Random(1), ALL_BODIES)
         for ct, td in C.CONTRACT_TYPE_DEFS.items():
             with self.subTest(contract_type=ct):
                 body = _first_compatible_body(td)
                 self.assertIsNotNone(body, f"{ct} has no compatible body")
                 spec = C.ContractSpec(ct, body)
-                d = spec.to_slot_dict()
+                d = spec.to_slot_dict(mb)
                 self.assertTrue(d["parameters"], f"{ct} emitted no parameters")
                 self.assertEqual(C.ContractSpec.from_slot_dict(d), spec)
+
+    def test_random_orbit_home_cost_modeled(self):
+        # The extra orbit cost (inclination rotation loss + apoapsis raise) MUST
+        # be modeled at the home body: a clearly inclined/raised home orbit costs
+        # more than a plain home orbit.
+        from worlds.ksp1.bodies import MissionBuilder, RandomOrbitParams
+        mb = MissionBuilder(home=BodyName.KERBIN)
+        kerbin = next(b for b in ALL_BODIES if b.name == BodyName.KERBIN)
+        mb.random_orbit_params[BodyName.KERBIN] = RandomOrbitParams(
+            inclination_deg=45.0, sma_m=kerbin.lo_radius_m * 1.5, eccentricity=0.2)
+        base = C.evaluate_contract(
+            C.ContractSpec(C.ContractType.ORBIT, BodyName.KERBIN), FULL, DIFF, mb)
+        rand = C.evaluate_contract(
+            C.ContractSpec(C.ContractType.RANDOM_ORBIT, BodyName.KERBIN), FULL, DIFF, mb)
+        self.assertIsNotNone(rand)
+        self.assertGreater(rand.launch_mass, base.launch_mass,
+                           "inclined/raised home orbit must cost more than a plain orbit")
+
+    def test_random_orbit_offhome_no_penalty(self):
+        # Off-home, capture is free into any inclination/altitude — so a remote
+        # random orbit must NOT be penalised (modeled as the base orbit).
+        from worlds.ksp1.bodies import MissionBuilder, RandomOrbitParams
+        mb = MissionBuilder(home=BodyName.KERBIN)
+        mun = next(b for b in ALL_BODIES if b.name == BodyName.MUN)
+        mb.random_orbit_params[BodyName.MUN] = RandomOrbitParams(
+            inclination_deg=80.0, sma_m=mun.lo_radius_m * 2.0, eccentricity=0.3)
+        base = C.evaluate_contract(
+            C.ContractSpec(C.ContractType.ORBIT, BodyName.MUN), FULL, DIFF, mb)
+        rand = C.evaluate_contract(
+            C.ContractSpec(C.ContractType.RANDOM_ORBIT, BodyName.MUN), FULL, DIFF, mb)
+        self.assertAlmostEqual(rand.launch_mass, base.launch_mass, places=3)
 
     def test_is_goal_flag_round_trips(self):
         # is_goal is the only field that distinguishes a goal contract in
@@ -404,7 +449,7 @@ class TestExplainContractGeneric(unittest.TestCase):
                     self.assertIn("Gate 3", text)
                     self.assertIn("Contract parameters", text)
                     # Every emitted parameter primitive must show its kind.
-                    for p in td.build_parameters(body):
+                    for p in td.build_parameters(body, MB):
                         self.assertIn(p.to_json()["kind"], text)
 
     def test_full_kit_mine_shows_required_parts_and_rocket(self):
