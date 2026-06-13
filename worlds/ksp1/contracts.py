@@ -43,7 +43,18 @@ if TYPE_CHECKING:
 
 # Bumped when the parameter wire format or primitive vocabulary changes. The
 # client rejects contracts whose schema it doesn't understand.
-CONTRACT_SCHEMA_VERSION = 2
+CONTRACT_SCHEMA_VERSION = 3
+
+# Non-goal contracts award TWO reward locations sharing ONE gate item: completing
+# the contract checks both slots, so each non-goal contract is net +1 location of
+# slack (2 locations - 1 gate item) for the multiworld. Goal contracts stay 1:1
+# (a single, unsuffixed location) — see ContractSpec.location_names.
+NON_GOAL_SLOT_COUNT = 2
+
+# Event item locked on each non-goal contract's "Contract Complete: ..." event
+# location (address None). state.has(this, X) == "X contracts completable in
+# logic", which paces the count/progressive_unlock threshold locations.
+CONTRACT_COMPLETED_EVENT = "Contract Completed"
 
 # Mine Ore contract: fixed ore quantity to extract. 50 fits in the smallest ore
 # tank (RadialOreTank holds 75), so a single tank suffices — 100 would force a
@@ -571,6 +582,11 @@ class ContractSpec:
     contract_type: ContractType
     body: BodyName
     is_goal: bool = False
+    # Client-display title override (Mission Control contract name). Only set
+    # for flavour cases like the random_contracts "free" goal ("Plant Flag on
+    # Launch Pad"); None means derive from the type_def. Cosmetic only —
+    # location_name / item_name never depend on it, so it can't affect logic.
+    title_override: Optional[str] = None
 
     @property
     def type_def(self) -> ContractTypeDef:
@@ -602,19 +618,36 @@ class ContractSpec:
         return self.display_name
 
     @property
+    def location_names(self) -> tuple[str, ...]:
+        """The reward location(s) this contract checks. Goal contracts stay 1:1
+        (a single unsuffixed location); non-goal contracts award
+        ``NON_GOAL_SLOT_COUNT`` slot-suffixed locations ("... 1", "... 2") that
+        share one gate item and one access rule."""
+        if self.is_goal:
+            return (self.display_name,)
+        return tuple(
+            f"{self.display_name} {i}"
+            for i in range(1, NON_GOAL_SLOT_COUNT + 1)
+        )
+
+    @property
     def location_name(self) -> str:
-        return self.display_name
+        """The canonical / primary location (slot 1). Goal logic, /explain, and
+        the client's binding key all use this; the suffixed siblings share its
+        access rule."""
+        return self.location_names[0]
 
     def to_slot_dict(self) -> dict:
         """The self-describing manifest entry the dumb client actuates. Carries
         ``contract_type``/``body`` structurally so UT regen reconstructs the
         spec from fields, never by parsing the display name (the client ignores
-        these two extra keys)."""
+        these two extra keys). ``locations`` is the full slot list (1 for goal,
+        2 for non-goal); the client reports every entry on completion."""
         td = self.type_def
-        return {
+        d = {
             "item": self.item_name,
-            "location": self.location_name,
-            "title": td.title(self.body),
+            "locations": list(self.location_names),
+            "title": self.title_override if self.title_override else td.title(self.body),
             "synopsis": td.synopsis(self.body),
             "schema": CONTRACT_SCHEMA_VERSION,
             "is_goal": self.is_goal,
@@ -622,6 +655,10 @@ class ContractSpec:
             "body": str(self.body),
             "parameters": [p.to_json() for p in td.build_parameters(self.body)],
         }
+        if self.title_override:
+            # Round-trips through UT regen so the flavour title survives.
+            d["title_override"] = self.title_override
+        return d
 
     @staticmethod
     def from_slot_dict(d: dict) -> "ContractSpec":
@@ -631,17 +668,13 @@ class ContractSpec:
             ContractType(d["contract_type"]),
             BodyName(d["body"]),
             is_goal=bool(d.get("is_goal", False)),
+            title_override=d.get("title_override"),
         )
 
 
-def parse_contract_location_name(name: str) -> Optional[ContractSpec]:
-    """Return the ContractSpec for a contract item/location name (they share the
-    display string), or None if it isn't one. Used by the sphere ladder to give
-    contract locations a real signature. Matches by rebuilding each (type, body)
-    display name and comparing — no preposition/format coupling. (Removing this
-    in-generation parse entirely is bug 086.)"""
-    if not name.startswith("Contract: "):
-        return None
+def _parse_exact_contract_name(name: str) -> Optional[ContractSpec]:
+    """Match a name against the bare ``display_name`` of some (type, body), or
+    None. Rebuilds each candidate and compares — no preposition/format coupling."""
     body_str = name.rsplit(None, 1)[-1]          # body is the final token
     try:
         body = BodyName(body_str)
@@ -651,6 +684,26 @@ def parse_contract_location_name(name: str) -> Optional[ContractSpec]:
         spec = ContractSpec(ct, body)
         if spec.display_name == name:
             return spec
+    return None
+
+
+def parse_contract_location_name(name: str) -> Optional[ContractSpec]:
+    """Return the ContractSpec for a contract location name, or None if it isn't
+    one. Accepts BOTH the bare goal-contract form ("Contract: Mine Ore on Mun")
+    and the non-goal slot-suffixed form ("Contract: Mine Ore on Mun 1" / "... 2").
+    Used by the sphere ladder to give every contract slot a real signature — a
+    silent None here un-gates the location and deadlocks fill (bug 086 / project
+    memory). Threshold ("Contract Threshold N") and event ("Contract Complete:
+    ...") names deliberately don't match (different prefix)."""
+    if not name.startswith("Contract: "):
+        return None
+    spec = _parse_exact_contract_name(name)
+    if spec is not None:
+        return spec
+    # Strip a trailing slot integer ("... 1") and retry against the bare form.
+    base, _, last = name.rpartition(" ")
+    if last.isdigit():
+        return _parse_exact_contract_name(base)
     return None
 
 
@@ -852,7 +905,7 @@ _AUTO_COUNT_BY_DIFFICULTY = (12, 10, 8, 6)
 
 
 def _resolve_count(world: "KSP1World") -> int:
-    raw = world.options.non_goal_contract_count.value
+    raw = world.options.contracts_available.value
     if raw < 0:
         return _AUTO_COUNT_BY_DIFFICULTY[world.options.difficulty.value]
     return raw
@@ -889,16 +942,29 @@ _GOAL_MISSION_TO_CONTRACT: dict[MissionType, ContractType] = {
     MissionType.ESCAPE: ContractType.FLYBY,
 }
 
+# The contract types that can represent a goal achievement (the only types that
+# ever become goal contracts). Used to size the threshold-location registry.
+GOAL_CONTRACT_TYPES: frozenset[ContractType] = frozenset(
+    _GOAL_MISSION_TO_CONTRACT.values())
+
 
 def _goal_contract_specs(goal_spec) -> list:
     """One goal-contract per goal body achievement. Always generated (a goal is
     mandatory) — no ever-achievable filter; model-infeasible goal bodies fall
     back to the all-parts proxy in the access rule (see rules._set_contract_rules)."""
+    # The random_contracts "free" goal is a single home-body flag plant; give it
+    # a celebratory title instead of the bare "Plant Flag on Kerbin".
+    free = getattr(goal_spec, "free_goal", False)
     out = []
     for body, mtype in sorted(_goal_achievements(goal_spec)):
         ct = _GOAL_MISSION_TO_CONTRACT.get(mtype)
         if ct is not None:
-            out.append(ContractSpec(ct, body, is_goal=True))
+            title_override = (
+                "Plant Flag on Launch Pad"
+                if free and ct == ContractType.FLAG_PLANT else None
+            )
+            out.append(ContractSpec(ct, body, is_goal=True,
+                                    title_override=title_override))
     return out
 
 
@@ -961,6 +1027,136 @@ def _goal_max_relay_tier(goal_spec, mission_builder: MissionBuilder) -> int:
     return tier
 
 
+# ---------------------------------------------------------------------------
+# Synthetic difficulty anchors for goals with no natural body mission
+# (random_contracts and complete_tech_tree). Both need a contract-difficulty
+# cap, but neither has a goal mission whose mass/relay-tier to compare against:
+#   - random_contracts: anchor at a difficulty-scaled percentile of the mission
+#     Δv scale, so contracts ramp up to (but not past) a sensible ceiling.
+#   - complete_tech_tree: anchor at the science-funding body returns (the
+#     missions the player must do to unlock the tree), so contracts are no harder
+#     than the tree itself demands.
+# ---------------------------------------------------------------------------
+
+# random_contracts: fraction up the RETURN-mass scale, indexed by difficulty
+# (casual / normal / expert / insane). Harder settings allow harder contracts.
+_RANDOM_CONTRACTS_PERCENTILE: tuple[float, ...] = (0.5, 0.6, 0.7, 0.8)
+
+
+def _return_mass_scale(flags, diff, mb) -> list[tuple[float, BodyName]]:
+    """``(launch_mass, body)`` for a RETURN from every landable body but home,
+    feasible-only, ascending. The intrinsic mission-difficulty ladder used to
+    anchor goals that carry no body mission of their own."""
+    out: list[tuple[float, BodyName]] = []
+    for b in ALL_BODIES:
+        if not b.can_land or b.name == mb.home:
+            continue
+        result = evaluate_contract(ContractSpec(ContractType.RETURN, b.name), flags, diff, mb)
+        if result is not None and result.feasible:
+            out.append((result.launch_mass, b.name))
+    out.sort(key=lambda t: (t[0], t[1].value))
+    return out
+
+
+def _anchor_cap(anchor_bodies, flags, diff, mb) -> tuple[float, int]:
+    """``(max RETURN launch mass, max relay tier)`` over the anchor bodies —
+    the synthetic harder-than-goal ceiling. 0.0 mass means no cap."""
+    rt = mb.relay_tier_by_body
+    mass = 0.0
+    tier = 0
+    for body in anchor_bodies:
+        result = evaluate_contract(ContractSpec(ContractType.RETURN, body), flags, diff, mb)
+        if result is not None and result.feasible:
+            mass = max(mass, result.launch_mass)
+        tier = max(tier, rt.get(body, 0))
+    return mass, tier
+
+
+def _random_contracts_anchor_body(world, flags, diff, mb):
+    """The body whose RETURN sits at the difficulty-scaled percentile of the
+    mission Δv scale; random_contracts caps contracts at its difficulty. None if
+    no feasible interplanetary return exists (cap then disabled)."""
+    scale = _return_mass_scale(flags, diff, mb)
+    if not scale:
+        return None
+    pct = _RANDOM_CONTRACTS_PERCENTILE[world.options.difficulty.value]
+    idx = min(len(scale) - 1, round(pct * (len(scale) - 1)))
+    return scale[idx][1]
+
+
+def _tech_tree_anchor_bodies(world, flags, diff, mb) -> list[BodyName]:
+    """The interplanetary RETURN bodies whose science funds the whole tech tree,
+    cheapest-mass first until the tier-MAX science target is met. Deterministic —
+    a difficulty cap, not the sphere ladder's seed-varied anchor set, but the same
+    greedy science accounting (see sphere_ladder._pick_tech_tree_anchors). Empty
+    when home-system science alone funds the tree (cap stays at home difficulty)."""
+    from .bodies import BODY_BY_NAME, home_system_bodies, science_budget
+    from .tech_tree import cumulative_tier_cost, MAX_TIER
+    from .rules import effective_science_safety
+
+    safety = effective_science_safety(world.options, world.options.difficulty.value)
+    target = cumulative_tier_cost(MAX_TIER) / safety
+    home = mb.home
+    home_set = home_system_bodies(home)
+
+    def body_yield(body) -> float:
+        return science_budget(
+            body, has_thermometer=True, has_barometer=True, has_capsule=True,
+            can_land_crewed=body.can_land, home=home, psi_tier=3)
+
+    accumulated = sum(body_yield(BODY_BY_NAME[bn]) for bn in home_set)
+    picked: list[BodyName] = []
+    for _mass, body in _return_mass_scale(flags, diff, mb):
+        if accumulated >= target:
+            break
+        if body in home_set:
+            continue
+        accumulated += body_yield(BODY_BY_NAME[body])
+        picked.append(body)
+    return picked
+
+
+def _difficulty_cap(world, flags, diff, mb) -> tuple[float, int | None]:
+    """Resolve the harder-than-goal cap as ``(goal_mass, goal_relay_tier)``.
+
+    ``allow_missions_harder_than_goal`` (on) disables the cap. Otherwise a goal
+    with body missions caps at its hardest mission; random_contracts and the tech
+    tree cap at their synthetic anchors (above)."""
+    if world.options.allow_missions_harder_than_goal.value:
+        return 0.0, None
+    if world.goal_spec.free_goal:
+        body = _random_contracts_anchor_body(world, flags, diff, mb)
+        if body is None:
+            return 0.0, None
+        return _anchor_cap([body], flags, diff, mb)
+    if world.goal_spec.complete_tech_tree:
+        bodies = _tech_tree_anchor_bodies(world, flags, diff, mb)
+        if not bodies:
+            return 0.0, None
+        return _anchor_cap(bodies, flags, diff, mb)
+    goal_mass = _goal_max_mass(world.goal_spec, flags, diff, mb)
+    goal_relay_tier = _goal_max_relay_tier(world.goal_spec, mb) if goal_mass > 0 else None
+    return goal_mass, goal_relay_tier
+
+
+def goal_contracts_easiest_first(world: "KSP1World") -> list[ContractSpec]:
+    """This world's goal contracts ordered easiest-first by full-kit launch mass
+    (model-infeasible / proxy goals sort last via an infinite key; ties broken by
+    contract_id for determinism). progressive_unlock awards them in this order —
+    the easiest goal mission unlocks at the lowest contract-count threshold."""
+    flags = _full_kit_flags(world)
+    diff = _difficulty(world)
+    mb = world.mission_builder
+
+    def sort_key(spec: ContractSpec) -> tuple[float, str]:
+        result = evaluate_contract(spec, flags, diff, mb)
+        mass = (result.launch_mass
+                if result is not None and result.feasible else float("inf"))
+        return (mass, spec.contract_id)
+
+    return sorted(world.goal_contract_specs, key=sort_key)
+
+
 def generate_contracts(world: "KSP1World") -> tuple[list[ContractSpec], list[ContractSpec]]:
     """Pick this seed's contracts. Returns (non_goal, goal).
 
@@ -989,19 +1185,18 @@ def generate_contracts(world: "KSP1World") -> tuple[list[ContractSpec], list[Con
         if world.goal_spec.is_home_system_only(home) else ALL_BODIES
     )
 
-    # Harder-than-goal cap (option, default ON = no cap), on two independent axes:
+    # Harder-than-goal cap, on two independent axes (see _difficulty_cap):
     #  - launch mass: a contract whose full-kit launch mass exceeds the goal's
     #    hardest mission is too heavy (payload-aware, not bare trajectory dv, so a
     #    crewed station's mass counts). Catches heavy-at-similar-distance.
     #  - relay tier: a relay-requiring contract (station/base) at a body more
     #    remote than the goal's farthest needs comms infrastructure the goal never
     #    does. Catches too-far — including airless bodies (Eeloo) that carry no
-    #    mass penalty. goal_mass == 0 (e.g. complete_tech_tree, no body missions)
-    #    disables both (nothing to compare against).
-    allow_harder = bool(world.options.allow_missions_harder_than_goal.value)
-    goal_mass = 0.0 if allow_harder else _goal_max_mass(world.goal_spec, full, diff, mb)
-    goal_relay_tier = (_goal_max_relay_tier(world.goal_spec, mb)
-                       if goal_mass > 0 else None)
+    #    mass penalty.
+    # goal_mass == 0 (allow_missions_harder_than_goal, or no anchor) disables both.
+    # random_contracts / complete_tech_tree have no goal mission, so they cap at a
+    # synthetic anchor instead.
+    goal_mass, goal_relay_tier = _difficulty_cap(world, full, diff, mb)
     goal_achievements = _goal_achievements(world.goal_spec)
 
     candidates: list[ContractSpec] = []

@@ -1,3 +1,4 @@
+import math
 from typing import Any
 
 from BaseClasses import CollectionState, Item, MultiWorld, Tutorial
@@ -13,14 +14,17 @@ from .bodies import (
     ALL_BODIES, BodyName, MissionBuilder, MissionType,
     home_relative_science_values,
 )
-from .items import ITEM_NAME_TO_ID, PROGRESSIVE_LAUNCH_PAD_CAPS, _FILLER_ITEMS
+from .items import (
+    ITEM_NAME_TO_ID, PROGRESSIVE_LAUNCH_PAD_CAPS, _FILLER_ITEMS,
+    PROGRESSIVE_RD_NAME, PROGRESSIVE_RD_COUNT,
+)
 from .locations import (
     ALL_EVENTS, KSC_BIOMES, KSC_LOCATION_PREFIX,
     LOCATION_NAME_TO_ID, LocationBuilder, MAX_TECH_SLOTS,
-    TechTreeLocation,
+    THRESHOLD_LOCATION_NAMES, TechTreeLocation,
     effective_starting_inv_count, effective_tech_slots_per_node,
 )
-from .options import Goal, KSP1Options, STARTING_BODY_POOLS, StartingBody
+from .options import Goal, GoalContractMode, KSP1Options, STARTING_BODY_POOLS, StartingBody
 from .tech_tree import MAX_TIER, NODES_BY_TIER, TECH_NODES, TIER_TO_BAND
 
 
@@ -216,6 +220,16 @@ class KSP1World(World):
     # vs goal-achievement contracts; both are ContractSpec. Set in generate_early.
     contract_specs: list
     goal_contract_specs: list
+    # Goal-mode (count / progressive_unlock) state. Resolved in generate_early.
+    # ``contracts_required`` is X (completed non-goal contracts needed for the
+    # goal). ``contract_threshold_defs`` is the list of
+    # ``(threshold_location_name, required_count, locked_item_name)`` triples —
+    # each threshold is a pre-filled location the client reports once the
+    # completed-contract count reaches ``required_count``, releasing the locked
+    # goal contract item (or Progressive R&D copy for the tech-tree goal). Empty
+    # in findable / starting modes.
+    contracts_required: int
+    contract_threshold_defs: list
     # Part ksp_names this seed's contracts require — promoted to progression in
     # items.create_item so AP guarantees them reachable before the contract.
     contract_required_part_names: frozenset[str]
@@ -286,6 +300,9 @@ class KSP1World(World):
             (*self.contract_specs, *self.goal_contract_specs))
         _validate_goal_contracts_registrable(self.goal_contract_specs)
 
+        # Goal contract mode: validate + resolve X and the threshold locations.
+        self._resolve_goal_contract_mode()
+
         if self.options.exclude_late_tech_tree:
             late_tier_locs: set[str] = {
                 str(TechTreeLocation(node.display_name, slot))
@@ -302,10 +319,101 @@ class KSP1World(World):
             self.goal_spec, frozenset(self.options.exclude_locations.value),
         )
 
+    def _resolve_goal_contract_mode(self) -> None:
+        """Validate the goal-contract-mode configuration and build the threshold
+        locations (count / progressive_unlock). Fail fast with ``OptionError`` on
+        any unsolvable combination — predictable structural violations belong at
+        generate_early, not as an opaque FillError later.
+
+        Sets ``self.contracts_required`` (X) and ``self.contract_threshold_defs``
+        (empty in findable / starting). UT regen restores X from slot_data; the
+        threshold defs recompute deterministically from the restored contracts."""
+        mode = self.options.goal_contract_mode.value
+        is_random = self.options.goal.value == Goal.option_random_contracts
+        is_tech = self.goal_spec.complete_tech_tree
+        needs_thresholds = mode in (GoalContractMode.option_count,
+                                    GoalContractMode.option_progressive_unlock)
+
+        # random_contracts is a contracts-driven goal: only count / progressive
+        # give it a win condition. findable / starting would be degenerate.
+        if is_random and not needs_thresholds:
+            raise OptionError(
+                "KSP1: goal 'random_contracts' requires goal_contract_mode "
+                "'count' or 'progressive_unlock' (it has no destination goal to "
+                "find or start with)."
+            )
+
+        if not needs_thresholds:
+            self.contracts_required = 0
+            self.contract_threshold_defs = []
+            return
+
+        # count / progressive need contracts to count toward.
+        n_contracts = len(self.contract_specs)
+        if n_contracts == 0:
+            raise OptionError(
+                "KSP1: goal_contract_mode 'count'/'progressive_unlock' needs "
+                "contracts to complete, but none were generated. Raise "
+                "contracts_available (or enable more contract types)."
+            )
+
+        # Resolve X (auto = 80% of generated contracts, rounded up).
+        ut_x = getattr(self, "_ut_contracts_required", None)
+        if ut_x is not None:
+            x = int(ut_x)
+        else:
+            raw_x = self.options.contracts_required_for_goal.value
+            raw_y = self.options.contracts_available.value
+            if raw_x >= 0 and raw_y >= 0 and raw_x > raw_y:
+                raise OptionError(
+                    f"KSP1: contracts_required_for_goal ({raw_x}) exceeds "
+                    f"contracts_available ({raw_y})."
+                )
+            x = raw_x if raw_x >= 0 else math.ceil(0.8 * n_contracts)
+
+        # Clamp to the contracts actually generated (candidate shortfall is not a
+        # user error — warn and continue rather than abort).
+        if x > n_contracts:
+            import logging
+            logging.warning(
+                "KSP1: contracts_required_for_goal %d exceeds the %d contracts "
+                "generated this seed; clamping to %d.", x, n_contracts, n_contracts)
+            x = n_contracts
+        if x < 1:
+            raise OptionError(
+                "KSP1: goal_contract_mode 'count'/'progressive_unlock' needs at "
+                "least 1 contract required for the goal (got "
+                f"{x}); pick a positive contracts_required_for_goal."
+            )
+        self.contracts_required = x
+
+        # Which items the thresholds award, in unlock order:
+        #   tech-tree goal -> Progressive R&D copies (count: just the final copy;
+        #                     progressive: all PROGRESSIVE_RD_COUNT copies)
+        #   body goal      -> goal contract items, easiest mission first
+        if is_tech:
+            n_copies = (1 if mode == GoalContractMode.option_count
+                        else PROGRESSIVE_RD_COUNT)
+            threshold_items = [PROGRESSIVE_RD_NAME] * n_copies
+        else:
+            threshold_items = [
+                s.item_name for s in contracts.goal_contracts_easiest_first(self)
+            ]
+
+        k = len(threshold_items)
+        defs: list = []
+        for i, item_name in enumerate(threshold_items, start=1):
+            # count: every goal item unlocks together at X. progressive: staggered
+            # so the k-th unlocks exactly at X.
+            count = x if mode == GoalContractMode.option_count else math.ceil(i * x / k)
+            defs.append((THRESHOLD_LOCATION_NAMES[i - 1], count, item_name))
+        self.contract_threshold_defs = defs
+
     def create_regions(self) -> None:
         regions.create_all_regions(self)
         locations.create_all_locations(self)
         rules.create_victory_location(self)
+        rules.create_threshold_locations(self)
 
     def create_items(self) -> None:
         items.create_all_items(self)
@@ -473,6 +581,19 @@ class KSP1World(World):
             spec.to_slot_dict()
             for spec in (*self.contract_specs, *self.goal_contract_specs)
         ]
+        # Goal contract mode. ``contract_thresholds`` is the client's watcher map
+        # {completed-contract-count -> [threshold locations to report]}: when the
+        # player's completed non-goal-contract count reaches a key, the client
+        # reports those locations, releasing the goal contract item(s). Empty in
+        # findable / starting. ``contracts_required``/``contracts_available`` are
+        # carried for UT regen fidelity.
+        d["goal_contract_mode"] = self.options.goal_contract_mode.value
+        d["contracts_required"] = self.contracts_required
+        d["contracts_available"] = self.options.contracts_available.value
+        thresholds_map: dict[str, list[str]] = {}
+        for loc_name, count, _item in self.contract_threshold_defs:
+            thresholds_map.setdefault(str(count), []).append(loc_name)
+        d["contract_thresholds"] = thresholds_map
         return d
 
     # ------------------------------------------------------------------
@@ -512,6 +633,16 @@ class KSP1World(World):
             contracts.ContractSpec.from_slot_dict(entry)
             for entry in slot_data.get("contracts", [])
         ]
+
+        # Goal contract mode: restore the options and the resolved X. The
+        # threshold defs themselves recompute deterministically in
+        # generate_early from the restored contracts + X (evaluate_contract is
+        # pure), so only X needs carrying to avoid any auto-derivation drift.
+        if "goal_contract_mode" in slot_data:
+            self.options.goal_contract_mode.value = slot_data["goal_contract_mode"]
+        if "contracts_available" in slot_data:
+            self.options.contracts_available.value = slot_data["contracts_available"]
+        self._ut_contracts_required = slot_data.get("contracts_required")
 
         # A custom goal isn't a single enum value — its body lists ARE the goal,
         # and resolve_goal_spec rebuilds the spec from those option values during
@@ -603,7 +734,7 @@ class KSP1World(World):
         world's own specs (the source of truth) rather than parsing the display
         name, so /explain covers every contract type without per-type handling."""
         for spec in (*self.contract_specs, *self.goal_contract_specs):
-            if spec.location_name == name:
+            if name in spec.location_names:
                 return spec
         return None
 

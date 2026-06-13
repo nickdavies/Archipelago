@@ -1972,6 +1972,24 @@ def _predictable_spheres(world: "KSP1World") -> list[tuple[str, str]]:
     # locations the chain extends through so cumulative science covers
     # cumulative_tier_cost(MAX_TIER).  Builder validates feasibility.
     out.extend(_pick_tech_tree_anchors(world))
+    # Goal-mode anchors (count / progressive_unlock): the player must complete X
+    # non-goal contracts to unlock the goal, so the chain must thread the kit to
+    # reach those contracts.  Without this, a trivial goal (random contracts'
+    # flag-at-home) builds a ladder too shallow to bootstrap the deeper contracts,
+    # and fill strands their kit unreachably so the threshold can never be
+    # satisfied.  Each contract reward is physics-gated (it has a signature), so it
+    # threads exactly like a goal sphere.  Excluded for the tech-tree goal, whose
+    # science anchors above already build a deep enough ladder — adding contract
+    # anchors on top over-constrains the chain and costs solve rate.
+    from .options import GoalContractMode
+    if (world.options.goal_contract_mode.value in (
+            GoalContractMode.option_count,
+            GoalContractMode.option_progressive_unlock)
+            and not world.goal_spec.complete_tech_tree):
+        for spec in world.contract_specs:
+            name = spec.location_name  # slot 1; both slots share one signature
+            if name not in infeasible and _parse_location(name) is not None:
+                out.append((f"S_contract[{name}]", name))
     return out
 
 

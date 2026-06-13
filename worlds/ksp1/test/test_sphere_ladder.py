@@ -11,6 +11,7 @@ from __future__ import annotations
 import unittest
 
 from worlds.ksp1.test.base import KSP1TestBase
+from worlds.ksp1.sphere_ladder import _parse_location
 
 
 class TestPredictableSpheres(KSP1TestBase):
@@ -94,6 +95,26 @@ class TestSmallGoalMunFlag(KSP1TestBase):
         names = {s.location_name for s in ladder.spheres}
         self.assertIn("Kerbin First Launch", names)
         self.assertIn("Kerbin Orbit 1", names)
+
+
+class TestParseLocationNewNames(unittest.TestCase):
+    """The sphere ladder must give both non-goal contract slots a real signature
+    (a None here un-gates the location and deadlocks fill), and must skip the
+    goal-mode threshold / event locations (they're pre-filled, never placed)."""
+
+    def test_both_contract_slots_parse(self) -> None:
+        from worlds.ksp1.contracts import ContractType
+        from worlds.ksp1.bodies import BodyName
+        for name in ("Contract: Mine Ore on Mun 1", "Contract: Mine Ore on Mun 2"):
+            info = _parse_location(name)
+            self.assertIsNotNone(info, name)
+            self.assertEqual(info.spec.contract_type, ContractType.MINE_ORE)
+            self.assertEqual(info.spec.body, BodyName.MUN)
+
+    def test_threshold_and_event_locations_skipped(self) -> None:
+        for name in ("Contract Threshold 1", "Contract Threshold 12",
+                     "Contract Complete: Mine Ore on Mun"):
+            self.assertIsNone(_parse_location(name), name)
 
 
 if __name__ == "__main__":

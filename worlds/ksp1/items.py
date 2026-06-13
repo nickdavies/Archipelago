@@ -35,6 +35,7 @@ from .parts import (
 )
 from .contracts import all_possible_contract_specs
 from .ranks import RankContext, rank_sig_for
+from .options import GoalContractMode
 
 if TYPE_CHECKING:
     from .world import KSP1World
@@ -318,8 +319,24 @@ def create_all_items(world: KSP1World) -> None:
         item._sphere_tier = tier
         pool.append(item)
 
-    # Progressive R&D copies (tech-tree band gate).
-    for tier in range(1, PROGRESSIVE_RD_COUNT + 1):
+    # Progressive R&D items (gates higher tech tree bands). For the tech-tree
+    # goal these double as the goal items in non-findable modes: starting
+    # precollects all copies; count/progressive_unlock lock some/all on threshold
+    # locations (_resolve_goal_contract_mode), so only the still-pooled copies are
+    # added here. Non-tech goals always pool every copy regardless of mode.
+    mode = world.options.goal_contract_mode.value
+    is_tech = world.goal_spec.complete_tech_tree
+    rd_locked = sum(
+        1 for _loc, _cnt, item_name in world.contract_threshold_defs
+        if item_name == PROGRESSIVE_RD_NAME
+    )
+    if is_tech and mode == GoalContractMode.option_starting:
+        for _ in range(PROGRESSIVE_RD_COUNT):
+            world.multiworld.push_precollected(create_item(world, PROGRESSIVE_RD_NAME))
+        rd_in_pool = 0
+    else:
+        rd_in_pool = PROGRESSIVE_RD_COUNT - rd_locked
+    for tier in range(1, rd_in_pool + 1):
         item = create_item(world, PROGRESSIVE_RD_NAME)
         item._sphere_tier = tier
         pool.append(item)
@@ -331,23 +348,35 @@ def create_all_items(world: KSP1World) -> None:
             item._sphere_tier = tier
             pool.append(item)
 
-    # Contract items (one per generated contract; goal contracts are phase 3).
-    # Each is progression and net-neutral on the pool (it adds a matching
-    # contract completion location too).
-    for spec in (*world.contract_specs, *world.goal_contract_specs):
+    # Contract gate items. Non-goal contracts are always pooled. Goal contract
+    # items depend on the goal contract mode:
+    #   findable           -> pool (found like any other item; today's behavior)
+    #   starting           -> precollected (extra starting items)
+    #   count / progressive -> locked on a threshold location (not pooled; the
+    #                          player receives them by completing X contracts)
+    for spec in world.contract_specs:
         pool.append(create_item(world, spec.item_name))
+    for spec in world.goal_contract_specs:
+        if mode == GoalContractMode.option_starting:
+            world.multiworld.push_precollected(create_item(world, spec.item_name))
+        elif mode == GoalContractMode.option_findable:
+            pool.append(create_item(world, spec.item_name))
+        # count / progressive_unlock: locked on a threshold location instead.
 
-    # Pad the pool with filler items so item count == location count.
-    # create_regions() runs before create_items(), so all locations exist.
-    real_location_count = sum(
+    # Pad the pool with filler items so item count == count of locations that
+    # still need filling. create_regions() runs before create_items(), so all
+    # locations exist. Pre-filled locations (goal-mode threshold locations carry
+    # a locked goal/R&D item) are excluded — their item isn't in the pool, so
+    # counting them would over-pad and break the items==locations balance.
+    unfilled_location_count = sum(
         1 for loc in world.multiworld.get_locations(world.player)
-        if loc.address is not None
+        if loc.address is not None and loc.item is None
     )
-    filler_count = real_location_count - len(pool)
+    filler_count = unfilled_location_count - len(pool)
     if filler_count < 0:
         raise AssertionError(
             f"KSP1 item pool overflow: pool={len(pool)} > locations="
-            f"{real_location_count}.  Phase 2 should keep this in balance"
+            f"{unfilled_location_count}.  Phase 2 should keep this in balance"
             f" but a check failed — investigate before generating."
         )
     for _ in range(filler_count):

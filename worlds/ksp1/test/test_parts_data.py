@@ -280,13 +280,15 @@ class TestStableIdRanges(unittest.TestCase):
         from worlds.ksp1.locations import LOCATION_TABLE
         # Location offsets occupy distinct bands: 2000-4199 for the legacy
         # buckets (starting inventory, KSC biomes, Kerbin home specials,
-        # mission events, tech tree) plus the 14 non-Kerbin home sets, and a
-        # large dedicated 20_000+ block for contract completion locations.
+        # mission events, tech tree) plus the 14 non-Kerbin home sets, a small
+        # 19_000-block for goal-mode threshold locations, and a large dedicated
+        # 20_000+ block for contract completion locations (3 names per spec).
         for name, offset in LOCATION_TABLE.items():
             in_legacy = 2000 <= offset < 4200
+            in_thresholds = 19_000 <= offset < 19_100
             in_contracts = 20_000 <= offset < 30_000
             self.assertTrue(
-                in_legacy or in_contracts,
+                in_legacy or in_thresholds or in_contracts,
                 f"Location {name!r} offset {offset} outside known bands",
             )
 

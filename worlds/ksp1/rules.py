@@ -41,7 +41,7 @@ from .locations import (
     effective_tech_slots_per_node,
     event_locations,
 )
-from .options import Difficulty, Goal, ItemPacing
+from .options import Difficulty, Goal, GoalContractMode, ItemPacing
 from .tech_tree import MAX_TIER, MAX_RD_BAND, cumulative_tier_cost, TECH_NODES, LEAF_TECH_NODES
 
 if TYPE_CHECKING:
@@ -180,6 +180,7 @@ def set_all_rules(world: KSP1World) -> None:
     _set_home_rules(world, player)
     _set_mission_rules(world, player)
     _set_contract_rules(world, player)
+    _set_threshold_rules(world, player)
     _apply_home_system_local_exclusions(world)
     # Tech tree rules are now region entrance rules (see regions.py).
     _set_item_pacing_rules(world, player, difficulty)
@@ -401,8 +402,14 @@ def _set_contract_rules(world: KSP1World, player: int) -> None:
     # /explain reads this set (world._contract_uses_proxy) rather than re-deriving
     # the predicate, so the reported gate can't drift from the rule actually set.
     world._proxy_contract_ids = set()
+    # In count / progressive_unlock each non-goal contract has a completion-event
+    # location; it shares the contract's rule so has("Contract Completed", X)
+    # counts contracts completable in logic.
+    counts_contracts = world.options.goal_contract_mode.value in (
+        GoalContractMode.option_count,
+        GoalContractMode.option_progressive_unlock,
+    )
     for spec in (*world.contract_specs, *world.goal_contract_specs):
-        loc = world.get_location(spec.location_name)
         ev = event_of.get(spec.contract_type)
         # A goal contract on a model-infeasible achievement (e.g. Eve/Laythe
         # return from a far home, which the dv model can't verify) routes to the
@@ -423,7 +430,16 @@ def _set_contract_rules(world: KSP1World, player: int) -> None:
                      item=spec.item_name) -> bool:
                 return (state.has(item, player)
                         and get_capability(state, player).contract_access.get(cid, False))
-        loc.access_rule = rule
+        # Both non-goal reward slots share the one gate+capability rule.
+        for loc_name in spec.location_names:
+            world.get_location(loc_name).access_rule = rule
+
+        # Non-goal completion event shares the rule (count / progressive_unlock):
+        # reachable iff the contract is completable, so it contributes one to the
+        # "Contract Completed" count exactly when the contract is done in logic.
+        if counts_contracts and not spec.is_goal:
+            ev_name = spec.display_name.replace("Contract: ", "Contract Complete: ", 1)
+            world.get_location(ev_name).access_rule = rule
 
         # A goal contract's matching mission event(s) share its EXACT rule, so
         # the (now ordinary) event is reachable iff the goal contract is
@@ -433,6 +449,19 @@ def _set_contract_rules(world: KSP1World, player: int) -> None:
         if spec.is_goal and ev is not None:
             for ev_loc in event_locations(spec.body, ev):
                 world.get_location(str(ev_loc)).access_rule = rule
+
+
+def _set_threshold_rules(world: KSP1World, player: int) -> None:
+    """Gate each goal-mode threshold location on the completed-contract count:
+    ``state.has("Contract Completed", required_count)``. The event items are
+    swept in as their (contract-gated) event locations become reachable, so a
+    threshold unlocks exactly when ``required_count`` contracts are completable
+    in logic, releasing its locked goal item. No-op in findable / starting."""
+    from .contracts import CONTRACT_COMPLETED_EVENT
+    for loc_name, count, _item in world.contract_threshold_defs:
+        def rule(state: CollectionState, _c=count) -> bool:
+            return state.has(CONTRACT_COMPLETED_EVENT, player, _c)
+        world.get_location(loc_name).access_rule = rule
 
 
 def _set_mission_rules(world: KSP1World, player: int) -> None:
@@ -705,6 +734,12 @@ class GoalSpec:
     complete_tech_tree: bool = False
     home_system_local: bool = False
     home: BodyName | None = None
+    # The random_contracts "free" goal: a single home-body flag plant whose only
+    # real gate is completing X contracts. Its content is the contracts, not the
+    # destination, so it must NOT restrict contract generation to the home system
+    # (see is_home_system_only) and its tiny launch mass must not cap contract
+    # difficulty (see generate_contracts).
+    free_goal: bool = False
 
     def is_home_system_only(self, home: BodyName) -> bool:
         """True when every goal body is in ``home``'s local neighbourhood.
@@ -716,6 +751,10 @@ class GoalSpec:
         is a separate progression axis from body reach).
         """
         if self.complete_tech_tree:
+            return False
+        # The free goal's flag-at-home target would otherwise read as
+        # "home system only" and wrongly confine every contract to home.
+        if self.free_goal:
             return False
         all_bodies = (
             set(self.flag_bodies)
@@ -796,6 +835,17 @@ def resolve_goal_spec(options, home: BodyName,
         or options.orbit_bodies.value
         or options.flyby_bodies.value
     )
+
+    # The random_contracts "free" goal: a single home-body flag plant. Built
+    # directly (already materialized) so it bypasses _filter_home_from_spec,
+    # which would strip the home body and leave an empty, target-less spec.
+    if goal_value == Goal.option_random_contracts:
+        return GoalSpec(
+            display_name="Random Contracts",
+            flag_bodies=(home,),
+            free_goal=True,
+            home=home,
+        )
 
     if goal_value != Goal.option_custom and has_body_lists:
         raise RuntimeError(
@@ -939,6 +989,51 @@ def create_victory_location(world: KSP1World) -> None:
     victory_location = Location(world.player, "Victory", None, menu)
     menu.locations.append(victory_location)
     victory_location.place_locked_item(create_item(world, "Victory"))
+
+
+def create_threshold_locations(world: KSP1World) -> None:
+    """Create goal-mode threshold + contract-completion-event locations
+    (count / progressive_unlock only; no-op otherwise).
+
+    Threshold locations are REAL, pre-filled locations: each holds a locked goal
+    contract item (or Progressive R&D copy for the tech-tree goal). The client
+    reports them once the completed-contract count reaches the threshold,
+    releasing the locked item through the normal AP channel — so the existing
+    item-gated contract-offer machinery needs no change.
+
+    For each non-goal contract we also mint an address-None EVENT location
+    ("Contract Complete: ...") locked with a "Contract Completed" event item; its
+    access rule (set in _set_contract_rules, identical to the contract's) makes
+    ``state.has("Contract Completed", X)`` mean "X contracts completable in
+    logic", which is what the threshold access rules gate on.
+    """
+    from BaseClasses import Location
+    from .items import create_item, KSP1Item
+    from .contracts import CONTRACT_COMPLETED_EVENT
+    from .locations import KSP1Location, LOCATION_NAME_TO_ID
+
+    defs = world.contract_threshold_defs
+    if not defs:
+        return
+
+    menu = world.get_region("Menu")
+
+    # Threshold locations: real (addressed), pre-filled with the locked item.
+    threshold_locs = {
+        loc_name: LOCATION_NAME_TO_ID[loc_name] for loc_name, _c, _i in defs
+    }
+    menu.add_locations(threshold_locs, KSP1Location)
+    for loc_name, _count, item_name in defs:
+        world.get_location(loc_name).place_locked_item(create_item(world, item_name))
+
+    # Contract-completion events: one per non-goal contract, address None.
+    for spec in world.contract_specs:
+        ev_name = spec.display_name.replace("Contract: ", "Contract Complete: ", 1)
+        ev_loc = Location(world.player, ev_name, None, menu)
+        menu.locations.append(ev_loc)
+        ev_loc.place_locked_item(
+            KSP1Item(CONTRACT_COMPLETED_EVENT, ItemClassification.progression,
+                     None, world.player))
 
 
 def _all_locations_infeasible(

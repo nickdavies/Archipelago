@@ -60,6 +60,10 @@ class Goal(Choice):
     jool_moons_return      -- Return from each Jool moon (Laythe, Vall, Tylo,
                               Bop, Pol).  Home is filtered out, so a Laythe
                               start gives a tight 4-target Jool-system goal.
+    random_contracts       -- No destination goal: complete X of your available
+                              contracts, then plant a flag at home to win. Only
+                              valid with goal_contract_mode = count or
+                              progressive_unlock.
     custom                 -- Build a goal from the body-list options below.
     """
     display_name = "Goal"
@@ -74,6 +78,7 @@ class Goal(Choice):
     option_mun_flag = 7
     option_mun_sample_return = 8
     option_jool_moons_return = 9
+    option_random_contracts = 10
     option_custom = 99
 
     default = option_duna_return
@@ -382,19 +387,60 @@ class ContractTypeWeights(OptionDict):
     default = {str(ct): 1 for ct in NON_GOAL_TYPES}
 
 
-class NonGoalContractCount(NamedRange):
+class ContractsAvailable(NamedRange):
     """
-    Total number of non-goal contracts placed into the seed.
+    Total number of ordinary (non-goal) contracts placed into the seed (Y).
+    Independent of the goal; goal contracts are separate.
 
     auto  -- Derived from Difficulty (12/10/8/6).
     0..40 -- Explicit override. Capped at the number of ever-achievable
              (enabled-type, body) combinations available in the seed.
     """
-    display_name = "Non-Goal Contract Count"
+    display_name = "Contracts Available"
     range_start = 0
     range_end = 40
     default = -1
     special_range_names = {"auto": -1}
+
+
+class ContractsRequiredForGoal(NamedRange):
+    """
+    Completed non-goal contracts (X) required before the goal contract item(s)
+    are awarded. Read only by goal_contract_mode = count / progressive_unlock;
+    ignored by findable / starting.
+
+    auto  -- ceil(0.8 * contracts actually generated).
+    0..40 -- Explicit. Must not exceed Contracts Available; clamped down to the
+             number of contracts actually generated this seed.
+    """
+    display_name = "Contracts Required For Goal"
+    range_start = 0
+    range_end = 40
+    default = -1
+    special_range_names = {"auto": -1}
+
+
+class GoalContractMode(Choice):
+    """
+    How the goal contract item(s) reach the player.
+
+    findable           -- (default) goal contract item is in the multiworld
+                          item pool, found like any other item (today's behavior).
+    starting           -- goal contract item(s) are precollected as EXTRA
+                          starting items; you are limited only by physics, parts,
+                          and buildings.
+    count              -- complete X of your Y available contracts; on hitting X
+                          all goal contract items are awarded at once.
+    progressive_unlock -- complete contracts to unlock the goal contract items
+                          one at a time (easiest goal mission first), the last
+                          at X.
+    """
+    display_name = "Goal Contract Mode"
+    option_findable = 0
+    option_starting = 1
+    option_count = 2
+    option_progressive_unlock = 3
+    default = option_findable
 
 
 class AllowMissionsHarderThanGoal(Toggle):
@@ -429,7 +475,9 @@ class KSP1Options(PerGameCommonOptions):
     exclude_late_tech_tree: ExcludeLateTechTree
     progressive_launch_pad: ProgressiveLaunchPad
     contract_type_weights: ContractTypeWeights
-    non_goal_contract_count: NonGoalContractCount
+    contracts_available: ContractsAvailable
+    contracts_required_for_goal: ContractsRequiredForGoal
+    goal_contract_mode: GoalContractMode
     allow_missions_harder_than_goal: AllowMissionsHarderThanGoal
     flag_bodies: FlagBodies
     return_bodies: ReturnBodies

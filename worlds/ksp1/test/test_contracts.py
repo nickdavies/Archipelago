@@ -77,11 +77,37 @@ class TestSlotDataRoundTrip(unittest.TestCase):
     def test_to_from_slot_dict(self):
         d = MUN_MINE.to_slot_dict()
         self.assertEqual(d["item"], "Contract: Mine Ore on Mun")
-        self.assertEqual(d["location"], "Contract: Mine Ore on Mun")
+        # Non-goal contracts ship two slot-suffixed reward locations.
+        self.assertEqual(
+            d["locations"],
+            ["Contract: Mine Ore on Mun 1", "Contract: Mine Ore on Mun 2"],
+        )
         self.assertEqual(d["schema"], C.CONTRACT_SCHEMA_VERSION)
         kinds = [p["kind"] for p in d["parameters"]]
         self.assertEqual(kinds, ["situation", "resource"])
         self.assertEqual(C.ContractSpec.from_slot_dict(d), MUN_MINE)
+
+    def test_goal_contract_single_location(self):
+        # Goal contracts stay 1:1 — one unsuffixed reward location.
+        goal = C.ContractSpec(C.ContractType.RETURN, BodyName.DUNA, is_goal=True)
+        d = goal.to_slot_dict()
+        self.assertEqual(d["locations"], ["Contract: Return from Duna"])
+        self.assertEqual(goal.location_name, "Contract: Return from Duna")
+
+    def test_parse_contract_location_name_both_forms(self):
+        # The sphere ladder must resolve both non-goal slots AND the bare goal
+        # form back to a spec; threshold/event names must NOT match.
+        for name in ("Contract: Mine Ore on Mun",
+                     "Contract: Mine Ore on Mun 1",
+                     "Contract: Mine Ore on Mun 2"):
+            spec = C.parse_contract_location_name(name)
+            self.assertIsNotNone(spec, name)
+            self.assertEqual(spec.contract_type, C.ContractType.MINE_ORE)
+            self.assertEqual(spec.body, BodyName.MUN)
+        for name in ("Contract Threshold 3",
+                     "Contract Complete: Mine Ore on Mun",
+                     "Mun Flag Plant 1"):
+            self.assertIsNone(C.parse_contract_location_name(name), name)
 
     def test_every_type_round_trips(self):
         # to_slot_dict/from_slot_dict must rebuild an identical spec for EVERY
@@ -182,7 +208,7 @@ class TestContractRequiredParts(KSP1TestBase):
     required parts are promoted to progression."""
     options = {
         "contract_type_weights": {"mine_ore": 10},
-        "non_goal_contract_count": 8,
+        "contracts_available": 8,
     }
 
     def test_required_parts_promoted_to_progression(self):
@@ -253,7 +279,7 @@ class TestStockBackedContractTypes(KSP1TestBase):
             "equatorial_orbit": 5, "polar_orbit": 5,
             "stationary_orbit": 5, "transmit_science": 5,
         },
-        "non_goal_contract_count": 20,
+        "contracts_available": 20,
     }
     needs_real_pre_fill = True
 
@@ -279,7 +305,7 @@ class TestHomeBodyOrbitalContract(KSP1TestBase):
     multi-type config sampled it only by luck."""
     options = {
         "contract_type_weights": {"equatorial_orbit": 1},
-        "non_goal_contract_count": 40,
+        "contracts_available": 40,
         "allow_missions_harder_than_goal": True,
     }
 

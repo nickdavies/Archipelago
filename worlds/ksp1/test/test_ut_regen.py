@@ -89,6 +89,44 @@ class TestUTRegen(unittest.TestCase):
             world1.goal_spec.flyby_bodies, world2.goal_spec.flyby_bodies,
         )
 
+    def test_count_mode_thresholds_round_trip(self):
+        """count-mode X and threshold defs reconstruct identically after regen."""
+        opts = {
+            "goal": "flag_every_body",
+            "goal_contract_mode": "count",
+            "contracts_available": 10,
+        }
+        world1, world2, original_sd = self._regen_from_slot_data(seed=7, options=opts)
+        self.assertEqual(world1.contracts_required, world2.contracts_required)
+        self.assertEqual(world1.contract_threshold_defs, world2.contract_threshold_defs)
+        regen_sd = world2.fill_slot_data()
+        for key in ("goal_contract_mode", "contracts_required", "contract_thresholds"):
+            self.assertEqual(original_sd[key], regen_sd[key],
+                             f"slot_data[{key!r}] mismatch after regen")
+
+    def test_progressive_unlock_thresholds_round_trip(self):
+        """progressive_unlock threshold ordering survives regen (launch-mass sort
+        is deterministic, so the same goal item lands on the same threshold)."""
+        opts = {
+            "goal": "flag_every_body",
+            "goal_contract_mode": "progressive_unlock",
+            "contracts_available": 10,
+        }
+        world1, world2, _ = self._regen_from_slot_data(seed=11, options=opts)
+        self.assertEqual(world1.contract_threshold_defs, world2.contract_threshold_defs)
+
+    def test_random_contracts_round_trip(self):
+        """random_contracts goal (free flag-on-home) reconstructs after regen."""
+        opts = {
+            "goal": "random_contracts",
+            "goal_contract_mode": "count",
+            "contracts_available": 10,
+        }
+        world1, world2, _ = self._regen_from_slot_data(seed=13, options=opts)
+        self.assertTrue(world2.goal_spec.free_goal)
+        self.assertEqual(world1.goal_spec.flag_bodies, world2.goal_spec.flag_bodies)
+        self.assertEqual(world1.contract_threshold_defs, world2.contract_threshold_defs)
+
 
 class TestExplainRule(unittest.TestCase):
     """Test the explain_rule UT hook."""

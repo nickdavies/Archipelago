@@ -43,7 +43,7 @@ from .bodies import (
     ALL_BODIES, BODY_BY_NAME, BodyName, MissionType,
     home_altitude_milestones,
 )
-from .contracts import all_possible_contract_specs
+from .contracts import all_possible_contract_specs, GOAL_CONTRACT_TYPES
 from .tech_tree import TECH_NODES
 
 if TYPE_CHECKING:
@@ -59,6 +59,7 @@ _HOME_OFFSET_START = 2100          # Kerbin home specials: 2100-2199 (11 used, r
 _MISSION_OFFSET_START = 2200       # Per-body mission events: 2200-2999
 _TECH_OFFSET_START = 3000          # Tech tree: 3000-3999
 _ALT_HOME_OFFSET_START = 4000      # Non-Kerbin home specials: 4000-4153 (14 bodies × 11 = 154)
+_THRESHOLD_OFFSET_START = 19_000   # Goal-mode threshold locations: 19_000-19_099 (max 77 used)
 _CONTRACT_OFFSET_START = 20_000     # Contract completion locations: large dedicated block, 20_000+
 
 
@@ -469,8 +470,18 @@ def _build_location_table() -> dict[str, int]:
             table[loc.name] = offset
             offset += 1
 
-    # Contract completion locations (one per possible (type, body)). Same sort
-    # order as the contract items in items.py so the two stay aligned.
+    # Goal-mode threshold locations: real, pre-filled locations the client
+    # reports once the completed-contract count reaches each threshold. The
+    # universe of names is fixed (a seed uses at most one per goal contract);
+    # 77 is the max possible goal-achievement count, comfortably under 100.
+    offset = _THRESHOLD_OFFSET_START
+    for name in THRESHOLD_LOCATION_NAMES:
+        table[name] = offset
+        offset += 1
+
+    # Contract completion locations: three names per possible (type, body) — the
+    # bare goal form plus the two non-goal slot suffixes. Same (type, body) sort
+    # order as the contract items in items.py so the blocks stay aligned.
     offset = _CONTRACT_OFFSET_START
     for name in CONTRACT_LOCATION_NAMES:
         table[name] = offset
@@ -479,14 +490,34 @@ def _build_location_table() -> dict[str, int]:
     return table
 
 
-# All possible contract location names, sorted to match the contract item ids.
+# Every reward-location name a contract could ever register: for each possible
+# (type, body), the bare goal-contract form AND both non-goal slot suffixes
+# (only the relevant subset is actually created per seed). Sorted by contract_id
+# so the id block is stable.
 CONTRACT_LOCATION_NAMES: tuple[str, ...] = tuple(
-    spec.location_name
+    name
     for spec in sorted(all_possible_contract_specs(), key=lambda s: s.contract_id)
+    for name in (
+        spec.display_name,
+        f"{spec.display_name} 1",
+        f"{spec.display_name} 2",
+    )
 )
 
 #: Set form for O(1) "is this a contract location?" checks (UT / sphere ladder).
 CONTRACT_LOCATION_NAME_SET: frozenset[str] = frozenset(CONTRACT_LOCATION_NAMES)
+
+# Goal-mode threshold location names (count / progressive_unlock). One per goal
+# contract is used per seed; the registry sizes to the universe maximum — the
+# count of every possible goal achievement (each goal contract type on every
+# body it can target). Derived, so adding bodies/types can't silently overflow.
+MAX_CONTRACT_THRESHOLDS: int = sum(
+    1 for spec in all_possible_contract_specs()
+    if spec.contract_type in GOAL_CONTRACT_TYPES
+)
+THRESHOLD_LOCATION_NAMES: tuple[str, ...] = tuple(
+    f"Contract Threshold {i}" for i in range(1, MAX_CONTRACT_THRESHOLDS + 1)
+)
 
 
 LOCATION_TABLE: dict[str, int] = _build_location_table()
@@ -567,8 +598,10 @@ def create_all_locations(world: KSP1World) -> None:
         region.add_locations(node_locs, KSP1Location)
 
     # Contract completion locations (only the contracts this seed generated).
+    # Non-goal contracts register two slot locations; goal contracts one.
     contract_locs = {
-        spec.location_name: LOCATION_NAME_TO_ID[spec.location_name]
+        name: LOCATION_NAME_TO_ID[name]
         for spec in (*world.contract_specs, *world.goal_contract_specs)
+        for name in spec.location_names
     }
     menu.add_locations(contract_locs, KSP1Location)
