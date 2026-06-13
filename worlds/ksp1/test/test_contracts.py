@@ -154,6 +154,30 @@ class TestSlotDataRoundTrip(unittest.TestCase):
         self.assertGreater(rand.launch_mass, base.launch_mass,
                            "inclined/raised home orbit must cost more than a plain orbit")
 
+    def test_kerbal_rescue_params_and_free_seat(self):
+        # Rescue emits the spawn primitive + a crew-cabin free-seat objective,
+        # and is infeasible without a crew cabin to bring the Kerbal home.
+        spec = C.ContractSpec(C.ContractType.KERBAL_RESCUE, BodyName.MUN)
+        kinds = [p.to_json()["kind"] for p in spec.type_def.build_parameters(BodyName.MUN)]
+        self.assertIn("rescue", kinds)
+        self.assertIn("has_any_part", kinds)  # the crew_cabin free seat
+        # Feasible with full kit; the crew_cabin category must resolve a part.
+        self.assertTrue(C.can_complete_contract(spec, FULL, DIFF, MB))
+        self.assertIsNotNone(C.required_part_manifest(spec, FULL))
+        # No crew part available at all -> the free seat can't be delivered.
+        no_crew = _flags(lambda n: 0)
+        self.assertIsNone(C.required_part_manifest(spec, no_crew))
+
+    def test_kerbal_rescue_no_target_landing(self):
+        # The rescue trajectory reaches the target's LOW ORBIT and returns from
+        # there -- it must never include the target's surface (no landing leg).
+        from worlds.ksp1.bodies import MissionType
+        for profile in MB.profiles_for(BodyName.MUN, MissionType.RESCUE):
+            nodes = {e.source for e in profile} | {e.destination for e in profile}
+            self.assertNotIn("mun_surface", nodes,
+                             "rescue must not land at the target body")
+            self.assertIn("mun_low_orbit", nodes)
+
     def test_random_orbit_offhome_no_penalty(self):
         # Off-home, capture is free into any inclination/altitude — so a remote
         # random orbit must NOT be penalised (modeled as the base orbit).

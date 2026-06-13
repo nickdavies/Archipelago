@@ -48,6 +48,9 @@ class MissionType(StrEnum):
     SAMPLE_RETURN = "sample_return"
     FLAG_PLANT = "flag_plant"
     ESCAPE = "escape"
+    # Rescue: reach the target's ORBIT, rendezvous, and bring a stranded Kerbal
+    # home — like RETURN but the return starts from low orbit (no landing leg).
+    RESCUE = "rescue"
     # Home-body-only mission types (no MissionBuilder profile entry)
     SOUNDING = "sounding"
     FIRST_LAUNCH = "first_launch"
@@ -1006,6 +1009,11 @@ class MissionBuilder:
     # ladder's hot loop.
     _MAX_PROFILE_ALTS = 2
 
+    # Rescue rendezvous/phasing margin (m/s) — the cost of matching and closing
+    # on the stranded craft's orbit, baked into the RESCUE profile at the target
+    # body. Modest (a coplanar same-orbit rendezvous is cheap) and conservative.
+    _RESCUE_RENDEZVOUS_DV = 200.0
+
     def __init__(self, home: BodyName):
         self.home: BodyName = home
         # Per-body seeded target orbits for RANDOM_ORBIT contracts. Populated by
@@ -1097,6 +1105,16 @@ class MissionBuilder:
         bnl = body.value.lower()
         return self._edge(
             f"{bnl}_low_orbit", f"{bnl}_sync_orbit", self._PV, dv, body,
+            attitude=True,
+        )
+
+    def make_phasing_edge(self, body: BodyName, dv: float) -> MissionEdge:
+        """A pure-vacuum low-orbit phasing/matching burn (the rendezvous margin a
+        rescue adds at the target body). A self-loop on the target's low orbit so
+        it sums into the mission dv without changing the trajectory."""
+        bnl = body.value.lower()
+        return self._edge(
+            f"{bnl}_low_orbit", f"{bnl}_low_orbit", self._PV, dv, body,
             attitude=True,
         )
 
@@ -1522,6 +1540,10 @@ class MissionBuilder:
                 land_profile = ascent + [deorbit]
                 self._add(hn, MissionType.LAND, land_profile)
                 self._add(hn, MissionType.RETURN, land_profile)
+                # RESCUE — reach home orbit, rendezvous, and deorbit the rescued
+                # Kerbal. Ascent + phasing burn (at low orbit) + deorbit.
+                phasing = self.make_phasing_edge(hn, self._RESCUE_RENDEZVOUS_DV)
+                self._add(hn, MissionType.RESCUE, ascent + [phasing, deorbit])
 
         # FLAG_PLANT and SAMPLE_RETURN: walk out from launchpad (Kerbal EVA),
         # no rocket required.  See user note in CLAUDE.md about Kerbin
@@ -1586,6 +1608,20 @@ class MissionBuilder:
             # missions are flyby-and-back, not sample retrieval.
             if body.can_land:
                 self._add(bn, MissionType.SAMPLE_RETURN, *combos)
+
+        # RESCUE — reach the target's LOW ORBIT (not surface), rendezvous, and
+        # bring the stranded Kerbal home. Like RETURN but the return always
+        # starts from low orbit (no landing+ascent leg at the target), with a
+        # rendezvous/phasing burn baked in at the target's low orbit.
+        rescue_outbound = self._find_outbound_paths(home_surface, target_lo)
+        rescue_return = self._find_return_paths(target_lo, home_surf)
+        if rescue_outbound and rescue_return:
+            phasing = self.make_phasing_edge(bn, self._RESCUE_RENDEZVOUS_DV)
+            rescue_combos = [out + [phasing] + ret
+                             for out in rescue_outbound for ret in rescue_return]
+            rescue_combos.sort(key=lambda p: sum(e.base_dv for e in p))
+            self._add(bn, MissionType.RESCUE,
+                      *rescue_combos[:self._MAX_PROFILE_ALTS])
 
     # ------------------------------------------------------------------
     # Cross-validation

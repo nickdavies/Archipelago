@@ -43,7 +43,7 @@ if TYPE_CHECKING:
 
 # Bumped when the parameter wire format or primitive vocabulary changes. The
 # client rejects contracts whose schema it doesn't understand.
-CONTRACT_SCHEMA_VERSION = 3
+CONTRACT_SCHEMA_VERSION = 4
 
 # Non-goal contracts award TWO reward locations sharing ONE gate item: completing
 # the contract checks both slots, so each non-goal contract is net +1 location of
@@ -167,6 +167,19 @@ class SampleReturnParam:
 
 
 @dataclass(frozen=True)
+class RescueParam:
+    """Rescue a stranded Kerbal from orbit of ``body`` and return them home. The
+    client SPAWNS the stranded Kerbal (a small pod in low orbit around ``body``)
+    when the contract is accepted, and completes when that Kerbal is recovered.
+    Unlike every other primitive, this one creates world state rather than just
+    watching the player's vessel — see the client RescuePrimitive."""
+    body: str
+
+    def to_json(self) -> dict:
+        return {"kind": "rescue", "body": str(self.body)}
+
+
+@dataclass(frozen=True)
 class SpecificOrbitParam:
     """Match a specific target orbit around ``body``. Wraps stock
     SpecificOrbitParameter (the satellite-contract orbit param) on the client; the
@@ -243,6 +256,7 @@ class ContractType(StrEnum):
     STATIONARY_ORBIT = "stationary_orbit"   # synchronous orbit (+raise dv at home)
     RANDOM_ORBIT = "random_orbit"           # seeded inclined/eccentric satellite orbit
     TRANSMIT_SCIENCE = "transmit_science"   # phone home from a body's space (CollectScience)
+    KERBAL_RESCUE = "kerbal_rescue"         # rescue a stranded Kerbal from orbit + return
     # Goal-only types — used when a goal achievement is one of these missions.
     RETURN = "return"
     FLYBY = "flyby"
@@ -255,7 +269,7 @@ NON_GOAL_TYPES: tuple[ContractType, ...] = (
     ContractType.FLAG_PLANT, ContractType.SAMPLE_RETURN, ContractType.ORBIT,
     ContractType.EQUATORIAL_ORBIT, ContractType.POLAR_ORBIT,
     ContractType.STATIONARY_ORBIT, ContractType.RANDOM_ORBIT,
-    ContractType.TRANSMIT_SCIENCE,
+    ContractType.TRANSMIT_SCIENCE, ContractType.KERBAL_RESCUE,
 )
 
 
@@ -370,7 +384,9 @@ class ContractTypeDef:
         penalty; STATIONARY appends the low-orbit→sync raise burn; RANDOM pays
         the inclination rotation loss + a raise to its apoapsis. All are free at
         remote bodies (capture straight into the target plane / a high orbit),
-        so they return ``edges`` unchanged off home."""
+        so they return ``edges`` unchanged off home. (RESCUE's rendezvous margin
+        is baked into its profile at build time, not here — it's at the target
+        body mid-trajectory, so it can't be appended without disconnecting.)"""
         if target_body != home_body:
             return edges
         home = BODY_BY_NAME[home_body]
@@ -468,6 +484,14 @@ class ContractTypeDef:
             return [PlantFlagParam(body)]
         if self.contract_type == ContractType.SAMPLE_RETURN:
             return [SampleReturnParam(body)]
+        if self.contract_type == ContractType.KERBAL_RESCUE:
+            # The client spawns the stranded Kerbal in orbit of `body` and
+            # completes when they are recovered. The crew-cabin free seat is a
+            # separate has_any_part objective so the player must actually have
+            # room to bring the Kerbal home.
+            params = [RescueParam(body)]
+            params += [_category_param(cat) for cat in self.required_categories]
+            return params
         if self.contract_type == ContractType.FLYBY:
             return [SituationParam("flyby", body)]      # stock EnterSOI(body)
         if self.contract_type == ContractType.RETURN:
@@ -581,6 +605,22 @@ CONTRACT_TYPE_DEFS: dict[ContractType, ContractTypeDef] = {
         home_safe=True,
         title_fmt="Transmit science from {body}",
         synopsis_fmt="Gather and transmit science from space around {body}.",
+    ),
+    ContractType.KERBAL_RESCUE: ContractTypeDef(
+        contract_type=ContractType.KERBAL_RESCUE,
+        location_noun="Crew Rescue",
+        location_prep="around",
+        base_mission_type=MissionType.RESCUE,
+        crewed=None,
+        # A free seat to bring the stranded Kerbal home (delivered as payload,
+        # like a station's crew cabins). crewed=None lets a probe-controlled
+        # craft with an empty cabin do it (lightest), or a crewed capsule.
+        required_categories=("crew_cabin",),
+        crew_requirement=1,
+        home_safe=True,
+        title_fmt="Rescue a stranded Kerbal in orbit of {body}",
+        synopsis_fmt="Rendezvous with a stranded Kerbal in orbit of {body} and "
+                     "bring them home safely.",
     ),
     ContractType.FLAG_PLANT: ContractTypeDef(
         contract_type=ContractType.FLAG_PLANT,
