@@ -1016,8 +1016,11 @@ def _construct_warm_start_kit(
     for sr in result.stage_results:
         if sr.engine_name and sr.engine_name != "(SRB integral)":
             used.add(sr.engine_name)
-        if sr.tank_name and sr.tank_name != "(SRB integral)":
-            used.add(sr.tank_name)
+        for _count, tname in sr.tank_manifest:
+            if tname and tname not in ("none", "(SRB integral)"):
+                used.add(tname)
+        if sr.heat_shield_name:
+            used.add(sr.heat_shield_name)
         for _count, pname in sr.equipment:
             used.add(pname)
     for _count, pname in result.terminal_parts:

@@ -10,7 +10,8 @@ from worlds.ksp1.parts import (
 from worlds.ksp1.rocket_math import (
     G0, stage_delta_v, srb_delta_v, required_tanks, twr,
     terminal_velocity, find_optimal_stage, StageResult,
-    KSP_SYMMETRY_MODES, ASPARAGUS_DRY_MASS_FACTOR, ONION_DRY_MASS_FACTOR,
+    KSP_SYMMETRY_MODES,
+    parallel_stage_dv, parallel_stage_min_twr,
 )
 
 
@@ -227,7 +228,7 @@ class TestFindOptimalStage(unittest.TestCase):
             gravity=9.81,
             needs_heat_shield=True,
             max_heat_shield_size=1.25,   # only 1.25m shield available
-            heat_shield_mass=0.15,
+            heat_shields=((1.25, 0.15, "Shield1"),),
         )
         self.assertIsNone(result)  # 2.5m engine filtered out
 
@@ -317,37 +318,90 @@ class TestFindOptimalStage(unittest.TestCase):
         self.assertIsNone(result)
 
 
-class TestParallelStagingDryMassFactor(unittest.TestCase):
-    """Verify asparagus/onion dry mass factors in stage_delta_v and required_tanks."""
+class TestParallelStageDv(unittest.TestCase):
+    """parallel_stage_dv: real progressive-shedding model (replaces the flat
+    dry-mass factor).  Identical columns; isp_g0=3000 for round numbers."""
 
-    def test_asparagus_more_dv_than_none(self) -> None:
-        dv_none = stage_delta_v(_SWIVEL, 1, _FL_T800, 2, 1.0, 1.0, parallel_mode="none")
-        dv_asp = stage_delta_v(_SWIVEL, 1, _FL_T800, 2, 1.0, 1.0, parallel_mode="asparagus")
-        self.assertGreater(dv_asp, dv_none)
+    ISP_G0 = 3000.0
+    P = 1.0          # payload (t)
+    CORE_DRY = 1.0   # core engine + core tank dry (t)
+    F = 4.0          # fuel per column (t)
+    BDRY = 1.05      # one booster's jettisoned dry: engine + tank dry + decoupler (t)
 
-    def test_onion_more_dv_than_none(self) -> None:
-        dv_none = stage_delta_v(_SWIVEL, 1, _FL_T800, 2, 1.0, 1.0, parallel_mode="none")
-        dv_onion = stage_delta_v(_SWIVEL, 1, _FL_T800, 2, 1.0, 1.0, parallel_mode="onion")
-        self.assertGreater(dv_onion, dv_none)
+    def _asp(self, n):
+        return parallel_stage_dv(self.ISP_G0, self.P, self.CORE_DRY, self.F,
+                                 self.BDRY, n, "asparagus")
 
-    def test_asparagus_more_dv_than_onion(self) -> None:
-        dv_onion = stage_delta_v(_SWIVEL, 1, _FL_T800, 2, 1.0, 1.0, parallel_mode="onion")
-        dv_asp = stage_delta_v(_SWIVEL, 1, _FL_T800, 2, 1.0, 1.0, parallel_mode="asparagus")
-        self.assertGreater(dv_asp, dv_onion)
+    def _onion(self, n):
+        return parallel_stage_dv(self.ISP_G0, self.P, self.CORE_DRY, self.F,
+                                 self.BDRY, n, "onion")
 
-    def test_onion_fewer_tanks_than_none(self) -> None:
-        n_none = required_tanks(_SWIVEL, 1, _FL_T800, 1.0, 2000.0, 1.0, parallel_mode="none")
-        n_onion = required_tanks(_SWIVEL, 1, _FL_T800, 1.0, 2000.0, 1.0, parallel_mode="onion")
-        self.assertGreater(n_none, 0)
-        self.assertGreater(n_onion, 0)
-        self.assertLessEqual(n_onion, n_none)
+    def test_zero_boosters_is_single_stage(self) -> None:
+        # No boosters -> just the core column burning its own fuel.
+        expected = self.ISP_G0 * math.log(
+            (self.P + self.CORE_DRY + self.F) / (self.P + self.CORE_DRY))
+        self.assertAlmostEqual(self._asp(0), expected, places=3)
+        self.assertAlmostEqual(self._onion(0), expected, places=3)
 
-    def test_asparagus_fewer_tanks_than_onion(self) -> None:
-        n_onion = required_tanks(_SWIVEL, 1, _FL_T800, 1.0, 2000.0, 1.0, parallel_mode="onion")
-        n_asp = required_tanks(_SWIVEL, 1, _FL_T800, 1.0, 2000.0, 1.0, parallel_mode="asparagus")
-        self.assertGreater(n_onion, 0)
-        self.assertGreater(n_asp, 0)
-        self.assertLessEqual(n_asp, n_onion)
+    def test_progressive_shedding_grows_with_pairs(self) -> None:
+        # Each added pair sheds more dry mass earlier -> strictly more dv.
+        seq = [self._asp(n) for n in (0, 2, 4, 6, 8)]
+        for lo, hi in zip(seq, seq[1:]):
+            self.assertGreater(hi, lo)
+
+    def test_asparagus_beats_onion_beyond_one_drop(self) -> None:
+        # One drop (2 boosters) is identical; crossfeed pulls ahead with more.
+        self.assertAlmostEqual(self._asp(2), self._onion(2), places=3)
+        for n in (4, 6, 8):
+            self.assertGreater(self._asp(n), self._onion(n))
+
+    def test_asparagus_beats_equal_fuel_single_stage(self) -> None:
+        # 8 boosters + core = 9 columns * 4t = 36t fuel.  A single stage with
+        # the same 36t (dry scaling with fuel) sheds nothing, so asparagus wins.
+        single = self.ISP_G0 * math.log(
+            (self.P + self.CORE_DRY + 9 * 0.5 + 36.0)
+            / (self.P + self.CORE_DRY + 9 * 0.5))
+        self.assertGreater(self._asp(8), single)
+
+    def test_heavier_decoupler_overhead_reduces_benefit(self) -> None:
+        # The radial decoupler + fuel line folded into booster_dry is the cost
+        # that bounds "more pairs is always better".
+        light = parallel_stage_dv(self.ISP_G0, self.P, self.CORE_DRY, self.F,
+                                   0.55, 8, "asparagus")   # tiny decoupler
+        heavy = parallel_stage_dv(self.ISP_G0, self.P, self.CORE_DRY, self.F,
+                                   2.05, 8, "asparagus")   # heavy decoupler
+        self.assertGreater(light, heavy)
+
+
+class TestParallelStageMinTwr(unittest.TestCase):
+    """parallel_stage_min_twr: the binding phase, where dropped booster engines
+    can make a LATE phase tighter than liftoff."""
+
+    T = 1000.0   # kN per engine
+    G = 10.0     # m/s^2
+
+    def test_droptank_binds_at_liftoff(self) -> None:
+        # Drop-tank boosters carry no engines, so thrust is constant while mass
+        # falls -> liftoff is the heaviest, lowest-TWR instant.
+        mn = parallel_stage_min_twr(self.T, self.G, payload=20.0, core_dry=2.0,
+            col_fuel=20.0, booster_dry=1.0, n_boost=4, n_eng_core=1,
+            n_eng_boost=0, mode="asparagus")
+        m0 = 20.0 + 2.0 + 20.0 + 4 * (1.0 + 20.0)
+        self.assertAlmostEqual(mn, 1 * self.T / (m0 * self.G), places=4)
+
+    def test_engine_boosters_core_phase_can_bind(self) -> None:
+        # Heavy payload, one engine per column: liftoff (3 engines) is fine but
+        # the core-only phase (1 engine) is tighter -- the case that a
+        # liftoff-only check would wrongly pass.
+        mn = parallel_stage_min_twr(self.T, self.G, payload=50.0, core_dry=2.0,
+            col_fuel=20.0, booster_dry=2.0, n_boost=2, n_eng_core=1,
+            n_eng_boost=1, mode="asparagus")
+        m0 = 50.0 + 2.0 + 20.0 + 2 * (2.0 + 20.0)
+        liftoff = 3 * self.T / (m0 * self.G)
+        m_core = m0 - 2 * (20.0 + 2.0)
+        core = 1 * self.T / (m_core * self.G)
+        self.assertLess(mn, liftoff)              # core tighter than liftoff
+        self.assertAlmostEqual(mn, core, places=4)
 
 
 class TestSymmetricEngineCounts(unittest.TestCase):

@@ -1106,8 +1106,9 @@ class TestEngineMounting(unittest.TestCase):
             available_multi_mounts=[],
         )
         if result is not None and result.engine_count > 1:
+            n_tanks = sum(n for n, _ in result.tank_manifest)
             self.assertGreaterEqual(
-                result.tank_count, result.engine_count,
+                n_tanks, result.engine_count,
                 "Without adapter, stack engine multi-engine must have n_tank >= n_eng",
             )
 
@@ -1162,7 +1163,7 @@ class TestEngineMounting(unittest.TestCase):
         # Radial engines have no n_tank >= n_eng constraint
         if result.engine_count > 1:
             # n_tanks can be less than n_eng — that's the point
-            self.assertIsInstance(result.tank_count, int)
+            self.assertIsInstance(result.tank_manifest, tuple)
 
     def test_radial_srb_capped_at_8(self) -> None:
         """Radial SRBs (Flea, Hammer) are capped at 8."""
@@ -1252,7 +1253,7 @@ class TestAeroLandingPassiveStage(unittest.TestCase):
                 last_stage = result.stage_results[-1]
                 self.assertEqual(last_stage.engine_count, 0,
                                  "Aero-landing stage should have no engines")
-                self.assertEqual(last_stage.tank_count, 0,
+                self.assertEqual(last_stage.tank_manifest, (),
                                  "Aero-landing stage should have no fuel tanks")
                 self.assertEqual(last_stage.delta_v, 0.0,
                                  "Aero-landing stage produces no delta-v")

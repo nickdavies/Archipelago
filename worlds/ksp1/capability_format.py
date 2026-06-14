@@ -330,9 +330,12 @@ def format_stage_breakdown(
         ksp_stage_num = num_stages - 1 - i
 
         tags: list[str] = []
-        if asparagus and not is_terminal:
-            tags.append("ASPARAGUS")
-        if stage.engine_count > 1:
+        if stage.n_boosters > 0:
+            # Real parallel build on this stage (not the old blanket flag).
+            mode = "ASPARAGUS" if asparagus else "ONION"
+            kind = "engine-boost" if stage.booster_engines > 0 else "drop-tank"
+            tags.append(f"{mode}: {stage.n_boosters} {kind} boosters")
+        elif stage.engine_count > 1:
             tags.append(f"{stage.engine_count}-WAY")
         tag_str = f"  [{', '.join(tags)}]" if tags else ""
         lines.append(f"\n  Stage {ksp_stage_num} ({header}):{tag_str}")
@@ -344,13 +347,18 @@ def format_stage_breakdown(
 
         if stage.engine_count > 0 and stage.engine_name != "none":
             lines.append(f"      {stage.engine_count}x {titled(stage.engine_name)}")
-        if stage.tank_count > 0 and stage.tank_name != "none":
-            fill_pct = stage.fill_fraction * 100
-            fill_str = f" ({fill_pct:.0f}% fill)" if fill_pct < 100 else ""
-            lines.append(f"      {stage.tank_count}x {titled(stage.tank_name)}{fill_str}")
+        for count, tank_name in stage.tank_manifest:
+            if tank_name and tank_name != "none":
+                lines.append(f"      {count}x {titled(tank_name)}")
 
         for count, part_id in stage.equipment:
             lines.append(f"      {count}x {titled(part_id)}")
+
+        # The heat shield the optimizer charged for this stage (it lives in
+        # stage_mass but isn't an engine/tank/equipment entry) — without it the
+        # reported build can't survive the reentry/aerocapture edge.
+        if stage.heat_shield_name:
+            lines.append(f"      1x {titled(stage.heat_shield_name)}")
 
         lines.append(f"    Edges:")
         for edge in group:

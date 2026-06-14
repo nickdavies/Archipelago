@@ -87,8 +87,19 @@ _MAX_SAFE_LANDING_SPEED: float = 6.0
 # (conservative: assume a 1.25m diameter capsule/probe)
 _SHIP_CROSS_SECTION: float = math.pi * (1.25 / 2) ** 2
 
-# Solar distance threshold for ION engines
-_ION_MAX_SOLAR_AU: float = 1.0  # only consider Dawn closer than Kerbin
+# Precomputed once: the part name + mass that provides FUEL_LINE (the
+# asparagus crossfeed enabler).  The real parallel-stage builder needs the
+# fuel line's mass/name to charge an asparagus crossfeed build.
+_FUEL_LINE_PART: Optional[str] = None
+_FUEL_LINE_MASS: float = 0.0
+for _nm, _parts in PART_DB.items():
+    _fl = next((_p for _p in _parts if isinstance(_p, MiscEquipment)
+                and CapabilityFlag.FUEL_LINE in _p.provides), None)
+    if _fl is not None:
+        _FUEL_LINE_PART = _nm
+        _FUEL_LINE_MASS = _fl.mass
+        break
+del _nm, _parts
 
 # Minimum jetpack TWR for ladder-free sample return
 _MIN_EVA_JETPACK_TWR: float = 1.05
@@ -864,19 +875,19 @@ def _filter_engines_for_ion(engines: list[Engine],
                              solar_au: float,
                              flags: EquipmentFlags) -> list[Engine]:
     """
-    Remove ION (xenon) engines from the list unless the target body is
-    close enough to Kerbol AND the player has adequate power for sustained burns.
+    Remove ION (xenon) engines from the logic entirely.
+
+    Ion's ~4200s Isp is a ~12x outlier: mass-minimisation always crowns it
+    for any dv-bound mission, so it becomes the de-facto required engine and
+    flattens per-seed variance.  It's also never *needed* — every mission is
+    reachable with chemical/nuclear, just heavier (and the launch-pad ladder
+    is sized for those non-ion masses).  So ion is out of logic: capability
+    never relies on it.  It stays in the item pool as an out-of-logic bonus
+    the player can fly if they collect it (an acceptable false-negative under
+    the conservative golden rule).  ``solar_au`` is retained for signature
+    stability but no longer gates anything.
     """
-    result = []
-    ion_ok = (
-        solar_au <= _ION_MAX_SOLAR_AU
-        and (flags.has_battery_large or flags.has_solar_array_large)
-    )
-    for engine in engines:
-        if engine.fuel_type == "xenon" and not ion_ok:
-            continue
-        result.append(engine)
-    return result
+    return [e for e in engines if e.fuel_type != "xenon"]
 
 
 def _evaluate_profile(
@@ -887,6 +898,7 @@ def _evaluate_profile(
     is_crewed: bool,
     home: BodyName,
     extra_payload_parts: tuple[MiscEquipment, ...] = (),
+    run_parallel: bool = True,
 ) -> ProfileResult:
     """
     Run the two-pass evaluation on a single mission profile alternative.
@@ -1168,18 +1180,27 @@ def _evaluate_profile(
         needs_hs = any(e.needs_heat_shield for e in group)
         needs_legs_g = any(e.needs_landing_legs for e in group)
 
-        # Equipment mass for this stage
-        equip_mass = 0.0
+        # Stage equipment.  Landing legs are a fixed, size-independent mass
+        # folded into the stage payload.  The heat shield is NOT a fixed mass:
+        # the optimizer charges the lightest shield that covers each candidate
+        # engine (``heat_shields_arg`` below), so a heavier shield is never
+        # forced — keeping the model monotonic in shield count.
+        equip_mass = 0.0          # non-shield fixed equipment (landing legs)
         stage_equipment: list[tuple[int, str]] = []
-        if needs_hs and flags.best_heat_shield:
-            equip_mass += flags.best_heat_shield.mass
-            stage_equipment.append((1, flags.best_heat_shield.name))
         if needs_legs_g:
             leg_body = BODY_BY_NAME[next(e.body for e in group if e.needs_landing_legs)]
             leg_mass, leg_id = _leg_mass_for_tier(flags, leg_body.landing_leg_tier)
             equip_mass += leg_mass
             if leg_id:
                 stage_equipment.append((_LANDING_LEG_COUNT, leg_id))
+
+        # Heat-shield options the optimizer may charge (per-engine lightest
+        # covering shield).  Empty when this stage needs no shield.
+        heat_shields_arg: tuple[tuple[float, float, str], ...] = ()
+        if needs_hs and flags.available_heat_shields:
+            heat_shields_arg = tuple(sorted(
+                (hs.size_class, hs.mass, hs.name) for hs in flags.available_heat_shields
+            ))
 
         # Atmospheric-ascent gate: steering a gravity turn in atmosphere
         # requires either a gimballed engine or actuated aero surfaces.
@@ -1194,7 +1215,12 @@ def _evaluate_profile(
         needs_gimbal_engine = (
             has_atmo_ascent_in_group and not flags.has_aero_control_surface
         )
-        stage_payload = payload
+        # Landing legs (equip_mass) are charged whenever a stage needs them,
+        # independent of the heat shield.  The pre-refactor code routed
+        # equip_mass through ``heat_shield_mass`` and zeroed it when the stage
+        # needed no shield, silently dropping leg mass on powered (no-shield)
+        # vacuum-body landings — an anti-conservative under-charge.
+        stage_payload = payload + equip_mass
         if has_atmo_ascent_in_group and flags.lightest_aero_control:
             stage_payload += 4.0 * flags.lightest_aero_control.mass
             stage_equipment.append((4, flags.lightest_aero_control.name))
@@ -1246,7 +1272,20 @@ def _evaluate_profile(
                 )
                 if chute_id and chute_count > 0:
                     stage_equipment.append((chute_count, chute_id))
-            passive_mass = stage_payload + equip_mass
+            # Size the reentry shield to the widest part it protects — the
+            # command pod (capsule/probe).  Lightest shield that COVERS the pod
+            # diameter; if none is big enough, the largest available.  (Legs are
+            # already folded into ``stage_payload`` via ``equip_mass``.)
+            passive_shield = None
+            if needs_hs and heat_shields_arg:
+                _term = _terminal_part(flags, is_crewed)
+                _term_dia = _term.size_class if _term else 0.0
+                _covering = [hs for hs in heat_shields_arg if hs[0] >= _term_dia]
+                passive_shield = (min(_covering, key=lambda x: x[1])
+                                  if _covering
+                                  else max(heat_shields_arg, key=lambda x: x[0]))
+            passive_shield_mass = passive_shield[1] if passive_shield else 0.0
+            passive_mass = stage_payload + passive_shield_mass
             stage_results_list.append(StageResult(
                 delta_v=0.0,
                 twr_at_ignition=0.0,
@@ -1256,11 +1295,11 @@ def _evaluate_profile(
                 stage_mass_wet=passive_mass,
                 stage_mass_dry=passive_mass,
                 engine_count=0,
-                tank_count=0,
                 fill_fraction=0.0,
                 engine_name="none",
-                tank_name="none",
+                tank_manifest=(),
                 equipment=stage_equipment,
+                heat_shield_name=passive_shield[2] if passive_shield else None,
             ))
             payload = passive_mass
             continue
@@ -1272,8 +1311,22 @@ def _evaluate_profile(
         else:
             parallel_mode = "none"
 
+        # Parts the real parallel builder needs: a radial decoupler to shed
+        # boosters, and the fuel line for asparagus crossfeed (onion has none).
+        _radial_decs = [d for d in flags.available_decouplers if d.kind == "radial"]
+        _rdec = min(_radial_decs, key=lambda d: d.mass) if _radial_decs else None
+        rdec_mass = _rdec.mass if _rdec else 0.0
+        rdec_name = _rdec.name if _rdec else ""
+        fl_mass = _FUEL_LINE_MASS if flags.has_fuel_lines else 0.0
+        fl_name = _FUEL_LINE_PART if (flags.has_fuel_lines and _FUEL_LINE_PART) else ""
+
         diagnostic_out: list = []
         stage_kwargs = dict(
+            run_parallel=run_parallel,
+            radial_decoupler_mass=rdec_mass,
+            radial_decoupler_name=rdec_name,
+            fuel_line_mass=fl_mass,
+            fuel_line_name=fl_name,
             available_engines=eligible_engines,
             available_srbs=flags.available_srbs,
             available_tanks=flags.available_tanks,
@@ -1284,7 +1337,7 @@ def _evaluate_profile(
             requires_throttleable=req_throttle,
             needs_heat_shield=needs_hs,
             max_heat_shield_size=flags.best_heat_shield.size_class if flags.best_heat_shield else None,
-            heat_shield_mass=equip_mass if needs_hs else 0.0,
+            heat_shields=heat_shields_arg,
             in_atmosphere=in_atmo,
             srb_needs_rcs=diff.srb_needs_rcs,
             player_has_rcs=flags.has_rcs,
@@ -1322,7 +1375,7 @@ def _evaluate_profile(
                 staging_tier=flags.staging_tier,
                 needs_heat_shield=needs_hs,
                 max_heat_shield_size=flags.best_heat_shield.size_class if flags.best_heat_shield else None,
-                heat_shield_mass=equip_mass if needs_hs else 0.0,
+                heat_shields=heat_shields_arg,
                 requires_throttleable=req_throttle,
                 require_gimbal=needs_gimbal_engine,
                 srb_needs_rcs=diff.srb_needs_rcs,
@@ -1338,6 +1391,11 @@ def _evaluate_profile(
                 atm_scale_height_m=body.atm_scale_height_m,
                 atm_top_m=body.safe_altitude_km * 1000.0 if body.has_atmosphere else 0.0,
                 parallel_mode=parallel_mode,
+                radial_decoupler_mass=rdec_mass,
+                radial_decoupler_name=rdec_name,
+                fuel_line_mass=fl_mass,
+                fuel_line_name=fl_name,
+                run_parallel=run_parallel,
             )
             if multistage is None:
                 return ProfileResult(False, launch_mass=payload, blocking=[BlockingInfo(

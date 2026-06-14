@@ -103,6 +103,10 @@ class StageDiagnostic:
     engine_fuel_types_attempted: tuple[str, ...] = ()
     smallest_filtered_engine_size: float = 0.0   # for HEAT_SHIELD_TOO_SMALL
     current_max_shield_size: float = 0.0
+    # For ENGINE_TOO_BIG_FOR_TANK: size_class of the smallest engine that has
+    # no tank big enough to mount it.  Any tank with size_class >= this value
+    # is a logically-valid fix.  Populated by the pack-native optimizer.
+    min_tank_size_needed: float = 0.0
     # Performance shortfalls.
     required_dv: float = 0.0
     best_dv_achieved: float = 0.0

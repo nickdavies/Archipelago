@@ -78,6 +78,7 @@ class FuelTank:
     fuel_type: str          # "lfo" | "lf" | "xenon" | "monoprop" (derived tag)
     size_class: float       # metres
     max_count: int = 0      # 0 = unlimited; >0 caps optimizer tank count (adapters)
+    is_radial: bool = False # srf-only side tank; can't be a stage's central spine
     # Per-propellant mass at 100% fill (tonnes), e.g. {"LiquidFuel": 0.5,
     # "Oxidizer": 0.5} for an LFO tank. Lets an engine that needs only a
     # subset of the carried propellants drain the rest — except MonoPropellant,
@@ -137,6 +138,10 @@ class MiscEquipment:
     mass: float
     provides: frozenset[CapabilityFlag]  # see CapabilityFlag enum for valid values
     crew_capacity: int = 0               # seats; >0 for pods/cabins/lab
+    # Diameter (metres), from bulkhead_profiles.  Used to size the reentry heat
+    # shield to the capsule it protects — a 1.25m pod needs a 1.25m shield, not
+    # the lightest available.  0.0 when the part has no meaningful diameter.
+    size_class: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -1096,6 +1101,7 @@ def _build_part(part_type: type, cfg: dict, overrides: dict, name: str) -> AnyPa
             fuel_type=_fuel_type_from_resources(resources),
             size_class=size,
             max_count=overrides.get("max_count", 0),
+            is_radial=is_radial_only,
             fuel_masses=fuel_masses,
         )
 
@@ -1150,6 +1156,7 @@ def _build_part(part_type: type, cfg: dict, overrides: dict, name: str) -> AnyPa
             mass=mass,
             provides=overrides.get("provides", frozenset()),
             crew_capacity=int(cfg.get("crew_capacity", 0) or 0),
+            size_class=size,
         )
 
     raise TypeError(f"Unknown part type: {part_type}")
