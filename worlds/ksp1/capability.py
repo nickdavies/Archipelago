@@ -1800,6 +1800,77 @@ def _assess_bodies(
     return results
 
 
+class _LazyBodyProfiles:
+    """Lazy ``body_name -> BodyAccessProfile`` mapping.
+
+    Assesses a body only on first access and memoizes the result.
+    Computing a moon first ensures its parent is assessed (the parent-
+    gating check in ``_assess_one_body`` reads ``computed[parent]``).
+
+    Why lazy: AP's fill sweep recomputes capability on every item add
+    (~225 distinct capability states per SSR seed), and each full
+    ``_assess_bodies`` evaluated ALL 17 bodies.  But a location's access
+    rule only queries ``.bodies[its_own_body]`` — most states touch a
+    handful of bodies, not all 17.  Deferring per-body assessment turns
+    225×17 body evals into 225×(few).  Iteration / ``values`` / ``items``
+    still materialize everything (used by display + multi-body goal
+    rules like flag_every_body), so those paths are unchanged.
+    """
+    __slots__ = ("_flags", "_diff", "_mb", "_cache")
+
+    def __init__(self, flags: EquipmentFlags, diff: DifficultyProfile,
+                 mission_builder: MissionBuilder):
+        self._flags = flags
+        self._diff = diff
+        self._mb = mission_builder
+        self._cache: dict[str, BodyAccessProfile] = {}
+
+    def _get(self, body_name: str) -> BodyAccessProfile:
+        prof = self._cache.get(body_name)
+        if prof is not None:
+            return prof
+        body = BODY_BY_NAME.get(body_name)
+        if body is None:
+            raise KeyError(body_name)
+        # Parent-gating: ensure the parent is assessed first so
+        # ``_assess_one_body``'s ``computed[parent]`` lookup succeeds.
+        if body.parent is not None and body.parent not in self._cache:
+            self._get(body.parent)
+        prof = _assess_one_body(body, self._flags, self._diff,
+                                self._cache, self._mb)
+        self._cache[body_name] = prof
+        return prof
+
+    def __getitem__(self, body_name: str) -> BodyAccessProfile:
+        return self._get(body_name)
+
+    def get(self, body_name: str, default=None):
+        try:
+            return self._get(body_name)
+        except KeyError:
+            return default
+
+    def __contains__(self, body_name: str) -> bool:
+        return body_name in BODY_BY_NAME
+
+    def _materialize(self) -> dict[str, BodyAccessProfile]:
+        for b in ALL_BODIES:
+            self._get(b.name)
+        return self._cache
+
+    def __iter__(self):
+        return iter(self._materialize())
+
+    def keys(self):
+        return self._materialize().keys()
+
+    def values(self):
+        return self._materialize().values()
+
+    def items(self):
+        return self._materialize().items()
+
+
 def _assess_one_body(
     body: Body,
     flags: EquipmentFlags,
@@ -1915,13 +1986,21 @@ def _try_profiles(
     ``home`` is needed by the relay-tier gate (heliocentric-distance
     based); test callers can rely on the Kerbin default.
     """
-    for is_crewed in _crewed_options(crewed, flags):
-        for profile in profiles:
-            result = _evaluate_profile(profile, flags, diff, mission_type,
-                                       is_crewed=is_crewed, home=home,
-                                       extra_payload_parts=extra_payload_parts)
-            if result.feasible:
-                return True
+    # Serial-first: gating only needs feasibility, and the exact asparagus
+    # build is ~2x the serial cost.  Asparagus only makes a build LIGHTER, so
+    # serial-feasible ⟹ parallel-feasible — trying serial first and only
+    # falling back to the parallel build when NO profile closes serially is
+    # feasibility-identical to always-parallel, just far cheaper in the common
+    # (serial-feasible) case.
+    for run_par in (False, True):
+        for is_crewed in _crewed_options(crewed, flags):
+            for profile in profiles:
+                result = _evaluate_profile(profile, flags, diff, mission_type,
+                                           is_crewed=is_crewed, home=home,
+                                           extra_payload_parts=extra_payload_parts,
+                                           run_parallel=run_par)
+                if result.feasible:
+                    return True
     return False
 
 
@@ -1943,18 +2022,27 @@ def _try_profiles_reason(
     if not profiles:
         return False, [BlockingInfo(reason=BlockingReason.NO_PROFILES,
                                      mission_type=str(mission_type))]
-    for is_crewed in _crewed_options(crewed, flags):
-        for profile in profiles:
-            result = _evaluate_profile(profile, flags, diff, mission_type,
-                                       is_crewed=is_crewed, home=home,
-                                       extra_payload_parts=extra_payload_parts)
-            if result.feasible:
-                return True, []
-            for b in result.blocking:
-                key = str(b)
-                if key not in seen:
-                    seen.add(key)
-                    all_blocking.append(b)
+    # Serial-first (see _try_profiles): asparagus only makes builds lighter, so
+    # serial-feasible ⟹ parallel-feasible.  Try the cheap serial mass first;
+    # only if no profile closes serially do we pay for the exact parallel build.
+    # Blocking reasons come from the parallel pass (the real, lightest-build
+    # failure).
+    for run_par in (False, True):
+        all_blocking = []
+        seen = set()
+        for is_crewed in _crewed_options(crewed, flags):
+            for profile in profiles:
+                result = _evaluate_profile(profile, flags, diff, mission_type,
+                                           is_crewed=is_crewed, home=home,
+                                           extra_payload_parts=extra_payload_parts,
+                                           run_parallel=run_par)
+                if result.feasible:
+                    return True, []
+                for b in result.blocking:
+                    key = str(b)
+                    if key not in seen:
+                        seen.add(key)
+                        all_blocking.append(b)
     return False, all_blocking
 
 
@@ -2254,7 +2342,7 @@ def compute_capability_from_items(
     flags = _pre_pass(item_count_fn, start_with_clamps, rep_names,
                       progressive_launch_pad,
                       launch_pad_caps=mission_builder.launch_pad_caps)
-    body_profiles = _assess_bodies(flags, diff, mission_builder)
+    body_profiles = _LazyBodyProfiles(flags, diff, mission_builder)
     sounding_km = _compute_sounding_altitude(flags, mission_builder.home_body)
 
     if flags.has_rtg:
