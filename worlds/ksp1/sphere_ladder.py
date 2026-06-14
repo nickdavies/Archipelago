@@ -3139,6 +3139,10 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
     # touched.
     rep_part_names = set(cumulative_reps)
     rep_part_names |= set(sphere_rank_reps.values())  # belt-and-suspenders
+    # Goal-contract items gate Victory; they must stay PROGRESSION or the
+    # beatability sweep (advancement-only) never collects them and the goal is
+    # unreachable.  Non-goal pacing contracts may demote freely.
+    rep_part_names |= {spec.item_name for spec in world.goal_contract_specs}
     _demote_non_rep_parts(world, rep_part_names, cumulative_ranks,
                           chain_extras=chain_full_extras)
     # === DIAGNOSTIC (temporary, gated) ===

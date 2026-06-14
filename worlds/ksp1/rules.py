@@ -459,11 +459,14 @@ def _set_mission_rules(world: KSP1World, player: int) -> None:
     # contract whose base mission merely happens to be LAND).
     _migrated_event = _migrated_event_map()
     gate_item: dict[tuple[str, str], str] = {}
-    # Both non-goal and goal contracts gate their matching event: you can't clear
-    # the event before holding the contract item, so by the time the goal mission
-    # is done the goal-contract item is in hand (keeps client events and the
-    # server victory condition aligned).
-    for spec in (*world.contract_specs, *world.goal_contract_specs):
+    # Only GOAL contracts gate their matching event: you can't clear the goal
+    # mission event before holding the goal-contract item (keeps client events and
+    # the server victory condition aligned). Non-goal (pacing) contracts must NOT
+    # gate their event — doing so makes ordinary mission locations (e.g. Kerbin
+    # Orbit 1) reachable only via a pacing-contract item, a gate the cheap
+    # sphere-bracket fill rules don't model, which strands the goal path and makes
+    # otherwise-trivial seeds unsolvable.
+    for spec in world.goal_contract_specs:
         ev = _migrated_event.get(spec.contract_type)
         if ev is not None:
             gate_item[(spec.body, ev)] = spec.item_name
