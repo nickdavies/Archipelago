@@ -2,8 +2,8 @@
 Universal Tracker regen round-trip tests.
 
 Verifies that generating a world, extracting slot_data, and regenerating
-via re_gen_passthrough produces the same progressive representatives,
-location set, and access rule results.
+via re_gen_passthrough produces the same location set and access rule
+results.
 """
 import unittest
 
@@ -43,11 +43,6 @@ class TestUTRegen(unittest.TestCase):
         world2: KSP1World = mw2.worlds[1]
         return world1, world2, slot_data
 
-    def test_progressive_representatives_match(self):
-        """Regen must produce identical progressive representatives."""
-        world1, world2, _ = self._regen_from_slot_data(seed=42)
-        self.assertEqual(world1.progressive_representatives, world2.progressive_representatives)
-
     def test_location_set_matches(self):
         """Regen must produce the same set of location names."""
         world1, world2, _ = self._regen_from_slot_data(seed=42)
@@ -61,8 +56,7 @@ class TestUTRegen(unittest.TestCase):
         regen_sd = world2.fill_slot_data()
         # These keys must match exactly — they control access rules.
         for key in ("goal", "difficulty", "start_with_launch_clamps",
-                     "tech_slots_per_node", "goal_locations", "goal_display_name",
-                     "progressive_representatives"):
+                     "tech_slots_per_node", "goal_locations", "goal_display_name"):
             self.assertEqual(
                 original_sd[key], regen_sd[key],
                 f"slot_data[{key!r}] mismatch after regen",
@@ -123,29 +117,6 @@ class TestExplainRule(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertIsInstance(result, list)
         self.assertIn("Received Parts", result[0]["text"])
-
-    def test_parts_progressive_reveals_chains(self):
-        result = self.world.explain_rule("parts progressive", self.state)
-        self.assertIsNotNone(result)
-        text = result[0]["text"]
-        self.assertIn("Progressive Parts (this seed)", text)
-        # Every chain in this seed's reps must appear in the output.
-        for chain_name in self.world.progressive_representatives:
-            if self.world.progressive_representatives[chain_name]:
-                self.assertIn(chain_name, text)
-
-    def test_parts_progressive_filtered_chain(self):
-        result = self.world.explain_rule("parts progressive launch", self.state)
-        self.assertIsNotNone(result)
-        text = result[0]["text"]
-        self.assertIn("Progressive Launch Engine", text)
-        # Vacuum-engine chain must NOT appear when filtering "launch".
-        self.assertNotIn("Progressive Vacuum Engine", text)
-
-    def test_parts_progressive_no_match(self):
-        result = self.world.explain_rule("parts progressive zzznoexist", self.state)
-        self.assertIsNotNone(result)
-        self.assertIn("No progressive chain matches", result[0]["text"])
 
     def test_parts_filter_still_works(self):
         """The 'progressive' sub-keyword must not break ordinary filters."""

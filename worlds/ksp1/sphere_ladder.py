@@ -323,6 +323,23 @@ def _missing_payload_blocking(
     ]
 
 
+def _contract_payload_rep_names(info: "_LocationMissionInfo",
+                                flags: EquipmentFlags) -> set[str]:
+    """Names of a contract location's delivery payload parts (drill / ore_tank /
+    battery / science_lab / crew cabins).  These are PAYLOAD, not rank reps, so
+    the bumper never designates them — but the contract location REQUIRES them.
+    Fold them into the location's ``reps_collected`` at each feasible return so
+    the demote keep-set (cumulative_reps) keeps them PROGRESSION and the fill
+    can't strand them (same mechanism as the science-instrument inject).
+    Standalone categories resolve via their lightest-member fallback; chain-axis
+    members are already reps, so adding their names is a harmless no-op.  Empty
+    for non-contract locations or when no payload is needed."""
+    if info.spec is None:
+        return set()
+    cp = contract_payload_parts(info.spec, flags)
+    return {p.name for p in cp} if cp else set()
+
+
 def _evaluate(
     flags: EquipmentFlags,
     info: _LocationMissionInfo,
@@ -568,241 +585,6 @@ def _pick_bump(
 
 
 # ---------------------------------------------------------------------------
-# Core primitive
-# ---------------------------------------------------------------------------
-
-# Canonical-key cache for ``minimal_rocket_for``.  Many location names map
-# to the same ``_LocationMissionInfo`` (e.g. ``Mun Landing 1``..``Mun Landing N``
-# are all the same mission), and within one ``apply_sphere_ladder`` call the
-# same (canonical_info, prior_kit) tuple is queried repeatedly.  Caching
-# at this layer dedupes those calls before any oracle work runs.
-#
-# Cache is module-level; cleared at the top of ``apply_sphere_ladder`` so it
-# never crosses worlds.  Key includes everything that affects the result
-# (rep_names, difficulty, pad/clamps, precollected, mission_builder identity,
-# prior_kit) and excludes ``rng`` — the cached MinimalRocket is the same
-# regardless of which RNG would have been used for greedy tiebreakers,
-# since the canonical mission only has one minimal-kit answer.
-_CACHE_SENTINEL = object()
-
-# DIAGNOSTIC ONLY — disabled in normal runs.  When enabled (set to a list
-# instance), every _minimal_rocket_for_uncached call appends one
-# (final_iter, returned_feasible) tuple.  Used by scratchpad/profile/
-# bumper_iter_stats.py to evaluate whether raising the 200-iter cap
-# would help.  Leave None in production.
-_BUMPER_ITER_TRACE: Optional[list] = None
-
-
-def _construct_warm_start_kit(
-    info,
-    rep_names: frozenset[str],
-    difficulty: str,
-    progressive_launch_pad: bool,
-    start_with_clamps: bool,
-    precollected_names: frozenset[str],
-    mission_builder: MissionBuilder,
-) -> dict[str, int]:
-    """Run the capability oracle with a maxed-out progressive kit, then
-    translate the parts it chose into the smallest kit that grants those
-    same parts.  Returns a kit dict suitable for merging with ``prior_kit``
-    as a warm start for the greedy bumper.
-
-    Coverage gap: this only captures chains directly tied to a part
-    (engine, tank, equipment, terminal command/support).  Gating chains
-    that affect *configuration* without producing a named part — Engine
-    Plate (multi-mount), Radial Decoupler (parallel staging), Launch Pad
-    (mass cap) — are NOT captured here; the bumper fills those in on
-    top of the warm start.
-    """
-    diff = DIFFICULTY_PROFILES[difficulty]
-
-    def max_count_fn(name: str, _caps=PROGRESSIVE_CAPS,
-                     _pre=precollected_names) -> int:
-        if name in _caps:
-            return _caps[name]
-        if name in _pre:
-            return 1
-        return 0
-
-    max_flags = _pre_pass_cached(
-        # Build a kit dict at caps; _pre_pass_cached caches by kit_tuple.
-        {chain: cap for chain, cap in PROGRESSIVE_CAPS.items()},
-        start_with_clamps=start_with_clamps,
-        rep_names=rep_names,
-        progressive_launch_pad=progressive_launch_pad,
-        launch_pad_caps=mission_builder.launch_pad_caps,
-        precollected_names=precollected_names,
-    )
-    extra_payload: tuple = ()
-    mission_transform = None
-    if info.spec is not None:
-        # Size the payload from the maxed kit's reps; the chosen crew/relay/power
-        # parts surface in terminal_parts below, so the warm start seeds the
-        # Progressive Capsule / Relay / Solar chains the contract needs.
-        payload = contract_payload_parts(info.spec, max_flags)
-        if payload is None:
-            return {}  # max kit lacks a required chain part — no warm start
-        extra_payload = payload
-        # Match the runtime rule's edge modifier so the warm start is sized for
-        # the real (transformed) mission, not the cheaper base orbit.
-        mission_transform = info.spec.mission_transform(mission_builder)
-    result = evaluate_mission_detailed(
-        max_flags, diff, info.body, info.mission_type, info.crewed,
-        mission_builder, threshold_km=info.threshold_km or 0.0,
-        extra_payload_parts=extra_payload,
-        mission_transform=mission_transform,
-    )
-    if not result.feasible:
-        # Max kit can't reach this location at all — no warm start to give.
-        return {}
-
-    # Collect every part name referenced by the oracle's chosen build.
-    used: set[str] = set()
-    for sr in result.stage_results:
-        if sr.engine_name and sr.engine_name != "(SRB integral)":
-            used.add(sr.engine_name)
-        for _count, tname in sr.tank_manifest:
-            if tname and tname not in ("none", "(SRB integral)"):
-                used.add(tname)
-        if sr.heat_shield_name:
-            used.add(sr.heat_shield_name)
-        for _count, pname in sr.equipment:
-            used.add(pname)
-    for _count, pname in result.terminal_parts:
-        used.add(pname)
-
-    # Reverse-map each part to the cheapest (lowest-tier) chain that grants
-    # it.  Take max across all uses — if Engine X is in chain "Launch Engine"
-    # tier 2, the warm start sets Launch Engine = 2.
-    kit: dict[str, int] = {}
-    for part in used:
-        entries = _PART_TO_PROGRESSIVE.get(part)
-        if not entries:
-            continue  # non-progressive part (always granted, no kit cost)
-        chain, tier = min(entries, key=lambda x: x[1])
-        kit[chain] = max(kit.get(chain, 0), tier)
-    return kit
-
-
-def _derive_local_bumper_rng(
-    info,
-    prior_kit: dict[str, int],
-    rep_names: frozenset[str],
-    difficulty: str,
-    progressive_launch_pad: bool,
-    start_with_clamps: bool,
-    precollected_names: frozenset[str],
-) -> Random:
-    """Build a ``Random`` whose seed is a stable hash of every input that
-    distinguishes one ``minimal_rocket_for`` invocation from another.
-
-    Stable means: same seed across process reboots (uses ``hashlib.sha256``
-    rather than Python's randomized ``hash()``).  All event-slot
-    duplicates ("Mun Landing 1" / "Mun Landing 2" / ...) share a
-    canonical key, so they get an identical local RNG and therefore an
-    identical bumper trajectory — making the canonical-key cache a pure
-    perf optimization with no behavior shift.
-    """
-    h = hashlib.sha256()
-    h.update(repr((
-        info.body, str(info.mission_type), info.crewed, info.threshold_km,
-        difficulty,
-        progressive_launch_pad,
-        start_with_clamps,
-        tuple(sorted(prior_kit.items())),
-        tuple(sorted(rep_names)),
-        tuple(sorted(precollected_names)),
-    )).encode("utf-8"))
-    seed_int = int.from_bytes(h.digest()[:8], "big")
-    return Random(seed_int)
-_MINIMAL_ROCKET_CACHE: dict[tuple, Optional["MinimalRocket"]] = {}
-_MINIMAL_ROCKET_CACHE_STATS: dict[str, int] = {
-    "hits": 0,
-    "misses": 0,
-    "bypassed_no_canonical": 0,  # _parse_location returned None
-}
-
-# Cross-call ``_pre_pass`` cache.  The bumper repeatedly evaluates kits that
-# differ by a single bump, and many of those kits recur across different
-# ``minimal_rocket_for`` calls (especially during ``_compute_location_signatures``
-# where every call starts from ``prior_kit={}`` and bumps the same small set
-# of candidates).  Caching by canonical (kit, options) avoids re-running
-# ``_pre_pass`` for kits we've already seen.
-#
-# Lives next to the minimal_rocket_for cache; cleared together at the top
-# of ``apply_sphere_ladder``.  Cached ``EquipmentFlags`` objects are shared
-# between callers; downstream evaluators (``evaluate_mission_detailed`` and
-# friends) treat ``flags`` as read-only.
-_PRE_PASS_CACHE: dict[tuple, EquipmentFlags] = {}
-_PRE_PASS_CACHE_STATS: dict[str, int] = {"hits": 0, "misses": 0}
-
-
-def clear_minimal_rocket_cache() -> None:
-    """Reset the per-call caches and their hit/miss counters."""
-    _MINIMAL_ROCKET_CACHE.clear()
-    for k in _MINIMAL_ROCKET_CACHE_STATS:
-        _MINIMAL_ROCKET_CACHE_STATS[k] = 0
-    _PRE_PASS_CACHE.clear()
-    for k in _PRE_PASS_CACHE_STATS:
-        _PRE_PASS_CACHE_STATS[k] = 0
-
-
-def get_minimal_rocket_cache_stats() -> dict[str, int]:
-    """Snapshot the cache hit/miss/bypass counters."""
-    return dict(_MINIMAL_ROCKET_CACHE_STATS)
-
-
-def get_pre_pass_cache_stats() -> dict[str, int]:
-    """Snapshot the _pre_pass cache hit/miss counters."""
-    return dict(_PRE_PASS_CACHE_STATS)
-
-
-def _pre_pass_cached(
-    kit: dict[str, int],
-    *,
-    start_with_clamps: bool,
-    rep_names: frozenset[str],
-    progressive_launch_pad: bool,
-    launch_pad_caps: tuple,
-    precollected_names: frozenset[str],
-) -> EquipmentFlags:
-    """Cache-wrapped ``_pre_pass``.  Takes the kit dict directly rather than
-    a closure so the cache key is hashable; builds the closure internally.
-    Callers must treat the returned ``EquipmentFlags`` as read-only.
-    """
-    key = (
-        tuple(sorted(kit.items())),
-        start_with_clamps,
-        rep_names,
-        progressive_launch_pad,
-        launch_pad_caps,
-        precollected_names,
-    )
-    cached = _PRE_PASS_CACHE.get(key)
-    if cached is not None:
-        _PRE_PASS_CACHE_STATS["hits"] += 1
-        return cached
-    _PRE_PASS_CACHE_STATS["misses"] += 1
-
-    def cf(name, _k=kit, _pre=precollected_names):
-        if name in PROGRESSIVE_CAPS:
-            return _k.get(name, 0)
-        if name in _pre:
-            return 1
-        return 0
-
-    flags = _pre_pass(
-        cf,
-        start_with_clamps=start_with_clamps,
-        rep_names=rep_names,
-        progressive_launch_pad=progressive_launch_pad,
-        launch_pad_caps=launch_pad_caps,
-    )
-    _PRE_PASS_CACHE[key] = flags
-    return flags
-
-
-# ---------------------------------------------------------------------------
 # Rank-space sphere walker — Phase 1 scaffold.
 #
 # This subsystem mirrors the progressive-tier walker above using
@@ -942,8 +724,8 @@ def _rank_admits_item(item_name: str, ranks: MinimumRanks, ctx: RankContext) -> 
     return True
 
 
-# Cache for ``_pre_pass_for_ranks`` — same shape as ``_pre_pass_cached``.
-# Keyed by the hashable ``MinimumRanks.upper_bounds`` tuple plus options.
+# Cache for ``_pre_pass_for_ranks``, keyed by the hashable
+# ``MinimumRanks.upper_bounds`` tuple plus options.
 _RANK_PRE_PASS_CACHE: dict[tuple, EquipmentFlags] = {}
 
 
@@ -1455,7 +1237,8 @@ def minimal_ranks_for(
                 ranks=ranks,
                 delta=delta,
                 reps=reps,
-                reps_collected=frozenset(reps_collected),
+                reps_collected=frozenset(
+                    reps_collected | _contract_payload_rep_names(info, flags)),
                 flags=flags,
                 profile_dv=result.launch_mass,
                 extras=extras,
@@ -1799,7 +1582,9 @@ def minimal_ranks_for(
                     }
                     return RankBumperResult(
                         ranks=lifted_ranks, delta=delta, reps=reps,
-                        reps_collected=frozenset(reps_collected),
+                        reps_collected=frozenset(
+                            reps_collected
+                            | _contract_payload_rep_names(info, verify_flags)),
                         flags=verify_flags,
                         profile_dv=verify_result.launch_mass,
                         extras=extras, extras_delta=extras_delta,
@@ -1865,7 +1650,9 @@ def minimal_ranks_for(
                     }
                     return RankBumperResult(
                         ranks=ranks, delta=delta, reps=reps,
-                        reps_collected=frozenset(reps_collected),
+                        reps_collected=frozenset(
+                            reps_collected
+                            | _contract_payload_rep_names(info, final_flags)),
                         flags=final_flags, profile_dv=m,
                         extras=extras, extras_delta=extras_delta,
                     )
@@ -2012,262 +1799,6 @@ def _pick_rank_bump_scored(blocking, ranks: MinimumRanks, ctx: RankContext,
     scored.sort()
 
     return scored[0][-1]
-
-
-def minimal_rocket_for(
-    location_name: str,
-    prior_kit: dict[str, int],
-    rep_names: frozenset[str],
-    difficulty: str,
-    progressive_launch_pad: bool,
-    start_with_clamps: bool,
-    rng: Random,
-    mission_builder: MissionBuilder,
-    precollected_names: frozenset[str] = frozenset(),
-) -> Optional[MinimalRocket]:
-    """Cache wrapper around ``_minimal_rocket_for_uncached``.  See that
-    function's docstring for the underlying contract."""
-    info = _parse_location(location_name)
-    if info is None:
-        _MINIMAL_ROCKET_CACHE_STATS["bypassed_no_canonical"] += 1
-        return None
-
-    key = (
-        info.body, info.mission_type, info.crewed, info.threshold_km,
-        info.spec.contract_type if info.spec else None,  # distinguishes contract payloads
-        rep_names,
-        difficulty,
-        progressive_launch_pad,
-        start_with_clamps,
-        precollected_names,
-        id(mission_builder),
-        tuple(sorted(prior_kit.items())),
-    )
-    cached = _MINIMAL_ROCKET_CACHE.get(key, _CACHE_SENTINEL)
-    if cached is not _CACHE_SENTINEL:
-        _MINIMAL_ROCKET_CACHE_STATS["hits"] += 1
-        return cached
-    _MINIMAL_ROCKET_CACHE_STATS["misses"] += 1
-    result = _minimal_rocket_for_uncached(
-        location_name=location_name,
-        prior_kit=prior_kit,
-        rep_names=rep_names,
-        difficulty=difficulty,
-        progressive_launch_pad=progressive_launch_pad,
-        start_with_clamps=start_with_clamps,
-        rng=rng,
-        mission_builder=mission_builder,
-        precollected_names=precollected_names,
-    )
-    _MINIMAL_ROCKET_CACHE[key] = result
-    return result
-
-
-def _minimal_rocket_for_uncached(
-    location_name: str,
-    prior_kit: dict[str, int],
-    rep_names: frozenset[str],
-    difficulty: str,
-    progressive_launch_pad: bool,
-    start_with_clamps: bool,
-    rng: Random,
-    mission_builder: MissionBuilder,
-    precollected_names: frozenset[str] = frozenset(),
-) -> Optional[MinimalRocket]:
-    """Compute the minimum delta of progressive items beyond ``prior_kit``
-    that makes ``location_name`` reachable.
-
-    The ladder rocket is built EXCLUSIVELY from parts AP can guarantee
-    the player has at this sphere:
-      - Progressive items in ``prior_kit`` / ``kit`` (which auto-grant
-        their reps via ``_pre_pass``)
-      - Items in ``precollected_names`` (multiworld.precollected_items)
-    Everything else is treated as absent.  Non-progressive structural
-    parts that happen to carry fuel (Mk3 fuselages, Size3To2Adapter, …)
-    or any other capability-significant part NOT covered by the
-    progressive system is unavailable to the ladder, full stop.
-
-    Returns ``None`` if the location is not capability-gated (tech tree,
-    KSC biome, starting inventory) OR if the rep set + per-item caps
-    cannot reach it under any kit.
-    """
-    info = _parse_location(location_name)
-    if info is None:
-        return None
-
-    # Warm-start: ask the max-kit oracle which parts it would use, translate
-    # those into the smallest progressive kit that grants them, and merge
-    # with prior_kit (element-wise max, capped).  The bumper starts from
-    # this merged kit and fills in any gating chains the oracle output
-    # doesn't expose (Engine Plate, Radial Decoupler, Launch Pad).
-    #
-    # Doesn't displace the greedy loop — if the warm start is already
-    # feasible, the loop exits at iter 0; if not, it bumps a handful of
-    # remaining chains.  The win is fewer bumps total and (typically) a
-    # smaller, structurally different kit that gives the AP fill solver
-    # different Rule B bans to work with.
-    _warm = _construct_warm_start_kit(
-        info, rep_names, difficulty,
-        progressive_launch_pad, start_with_clamps,
-        precollected_names, mission_builder,
-    )
-
-    # Derive a deterministic per-canonical-key RNG.  The bumper's only
-    # RNG use is the ``rng.random()`` tiebreaker in ``_pick_bump``'s score
-    # tuple — same-priority candidates pick a random one to break ties.
-    # When the canonical-key cache is enabled, every event-slot duplicate
-    # (e.g. "Mun Landing 1" / "Mun Landing 2") shares one cache entry, so
-    # without this derivation only the first call's RNG state would be
-    # captured and the cached ``min_kit`` would depend on call order.
-    # Deriving locally from (canonical_key, prior_kit, rep_names) makes
-    # the result independent of whatever order the caller iterates
-    # locations in, while still varying per-seed (rep_names is part of
-    # the seed identity) and per-canonical-key.
-    #
-    # ``hashlib.sha256`` is used instead of Python's ``hash()`` because
-    # the latter is randomized per process (PYTHONHASHSEED) and would
-    # produce different RNGs across reruns of the same seed.
-    rng = _derive_local_bumper_rng(
-        info, prior_kit, rep_names, difficulty,
-        progressive_launch_pad, start_with_clamps, precollected_names,
-    )
-
-    diff = DIFFICULTY_PROFILES[difficulty]
-    # Start from prior_kit, then layer in the warm-start kit element-wise.
-    # Cap to PROGRESSIVE_CAPS so we never start above legal kit size.
-    kit: dict[str, int] = dict(prior_kit)
-    for chain, tier in _warm.items():
-        new_tier = max(kit.get(chain, 0), tier)
-        cap = PROGRESSIVE_CAPS.get(chain, new_tier)
-        kit[chain] = min(new_tier, cap)
-    # Pre-compute which narrow chains (HS / Parachute / Legs / Ladder) the
-    # mission actually exercises.  Bumping these for missions that don't
-    # use them is a wasted iteration; the bumper filters them out.
-    narrow_relevant = _relevant_narrow_chains(info.body, info.mission_type, info.crewed, mission_builder)
-
-    def _evaluate_with_bump(cand: str) -> tuple[bool, float, int]:
-        """Score a hypothetical bump of ``cand`` by running pre_pass +
-        evaluate on a kit with that candidate incremented by one.
-        Returns (feasible, launch_mass, n_blocking).  Used by
-        ``_pick_bump`` to score candidates by capability increase.
-        """
-        trial_kit = dict(kit)
-        trial_kit[cand] = trial_kit.get(cand, 0) + 1
-        trial_flags = _pre_pass_cached(
-            trial_kit,
-            start_with_clamps=start_with_clamps,
-            rep_names=rep_names,
-            progressive_launch_pad=progressive_launch_pad,
-            launch_pad_caps=mission_builder.launch_pad_caps,
-            precollected_names=precollected_names,
-        )
-        trial_result = _evaluate(trial_flags, info, diff, mission_builder)
-        # When infeasible, `launch_mass` carries the optimizer's partial-
-        # mass-attempt (running payload at the failing stage).  Use it
-        # so the scorer can rank "this bump got us closer" without needing
-        # actual feasibility.  Zero means no partial info available
-        # (early validation failure); treat as inf so it's deprioritized.
-        if trial_result.feasible:
-            mass_score = trial_result.launch_mass
-        elif trial_result.launch_mass > 0.0:
-            mass_score = trial_result.launch_mass
-        else:
-            mass_score = float("inf")
-        return (
-            trial_result.feasible,
-            mass_score,
-            len(trial_result.blocking),
-        )
-
-    def _evaluate_kit(trial_kit: dict[str, int]) -> tuple[bool, float, int]:
-        """Score an arbitrary kit (not just a single bump from current).
-        Used by pair-lookahead in ``_pick_bump``.
-        """
-        trial_flags = _pre_pass_cached(
-            trial_kit,
-            start_with_clamps=start_with_clamps,
-            rep_names=rep_names,
-            progressive_launch_pad=progressive_launch_pad,
-            launch_pad_caps=mission_builder.launch_pad_caps,
-            precollected_names=precollected_names,
-        )
-        trial_result = _evaluate(trial_flags, info, diff, mission_builder)
-        # When infeasible, `launch_mass` carries the optimizer's partial-
-        # mass-attempt (running payload at the failing stage).  Use it
-        # so the scorer can rank "this bump got us closer" without needing
-        # actual feasibility.  Zero means no partial info available
-        # (early validation failure); treat as inf so it's deprioritized.
-        if trial_result.feasible:
-            mass_score = trial_result.launch_mass
-        elif trial_result.launch_mass > 0.0:
-            mass_score = trial_result.launch_mass
-        else:
-            mass_score = float("inf")
-        return (
-            trial_result.feasible,
-            mass_score,
-            len(trial_result.blocking),
-        )
-
-    # Safety bound: with 17 progressive groups and per-group caps ≤ 5,
-    # the total possible bumps is ~50.  We allow 200 to absorb wasted
-    # bumps when randomness picks an item that doesn't close any current
-    # blocking.
-    stuck_iters = 0   # consecutive iters where blocker count didn't drop
-    prev_blocker_count = -1
-    _final_iter = -1
-    for _iter in range(200):
-        _final_iter = _iter
-        flags = _pre_pass_cached(
-            kit,
-            start_with_clamps=start_with_clamps,
-            rep_names=rep_names,
-            progressive_launch_pad=progressive_launch_pad,
-            launch_pad_caps=mission_builder.launch_pad_caps,
-            precollected_names=precollected_names,
-        )
-        result = _evaluate(flags, info, diff, mission_builder)
-        if result.feasible:
-            delta = {
-                k: v - prior_kit.get(k, 0)
-                for k, v in kit.items()
-                if v - prior_kit.get(k, 0) > 0
-            }
-            if _BUMPER_ITER_TRACE is not None:
-                _BUMPER_ITER_TRACE.append((_iter, True, location_name))
-            return MinimalRocket(
-                delta=delta,
-                cumulative=dict(kit),
-                flags=flags,
-                profile_dv=result.launch_mass,
-                requirements=_extract_requirements(flags),
-            )
-        # Track stuck-ness — enables payload audit + pair lookahead once
-        # the simple greedy single-bump phase stops making progress.
-        cur_blockers = len(result.blocking)
-        if cur_blockers >= prev_blocker_count >= 0:
-            stuck_iters += 1
-        else:
-            stuck_iters = 0
-        prev_blocker_count = cur_blockers
-        item = _pick_bump(
-            result.blocking, kit, rng, _evaluate_with_bump,
-            flags=flags,
-            enable_payload_audit=stuck_iters >= 2,
-            enable_pair_lookahead=stuck_iters >= 4,
-            evaluate_kit=_evaluate_kit,
-            rep_names=rep_names,
-            narrow_relevant=narrow_relevant,
-        )
-        if item is None:
-            if _BUMPER_ITER_TRACE is not None:
-                _BUMPER_ITER_TRACE.append((_iter, False, location_name))
-            return None
-        kit[item] = kit.get(item, 0) + 1
-
-    if _BUMPER_ITER_TRACE is not None:
-        _BUMPER_ITER_TRACE.append((_final_iter, False, location_name))
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -2446,8 +1977,8 @@ def _predictable_spheres(world: "KSP1World") -> list[tuple[str, str]]:
 
 # Items injected into the cumulative kit of tech-tree anchor spheres.
 # These are bookkeeping items (gate tech-tree access, not rocket physics);
-# the chain walker merges them into the rocket's delta+cumulative after
-# ``minimal_rocket_for`` builds the physics part.  Result: chain_required
+# the bumper merges them into the rocket's delta+cumulative after
+# ``minimal_ranks_for`` builds the physics part.  Result: chain_required
 # carries them through, Rule B distributes copies by sphere ordering.
 _TECH_ANCHOR_INJECT = {
     PROGRESSIVE_RD_NAME: 3,                   # = MAX_RD_BAND

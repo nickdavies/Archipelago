@@ -32,7 +32,6 @@ from .parts import (
     Parachute, LandingLeg, Decoupler, MiscEquipment,
     MultiMount, MULTI_MOUNT_TABLE,
     PART_TO_CONTRACT_CATEGORIES,
-    PROGRESSIVE_PART_TIERS, PROGRESSIVE_PART_NAMES, PROGRESSIVE_PART_COUNTS,
     usable_fuel_mass,
 )
 from .capability_reasons import BlockingInfo, BlockingReason

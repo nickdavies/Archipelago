@@ -19,7 +19,7 @@ DIFF = DIFFICULTY_PROFILES["normal"]
 
 
 def _flags(item_count_fn):
-    return _pre_pass(item_count_fn, start_with_clamps=True, rep_names=frozenset(),
+    return _pre_pass(item_count_fn, start_with_clamps=True,
                      progressive_launch_pad=False,
                      launch_pad_caps=MB.launch_pad_caps)
 
@@ -405,6 +405,33 @@ class TestExplainContractGeneric(unittest.TestCase):
         ))
         self.assertIn("drill: MISSING", text)
         self.assertIn("Gate 3 - physics delivery: NO", text)
+
+
+class TestRequirementSeam(unittest.TestCase):
+    """The typed Requirement union. Baseline contracts derive AnyOf from
+    required_categories — behaviour-identical to the old category tuple — and
+    the part-resolution consumers fail closed on any kind they don't handle, so
+    a future Requirement subclass can't be silently dropped."""
+
+    def test_every_def_derives_anyof_from_categories(self):
+        for ct, td in C.CONTRACT_TYPE_DEFS.items():
+            with self.subTest(contract_type=ct):
+                self.assertEqual(
+                    td.requirements,
+                    tuple(C.AnyOf(cat) for cat in td.required_categories))
+
+    def test_unhandled_requirement_kind_fails_closed(self):
+        from types import SimpleNamespace
+        unknown = C.Requirement()  # base class, no resolver branch
+        td = C.ContractTypeDef(
+            contract_type=C.ContractType.ORBIT, location_noun="X",
+            base_mission_type=C.MissionType.ORBIT, crewed=None,
+            required_categories=(), title_fmt="", synopsis_fmt="",
+            requirements=(unknown,))
+        with self.assertRaises(NotImplementedError):
+            C.required_part_names_for([SimpleNamespace(type_def=td)])
+        with self.assertRaises(NotImplementedError):
+            C.required_part_breakdown(SimpleNamespace(type_def=td), FULL)
 
 
 if __name__ == "__main__":

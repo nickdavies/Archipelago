@@ -267,6 +267,30 @@ def _category_param(cat: str):
     return HasAnyPartParam(parts, label=cat)
 
 
+# ---------------------------------------------------------------------------
+# Contract requirements (the logic gate)
+# ---------------------------------------------------------------------------
+# A contract's required kit is a tuple of Requirement objects.  Each resolves to
+# the delivery payload the sphere ladder charges and the runtime access rule
+# checks.  The baseline catalog uses AnyOf exclusively — any available member of
+# a part category satisfies it — derived automatically from each type's
+# ``required_categories``.  Requirement is the typed extension point: new kinds
+# (a specific part, a minimum rank) are added as subclasses here together with a
+# resolver branch in required_part_breakdown / required_part_names_for, which
+# fail closed on any kind they don't yet handle.
+
+@dataclass(frozen=True)
+class Requirement:
+    """Base for a contract's logic-gate requirements."""
+
+
+@dataclass(frozen=True)
+class AnyOf(Requirement):
+    """Satisfied by any available member of ``category`` (e.g. AnyOf('relay') —
+    any antenna); the seed's lightest available member is the representative."""
+    category: str
+
+
 @dataclass(frozen=True)
 class ContractTypeDef:
     """Static definition of a contract type.
@@ -294,6 +318,16 @@ class ContractTypeDef:
     # silly at home. Generation only places a contract on the home body when this
     # is True (see the candidates loop).
     home_safe: bool = False
+    # The logic-gate requirements (see Requirement). Defaults to one AnyOf per
+    # required_categories entry; new types may author this explicitly — then it
+    # is taken as given.
+    requirements: tuple[Requirement, ...] = ()
+
+    def __post_init__(self):
+        if not self.requirements:
+            object.__setattr__(
+                self, "requirements",
+                tuple(AnyOf(cat) for cat in self.required_categories))
 
     def requires_landing(self) -> bool:
         return self.base_mission_type in (
@@ -629,12 +663,15 @@ def required_part_breakdown(
 ) -> list[tuple[str, Optional[tuple[MiscEquipment, ...]]]]:
     """Per required category, the available parts to deliver (the lightest part,
     or for a crew contract the cheapest combo reaching the seat count), or None
-    for a category with no available part. Generic over contract types — a single
-    iteration of ``required_categories`` that BOTH the delivery manifest and the
+    for a requirement with no available part. Generic over contract types — a
+    single iteration of ``requirements`` that BOTH the delivery manifest and the
     ``/explain`` Gate-2 breakdown read, so they cannot diverge."""
     td = spec.type_def
     out: list[tuple[str, Optional[tuple[MiscEquipment, ...]]]] = []
-    for cat in td.required_categories:
+    for req in td.requirements:
+        if not isinstance(req, AnyOf):
+            raise NotImplementedError(f"requirement kind not handled: {req!r}")
+        cat = req.category
         if cat == "crew_cabin" and td.crew_requirement:
             combo = _min_crew_combo(flags.available_crew_parts, td.crew_requirement)
             out.append((cat, combo))
@@ -757,7 +794,10 @@ def required_part_names_for(specs) -> frozenset[str]:
     from .parts import PART_DB
     cats: set[str] = set()
     for s in specs:
-        cats.update(s.type_def.required_categories)
+        for req in s.type_def.requirements:
+            if not isinstance(req, AnyOf):
+                raise NotImplementedError(f"requirement kind not handled: {req!r}")
+            cats.add(req.category)
     # Categories already guaranteed reachable by a progression chain (solar/relay
     # antennas, command pods). Promoting a *specific* part for them is redundant
     # AND adds an inert progression item fill can strand on a hard location,
@@ -796,7 +836,6 @@ def _full_kit_flags(world: "KSP1World") -> "EquipmentFlags":
     return _pre_pass(
         lambda name: 99,
         start_with_clamps=bool(world.options.start_with_launch_clamps.value),
-        rep_names=frozenset(),
         progressive_launch_pad=bool(world.options.progressive_launch_pad.value),
         launch_pad_caps=world.mission_builder.launch_pad_caps,
     )

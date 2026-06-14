@@ -531,46 +531,6 @@ def format_parts_list(item_counts: dict[str, int]) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Progressive chain reveal
-# ---------------------------------------------------------------------------
-
-def format_progressive_chains(
-    representatives: dict[str, dict[int, str]],
-    count_fn,
-    chain_filter: str = "",
-) -> list[str]:
-    """Reveal per-seed progressive part assignments with unlock status.
-
-    ``representatives`` is the ``{progressive_name: {tier: rep_part}}`` mapping
-    set during generation (see items.select_progressive_representatives).
-    ``count_fn(name)`` returns how many copies of a progressive item the player
-    has received — drives the [unlocked]/[locked] marker.  ``chain_filter`` is
-    a case-insensitive prefix match on the chain name; empty = all chains.
-    """
-    if chain_filter:
-        f = chain_filter.lower()
-        chains = [n for n in representatives if f in n.lower()]
-        if not chains:
-            return [f"\nNo progressive chain matches '{chain_filter}'."]
-    else:
-        chains = list(representatives)
-
-    lines: list[str] = ["\n=== Progressive Parts (this seed) ==="]
-    for name in chains:
-        tiers = representatives[name]
-        if not tiers:
-            continue
-        unlocked = count_fn(name)
-        max_tier = max(tiers)
-        lines.append(f"\n  {name}: {unlocked}/{max_tier} unlocked")
-        for tier_num in sorted(tiers):
-            rep = tiers[tier_num]
-            status = "unlocked" if tier_num <= unlocked else "locked"
-            lines.append(f"    tier {tier_num}: {titled(rep)}  [{status}]")
-    return lines
-
-
-# ---------------------------------------------------------------------------
 # In-logic location grouping
 # ---------------------------------------------------------------------------
 
@@ -629,17 +589,11 @@ def build_bug_report_dict(
     if user_description:
         report["user_description"] = user_description
 
-    rep_names = frozenset(
-        rep
-        for tiers in slot_data.get("progressive_representatives", {}).values()
-        for rep in tiers.values()
-    )
     _, flags = compute_capability_from_items(
         lambda name: items_by_name.get(name, 0),
         difficulty_name,
         bool(slot_data.get("start_with_launch_clamps", 1)),
         mission_builder,
-        rep_names=rep_names,
     )
     report["equipment_flags"] = {
         "staging_tier": flags.staging_tier,

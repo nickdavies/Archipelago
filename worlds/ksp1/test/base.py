@@ -10,9 +10,8 @@ Most tests don't read any of the sphere-ladder side effects:
 classifications via ``_demote_non_rep_parts``, installs Rule A
 (bootstrap-local) on KSC biomes, installs Rule B (per-copy tier ban) on
 non-bootstrap locations, and registers ``S_launch.delta`` as
-``multiworld.local_early_items``. Tests that only inspect ``itempool``,
-``progressive_representatives``, or do their own reachability sweeps
-don't need any of that.
+``multiworld.local_early_items``. Tests that only inspect ``itempool``
+or do their own reachability sweeps don't need any of that.
 
 This base stubs ``pre_fill`` to a no-op so world setup completes through
 the other (fast) gen steps. Tests that depend on sphere-ladder side
