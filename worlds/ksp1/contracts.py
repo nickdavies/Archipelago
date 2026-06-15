@@ -42,14 +42,41 @@ if TYPE_CHECKING:
 
 
 # Bumped when the parameter wire format or primitive vocabulary changes. The
-# client rejects contracts whose schema it doesn't understand.
-CONTRACT_SCHEMA_VERSION = 4
+# client rejects contracts whose schema it doesn't understand. v5 added the
+# variable reward-slot count (Contract Repeats): a non-goal contract's
+# ``locations`` array may now hold more than 2 entries, so a v4 client that
+# assumed exactly 2 must reject rather than silently drop the extras.
+CONTRACT_SCHEMA_VERSION = 5
 
-# Non-goal contracts award TWO reward locations sharing ONE gate item: completing
-# the contract checks both slots, so each non-goal contract is net +1 location of
-# slack (2 locations - 1 gate item) for the multiworld. Goal contracts stay 1:1
+# Base number of reward locations a non-goal contract awards, sharing ONE gate
+# item: completing the contract checks every slot, so each non-goal contract is
+# net (slots - 1) locations of slack for the multiworld. Goal contracts stay 1:1
 # (a single, unsuffixed location) — see ContractSpec.location_names.
 NON_GOAL_SLOT_COUNT = 2
+
+# Upper bound on the Contract Repeats option (extra reward slots per non-goal
+# contract beyond the base 2). The data package registers every possible slot
+# name up to NON_GOAL_SLOT_COUNT + MAX_CONTRACT_REPEATS so any option value has
+# stable ids; a given seed creates only its resolved subset.
+MAX_CONTRACT_REPEATS = 8
+MAX_NON_GOAL_SLOT_COUNT = NON_GOAL_SLOT_COUNT + MAX_CONTRACT_REPEATS
+
+
+def effective_contract_repeats(options) -> int:
+    """Extra reward slots each non-goal contract yields beyond the base 2.
+    Clamped to MAX_CONTRACT_REPEATS so a stale yaml can never exceed the
+    registered slot-name universe. 0 (default) == today's exactly-2-slots
+    behavior."""
+    opt = getattr(options, "contract_repeats", None)
+    if opt is None:
+        return 0
+    return max(0, min(int(opt.value), MAX_CONTRACT_REPEATS))
+
+
+def non_goal_slot_count(options) -> int:
+    """Reward-slot count per non-goal contract for this world:
+    ``NON_GOAL_SLOT_COUNT + contract_repeats``."""
+    return NON_GOAL_SLOT_COUNT + effective_contract_repeats(options)
 
 # Event item locked on each non-goal contract's "Contract Complete: ..." event
 # location (address None). state.has(this, X) == "X contracts completable in
@@ -706,38 +733,45 @@ class ContractSpec:
     def item_name(self) -> str:
         return self.display_name
 
-    @property
-    def location_names(self) -> tuple[str, ...]:
+    def location_names(self, slot_count: int = NON_GOAL_SLOT_COUNT) -> tuple[str, ...]:
         """The reward location(s) this contract checks. Goal contracts stay 1:1
-        (a single unsuffixed location); non-goal contracts award
-        ``NON_GOAL_SLOT_COUNT`` slot-suffixed locations ("... 1", "... 2") that
-        share one gate item and one access rule."""
+        (a single unsuffixed location, ignoring ``slot_count``); non-goal
+        contracts award ``slot_count`` slot-suffixed locations ("... 1",
+        "... 2", ...) that share one gate item and one access rule.
+        ``slot_count`` defaults to the base 2 (today's behavior); a world threads
+        ``NON_GOAL_SLOT_COUNT + contract_repeats`` through for repeating contracts
+        and the data package threads ``MAX_NON_GOAL_SLOT_COUNT`` to register every
+        possible slot name."""
         if self.is_goal:
             return (self.display_name,)
         return tuple(
             f"{self.display_name} {i}"
-            for i in range(1, NON_GOAL_SLOT_COUNT + 1)
+            for i in range(1, slot_count + 1)
         )
 
     @property
     def location_name(self) -> str:
         """The canonical / primary location (slot 1). Goal logic, /explain, and
         the client's binding key all use this; the suffixed siblings share its
-        access rule."""
-        return self.location_names[0]
+        access rule. Independent of the seed's slot count — slot 1 always exists
+        (>= the base 2 non-goal slots), so this is stable as repeats vary."""
+        if self.is_goal:
+            return self.display_name
+        return f"{self.display_name} 1"
 
-    def to_slot_dict(self, mission_builder=None) -> dict:
+    def to_slot_dict(self, mission_builder=None,
+                     slot_count: int = NON_GOAL_SLOT_COUNT) -> dict:
         """The self-describing manifest entry the dumb client actuates. Carries
         ``contract_type``/``body`` structurally so UT regen reconstructs the
         spec from fields, never by parsing the display name (the client ignores
         these two extra keys). ``locations`` is the full slot list (1 for goal,
-        2 for non-goal); the client reports every entry on completion.
-        ``mission_builder`` is required only for RANDOM_ORBIT (it owns the seeded
-        target orbit the client renders)."""
+        ``slot_count`` for non-goal); the client reports every entry on
+        completion. ``mission_builder`` is required only for RANDOM_ORBIT (it owns
+        the seeded target orbit the client renders)."""
         td = self.type_def
         d = {
             "item": self.item_name,
-            "locations": list(self.location_names),
+            "locations": list(self.location_names(slot_count)),
             "title": self.title_override if self.title_override else td.title(self.body),
             "synopsis": td.synopsis(self.body),
             "schema": CONTRACT_SCHEMA_VERSION,

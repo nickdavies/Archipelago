@@ -49,19 +49,19 @@ class TestSphereChainOrdered(KSP1TestBase):
         ladder = self.world._sphere_ladder
         prev = None
         for s in ladder.spheres:
-            cum = s.ranks
+            cum = s.provides
             if prev is not None:
-                for axis, prev_rank in prev.upper_bounds:
-                    cur_rank = cum.get(axis)
-                    self.assertIsNotNone(
-                        cur_rank,
-                        f"Sphere {s.name} dropped axis {axis.value} that the "
-                        f"prior sphere constrained — chain must only grow.",
-                    )
+                for req in prev.rank_reqs:
+                    axis, prev_rank = req.axis, req.level
+                    cur_rank = cum.rank(axis)
+                    # Absent axis reports rank 0 (< any real rank >= 1), so a
+                    # dropped axis fails the monotone check below — the chain
+                    # must only grow.
                     self.assertGreaterEqual(
                         cur_rank, prev_rank,
                         f"Sphere {s.name} lowered {axis.value} ceiling from "
-                        f"{prev_rank} to {cur_rank} — ladder must only grow.",
+                        f"{prev_rank} to {cur_rank} — ladder must only grow "
+                        f"(0 means the axis was dropped).",
                     )
             prev = cum
 

@@ -159,6 +159,42 @@ PROGRESSIVE_RD_NAME: str = "Progressive R&D"
 PROGRESSIVE_LAUNCH_PAD_NAME: str = "Progressive Launch Pad"
 PROGRESSIVE_SCIENCE_INSTRUMENT_NAME: str = "Progressive Science Instrument"
 
+# Curated-building progressives (buildings_in_logic). Only added to the pool
+# when the option is on; otherwise these names are never created and the world
+# is byte-for-byte unchanged.  Each maps to a curated capability effect via
+# ``effects.building_effects``:
+#   * VAB              -> vessel buildable-mass cap (Effect.VESSEL_MASS_LIMIT)
+#   * Astronaut Complex-> free EVA               (Effect.CAN_EVA)
+#   * Tracking Station -> DSN power (DEFERRED seam — relay_tier already gates
+#                          comms, so this item is NOT wired into capability yet)
+# Stock KSP has 2 upgrade levels per facility (base 0 -> 1 -> 2), so each gets
+# 2 copies (levels 1 and 2 on top of base level 0).
+PROGRESSIVE_VAB_NAME: str = "Progressive VAB"
+PROGRESSIVE_TRACKING_STATION_NAME: str = "Progressive Tracking Station"
+PROGRESSIVE_ASTRONAUT_COMPLEX_NAME: str = "Progressive Astronaut Complex"
+
+# Number of pooled copies per building (stock = 2 upgrade levels).
+PROGRESSIVE_VAB_COUNT: int = 2
+PROGRESSIVE_TRACKING_STATION_COUNT: int = 2
+PROGRESSIVE_ASTRONAUT_COMPLEX_COUNT: int = 2
+
+# Bridge: which AP progressive item supplies each curated ``Building``.  The
+# effects layer (``effects.min_building_level_for``) returns a ``Building`` +
+# level; this map turns that into the ``Counted`` requirement's kind (the item
+# name) so the sphere ladder threads the right item into the chain.  Defined
+# here (items.py owns item names) rather than in effects.py to keep effects.py
+# free of item-pool concerns / import cycles.  Imported lazily by capability /
+# sphere_ladder.
+def _building_to_item_name() -> dict:
+    from .effects import Building
+    return {
+        Building.VAB: PROGRESSIVE_VAB_NAME,
+        Building.SPH: PROGRESSIVE_VAB_NAME,  # SPH folds into VAB (vessel limits)
+        Building.TRACKING_STATION: PROGRESSIVE_TRACKING_STATION_NAME,
+        Building.ASTRONAUT_COMPLEX: PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
+        Building.LAUNCH_PAD: PROGRESSIVE_LAUNCH_PAD_NAME,
+    }
+
 # Kerbin baseline tonnage caps by collected count (index = number of copies
 # received).  Index 0 = no copies = starting cap.  Starting at 100t lets
 # sphere-0 do basic Kerbin / Mun / Minmus orbit + landing without any Launch
@@ -190,6 +226,12 @@ _PROGRESSIVE_ITEMS: dict[str, tuple[int, ItemClassification]] = {
     PROGRESSIVE_RD_NAME:                (50, ItemClassification.progression),
     PROGRESSIVE_SCIENCE_INSTRUMENT_NAME: (66, ItemClassification.progression),
     PROGRESSIVE_LAUNCH_PAD_NAME:        (68, ItemClassification.progression),
+    # Curated-building progressives (buildings_in_logic) — ids are always
+    # registered (so create_item resolves the name), but the items are only
+    # POOLED when the option is on.  When off, none are ever created.
+    PROGRESSIVE_VAB_NAME:               (70, ItemClassification.progression),
+    PROGRESSIVE_TRACKING_STATION_NAME:  (71, ItemClassification.progression),
+    PROGRESSIVE_ASTRONAUT_COMPLEX_NAME: (72, ItemClassification.progression),
 }
 
 PROGRESSIVE_RD_COUNT: int = 3
@@ -347,6 +389,23 @@ def create_all_items(world: KSP1World) -> None:
             item = create_item(world, PROGRESSIVE_LAUNCH_PAD_NAME)
             item._sphere_tier = tier
             pool.append(item)
+
+    # Curated-building progressives (buildings_in_logic — only when enabled).
+    # Each copy carries ``_sphere_tier`` exactly like the Pad/R&D counted
+    # progressives so the placement window (``_item_min_sphere``) gates the Nth
+    # copy at the sphere that first needs building level N.
+    if world.options.buildings_in_logic:
+        for name, count in (
+            (PROGRESSIVE_VAB_NAME, PROGRESSIVE_VAB_COUNT),
+            (PROGRESSIVE_TRACKING_STATION_NAME,
+             PROGRESSIVE_TRACKING_STATION_COUNT),
+            (PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
+             PROGRESSIVE_ASTRONAUT_COMPLEX_COUNT),
+        ):
+            for tier in range(1, count + 1):
+                item = create_item(world, name)
+                item._sphere_tier = tier
+                pool.append(item)
 
     # Contract gate items. Non-goal contracts are always pooled. Goal contract
     # items depend on the goal contract mode:

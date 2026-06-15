@@ -43,7 +43,9 @@ from .bodies import (
     ALL_BODIES, BODY_BY_NAME, BodyName, MissionType,
     home_altitude_milestones,
 )
-from .contracts import all_possible_contract_specs, GOAL_CONTRACT_TYPES
+from .contracts import (
+    all_possible_contract_specs, GOAL_CONTRACT_TYPES, MAX_NON_GOAL_SLOT_COUNT,
+)
 from .tech_tree import TECH_NODES
 
 if TYPE_CHECKING:
@@ -147,17 +149,23 @@ class EventDef:
     mission_type: MissionType             # key into MissionBuilder.profiles_for
     crewed: bool | None                   # None=try both, True=crewed only, False=unmanned only
     requires_landing: bool                # only applies to landable bodies
+    # Whether completing this event requires a Kerbal EVA (walk out of the
+    # craft).  Source of truth for the curated Astronaut-Complex ``can_eva``
+    # gate (buildings_in_logic).  FLAG_PLANT / SAMPLE_RETURN imply it from
+    # their mission_type, but EVA-in-orbit shares the plain ORBIT type and so
+    # needs this explicit flag.  Default False.
+    requires_eva: bool = False
 
 ALL_EVENTS: tuple[EventDef, ...] = (
     EventDef(EventName.ORBIT,          1, MissionType.ORBIT,         None,  False),
-    EventDef(EventName.EVA_IN_ORBIT,   1, MissionType.ORBIT,         True,  False),
+    EventDef(EventName.EVA_IN_ORBIT,   1, MissionType.ORBIT,         True,  False, requires_eva=True),
     EventDef(EventName.FLYBY,          1, MissionType.ESCAPE,        None,  False),
     EventDef(EventName.SOI_LEAVE,      1, MissionType.ESCAPE,        None,  False),
     EventDef(EventName.LANDING,        2, MissionType.LAND,          None,  True),
     EventDef(EventName.CREWED_LANDING, 2, MissionType.LAND,          True,  True),
-    EventDef(EventName.FLAG_PLANT,     2, MissionType.FLAG_PLANT,    True,  True),
+    EventDef(EventName.FLAG_PLANT,     2, MissionType.FLAG_PLANT,    True,  True,  requires_eva=True),
     EventDef(EventName.RETURN,         3, MissionType.RETURN,        None,  True),
-    EventDef(EventName.SAMPLE_RETURN,  3, MissionType.SAMPLE_RETURN, True,  True),
+    EventDef(EventName.SAMPLE_RETURN,  3, MissionType.SAMPLE_RETURN, True,  True,  requires_eva=True),
 )
 
 EVENT_BY_NAME: dict[str, EventDef] = {e.name: e for e in ALL_EVENTS}
@@ -479,9 +487,9 @@ def _build_location_table() -> dict[str, int]:
         table[name] = offset
         offset += 1
 
-    # Contract completion locations: three names per possible (type, body) — the
-    # bare goal form plus the two non-goal slot suffixes. Same (type, body) sort
-    # order as the contract items in items.py so the blocks stay aligned.
+    # Contract completion locations: the bare goal form plus every possible
+    # non-goal slot suffix per (type, body). Same (type, body) sort order as the
+    # contract items in items.py so the blocks stay aligned.
     offset = _CONTRACT_OFFSET_START
     for name in CONTRACT_LOCATION_NAMES:
         table[name] = offset
@@ -491,16 +499,17 @@ def _build_location_table() -> dict[str, int]:
 
 
 # Every reward-location name a contract could ever register: for each possible
-# (type, body), the bare goal-contract form AND both non-goal slot suffixes
-# (only the relevant subset is actually created per seed). Sorted by contract_id
-# so the id block is stable.
+# (type, body), the bare goal-contract form AND every non-goal slot suffix up to
+# MAX_NON_GOAL_SLOT_COUNT (base 2 + the Contract Repeats ceiling). Registering the
+# universe maximum keeps location ids stable regardless of the seed's
+# contract_repeats value; a given seed creates only its resolved subset (see
+# create_regions). Sorted by contract_id so the id block is stable.
 CONTRACT_LOCATION_NAMES: tuple[str, ...] = tuple(
     name
     for spec in sorted(all_possible_contract_specs(), key=lambda s: s.contract_id)
     for name in (
         spec.display_name,
-        f"{spec.display_name} 1",
-        f"{spec.display_name} 2",
+        *(f"{spec.display_name} {i}" for i in range(1, MAX_NON_GOAL_SLOT_COUNT + 1)),
     )
 )
 
@@ -598,10 +607,11 @@ def create_all_locations(world: KSP1World) -> None:
         region.add_locations(node_locs, KSP1Location)
 
     # Contract completion locations (only the contracts this seed generated).
-    # Non-goal contracts register two slot locations; goal contracts one.
+    # Non-goal contracts register ``world.non_goal_slot_count`` slot locations
+    # (base 2 + Contract Repeats); goal contracts one.
     contract_locs = {
         name: LOCATION_NAME_TO_ID[name]
         for spec in (*world.contract_specs, *world.goal_contract_specs)
-        for name in spec.location_names
+        for name in spec.location_names(world.non_goal_slot_count)
     }
     menu.add_locations(contract_locs, KSP1Location)

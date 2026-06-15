@@ -167,6 +167,19 @@ _FACILITY_IDS: tuple[str, ...] = (
 )
 _MAX_FACILITY_LEVEL = 2  # stock 0/1/2 (level-3 buildings)
 
+# Facilities the buildings_in_logic option gates as AP progression.  When the
+# option is on these START at level 0 (the player upgrades them by collecting
+# the curated building progressives); every other facility stays maxed.  The
+# Launch Pad is gated separately via progressive_launch_pad (its tonnage caps
+# ride their own slot_data key), so it is NOT listed here.  Tracking Station is
+# omitted: its DSN effect is a deferred seam (relay_tier already gates comms),
+# so it must not change today's maxed behavior.
+_GATED_FACILITY_IDS: tuple[str, ...] = (
+    "SpaceCenter/VehicleAssemblyBuilding",
+    "SpaceCenter/SpaceplaneHangar",
+    "SpaceCenter/AstronautComplex",
+)
+
 
 class KSP1World(World):
     """
@@ -311,6 +324,11 @@ class KSP1World(World):
                 contracts.generate_contracts(self))
         self.contract_required_part_names = contracts.required_part_names_for(
             (*self.contract_specs, *self.goal_contract_specs))
+        # Reward slots each non-goal contract yields this seed: base 2 plus the
+        # Contract Repeats option. Resolved once here so every per-seed consumer
+        # (region registration, access rules, /explain, slot_data) reads one
+        # value instead of re-deriving from options. 0 repeats == exactly 2.
+        self.non_goal_slot_count = contracts.non_goal_slot_count(self.options)
         _validate_goal_contracts_registrable(self.goal_contract_specs)
 
         # Goal contract mode: validate + resolve X and the threshold locations.
@@ -580,9 +598,19 @@ class KSP1World(World):
         # Hacked-career directives — server→client, always emitted, actuated
         # verbatim by the dumb client. Career replaces the prior game mode; the
         # client rejects non-Career saves. Per-building start levels let real
-        # facility progression be reintroduced piecemeal later (all maxed now).
+        # facility progression be reintroduced piecemeal later.
+        #
+        # buildings_in_logic OFF (default): every facility maxed — today's
+        # behavior, byte-for-byte.  ON: the curated-gated facilities START at
+        # level 0 so the player upgrades them via the AP building progressives;
+        # ungated facilities stay maxed.  (Client actuation of the start level
+        # is fast-follow; this just emits the server-authoritative value.)
+        building_levels = {b: _MAX_FACILITY_LEVEL for b in _FACILITY_IDS}
+        if self.options.buildings_in_logic:
+            for b in _GATED_FACILITY_IDS:
+                building_levels[b] = 0
         d["career"] = {
-            "building_levels": {b: _MAX_FACILITY_LEVEL for b in _FACILITY_IDS},
+            "building_levels": building_levels,
             "infinite_funds": True,
             "infinite_reputation": True,
             "unlimited_contracts": True,
@@ -591,7 +619,7 @@ class KSP1World(World):
         # native KSP contract from `parameters` and reports `location` on
         # completion. Goal contracts ride the same array.
         d["contracts"] = [
-            spec.to_slot_dict(self.mission_builder)
+            spec.to_slot_dict(self.mission_builder, self.non_goal_slot_count)
             for spec in (*self.contract_specs, *self.goal_contract_specs)
         ]
         # Seeded RANDOM_ORBIT target orbits, per body — carried so UT regen
@@ -614,6 +642,10 @@ class KSP1World(World):
         d["goal_contract_mode"] = self.options.goal_contract_mode.value
         d["contracts_required"] = self.contracts_required
         d["contracts_available"] = self.options.contracts_available.value
+        # Reward-slot repeats: carried so UT regen recomputes the same
+        # non_goal_slot_count from the option (like every other option), rather
+        # than inferring it from the contracts array length.
+        d["contract_repeats"] = self.options.contract_repeats.value
         thresholds_map: dict[str, list[str]] = {}
         for loc_name, count, _item in self.contract_threshold_defs:
             thresholds_map.setdefault(str(count), []).append(loc_name)
@@ -666,6 +698,8 @@ class KSP1World(World):
             self.options.goal_contract_mode.value = slot_data["goal_contract_mode"]
         if "contracts_available" in slot_data:
             self.options.contracts_available.value = slot_data["contracts_available"]
+        if "contract_repeats" in slot_data:
+            self.options.contract_repeats.value = slot_data["contract_repeats"]
         self._ut_contracts_required = slot_data.get("contracts_required")
 
         # Restore the exact RANDOM_ORBIT target orbits (re-rolling would diverge).
@@ -770,7 +804,7 @@ class KSP1World(World):
         world's own specs (the source of truth) rather than parsing the display
         name, so /explain covers every contract type without per-type handling."""
         for spec in (*self.contract_specs, *self.goal_contract_specs):
-            if name in spec.location_names:
+            if name in spec.location_names(self.non_goal_slot_count):
                 return spec
         return None
 

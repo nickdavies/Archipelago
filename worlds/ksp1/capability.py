@@ -76,6 +76,14 @@ CAPABILITY_ITEMS: frozenset[str] = frozenset(
     "Progressive Launch Pad",
     "Progressive R&D",
     "Progressive Science Instrument",
+    # Curated-building progressives (buildings_in_logic).  When the option is
+    # OFF these items are never in the pool, so their count is always 0 and
+    # they never enter the fingerprint — a no-op.  When ON, their counts must
+    # be tracked so the cache distinguishes e.g. VAB=0 vs VAB=2.  (Tracking
+    # Station is included for completeness even though its effect is deferred.)
+    "Progressive VAB",
+    "Progressive Tracking Station",
+    "Progressive Astronaut Complex",
 }
 
 # Terminal velocity threshold for parachute adequacy (m/s)
@@ -101,6 +109,16 @@ del _nm, _parts
 
 # Minimum jetpack TWR for ladder-free sample return
 _MIN_EVA_JETPACK_TWR: float = 1.05
+
+# Mission types that inherently require a Kerbal EVA (walk out of the craft):
+# planting a flag and taking a surface sample both need a kerbal outside.  This
+# drives the curated Astronaut-Complex ``can_eva`` gate (buildings_in_logic).
+# EVA-in-orbit shares the ORBIT mission_type, so it can't be inferred from the
+# type alone — its caller passes ``requires_eva=True`` explicitly.
+MISSION_TYPES_REQUIRING_EVA: frozenset[MissionType] = frozenset({
+    MissionType.FLAG_PLANT,
+    MissionType.SAMPLE_RETURN,
+})
 
 
 # Sounding rocket parameters
@@ -201,6 +219,16 @@ class EquipmentFlags:
     # launch-pad tier when the option is enabled. Missions whose computed
     # launch mass exceeds this are infeasible.
     launch_pad_mass_cap: float = float("inf")
+
+    # --- Curated-building effects (buildings_in_logic) ---------------------
+    # Each defaults to the MAXED value so that when buildings are NOT in logic
+    # ``_evaluate_profile`` behaves exactly as it did before this feature:
+    #   * ``can_eva=True``  -> no EVA mission is ever gated on the building
+    #   * ``vessel_mass_limit=inf`` -> no mission is gated on total vessel mass
+    # When buildings_in_logic is on, ``_pre_pass`` overrides these from the
+    # collected building-progressive counts via the effects translation layer.
+    can_eva: bool = True
+    vessel_mass_limit: float = float("inf")
 
     # Available part lists (populated by pre-pass)
     available_engines: list[Engine] = field(default_factory=list)
@@ -312,11 +340,17 @@ def _capability_fingerprint(state: CollectionState, player: int) -> frozenset[tu
         PROGRESSIVE_LAUNCH_PAD_NAME, PROGRESSIVE_LAUNCH_PAD_COUNT,
         PROGRESSIVE_RD_NAME, PROGRESSIVE_RD_COUNT,
         PROGRESSIVE_SCIENCE_INSTRUMENT_NAME, PROGRESSIVE_PSI_COUNT,
+        PROGRESSIVE_VAB_NAME, PROGRESSIVE_VAB_COUNT,
+        PROGRESSIVE_TRACKING_STATION_NAME, PROGRESSIVE_TRACKING_STATION_COUNT,
+        PROGRESSIVE_ASTRONAUT_COMPLEX_NAME, PROGRESSIVE_ASTRONAUT_COMPLEX_COUNT,
     )
     _COUNTED = {
         PROGRESSIVE_LAUNCH_PAD_NAME: PROGRESSIVE_LAUNCH_PAD_COUNT,
         PROGRESSIVE_RD_NAME: PROGRESSIVE_RD_COUNT,
         PROGRESSIVE_SCIENCE_INSTRUMENT_NAME: PROGRESSIVE_PSI_COUNT,
+        PROGRESSIVE_VAB_NAME: PROGRESSIVE_VAB_COUNT,
+        PROGRESSIVE_TRACKING_STATION_NAME: PROGRESSIVE_TRACKING_STATION_COUNT,
+        PROGRESSIVE_ASTRONAUT_COMPLEX_NAME: PROGRESSIVE_ASTRONAUT_COMPLEX_COUNT,
     }
     result: list[tuple[str, int]] = []
     for name in CAPABILITY_ITEMS:
@@ -384,7 +418,9 @@ def explain_body_unreachable(state: CollectionState, player: int, body_name: str
 def _pre_pass(item_count_fn: Callable[[str], int],
               start_with_clamps: bool,
               progressive_launch_pad: bool = False,
-              launch_pad_caps: tuple[float, ...] | None = None) -> EquipmentFlags:
+              launch_pad_caps: tuple[float, ...] | None = None,
+              buildings_in_logic: bool = False,
+              home: BodyName | None = None) -> EquipmentFlags:
     """
     Iterate every PART_DB item the player has and build EquipmentFlags.
 
@@ -393,6 +429,14 @@ def _pre_pass(item_count_fn: Callable[[str], int],
     received that part and 0 otherwise.  The ``Progressive Launch Pad``
     counted progressive is the only non-binary count consulted (drives
     ``launch_pad_mass_cap``).
+
+    ``buildings_in_logic`` (default off) gates curated facility effects on the
+    collected building-progressive counts.  When OFF (the default), the
+    building effect fields keep their maxed ``EquipmentFlags`` defaults
+    (``can_eva=True``, ``vessel_mass_limit=inf``), so evaluation is identical
+    to before this feature existed — a strict no-op.  ``home`` only matters
+    when the option is on (none of the curated building effects are home-scaled
+    today, but the translation layer signature requires it).
     """
     flags = EquipmentFlags()
 
@@ -400,12 +444,33 @@ def _pre_pass(item_count_fn: Callable[[str], int],
         flags.has_launch_clamp = True
 
     # Launch-pad mass cap: index by collected count of "Progressive Launch Pad".
+    # Routed through the effects translation layer (the pad cap is the only
+    # capability effect consumed today); ``pad_mass_limit_from_caps`` produces
+    # the identical value the old inline derivation did.
     if progressive_launch_pad:
         from .items import PROGRESSIVE_LAUNCH_PAD_NAME, PROGRESSIVE_LAUNCH_PAD_CAPS_KERBIN
+        from .effects import pad_mass_limit_from_caps
         caps = launch_pad_caps or PROGRESSIVE_LAUNCH_PAD_CAPS_KERBIN
         pad_count = item_count_fn(PROGRESSIVE_LAUNCH_PAD_NAME)
-        idx = min(pad_count, len(caps) - 1)
-        flags.launch_pad_mass_cap = caps[idx]
+        flags.launch_pad_mass_cap = pad_mass_limit_from_caps(caps, pad_count)
+
+    # Curated-building effects (buildings_in_logic). OFF -> the maxed defaults
+    # stand untouched (strict no-op). ON -> override from the collected counts
+    # of each building progressive, routed through the effects layer.
+    if buildings_in_logic:
+        from .items import (
+            PROGRESSIVE_VAB_NAME, PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
+        )
+        from .effects import Building, Effect, building_effects
+        eva_home = home or BodyName.KERBIN
+        vab_level = item_count_fn(PROGRESSIVE_VAB_NAME)
+        ac_level = item_count_fn(PROGRESSIVE_ASTRONAUT_COMPLEX_NAME)
+        vab_eff = building_effects(Building.VAB, vab_level, home=eva_home)
+        ac_eff = building_effects(Building.ASTRONAUT_COMPLEX, ac_level, home=eva_home)
+        flags.vessel_mass_limit = vab_eff[Effect.VESSEL_MASS_LIMIT]
+        flags.can_eva = ac_eff[Effect.CAN_EVA]
+        # Tracking Station / DSN_POWER is a DEFERRED seam (relay_tier already
+        # gates comms); the item exists for pacing but is not read here.
 
     # Process every PART_DB item.
     for item_name, parts in PART_DB.items():
@@ -1122,6 +1187,7 @@ def _evaluate_profile(
     home: BodyName,
     extra_payload_parts: tuple[MiscEquipment, ...] = (),
     run_parallel: bool = True,
+    requires_eva: bool = False,
 ) -> ProfileResult:
     """
     Run the two-pass evaluation on a single mission profile alternative.
@@ -1183,6 +1249,14 @@ def _evaluate_profile(
     # Ladder
     if needs_ladder and not flags.has_ladder:
         blocking.append(BlockingInfo(reason=BlockingReason.NO_LADDER))
+
+    # EVA (Astronaut Complex, buildings_in_logic).  ``flags.can_eva`` defaults
+    # True, so when buildings aren't in logic this never fires.  Home-surface
+    # EVA (empty profile = Kerbal walks off the pad: Kerbin flag/sample) is
+    # allowed at AC level 0 in stock KSP, so we only gate EVA missions that
+    # require travel (a non-empty profile).
+    if requires_eva and profile and not flags.can_eva:
+        blocking.append(BlockingInfo(reason=BlockingReason.CANNOT_EVA))
 
     # Heat shield
     if has_aero_edge and not flags.has_heat_shield:
@@ -1731,6 +1805,20 @@ def _evaluate_profile(
                 mass_cap=flags.launch_pad_mass_cap,
             )],
         )
+    # VAB/SPH buildable-mass cap (buildings_in_logic).  ``vessel_mass_limit``
+    # defaults to inf, so when buildings aren't in logic this never fires.  The
+    # total launch (vessel) mass is the relevant quantity — same metric KSP's
+    # VAB cap applies to.
+    if payload > flags.vessel_mass_limit:
+        return ProfileResult(
+            feasible=False,
+            launch_mass=payload,
+            blocking=[BlockingInfo(
+                reason=BlockingReason.VESSEL_MASS_EXCEEDED,
+                mass_actual=payload,
+                mass_cap=flags.vessel_mass_limit,
+            )],
+        )
     reversed_stages = list(reversed(stage_results_list))
     return ProfileResult(
         feasible=True,
@@ -2174,6 +2262,7 @@ def _assess_one_body(
         ok, sub_blocking = _try_profiles_reason(
             profiles, flags, diff, event.mission_type,
             crewed=event.crewed, home=mission_builder.home,
+            requires_eva=event.requires_eva,
         )
         prof.access[event.name] = ok
         if not ok and not prof.blocking:
@@ -2232,6 +2321,7 @@ def _try_profiles(
     crewed: bool | None,
     home: BodyName,
     extra_payload_parts: tuple[MiscEquipment, ...] = (),
+    requires_eva: bool = False,
 ) -> bool:
     """Return True if any profile alternative is feasible.
 
@@ -2250,7 +2340,8 @@ def _try_profiles(
                 result = _evaluate_profile(profile, flags, diff, mission_type,
                                            is_crewed=is_crewed, home=home,
                                            extra_payload_parts=extra_payload_parts,
-                                           run_parallel=run_par)
+                                           run_parallel=run_par,
+                                           requires_eva=requires_eva)
                 if result.feasible:
                     return True
     return False
@@ -2264,6 +2355,7 @@ def _try_profiles_reason(
     crewed: bool | None,
     home: BodyName,
     extra_payload_parts: tuple[MiscEquipment, ...] = (),
+    requires_eva: bool = False,
 ) -> tuple[bool, list[BlockingInfo]]:
     """
     Like _try_profiles but also returns deduplicated blocking entries
@@ -2287,7 +2379,8 @@ def _try_profiles_reason(
                 result = _evaluate_profile(profile, flags, diff, mission_type,
                                            is_crewed=is_crewed, home=home,
                                            extra_payload_parts=extra_payload_parts,
-                                           run_parallel=run_par)
+                                           run_parallel=run_par,
+                                           requires_eva=requires_eva)
                 if result.feasible:
                     return True, []
                 for b in result.blocking:
@@ -2308,6 +2401,7 @@ def evaluate_mission_detailed(
     threshold_km: float | None = None,
     extra_payload_parts: tuple[MiscEquipment, ...] = (),
     mission_transform: Optional[Callable[[list], list]] = None,
+    requires_eva: bool | None = None,
 ) -> ProfileResult:
     """
     Evaluate a specific mission and return the winning ProfileResult
@@ -2315,6 +2409,13 @@ def evaluate_mission_detailed(
     ProfileResult if no profile alternative succeeds.
 
     crewed: True = crewed only, False = unmanned only, None = try both.
+
+    ``requires_eva`` overrides the EVA requirement (buildings_in_logic gate).
+    ``None`` (the default) derives it from ``mission_type`` via
+    ``MISSION_TYPES_REQUIRING_EVA`` — FLAG_PLANT/SAMPLE_RETURN always need EVA.
+    EVA-in-orbit shares the ORBIT type, so its caller passes ``True`` here.
+    When ``flags.can_eva`` is True (the default / option off) this has no
+    effect.
 
     For ``mission_type="sounding"``, evaluates sounding rocket altitude
     against ``threshold_km``.  Other Kerbin-specific types (first_launch,
@@ -2434,6 +2535,10 @@ def evaluate_mission_detailed(
     if mission_transform is not None:
         profiles = [mission_transform(p) for p in profiles]
 
+    # EVA requirement: explicit override (EVA-in-orbit), else derived from type.
+    eva_required = (mission_type in MISSION_TYPES_REQUIRING_EVA
+                    if requires_eva is None else requires_eva)
+
     all_blocking: list[BlockingInfo] = []
     seen: set[str] = set()
     for is_crewed in _crewed_options(crewed, flags):
@@ -2441,7 +2546,8 @@ def evaluate_mission_detailed(
             result = _evaluate_profile(profile, flags, diff, mission_type,
                                        is_crewed=is_crewed,
                                        home=mission_builder.home,
-                                       extra_payload_parts=extra_payload_parts)
+                                       extra_payload_parts=extra_payload_parts,
+                                       requires_eva=eva_required)
             if result.feasible:
                 return result
             for b in result.blocking:
@@ -2583,16 +2689,22 @@ def compute_capability_from_items(
     mission_builder: MissionBuilder,
     progressive_launch_pad: bool = False,
     contract_specs: tuple = (),
+    buildings_in_logic: bool = False,
 ) -> tuple[RocketCapability, EquipmentFlags]:
     """Compute capability without a CollectionState. For CLI/external tools.
 
     ``contract_specs`` (a tuple of ContractSpec) makes this also compute
     per-contract feasibility into ``cap.contract_access``. Empty = no contracts.
+
+    ``buildings_in_logic`` (default off) gates curated facility effects; OFF is
+    a strict no-op (see ``_pre_pass``).
     """
     diff = DIFFICULTY_PROFILES[difficulty_name]
     flags = _pre_pass(item_count_fn, start_with_clamps,
                       progressive_launch_pad,
-                      launch_pad_caps=mission_builder.launch_pad_caps)
+                      launch_pad_caps=mission_builder.launch_pad_caps,
+                      buildings_in_logic=buildings_in_logic,
+                      home=mission_builder.home)
     # Lazy: bodies are assessed on first query (AP fill rules touch only
     # a few bodies per state; eager _assess_bodies evaluated all 17).
     body_profiles = _LazyBodyProfiles(flags, diff, mission_builder)
@@ -2653,6 +2765,7 @@ def _compute_capability(state: CollectionState, player: int) -> RocketCapability
         progressive_launch_pad=bool(options.progressive_launch_pad.value),
         contract_specs=(*getattr(world, "contract_specs", ()),
                         *getattr(world, "goal_contract_specs", ())),
+        buildings_in_logic=bool(options.buildings_in_logic.value),
     )
     return cap
 

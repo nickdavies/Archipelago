@@ -47,6 +47,8 @@ from .contracts import (
 from .items import (
     PROGRESSIVE_LAUNCH_PAD_COUNT, PROGRESSIVE_LAUNCH_PAD_NAME,
     PROGRESSIVE_RD_COUNT, PROGRESSIVE_RD_NAME,
+    PROGRESSIVE_VAB_NAME, PROGRESSIVE_VAB_COUNT,
+    PROGRESSIVE_ASTRONAUT_COMPLEX_NAME, PROGRESSIVE_ASTRONAUT_COMPLEX_COUNT,
 )
 from .parts import (
     CapabilityFlag,
@@ -59,6 +61,7 @@ from .ranks import (
     DEFAULT_CONTEXT, RANK_AXES, RANK_AXES_BY_KEY, RankAxisKey, RankContext,
     max_rank_for, rank_sig_for, ranks_for_context,
 )
+from .requirements import Counted, Rank, Signature, Threshold
 
 # Parts providing the basic temperature/pressure instruments that
 # ``bankable_science`` credits on every body.  Computed from PART_DB by
@@ -129,59 +132,6 @@ _NARROW_CHAINS_REQUIRING_PROFILE_USE: frozenset[str] = frozenset({
 
 
 @dataclass(frozen=True)
-class MinimumRanks:
-    """Per-axis upper bound on admitted ranks for the rank-space sphere
-    walker (Phase 1 scaffold).
-
-    Stored as a sorted tuple of ``(RankAxisKey, int)`` for hashability.
-    Absent axes are *unconstrained* — every item on that axis is admitted.
-    The default ``empty()`` value therefore admits everything; the bumper
-    *adds* axes as missions force constraints.
-
-    Internal invariants:
-      * ``upper_bounds`` is sorted by ``RankAxisKey.value`` (StrEnum value)
-        so equality / hashing is canonical.
-      * Each axis appears at most once.
-    """
-    upper_bounds: tuple[tuple[RankAxisKey, int], ...] = ()
-
-    def get(self, axis: RankAxisKey) -> Optional[int]:
-        for k, v in self.upper_bounds:
-            if k == axis:
-                return v
-        return None
-
-    def with_axis(self, axis: RankAxisKey, value: int) -> "MinimumRanks":
-        """Return a new MinimumRanks with ``axis`` set to ``value`` (replace
-        or insert).  No-op (returns ``self``) if the value is already set."""
-        existing = self.get(axis)
-        if existing == value:
-            return self
-        keep = [(k, v) for k, v in self.upper_bounds if k != axis]
-        keep.append((axis, value))
-        keep.sort(key=lambda x: x[0].value)
-        return MinimumRanks(tuple(keep))
-
-    def merged_max(self, other: "MinimumRanks") -> "MinimumRanks":
-        """Element-wise max across the union of keys.  Missing-on-one-side
-        is treated as unconstrained on that side, so the *other* side's
-        value wins."""
-        if not self.upper_bounds:
-            return other
-        if not other.upper_bounds:
-            return self
-        merged: dict[RankAxisKey, int] = {k: v for k, v in self.upper_bounds}
-        for k, v in other.upper_bounds:
-            existing = merged.get(k)
-            merged[k] = v if existing is None else max(existing, v)
-        return MinimumRanks(tuple(sorted(merged.items(), key=lambda x: x[0].value)))
-
-    @classmethod
-    def empty(cls) -> "MinimumRanks":
-        return cls(())
-
-
-@dataclass(frozen=True)
 class LocationSignature:
     """Position of a location in the capability partial order.
 
@@ -203,9 +153,10 @@ class LocationSignature:
 class SphereBoundary:
     """A sphere in the rank-space ladder.
 
-    ``ranks`` / ``ranks_delta`` track the cumulative rank ceiling and the
-    increment over the prior sphere.  ``extras`` / ``extras_delta`` track
-    counted progressives the bumper increments outside the rank model.
+    ``provides`` is the cumulative capability signature (rank ceilings +
+    counted-progressive levels) the sphere proves; ``delta`` is the
+    increment over the prior sphere.  Both fold the old split
+    ``(MinimumRanks ranks, dict extras)`` into one :class:`Signature`.
     ``reps_collected`` is the union of all bumper-selected reps through
     this sphere — used by chain-walker reps-only feasibility proofs and
     by downstream tech-tier band funding.
@@ -213,11 +164,9 @@ class SphereBoundary:
     name: str
     location_name: str
     is_predictable: bool
-    ranks: MinimumRanks
-    ranks_delta: MinimumRanks
+    provides: Signature
+    delta: Signature
     reps_collected: frozenset[str] = frozenset()
-    extras: dict[str, int] = field(default_factory=dict)
-    extras_delta: dict[str, int] = field(default_factory=dict)
     flags: EquipmentFlags = field(default_factory=lambda: None)  # type: ignore[arg-type]
     profile_dv: float = 0.0
     signature: Optional[LocationSignature] = None
@@ -248,6 +197,12 @@ class _LocationMissionInfo:
     # ``contract_payload_parts``) so the ladder signature matches the runtime
     # access rule. ``None`` for ordinary (non-contract) missions.
     spec: Optional["ContractSpec"] = None
+    # Whether this location's mission requires a Kerbal EVA — drives the
+    # curated Astronaut-Complex ``can_eva`` gate (buildings_in_logic).  For
+    # FLAG_PLANT/SAMPLE_RETURN this is implied by mission_type; for EVA-in-orbit
+    # it comes from the EventDef (it shares the ORBIT type).  ``None`` means
+    # "let the evaluator derive it from mission_type".
+    requires_eva: Optional[bool] = None
 
 
 def _parse_location(name: str) -> Optional[_LocationMissionInfo]:
@@ -280,6 +235,7 @@ def _parse_location(name: str) -> Optional[_LocationMissionInfo]:
             mission_type=event_def.mission_type,
             crewed=event_def.crewed,
             threshold_km=None,
+            requires_eva=event_def.requires_eva,
         )
     # Contract completion locations: physics-gated like a mission of the
     # contract's base type, but with the required equipment as delivered payload.
@@ -295,6 +251,28 @@ def _parse_location(name: str) -> Optional[_LocationMissionInfo]:
         )
     # Tech tree / KSC / starting inventory: not capability-gated.
     return None
+
+
+def _mission_key(info: "_LocationMissionInfo") -> tuple:
+    """Canonical dedup key for a location's mission — locations sharing it get
+    one capability evaluation (signature + feasibility bracket).
+
+    Ordinary missions key on trajectory only ``(body, type, crewed, threshold)``
+    so the event slots that share one mission collapse (e.g. Mun Landing 1/2/3 —
+    deliberate, see project memory).
+
+    Contract locations additionally key on ``contract_id`` (type:body): two
+    contracts with the same base trajectory can still differ in BOTH the
+    required-part payload the bracket charges (Transmit Science needs a relay
+    antenna; a bare Orbit contract needs none) AND the mission transform that
+    rewrites the edge dv (POLAR/STATIONARY inject extra burns). Collapsing them
+    onto the trajectory key drops those distinctions, bracketing a contract
+    EARLIER than the sphere that actually grants its required rep — the runtime
+    rule then strands that rep on the contract's own reward location."""
+    base = (info.body, info.mission_type, info.crewed, info.threshold_km)
+    if info.spec is not None:
+        return base + (info.spec.contract_id,)
+    return base
 
 
 # A chain-guaranteed contract category that has no part at the current kit maps
@@ -370,6 +348,7 @@ def _evaluate(
         threshold_km=info.threshold_km,
         extra_payload_parts=extra_payload,
         mission_transform=mission_transform,
+        requires_eva=info.requires_eva,
     )
 
 
@@ -588,7 +567,7 @@ def _pick_bump(
 # Rank-space sphere walker — Phase 1 scaffold.
 #
 # This subsystem mirrors the progressive-tier walker above using
-# ``MinimumRanks`` ceilings keyed by ``RankAxisKey``.  It runs *alongside*
+# ``Signature`` ceilings keyed by ``RankAxisKey``.  It runs *alongside*
 # the existing walker (does not replace it yet); the existing walker
 # remains the placement authority.  The rank walker's purpose is to:
 #   1. Compute per-sphere minimum rank ceilings for the predictable
@@ -710,22 +689,26 @@ def _items_at_rank(ctx: RankContext) -> dict[RankAxisKey, dict[int, tuple[str, .
     return out
 
 
-def _rank_admits_item(item_name: str, ranks: MinimumRanks, ctx: RankContext) -> bool:
+def _rank_admits_item(item_name: str, ranks: Signature, ctx: RankContext) -> bool:
     """Item is admitted iff every axis it participates in has the item's
     rank ≤ the ceiling on that axis.  Items with empty rank_sig (filler,
-    non-ranked progressives) are admitted unconditionally."""
+    non-ranked progressives) are admitted unconditionally.
+
+    An axis absent from ``ranks`` reports level 0; since real part ranks
+    are ≥ 1, ``item_rank > ranks.rank(axis)`` then fails — preserving the
+    old "absent axis = unavailable" meaning.
+    """
     sig = rank_sig_for(item_name, ctx)
     if not sig.axes:
         return True
     for axis_key, item_rank in sig.axes:
-        cap = ranks.get(axis_key)
-        if cap is None or item_rank > cap:
+        if item_rank > ranks.rank(axis_key):
             return False
     return True
 
 
 # Cache for ``_pre_pass_for_ranks``, keyed by the hashable
-# ``MinimumRanks.upper_bounds`` tuple plus options.
+# ``Signature.reqs`` tuple plus options.
 _RANK_PRE_PASS_CACHE: dict[tuple, EquipmentFlags] = {}
 
 
@@ -870,7 +853,7 @@ def _random_kit_variant(kit, rng: Random) -> frozenset[str]:
 
 
 def _pre_pass_for_ranks(
-    ranks: MinimumRanks,
+    ranks: Signature,
     ctx: RankContext,
     *,
     start_with_clamps: bool,
@@ -879,6 +862,8 @@ def _pre_pass_for_ranks(
     pad_tier: int = 0,
     precollected_names: frozenset[str] = frozenset(),
     reps_only: Optional[frozenset[str]] = None,
+    buildings_in_logic: bool = False,
+    home: "BodyName | None" = None,
 ) -> EquipmentFlags:
     """Build EquipmentFlags from a rank ceiling OR a specific rep set.
 
@@ -901,9 +886,10 @@ def _pre_pass_for_ranks(
     Precollected items are admitted in both modes.
     """
     cache_key = (
-        ranks.upper_bounds, ctx,
+        ranks.reqs, ctx,
         start_with_clamps, progressive_launch_pad, launch_pad_caps,
         pad_tier, precollected_names, reps_only,
+        buildings_in_logic, home,
     )
     cached = _RANK_PRE_PASS_CACHE.get(cache_key)
     if cached is not None:
@@ -917,9 +903,23 @@ def _pre_pass_for_ranks(
                 admitted.add(item_name)
         admitted |= precollected_names & PART_DB.keys()
 
-    def cf(name: str, _adm=admitted, _pad=pad_tier) -> int:
+    # Curated-building levels ride the same Signature the bumper threads (like
+    # pad_tier).  When buildings_in_logic is OFF these are never consulted by
+    # ``_pre_pass`` (the flag is off), so the lookup is harmless.
+    _building_levels: dict[str, int] = {}
+    if buildings_in_logic:
+        _building_levels = {
+            PROGRESSIVE_VAB_NAME: ranks.counted(PROGRESSIVE_VAB_NAME),
+            PROGRESSIVE_ASTRONAUT_COMPLEX_NAME:
+                ranks.counted(PROGRESSIVE_ASTRONAUT_COMPLEX_NAME),
+        }
+
+    def cf(name: str, _adm=admitted, _pad=pad_tier, _bl=_building_levels) -> int:
         if name == PROGRESSIVE_LAUNCH_PAD_NAME:
             return _pad
+        bl = _bl.get(name)
+        if bl is not None:
+            return bl
         return 1 if name in _adm else 0
 
     flags = _pre_pass(
@@ -927,6 +927,8 @@ def _pre_pass_for_ranks(
         start_with_clamps=start_with_clamps,
         progressive_launch_pad=progressive_launch_pad,
         launch_pad_caps=launch_pad_caps,
+        buildings_in_logic=buildings_in_logic,
+        home=home,
     )
     # In rank-space mode the progressive binary gate flags
     # (``has_launch_engine``, ``has_vacuum_engine``, ``has_lfo_fuel``,
@@ -950,21 +952,43 @@ def _pre_pass_for_ranks(
 class RankBumperResult:
     """Output of ``minimal_ranks_for``.
 
-    ``ranks`` / ``delta`` track the rank ceiling and increment.  ``extras``
-    / ``extras_delta`` track the counted progressives (Pad / R&D / PSI)
-    the bumper incremented outside the rank model — Pad is the only one
+    ``signature`` is the full capability signature the bumper proved (rank
+    ceilings + counted-progressive levels); ``delta`` is the increment over
+    the prior signature.  Both fold the old split ``(MinimumRanks ranks,
+    dict extras)`` into one :class:`Signature`.  The counted progressives
+    (Pad / R&D / PSI) live as :class:`Counted` reqs — Pad is the only one
     the bumper itself touches today (LAUNCH_MASS_EXCEEDED → Pad bump);
     R&D / PSI are injected by the chain orchestrator via tech-tree
     band-funding logic.
     """
-    ranks: MinimumRanks
-    delta: MinimumRanks
+    signature: Signature
+    delta: Signature
     reps: dict[tuple[RankAxisKey, int], str]
     flags: EquipmentFlags
     profile_dv: float
     reps_collected: frozenset[str] = frozenset()
-    extras: dict[str, int] = field(default_factory=dict)
-    extras_delta: dict[str, int] = field(default_factory=dict)
+
+
+def _signature_delta(prior: Signature, current: Signature) -> Signature:
+    """The increment of ``current`` over ``prior`` as a :class:`Signature`.
+
+    Mirrors the old split delta exactly:
+      * **Rank** reqs: the *new ceiling* of every axis whose level grew
+        (the old ``ranks_delta`` stored the absolute ceiling, not the
+        increment — and it is never read, only recorded).
+      * **Counted** reqs: the *increment* (``new - prior``) of every kind
+        whose level grew (the old ``extras_delta`` stored the increment;
+        the band-funding pass reads it).
+    """
+    reqs: list[Threshold] = []
+    for r in current.rank_reqs:
+        if r.level > prior.rank(r.axis):
+            reqs.append(Rank(r.axis, r.level))
+    for c in current.counted_reqs:
+        inc = c.level - prior.counted(c.kind)
+        if inc > 0:
+            reqs.append(Counted(c.kind, inc))
+    return Signature.of(reqs)
 
 
 def _pick_rank_rep(axis: RankAxisKey, new_rank: int,
@@ -987,10 +1011,11 @@ def _pick_rank_rep(axis: RankAxisKey, new_rank: int,
 
 def _pick_rank_rep_scored(
     axis: RankAxisKey, new_rank: int, ctx: RankContext, rng: Random,
-    *, ranks: MinimumRanks, reps_collected: set, info, diff,
+    *, ranks: Signature, reps_collected: set, info, diff,
     start_with_clamps: bool, progressive_launch_pad: bool,
     launch_pad_caps, pad_tier: int, precollected_names: frozenset,
     mission_builder,
+    buildings_in_logic: bool = False, home: "BodyName | None" = None,
 ) -> Optional[str]:
     """Trial each candidate rep at ``(axis, new_rank)``: add it to a
     copy of ``reps_collected``, lift co-axis ranks per its rank_sig,
@@ -1011,7 +1036,7 @@ def _pick_rank_rep_scored(
     if len(cands) > 6:
         cands = rng.sample(cands, 6)
     scored: list[tuple[int, float, int, float, str]] = []
-    base_ranks = ranks.with_axis(axis, new_rank)
+    base_ranks = ranks.with_rank(axis, new_rank)
     for cand in sorted(cands):
         trial_reps = set(reps_collected); trial_reps.add(cand)
         trial_ranks = base_ranks
@@ -1019,8 +1044,8 @@ def _pick_rank_rep_scored(
         for co_axis, co_rank in sig.axes:
             if co_axis == axis:
                 continue
-            if (trial_ranks.get(co_axis) or 0) < co_rank:
-                trial_ranks = trial_ranks.with_axis(co_axis, co_rank)
+            if trial_ranks.rank(co_axis) < co_rank:
+                trial_ranks = trial_ranks.with_rank(co_axis, co_rank)
         trial_flags = _pre_pass_for_ranks(
             trial_ranks, ctx,
             start_with_clamps=start_with_clamps,
@@ -1029,6 +1054,7 @@ def _pick_rank_rep_scored(
             pad_tier=pad_tier,
             precollected_names=precollected_names,
             reps_only=frozenset(trial_reps),
+            buildings_in_logic=buildings_in_logic, home=home,
         )
         trial_result = _evaluate(trial_flags, info, diff, mission_builder)
         feasibility = 0 if trial_result.feasible else 1
@@ -1042,11 +1068,11 @@ def _pick_rank_rep_scored(
     return scored[0][-1]
 
 
-def _rank_axis_at_cap(axis: RankAxisKey, ranks: MinimumRanks) -> bool:
+def _rank_axis_at_cap(axis: RankAxisKey, ranks: Signature) -> bool:
     """Return True if ``axis`` ceiling already equals the axis's effective
     max rank (min(distinct scores, cap)) — no more bumps possible."""
     max_buckets = max_rank_for(axis)
-    current = ranks.get(axis) or 0
+    current = ranks.rank(axis)
     return current >= max_buckets
 
 
@@ -1102,7 +1128,7 @@ def _axes_for_stage_diag(stage_diag) -> tuple[RankAxisKey, ...]:
     return _RANK_BUMP_TABLE[BlockingReason.NO_VIABLE_STAGE]
 
 
-def _pick_rank_bump(blocking, ranks: MinimumRanks, rng: Random) -> Optional[RankAxisKey]:
+def _pick_rank_bump(blocking, ranks: Signature, rng: Random) -> Optional[RankAxisKey]:
     """Choose an axis to bump based on the current blocking reasons.
 
     Walks ``RANK_PRIORITY_GROUPS`` in order; the first group that
@@ -1135,24 +1161,26 @@ def _pick_rank_bump(blocking, ranks: MinimumRanks, rng: Random) -> Optional[Rank
 
 def minimal_ranks_for(
     location_name: str,
-    prior_ranks: MinimumRanks,
+    prior: Signature,
     ctx: RankContext,
     difficulty: str,
     progressive_launch_pad: bool,
     start_with_clamps: bool,
     rng: Random,
     mission_builder: MissionBuilder,
-    prior_extras: Optional[dict[str, int]] = None,
     prior_reps: frozenset[str] = frozenset(),
     precollected_names: frozenset[str] = frozenset(),
     max_iterations: int = 500,
     reps_only_mode: bool = True,
+    buildings_in_logic: bool = False,
 ) -> Optional[RankBumperResult]:
     """Rank-space sphere walker (Phase 1 scaffold).
 
-    Greedy bumper: starting from ``prior_ranks``, repeatedly bump an axis
-    ceiling by 1 until the mission becomes feasible.  Each bump records a
-    designated rep (a random newly-admitted part) in ``RankBumperResult.reps``.
+    Greedy bumper: starting from ``prior`` (a :class:`Signature` carrying
+    both rank ceilings and counted-progressive levels), repeatedly bump an
+    axis ceiling by 1 until the mission becomes feasible.  Each bump records
+    a designated rep (a random newly-admitted part) in
+    ``RankBumperResult.reps``.
 
     Returns ``None`` if the location isn't capability-gated (tech-tree
     biome / starting inventory) OR if no kit reaches it within
@@ -1162,8 +1190,8 @@ def minimal_ranks_for(
     if info is None:
         return None
     diff = DIFFICULTY_PROFILES[difficulty]
-    ranks = prior_ranks
-    extras = dict(prior_extras or {})
+    home = mission_builder.home
+    sig = prior
     reps: dict[tuple[RankAxisKey, int], str] = {}
     reps_collected: set[str] = set(prior_reps)
     prev_blocker_count = -1
@@ -1174,13 +1202,14 @@ def minimal_ranks_for(
     )
     for _iter in range(max_iterations):
         flags = _pre_pass_for_ranks(
-            ranks, ctx,
+            sig, ctx,
             start_with_clamps=start_with_clamps,
             progressive_launch_pad=progressive_launch_pad,
             launch_pad_caps=mission_builder.launch_pad_caps,
-            pad_tier=extras.get(PROGRESSIVE_LAUNCH_PAD_NAME, 0),
+            pad_tier=sig.counted(PROGRESSIVE_LAUNCH_PAD_NAME),
             precollected_names=precollected_names,
             reps_only=frozenset(reps_collected) if reps_only_mode else None,
+            buildings_in_logic=buildings_in_logic, home=home,
         )
         result = _evaluate(flags, info, diff, mission_builder)
         if result.feasible:
@@ -1196,8 +1225,9 @@ def minimal_ranks_for(
                     start_with_clamps=start_with_clamps,
                     progressive_launch_pad=progressive_launch_pad,
                     launch_pad_caps=mission_builder.launch_pad_caps,
-                    pad_tier=extras.get(PROGRESSIVE_LAUNCH_PAD_NAME, 0),
+                    pad_tier=sig.counted(PROGRESSIVE_LAUNCH_PAD_NAME),
                     precollected_names=precollected_names,
+                    buildings_in_logic=buildings_in_logic, home=home,
                 )
                 kept = set(reps_collected)
                 _changed = True
@@ -1206,43 +1236,32 @@ def minimal_ranks_for(
                     for _rep in sorted(kept - set(prior_reps)):
                         _trial = kept - {_rep}
                         _tf = _pre_pass_for_ranks(
-                            ranks, ctx, reps_only=frozenset(_trial), **_pp)
+                            sig, ctx, reps_only=frozenset(_trial), **_pp)
                         if _evaluate(_tf, info, diff, mission_builder).feasible:
                             kept = _trial
                             _changed = True
                 if kept != reps_collected:
                     reps_collected = kept
-                    _new = prior_ranks
+                    # Re-derive the rank ceiling from prior ranks + surviving
+                    # reps; carry the current counted (extras incl. pad) levels
+                    # — minimization only trims rank reps, never the pad.
+                    _new = Signature.of((*prior.rank_reqs, *sig.counted_reqs))
                     for _rep in reps_collected:
                         for _ax, _rk in rank_sig_for(_rep, ctx).axes:
-                            if _rk > (_new.get(_ax) or 0):
-                                _new = _new.with_axis(_ax, _rk)
-                    ranks = _new
+                            if _rk > _new.rank(_ax):
+                                _new = _new.with_rank(_ax, _rk)
+                    sig = _new
                     reps = {k: v for k, v in reps.items() if v in reps_collected}
                     flags = _pre_pass_for_ranks(
-                        ranks, ctx, reps_only=frozenset(reps_collected), **_pp)
-            delta_pairs: list[tuple[RankAxisKey, int]] = []
-            for axis_key, ceil in ranks.upper_bounds:
-                prior = prior_ranks.get(axis_key) or 0
-                if ceil > prior:
-                    delta_pairs.append((axis_key, ceil))
-            delta = MinimumRanks(tuple(sorted(delta_pairs, key=lambda x: x[0].value)))
-            prior_extras_d = dict(prior_extras or {})
-            extras_delta = {
-                k: v - prior_extras_d.get(k, 0)
-                for k, v in extras.items()
-                if v > prior_extras_d.get(k, 0)
-            }
+                        sig, ctx, reps_only=frozenset(reps_collected), **_pp)
             return RankBumperResult(
-                ranks=ranks,
-                delta=delta,
+                signature=sig,
+                delta=_signature_delta(prior, sig),
                 reps=reps,
                 reps_collected=frozenset(
                     reps_collected | _contract_payload_rep_names(info, flags)),
                 flags=flags,
                 profile_dv=result.launch_mass,
-                extras=extras,
-                extras_delta=extras_delta,
             )
         # Mass-cap blocker: bump Pad outside the rank model.  This is the
         # one extra counted-progressive the bumper itself touches —
@@ -1253,9 +1272,30 @@ def minimal_ranks_for(
             for b in result.blocking
         )
         if mass_block and progressive_launch_pad:
-            cur_pad = extras.get(PROGRESSIVE_LAUNCH_PAD_NAME, 0)
+            cur_pad = sig.counted(PROGRESSIVE_LAUNCH_PAD_NAME)
             if cur_pad < pad_cap_count:
-                extras[PROGRESSIVE_LAUNCH_PAD_NAME] = cur_pad + 1
+                sig = sig.with_counted(PROGRESSIVE_LAUNCH_PAD_NAME, cur_pad + 1)
+                continue
+        # Curated-building blockers (buildings_in_logic): bump the building
+        # Counted level outside the rank model, mirroring the Pad mass-cap
+        # bump above.  VESSEL_MASS_EXCEEDED -> VAB level, CANNOT_EVA ->
+        # Astronaut Complex level.  Each building's max level comes from its
+        # pooled copy count.
+        if buildings_in_logic:
+            building_block = False
+            for kind, cap, reason in (
+                (PROGRESSIVE_VAB_NAME, PROGRESSIVE_VAB_COUNT,
+                 BlockingReason.VESSEL_MASS_EXCEEDED),
+                (PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
+                 PROGRESSIVE_ASTRONAUT_COMPLEX_COUNT,
+                 BlockingReason.CANNOT_EVA),
+            ):
+                if any(b.reason == reason for b in result.blocking):
+                    cur = sig.counted(kind)
+                    if cur < cap:
+                        sig = sig.with_counted(kind, cur + 1)
+                        building_block = True
+            if building_block:
                 continue
         # Discrete-unlock blockers: blockers whose resolution is a
         # specific named part not on any rank axis.  Map each blocker
@@ -1312,8 +1352,8 @@ def minimal_ranks_for(
                 for _ax, _rk in rank_sig_for(pick, ctx).axes:
                     if (_ax, _rk) not in reps:
                         reps[(_ax, _rk)] = pick
-                    if _rk > (ranks.get(_ax) or 0):
-                        ranks = ranks.with_axis(_ax, _rk)
+                    if _rk > sig.rank(_ax):
+                        sig = sig.with_rank(_ax, _rk)
                 reactive_added = True
                 break
             if reactive_added:
@@ -1373,8 +1413,8 @@ def minimal_ranks_for(
                 for _ax, _rk in rank_sig_for(pick, ctx).axes:
                     if (_ax, _rk) not in reps:
                         reps[(_ax, _rk)] = pick
-                    if _rk > (ranks.get(_ax) or 0):
-                        ranks = ranks.with_axis(_ax, _rk)
+                    if _rk > sig.rank(_ax):
+                        sig = sig.with_rank(_ax, _rk)
                 reactive_added = True
                 break
             if reactive_added:
@@ -1391,23 +1431,24 @@ def minimal_ranks_for(
         # stage_diag candidate narrowing) is the primary mechanism —
         # ports the legacy _pick_bump intelligence to the rank system.
         axis = _pick_rank_bump_scored(
-            result.blocking, ranks, ctx, rng,
+            result.blocking, sig, ctx, rng,
             difficulty=difficulty,
             progressive_launch_pad=progressive_launch_pad,
             start_with_clamps=start_with_clamps,
             launch_pad_caps=mission_builder.launch_pad_caps,
-            pad_tier=extras.get(PROGRESSIVE_LAUNCH_PAD_NAME, 0),
+            pad_tier=sig.counted(PROGRESSIVE_LAUNCH_PAD_NAME),
             precollected_names=precollected_names,
             mission_builder=mission_builder,
             info=info,
             diff=diff,
             reps_collected=reps_collected,
             reps_only_mode=reps_only_mode,
+            buildings_in_logic=buildings_in_logic, home=home,
         )
         if axis is None:
             # Fall back to the catchall candidate set if stage_diag-targeted
             # axes are exhausted (e.g. non-NO_VIABLE_STAGE blockers only).
-            axis = _pick_rank_bump(result.blocking, ranks, rng)
+            axis = _pick_rank_bump(result.blocking, sig, rng)
         if axis is None:
             # The greedy bumper could not map any remaining blocker to an axis
             # it can still raise — a structural smell (the rep at some capped
@@ -1452,18 +1493,25 @@ def minimal_ranks_for(
             # of (current ceiling, max kit-part rank) per axis, then
             # verify the lifted-ranks + union-reps combination
             # actually reproduces feasibility.
-            max_ranks_for_rescue = MinimumRanks(tuple(sorted(
-                ((a, max_rank_for(a)) for a in RankAxisKey),
-                key=lambda x: x[0].value,
-            )))
+            max_ranks_for_rescue = Signature.of(
+                Rank(a, max_rank_for(a)) for a in RankAxisKey
+            )
+            if buildings_in_logic:
+                # Full-admit rescue: max the building levels too, else a
+                # vessel-mass / EVA gate would falsely fail the rescue probe.
+                max_ranks_for_rescue = (max_ranks_for_rescue
+                    .with_counted(PROGRESSIVE_VAB_NAME, PROGRESSIVE_VAB_COUNT)
+                    .with_counted(PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
+                                  PROGRESSIVE_ASTRONAUT_COMPLEX_COUNT))
             rescue_flags = _pre_pass_for_ranks(
                 max_ranks_for_rescue, ctx,
                 start_with_clamps=start_with_clamps,
                 progressive_launch_pad=progressive_launch_pad,
                 launch_pad_caps=mission_builder.launch_pad_caps,
-                pad_tier=extras.get(PROGRESSIVE_LAUNCH_PAD_NAME, 0),
+                pad_tier=sig.counted(PROGRESSIVE_LAUNCH_PAD_NAME),
                 precollected_names=precollected_names,
                 reps_only=None,
+                buildings_in_logic=buildings_in_logic, home=home,
             )
             rescue_result = _evaluate(rescue_flags, info, diff, mission_builder)
             rescue_kit = build_kit_for_result(rescue_flags, rescue_result)
@@ -1478,22 +1526,22 @@ def minimal_ranks_for(
                 # deterministic ``kit.all_parts()`` which is guaranteed
                 # to reproduce capability's feasibility claim.
                 variant_parts = _random_kit_variant(kit, rng)
-                lifted_ranks = ranks
+                lifted_ranks = sig
                 for u in variant_parts:
-                    sig = rank_sig_for(u, ctx)
-                    for ax, rk in sig.axes:
-                        cur = lifted_ranks.get(ax) or 0
-                        if rk > cur:
-                            lifted_ranks = lifted_ranks.with_axis(ax, rk)
+                    rsig = rank_sig_for(u, ctx)
+                    for ax, rk in rsig.axes:
+                        if rk > lifted_ranks.rank(ax):
+                            lifted_ranks = lifted_ranks.with_rank(ax, rk)
                 union_reps = reps_collected | variant_parts
                 verify_flags = _pre_pass_for_ranks(
                     lifted_ranks, ctx,
                     start_with_clamps=start_with_clamps,
                     progressive_launch_pad=progressive_launch_pad,
                     launch_pad_caps=mission_builder.launch_pad_caps,
-                    pad_tier=extras.get(PROGRESSIVE_LAUNCH_PAD_NAME, 0),
+                    pad_tier=sig.counted(PROGRESSIVE_LAUNCH_PAD_NAME),
                     precollected_names=precollected_names,
                     reps_only=frozenset(union_reps),
+                    buildings_in_logic=buildings_in_logic, home=home,
                 )
                 verify_result = _evaluate(verify_flags, info, diff, mission_builder)
                 kit_parts = variant_parts
@@ -1501,30 +1549,30 @@ def minimal_ranks_for(
                     # Variant broke a cascade.  Fall back to the
                     # deterministic optimal kit and re-verify.
                     kit_parts = kit.all_parts()
-                    lifted_ranks = ranks
+                    lifted_ranks = sig
                     for u in kit_parts:
-                        sig = rank_sig_for(u, ctx)
-                        for ax, rk in sig.axes:
-                            cur = lifted_ranks.get(ax) or 0
-                            if rk > cur:
-                                lifted_ranks = lifted_ranks.with_axis(ax, rk)
+                        rsig = rank_sig_for(u, ctx)
+                        for ax, rk in rsig.axes:
+                            if rk > lifted_ranks.rank(ax):
+                                lifted_ranks = lifted_ranks.with_rank(ax, rk)
                     union_reps = reps_collected | kit_parts
                     verify_flags = _pre_pass_for_ranks(
                         lifted_ranks, ctx,
                         start_with_clamps=start_with_clamps,
                         progressive_launch_pad=progressive_launch_pad,
                         launch_pad_caps=mission_builder.launch_pad_caps,
-                        pad_tier=extras.get(PROGRESSIVE_LAUNCH_PAD_NAME, 0),
+                        pad_tier=sig.counted(PROGRESSIVE_LAUNCH_PAD_NAME),
                         precollected_names=precollected_names,
                         reps_only=frozenset(union_reps),
+                        buildings_in_logic=buildings_in_logic, home=home,
                     )
                     verify_result = _evaluate(verify_flags, info, diff, mission_builder)
                 if verify_result.feasible:
                     for u in kit_parts:
                         if u not in reps_collected:
                             reps_collected.add(u)
-                            sig = rank_sig_for(u, ctx)
-                            for ax, rk in sig.axes:
+                            rsig = rank_sig_for(u, ctx)
+                            for ax, rk in rsig.axes:
                                 if (ax, rk) not in reps:
                                     reps[(ax, rk)] = u
                     # Minimize the rescue kit.  The max-flags optimizer grabs
@@ -1538,8 +1586,9 @@ def minimal_ranks_for(
                             start_with_clamps=start_with_clamps,
                             progressive_launch_pad=progressive_launch_pad,
                             launch_pad_caps=mission_builder.launch_pad_caps,
-                            pad_tier=extras.get(PROGRESSIVE_LAUNCH_PAD_NAME, 0),
+                            pad_tier=sig.counted(PROGRESSIVE_LAUNCH_PAD_NAME),
                             precollected_names=precollected_names,
+                            buildings_in_logic=buildings_in_logic, home=home,
                         )
                         kept = set(reps_collected)
                         _changed = True
@@ -1556,11 +1605,15 @@ def minimal_ranks_for(
                                     _changed = True
                         if kept != reps_collected:
                             reps_collected = kept
-                            lifted_ranks = prior_ranks
+                            # Re-derive the rank ceiling from prior ranks +
+                            # survivors; carry the current counted (extras incl.
+                            # pad) levels so the signature keeps them.
+                            lifted_ranks = Signature.of(
+                                (*prior.rank_reqs, *sig.counted_reqs))
                             for _rep in reps_collected:
                                 for _ax, _rk in rank_sig_for(_rep, ctx).axes:
-                                    if _rk > (lifted_ranks.get(_ax) or 0):
-                                        lifted_ranks = lifted_ranks.with_axis(_ax, _rk)
+                                    if _rk > lifted_ranks.rank(_ax):
+                                        lifted_ranks = lifted_ranks.with_rank(_ax, _rk)
                             reps = {k: v for k, v in reps.items()
                                     if v in reps_collected}
                             verify_flags = _pre_pass_for_ranks(
@@ -1568,26 +1621,15 @@ def minimal_ranks_for(
                                 reps_only=frozenset(reps_collected), **_rpp)
                             verify_result = _evaluate(
                                 verify_flags, info, diff, mission_builder)
-                    delta_pairs: list[tuple[RankAxisKey, int]] = []
-                    for axis_key, ceil in lifted_ranks.upper_bounds:
-                        prior = prior_ranks.get(axis_key) or 0
-                        if ceil > prior:
-                            delta_pairs.append((axis_key, ceil))
-                    delta = MinimumRanks(tuple(sorted(delta_pairs, key=lambda x: x[0].value)))
-                    prior_extras_d = dict(prior_extras or {})
-                    extras_delta = {
-                        k: v - prior_extras_d.get(k, 0)
-                        for k, v in extras.items()
-                        if v > prior_extras_d.get(k, 0)
-                    }
                     return RankBumperResult(
-                        ranks=lifted_ranks, delta=delta, reps=reps,
+                        signature=lifted_ranks,
+                        delta=_signature_delta(prior, lifted_ranks),
+                        reps=reps,
                         reps_collected=frozenset(
                             reps_collected
                             | _contract_payload_rep_names(info, verify_flags)),
                         flags=verify_flags,
                         profile_dv=verify_result.launch_mass,
-                        extras=extras, extras_delta=extras_delta,
                     )
             # Swap-fallback: greedy hill-climb on rep alternatives.
             cur_blockers = len(result.blocking)
@@ -1601,13 +1643,14 @@ def minimal_ranks_for(
                             continue
                         new_reps = (reps_collected - {current_rep}) | {alt}
                         swap_flags = _pre_pass_for_ranks(
-                            ranks, ctx,
+                            sig, ctx,
                             start_with_clamps=start_with_clamps,
                             progressive_launch_pad=progressive_launch_pad,
                             launch_pad_caps=mission_builder.launch_pad_caps,
-                            pad_tier=extras.get(PROGRESSIVE_LAUNCH_PAD_NAME, 0),
+                            pad_tier=sig.counted(PROGRESSIVE_LAUNCH_PAD_NAME),
                             precollected_names=precollected_names,
                             reps_only=frozenset(new_reps),
+                            buildings_in_logic=buildings_in_logic, home=home,
                         )
                         swap_result = _evaluate(swap_flags, info, diff, mission_builder)
                         nb = len(swap_result.blocking)
@@ -1628,63 +1671,53 @@ def minimal_ranks_for(
                 if nb == 0:
                     # Feasible — return
                     final_flags = _pre_pass_for_ranks(
-                        ranks, ctx,
+                        sig, ctx,
                         start_with_clamps=start_with_clamps,
                         progressive_launch_pad=progressive_launch_pad,
                         launch_pad_caps=mission_builder.launch_pad_caps,
-                        pad_tier=extras.get(PROGRESSIVE_LAUNCH_PAD_NAME, 0),
+                        pad_tier=sig.counted(PROGRESSIVE_LAUNCH_PAD_NAME),
                         precollected_names=precollected_names,
                         reps_only=frozenset(reps_collected),
+                        buildings_in_logic=buildings_in_logic, home=home,
                     )
-                    delta_pairs: list[tuple[RankAxisKey, int]] = []
-                    for axis_key, ceil in ranks.upper_bounds:
-                        prior = prior_ranks.get(axis_key) or 0
-                        if ceil > prior:
-                            delta_pairs.append((axis_key, ceil))
-                    delta = MinimumRanks(tuple(sorted(delta_pairs, key=lambda x: x[0].value)))
-                    prior_extras_d = dict(prior_extras or {})
-                    extras_delta = {
-                        k: v - prior_extras_d.get(k, 0)
-                        for k, v in extras.items()
-                        if v > prior_extras_d.get(k, 0)
-                    }
                     return RankBumperResult(
-                        ranks=ranks, delta=delta, reps=reps,
+                        signature=sig,
+                        delta=_signature_delta(prior, sig),
+                        reps=reps,
                         reps_collected=frozenset(
                             reps_collected
                             | _contract_payload_rep_names(info, final_flags)),
                         flags=final_flags, profile_dv=m,
-                        extras=extras, extras_delta=extras_delta,
                     )
             return None
-        new_rank = (ranks.get(axis) or 0) + 1
+        new_rank = sig.rank(axis) + 1
         # Pick the part at this (axis, rank) that actually clears the most
         # blockers, not a random one — a random low-rank pick is often too
         # weak, forcing the bumper to over-raise the rank (orbit "needs" vac:5,
         # Pol "needs" launch:5 when a good rank-2 part flies it).
         rep_name = _pick_rank_rep_scored(
             axis, new_rank, ctx, rng,
-            ranks=ranks, reps_collected=reps_collected, info=info, diff=diff,
+            ranks=sig, reps_collected=reps_collected, info=info, diff=diff,
             start_with_clamps=start_with_clamps,
             progressive_launch_pad=progressive_launch_pad,
             launch_pad_caps=mission_builder.launch_pad_caps,
-            pad_tier=extras.get(PROGRESSIVE_LAUNCH_PAD_NAME, 0),
+            pad_tier=sig.counted(PROGRESSIVE_LAUNCH_PAD_NAME),
             precollected_names=precollected_names,
             mission_builder=mission_builder,
+            buildings_in_logic=buildings_in_logic, home=home,
         )
         if rep_name is not None:
             reps[(axis, new_rank)] = rep_name
             reps_collected.add(rep_name)
-        ranks = ranks.with_axis(axis, new_rank)
+        sig = sig.with_rank(axis, new_rank)
         # Co-axis lift.
         if rep_name is not None:
-            sig = rank_sig_for(rep_name, ctx)
-            for co_axis, co_rank in sig.axes:
+            rsig = rank_sig_for(rep_name, ctx)
+            for co_axis, co_rank in rsig.axes:
                 if co_axis == axis:
                     continue
-                current = ranks.get(co_axis) or 0
-                if co_rank > current:
-                    ranks = ranks.with_axis(co_axis, co_rank)
+                if co_rank > sig.rank(co_axis):
+                    sig = sig.with_rank(co_axis, co_rank)
     return None
 
 
@@ -1712,7 +1745,7 @@ _MASS_RELATED_FAILURES = frozenset({
 })
 
 
-def _pick_rank_bump_scored(blocking, ranks: MinimumRanks, ctx: RankContext,
+def _pick_rank_bump_scored(blocking, ranks: Signature, ctx: RankContext,
                            rng: Random, *,
                            difficulty: str,
                            progressive_launch_pad: bool,
@@ -1722,7 +1755,10 @@ def _pick_rank_bump_scored(blocking, ranks: MinimumRanks, ctx: RankContext,
                            precollected_names: frozenset[str],
                            mission_builder, info, diff,
                            reps_collected: Optional[set[str]] = None,
-                           reps_only_mode: bool = True) -> Optional[RankAxisKey]:
+                           reps_only_mode: bool = True,
+                           buildings_in_logic: bool = False,
+                           home: "BodyName | None" = None,
+                           ) -> Optional[RankAxisKey]:
     """Trial-bump every candidate axis; pick the one with the best
     ``(feasibility, launch_mass, n_blocking)`` score.
 
@@ -1753,8 +1789,8 @@ def _pick_rank_bump_scored(blocking, ranks: MinimumRanks, ctx: RankContext,
                 return (i, a.value)
         return (len(RANK_PRIORITY_GROUPS), a.value)
     for cand in sorted(candidates, key=_cand_sort_key):
-        new_rank = (ranks.get(cand) or 0) + 1
-        trial_ranks = ranks.with_axis(cand, new_rank)
+        new_rank = ranks.rank(cand) + 1
+        trial_ranks = ranks.with_rank(cand, new_rank)
         trial_reps_set = None
         if reps_only_mode and reps_collected is not None:
             trial_reps = set(reps_collected)
@@ -1765,8 +1801,8 @@ def _pick_rank_bump_scored(blocking, ranks: MinimumRanks, ctx: RankContext,
                 for _co_axis, _co_rank in _sig.axes:
                     if _co_axis == cand:
                         continue
-                    if (trial_ranks.get(_co_axis) or 0) < _co_rank:
-                        trial_ranks = trial_ranks.with_axis(_co_axis, _co_rank)
+                    if trial_ranks.rank(_co_axis) < _co_rank:
+                        trial_ranks = trial_ranks.with_rank(_co_axis, _co_rank)
             trial_reps_set = frozenset(trial_reps)
         trial_flags = _pre_pass_for_ranks(
             trial_ranks, ctx,
@@ -1776,6 +1812,7 @@ def _pick_rank_bump_scored(blocking, ranks: MinimumRanks, ctx: RankContext,
             pad_tier=pad_tier,
             precollected_names=precollected_names,
             reps_only=trial_reps_set,
+            buildings_in_logic=buildings_in_logic, home=home,
         )
         trial_result = _evaluate(trial_flags, info, diff, mission_builder)
         feasibility_rank = 0 if trial_result.feasible else 1
@@ -1978,14 +2015,18 @@ def _predictable_spheres(world: "KSP1World") -> list[tuple[str, str]]:
     # flag-at-home) builds a ladder too shallow to bootstrap the deeper contracts,
     # and fill strands their kit unreachably so the threshold can never be
     # satisfied.  Each contract reward is physics-gated (it has a signature), so it
-    # threads exactly like a goal sphere.  Excluded for the tech-tree goal, whose
-    # science anchors above already build a deep enough ladder — adding contract
-    # anchors on top over-constrains the chain and costs solve rate.
+    # threads exactly like a goal sphere.
+    #
+    # This applies to the tech-tree goal in count/progressive too: even though its
+    # science anchors above build a deep ladder, those anchors thread the science
+    # kit, not the contract kit (drill / ore_tank / battery / lab), so the
+    # contracts still strand without their own S_contract anchors.  (For FINDABLE
+    # mode the contracts aren't threshold-gated and this block is never reached, so
+    # the tech-tree findable goal stays unconstrained by contract anchors.)
     from .options import GoalContractMode
-    if (world.options.goal_contract_mode.value in (
+    if world.options.goal_contract_mode.value in (
             GoalContractMode.option_count,
-            GoalContractMode.option_progressive_unlock)
-            and not world.goal_spec.complete_tech_tree):
+            GoalContractMode.option_progressive_unlock):
         for spec in world.contract_specs:
             name = spec.location_name  # slot 1; both slots share one signature
             if name not in infeasible and _parse_location(name) is not None:
@@ -2201,7 +2242,7 @@ def _install_bootstrap_local_rule(world: "KSP1World") -> None:
 def _demote_non_rep_parts(
     world: "KSP1World",
     rep_names: set[str],
-    chain_cumulative: MinimumRanks,
+    chain_cumulative: Signature,
     chain_extras: Optional[dict[str, int]] = None,
 ) -> int:
     """Demote every PROGRESSION part the bumper didn't designate as a rep,
@@ -2221,14 +2262,23 @@ def _demote_non_rep_parts(
     from .items import (
         PROGRESSIVE_RD_NAME, PROGRESSIVE_LAUNCH_PAD_NAME,
         PROGRESSIVE_SCIENCE_INSTRUMENT_NAME,
+        PROGRESSIVE_VAB_NAME, PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
+        PROGRESSIVE_TRACKING_STATION_NAME,
     )
     from .ranks import ItemRankSig
+    # The counted progressives whose copies must stay PROGRESSION up to the
+    # chain's highest needed level (chain_extras): R&D / Pad / PSI plus the
+    # curated buildings (only pooled when buildings_in_logic is on; absent from
+    # the pool otherwise, so naming them here is a harmless no-op when off).
     _KEEP_PROGRESSIVE: frozenset[str] = frozenset({
         PROGRESSIVE_RD_NAME,
         PROGRESSIVE_LAUNCH_PAD_NAME,
         PROGRESSIVE_SCIENCE_INSTRUMENT_NAME,
+        PROGRESSIVE_VAB_NAME,
+        PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
+        PROGRESSIVE_TRACKING_STATION_NAME,
     })
-    ceiling = dict(chain_cumulative.upper_bounds)
+    ceiling = {r.axis: r.level for r in chain_cumulative.rank_reqs}
     player = world.player
     demoted = 0
     promoted = 0
@@ -2336,11 +2386,66 @@ def _make_bracket_rule(player: int, reps: tuple, extras: tuple):
     return rule
 
 
+def _mission_needs_travel(info: "_LocationMissionInfo",
+                          mission_builder: MissionBuilder) -> bool:
+    """True iff the mission has a non-empty edge profile (a rocket must fly).
+
+    Home-surface FLAG_PLANT / SAMPLE_RETURN register an EMPTY profile (the
+    Kerbal walks off the pad), so they need no travel — and EVA there is
+    allowed at Astronaut Complex level 0 in stock KSP.  Mirrors the
+    empty-profile exemption in ``capability._evaluate_profile``.
+    """
+    profiles = mission_builder.profiles_for(info.body, info.mission_type)
+    return any(bool(p) for p in profiles)
+
+
+def _mission_building_reqs(
+    info: "_LocationMissionInfo", launch_mass: float, *, home: "BodyName",
+    needs_travel: bool,
+) -> tuple[tuple[str, int], ...]:
+    """Per-mission curated-building requirements as ``(item_name, level)``.
+
+    Derived from the mission's own physics (its launch mass + whether it needs
+    EVA), mirroring the per-mission pad gate.  Each curated effect is inverted
+    to the minimum building level via ``effects.min_building_level_for`` and
+    mapped to its AP progressive item name.  Only positive levels are recorded.
+
+    * VESSEL_MASS_LIMIT (VAB): the lightest VAB level whose buildable-mass cap
+      fits this mission's launch mass.
+    * CAN_EVA (Astronaut Complex): level 1 for EVA missions that require travel
+      (``needs_travel`` — a non-empty profile); home-surface walk-off-pad EVA is
+      allowed at AC level 0, matching the empty-profile exemption.
+    """
+    from .effects import Effect, min_building_level_for
+    from .items import _building_to_item_name
+    from .capability import MISSION_TYPES_REQUIRING_EVA
+
+    name_for = _building_to_item_name()
+    reqs: list[tuple[str, int]] = []
+
+    # VAB vessel-mass cap (only meaningful for missions that fly).
+    if needs_travel:
+        _vab_building, vab_level = min_building_level_for(
+            Effect.VESSEL_MASS_LIMIT, launch_mass, home=home)
+        if vab_level > 0:
+            reqs.append((name_for[_vab_building], vab_level))
+
+    # Astronaut Complex EVA gate.
+    eva_required = (info.requires_eva if info.requires_eva is not None
+                    else info.mission_type in MISSION_TYPES_REQUIRING_EVA)
+    if eva_required and needs_travel:
+        _ac_building, ac_level = min_building_level_for(
+            Effect.CAN_EVA, True, home=home)
+        if ac_level > 0:
+            reqs.append((name_for[_ac_building], ac_level))
+
+    return tuple(reqs)
+
+
 def _install_ladder_rules(
     world: "KSP1World",
     ladder: SphereLadder,
-    location_min_ranks: dict[str, MinimumRanks],
-    location_min_extras: dict[str, dict[str, int]],
+    location_signatures: dict[str, Signature],
     bootstrap_locations: set,
     save_original: bool = False,
     install_access: bool = True,
@@ -2371,6 +2476,8 @@ def _install_ladder_rules(
         ["casual", "normal", "expert", "insane"][world.options.difficulty.value]
     ]
     mb = world.mission_builder
+    buildings_in_logic = bool(world.options.buildings_in_logic)
+    bn_home = mb.home
 
     # strict_ladder: keep the original capability access rule per
     # location so post_fill can swap it back in and independently
@@ -2387,17 +2494,18 @@ def _install_ladder_rules(
     for loc in world.multiworld.get_locations(player):
         if loc.address is None or loc.name in bootstrap_locations:
             continue
-        if loc.name not in location_min_ranks:
+        if loc.name not in location_signatures:
             continue  # not capability-gated (proxy) — leave rule
         info = _parse_location(loc.name)
         if info is None:
             continue  # tech anchor — gates on science, not capability
-        mkey = (info.body, info.mission_type, info.crewed, info.threshold_km)
+        mkey = _mission_key(info)
         if mkey in bracket_by_mission:
-            j, pad_req = bracket_by_mission[mkey]
+            j, pad_req, building_reqs = bracket_by_mission[mkey]
         else:
             j = None
             pad_req = 0
+            building_reqs: tuple[tuple[str, int], ...] = ()
             for i, s in enumerate(spheres):
                 if s.flags is None:
                     continue
@@ -2415,8 +2523,38 @@ def _install_ladder_rules(
                     caps = mb.launch_pad_caps
                     pad_req = next((t for t, c in enumerate(caps)
                                     if r.launch_mass <= c), len(caps) - 1)
+                    # Precise per-mission building reqs (buildings_in_logic) —
+                    # the same self-gate the pad gets, derived from THIS
+                    # mission's physics at the bracket sphere.
+                    if buildings_in_logic:
+                        building_reqs = _mission_building_reqs(
+                            info, r.launch_mass, home=bn_home,
+                            needs_travel=_mission_needs_travel(info, mb))
                     break
-            bracket_by_mission[mkey] = (j, pad_req)
+            if j is None and buildings_in_logic:
+                # Unbracketed mission (beyond the chain's reps-only reach, e.g.
+                # a far body's EVA for a near goal).  It still needs its
+                # building gate recorded so a unique-provider building copy
+                # can't strand at a location that requires a higher building
+                # level than the copy supplies.  Evaluate at the maximal chain
+                # kit (last sphere with flags) to read its true gate.
+                last_flags = next(
+                    (s.flags for s in reversed(spheres) if s.flags is not None),
+                    None)
+                if last_flags is not None:
+                    r2 = _evaluate(last_flags, info, diff, mb)
+                    mass = r2.launch_mass if r2.feasible else float("inf")
+                    building_reqs = _mission_building_reqs(
+                        info, mass, home=bn_home,
+                        needs_travel=_mission_needs_travel(info, mb))
+            bracket_by_mission[mkey] = (j, pad_req, building_reqs)
+        # Record per-mission building reqs even for unbracketed missions so the
+        # unique-provider building copies never strand behind them.
+        for _kind, _lvl in building_reqs:
+            if _lvl > 0:
+                location_signatures[loc.name] = location_signatures.get(
+                    loc.name, Signature.empty()
+                ).with_counted(_kind, _lvl)
         if j is None:
             # No sphere reaches this mission with its reps-only kit —
             # leave the capability rule as the (slow) fallback.
@@ -2428,8 +2566,12 @@ def _install_ladder_rules(
         # self-ban a real destination gate: a pad copy can't land at a mission
         # that already needs that many copies.
         if pad_req > 0:
-            location_min_extras.setdefault(loc.name, {})[
-                PROGRESSIVE_LAUNCH_PAD_NAME] = pad_req
+            location_signatures[loc.name] = location_signatures.get(
+                loc.name, Signature.empty()
+            ).with_counted(PROGRESSIVE_LAUNCH_PAD_NAME, pad_req)
+        # (per-mission building reqs are recorded above, before the j-is-None
+        # bail, so they also cover unbracketed-but-eventually-reachable
+        # locations — unique-provider building copies must never strand there.)
         if install_access:
             if save_original:
                 saved[loc.name] = loc.access_rule
@@ -2438,7 +2580,7 @@ def _install_ladder_rules(
             loc.access_rule = _make_bracket_rule(
                 player,
                 tuple(sphere.reps_collected),
-                tuple(sphere.extras.items()),
+                tuple((c.kind, c.level) for c in sphere.provides.counted_reqs),
             )
         # No item_rule ban here.  The chicken-and-egg (a rep needed to reach
         # L sitting at L) is prevented by AP's restrictive fill, which never
@@ -2452,40 +2594,19 @@ def _install_ladder_rules(
         world._strict_ladder_saved_rules = saved
 
 
-_EMPTY_EXTRAS: dict[str, int] = {}
+def _first_covering_sphere(spheres, need: Signature) -> int:
+    """Ladder index of the first sphere whose ``provides`` covers ``need``.
 
-
-def _sphere_covers(s: "SphereBoundary", axes, extras) -> bool:
-    """True iff sphere ``s`` admits an item/location with these rank
-    ``axes`` (iterable of ``(axis, rank)``) and counted-progressive
-    ``extras`` (``name -> count``).
-
-    Same admission test as :func:`_rank_admits_item`: an axis absent from
-    the sphere's ceiling is *unavailable* (cap 0), not unconstrained.
-    """
-    ranks = s.ranks
-    for ax, rk in axes:
-        cap = ranks.get(ax)
-        if cap is None or rk > cap:
-            return False
-    if extras:
-        s_extras = s.extras
-        for nm, cnt in extras.items():
-            if cnt > s_extras.get(nm, 0):
-                return False
-    return True
-
-
-def _first_covering_sphere(spheres, axes, extras) -> int:
-    """Ladder index of the first sphere that covers ``(axes, extras)``.
-
-    Sphere rank ceilings and counted-progressive ``extras`` grow
+    Sphere provisions (rank ceilings + counted-progressive levels) grow
     monotonically along the chain, so the first covering sphere is the
     ladder position.  Returns ``len(spheres)`` when no real sphere covers
     it (beyond the chain's reach).
+
+    Covering uses :meth:`Signature.covers`: an axis/kind absent from the
+    sphere's provisions is level 0 — *unavailable*, not unconstrained.
     """
     for i, s in enumerate(spheres):
-        if _sphere_covers(s, axes, extras):
+        if s.provides.covers(need):
             return i
     return len(spheres)
 
@@ -2494,9 +2615,9 @@ def _item_min_sphere(item, spheres) -> int:
     """Ladder position of an item — the first sphere at which it becomes
     available, and therefore the earliest location sphere it may sit at.
 
-    * Parts use their ``rank_sig`` axes against sphere rank ceilings.
-    * Counted progressives (R&D / Pad / PSI) use ``{name: tier}`` against
-      sphere ``extras``.
+    * Parts build a need signature from their ``rank_sig`` axes (Rank reqs).
+    * Counted progressives (R&D / Pad / PSI) build a need signature from a
+      single Counted req (the item's name as kind at its ``_sphere_tier``).
     * Items the chain never requires — spare high-rank parts whose ranks
       exceed the goal, or counted progressives the goal never bumps — are
       unconstrained (sphere 0).  This reproduces the legacy "past-chain ⇒
@@ -2504,11 +2625,13 @@ def _item_min_sphere(item, spheres) -> int:
     """
     sig = getattr(item, "rank_sig", None)
     if sig is not None and sig.axes:
-        idx = _first_covering_sphere(spheres, sig.axes, _EMPTY_EXTRAS)
+        need = Signature.of(Rank(ax, rk) for ax, rk in sig.axes)
+        idx = _first_covering_sphere(spheres, need)
         return 0 if idx == len(spheres) else idx
     tier = getattr(item, "_sphere_tier", None)
     if tier is not None:
-        idx = _first_covering_sphere(spheres, (), {item.name: tier})
+        idx = _first_covering_sphere(
+            spheres, Signature.of((Counted(item.name, tier),)))
         return 0 if idx == len(spheres) else idx
     return 0
 
@@ -2548,8 +2671,7 @@ def _compute_cascade_lo(
 def _install_unified_sphere_rules(
     world: "KSP1World",
     ladder: "SphereLadder",
-    location_min_ranks: dict[str, MinimumRanks],
-    location_min_extras: dict[str, dict[str, int]],
+    location_signatures: dict[str, Signature],
     bootstrap_locations: set[str],
 ) -> None:
     """The unified placement rule — a per-item sphere *window* keyed on
@@ -2582,13 +2704,11 @@ def _install_unified_sphere_rules(
     # so _first_covering_sphere is exact for them.
     cheap_bracket: dict[str, int] = getattr(world, "_cheap_access_bracket", {})
     loc_sphere: dict[str, int] = {}
-    for name, ranks in location_min_ranks.items():
+    for name, need in location_signatures.items():
         if name in cheap_bracket:
             loc_sphere[name] = cheap_bracket[name]
         else:
-            loc_sphere[name] = _first_covering_sphere(
-                spheres, ranks.upper_bounds, location_min_extras.get(name, _EMPTY_EXTRAS)
-            )
+            loc_sphere[name] = _first_covering_sphere(spheres, need)
 
     # Capacity-driven cascade.  A chain rep belongs at its prerequisite sphere
     # (min_sphere-1), but high-rank reps whose prerequisite sphere is empty /
@@ -2616,16 +2736,22 @@ def _install_unified_sphere_rules(
         if L is None:
             continue  # ungated (KSC / starting inventory / event) — keep existing rule
         existing = loc.item_rule
-        # This location's own counted-progressive requirement, e.g.
-        # {Pad: 2, R&D: 1} = "reaching L needs pad tier 2 and R&D band 1".
-        my_extras = location_min_extras.get(loc.name, _EMPTY_EXTRAS)
+        # This location's own signature, e.g. Counted(Pad, 2) + Counted(R&D, 1)
+        # = "reaching L needs pad tier 2 and R&D band 1".
+        my_sig = location_signatures.get(loc.name, Signature.empty())
 
         def _rule(item, _p=player, _L=L, _spheres=spheres, _orig=existing,
-                  _ext=my_extras) -> bool:
+                  _sig=my_sig) -> bool:
             if _orig is not None and not _orig(item):
                 return False
             if item.player != _p:
                 return True
+            if _L >= len(_spheres):          # sentinel: chain-unreachable location
+                # _first_covering_sphere returned len(spheres) — no sphere covers
+                # this location's signature, so it's unreachable in the chain.
+                # An advancement item placed here strands (type-agnostic: parts,
+                # counted progressives, contract gate items, goal items).
+                return not item.advancement   # filler-only
             if item.advancement:
                 tier = getattr(item, "_sphere_tier", None)
                 if tier is not None:
@@ -2636,7 +2762,7 @@ def _install_unified_sphere_rules(
                     # then L is reachable with a lower tier, so collecting the
                     # copy here can never be circular.  Cheap: one lookup in
                     # the chain's precomputed per-location requirement.
-                    return _ext.get(item.name, 0) < tier
+                    return _sig.counted(item.name) < tier
                 # Part: many alternates share its rank, so no single part is
                 # uniquely required to reach any location.  The chain selected
                 # the reps; AP's restrictive fill places them (it handles the
@@ -2653,18 +2779,18 @@ def _install_unified_sphere_rules(
 
 def _compute_tech_tier_signatures_rank(
     world: "KSP1World", ladder: SphereLadder, ctx: RankContext,
-) -> tuple[dict[str, LocationSignature], dict[str, MinimumRanks],
-           dict[str, dict[str, int]], dict[int, SphereBoundary]]:
+) -> tuple[dict[str, LocationSignature], dict[str, Signature],
+           dict[int, SphereBoundary]]:
     """Rank-space port of the legacy ``_compute_tech_tier_signatures``.
 
     Walks the chain, computes science accumulation per sphere from the
-    capability the sphere's ``(ranks, extras)`` proves, and identifies
+    capability the sphere's ``provides`` signature proves, and identifies
     the earliest sphere that funds each tech tier's cumulative cost.
     Returns:
       * ``signatures``  — tech-tree location → LocationSignature
-      * ``min_ranks``   — tech-tree location → MinimumRanks
-      * ``min_extras``  — tech-tree location → counted-progressive kit
-        (PSI/Pad copies the player should have by this sphere)
+      * ``min_sigs``    — tech-tree location → capability :class:`Signature`
+        (the funding sphere's rank ceiling + the R&D / PSI / Pad copies the
+        player should have by this sphere)
       * ``band_funding`` — R&D band → funding sphere (caller injects R&D
         copies at this sphere's depth)
     """
@@ -2687,14 +2813,16 @@ def _compute_tech_tier_signatures_rank(
     # (reps-only model) so the capability matches what fill actually
     # places — not what the rank ceiling would *abstractly* admit.
     sphere_science: list[tuple[SphereBoundary, float]] = []
+    from .items import PROGRESSIVE_SCIENCE_INSTRUMENT_NAME
     for sphere in ladder.spheres:
         admitted = (sphere.reps_collected
                     | (precollected_names & frozenset(PART_DB.keys())))
-        extras = sphere.extras
+        provides = sphere.provides
 
-        def _count(name: str, _adm=admitted, _ext=extras) -> int:
-            if name in _ext:
-                return _ext[name]
+        def _count(name: str, _adm=admitted, _prov=provides) -> int:
+            counted = _prov.counted(name)
+            if counted > 0:
+                return counted
             return 1 if name in _adm else 0
 
         cap, _flags = compute_capability_from_items(
@@ -2702,14 +2830,13 @@ def _compute_tech_tier_signatures_rank(
             start_with_clamps=clamps,
             mission_builder=world.mission_builder,
             progressive_launch_pad=pad_on,
+            buildings_in_logic=bool(world.options.buildings_in_logic),
         )
-        from .items import PROGRESSIVE_SCIENCE_INSTRUMENT_NAME
-        psi_tier = extras.get(PROGRESSIVE_SCIENCE_INSTRUMENT_NAME, 0)
+        psi_tier = provides.counted(PROGRESSIVE_SCIENCE_INSTRUMENT_NAME)
         sphere_science.append((sphere, bankable_science(cap, psi_tier, home) * safety))
 
     sigs: dict[str, LocationSignature] = {}
-    min_ranks_out: dict[str, MinimumRanks] = {}
-    min_extras_out: dict[str, dict[str, int]] = {}
+    min_sigs_out: dict[str, Signature] = {}
     band_funding: dict[int, SphereBoundary] = {}
     num_slots = effective_tech_slots_per_node(world.options, difficulty_idx)
     tier_set = sorted({n.tier for n in TECH_NODES})
@@ -2735,21 +2862,19 @@ def _compute_tech_tier_signatures_rank(
             requirements=tuple(sorted(reqs_dict.items())),
             body_chain_depth=funding.signature.body_chain_depth,
         )
-        # min_ranks for tech-tree locations is the funding sphere's
-        # cumulative rank ceiling; R&D / PSI go in min_extras.
-        extras_kit = dict(funding.extras)
+        # The capability need for tech-tree locations is the funding sphere's
+        # cumulative rank ceiling plus its counted progressives (PSI / Pad),
+        # with the tier's R&D band folded in.
+        min_sig = funding.provides
         if rd_required > 0:
-            extras_kit[PROGRESSIVE_RD_NAME] = max(
-                extras_kit.get(PROGRESSIVE_RD_NAME, 0), rd_required
-            )
+            min_sig = min_sig.with_counted(PROGRESSIVE_RD_NAME, rd_required)
         for node in TECH_NODES:
             if node.tier != tier:
                 continue
             for slot in range(1, num_slots + 1):
                 loc_name = str(TechTreeLocation(node.display_name, slot))
                 sigs[loc_name] = sig
-                min_ranks_out[loc_name] = funding.ranks
-                min_extras_out[loc_name] = extras_kit
+                min_sigs_out[loc_name] = min_sig
         if rd_required > 0:
             prev = band_funding.get(rd_required)
             if prev is None or (
@@ -2757,7 +2882,7 @@ def _compute_tech_tier_signatures_rank(
                 and funding.signature.dv < prev.signature.dv
             ):
                 band_funding[rd_required] = funding
-    return sigs, min_ranks_out, min_extras_out, band_funding
+    return sigs, min_sigs_out, band_funding
 
 
 def apply_sphere_ladder(world: "KSP1World") -> None:
@@ -2766,7 +2891,7 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
     been retired.
 
     Scope:
-      - Compute per-location MinimumRanks ceiling + LocationSignature.
+      - Compute per-location capability Signature + LocationSignature.
       - Build the predictable ladder (S_launch / S_orbit / S_goal).
       - Pick random intermediate spheres.
       - Walk the combined chain in rank space, accumulating ranks +
@@ -2788,11 +2913,13 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
         world.options.difficulty.value
     ]
     progressive_launch_pad = bool(world.options.progressive_launch_pad)
+    buildings_in_logic = bool(world.options.buildings_in_logic)
     start_with_clamps = bool(world.options.start_with_launch_clamps)
     precollected_names = frozenset(
         it.name for it in world.multiworld.precollected_items[world.player]
     )
     home = str(world.mission_builder.home)
+    bn_home = world.mission_builder.home  # BodyName (effects translation)
     infeasible = world.model_infeasible_locations
 
     # Per-location intrinsic rank ceilings.
@@ -2806,12 +2933,16 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
     # same number the bumper converged to, reached in one optimizer call
     # instead of a long greedy walk.  Results are deduped by canonical
     # mission key (Mun Landing 1/2/3 share one mission → one eval).
-    _max_ranks = MinimumRanks(tuple(sorted(
-        ((a, max_rank_for(a)) for a in RankAxisKey),
-        key=lambda x: x[0].value,
-    )))
+    _max_ranks = Signature.of(Rank(a, max_rank_for(a)) for a in RankAxisKey)
     _pad_max = (len(world.mission_builder.launch_pad_caps) - 1
                 if world.mission_builder.launch_pad_caps else 0)
+    if buildings_in_logic:
+        # Full-admit max: max the building levels too so the intrinsic
+        # per-location query isn't false-failed by a building gate.
+        _max_ranks = (_max_ranks
+            .with_counted(PROGRESSIVE_VAB_NAME, PROGRESSIVE_VAB_COUNT)
+            .with_counted(PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
+                          PROGRESSIVE_ASTRONAUT_COMPLEX_COUNT))
     _max_flags = _pre_pass_for_ranks(
         _max_ranks, ctx,
         start_with_clamps=start_with_clamps,
@@ -2820,20 +2951,12 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
         pad_tier=_pad_max,
         precollected_names=precollected_names,
         reps_only=None,
+        buildings_in_logic=buildings_in_logic, home=bn_home,
     )
     _diff = DIFFICULTY_PROFILES[difficulty]
 
-    def _ranks_from_kit(kit) -> MinimumRanks:
-        out = MinimumRanks.empty()
-        for part_name in kit.all_parts():
-            sig = rank_sig_for(part_name, ctx)
-            for ax, rk in sig.axes:
-                if rk > (out.get(ax) or 0):
-                    out = out.with_axis(ax, rk)
-        return out
-
-    location_min_ranks: dict[str, MinimumRanks] = {}
-    _ranks_by_mission: dict[tuple, Optional[MinimumRanks]] = {}
+    location_signatures: dict[str, Signature] = {}
+    _sig_by_mission: dict[tuple, Optional[Signature]] = {}
     for loc in world.multiworld.get_locations(world.player):
         if loc.address is None or loc.name in infeasible:
             continue
@@ -2841,9 +2964,9 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
         if info is None:
             continue
         # Canonical mission key — dedup locations that share one mission.
-        mkey = (info.body, info.mission_type, info.crewed, info.threshold_km)
-        if mkey in _ranks_by_mission:
-            derived = _ranks_by_mission[mkey]
+        mkey = _mission_key(info)
+        if mkey in _sig_by_mission:
+            derived = _sig_by_mission[mkey]
         else:
             # Minimal kit grown from nothing (the chain's own bumper) — the
             # intrinsic per-location requirement.  The previous max-flags kit
@@ -2852,19 +2975,25 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
             # the rest of the code already assumes (see the chain-walk
             # fallback comment below).
             rocket = minimal_ranks_for(
-                loc.name, MinimumRanks.empty(), ctx,
+                loc.name, Signature.empty(), ctx,
                 difficulty=difficulty,
                 progressive_launch_pad=progressive_launch_pad,
                 start_with_clamps=start_with_clamps,
                 rng=world.random,
                 mission_builder=world.mission_builder,
                 precollected_names=precollected_names,
+                buildings_in_logic=buildings_in_logic,
             )
-            derived = rocket.ranks if rocket is not None else None
-            _ranks_by_mission[mkey] = derived
+            # Intrinsic per-location requirement is the RANK ceiling only —
+            # the from-empty bumper's counted (pad) bumps are discarded here;
+            # the precise per-mission pad gate is recorded later by
+            # ``_install_ladder_rules`` from each mission's own launch mass.
+            derived = (Signature.of(rocket.signature.rank_reqs)
+                       if rocket is not None else None)
+            _sig_by_mission[mkey] = derived
         if derived is None:
             continue
-        location_min_ranks[loc.name] = derived
+        location_signatures[loc.name] = derived
         ladder.location_signatures[loc.name] = LocationSignature(
             dv=_goal_dv(loc.name, world.mission_builder),
             requirements=tuple(),
@@ -2926,7 +3055,7 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
         if sig is None:
             return (group, 0, 0.0, 0, name)
         min_rank_size = len(
-            location_min_ranks.get(name, MinimumRanks.empty()).upper_bounds
+            location_signatures.get(name, Signature.empty()).rank_reqs
         )
         return (group, min_rank_size, sig.dv, sig.body_chain_depth, name)
 
@@ -2935,21 +3064,20 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
     # Walk the chain in rank space.  Reps-only mode: each bumper call
     # uses ONLY the reps collected so far + precollected items for its
     # feasibility check, matching what fill places as PROGRESSION.
-    cumulative_ranks = MinimumRanks.empty()
-    cumulative_extras: dict[str, int] = {}
+    cumulative_sig = Signature.empty()
     cumulative_reps: frozenset[str] = frozenset()
     sphere_rank_reps: dict[tuple[RankAxisKey, int], str] = {}
     for label, location_name, is_pred in all_sphere_names:
         rocket = minimal_ranks_for(
-            location_name, cumulative_ranks, ctx,
+            location_name, cumulative_sig, ctx,
             difficulty=difficulty,
             progressive_launch_pad=progressive_launch_pad,
             start_with_clamps=start_with_clamps,
             rng=world.random,
             mission_builder=world.mission_builder,
-            prior_extras=cumulative_extras,
             prior_reps=cumulative_reps,
             precollected_names=precollected_names,
+            buildings_in_logic=buildings_in_logic,
         )
         if rocket is None:
             if is_pred:
@@ -2957,15 +3085,15 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
                 # to the intrinsic per-location ranks (computed earlier
                 # from an empty prior) and merge into cumulative.  If
                 # even THAT is missing, the location is truly infeasible.
-                intrinsic = location_min_ranks.get(location_name)
+                intrinsic = location_signatures.get(location_name)
                 if intrinsic is None:
                     raise OptionError(
                         f"Sphere ladder: predictable anchor {label} "
                         f"({location_name!r}) is unreachable under any rank kit."
                     )
-                merged = cumulative_ranks.merged_max(intrinsic)
+                merged = cumulative_sig.merged_max(intrinsic)
                 rocket = RankBumperResult(
-                    ranks=merged,
+                    signature=merged,
                     delta=intrinsic,
                     reps={},
                     flags=_pre_pass_for_ranks(
@@ -2973,29 +3101,25 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
                         start_with_clamps=start_with_clamps,
                         progressive_launch_pad=progressive_launch_pad,
                         launch_pad_caps=world.mission_builder.launch_pad_caps,
-                        pad_tier=cumulative_extras.get(PROGRESSIVE_LAUNCH_PAD_NAME, 0),
+                        pad_tier=cumulative_sig.counted(PROGRESSIVE_LAUNCH_PAD_NAME),
                         precollected_names=precollected_names,
+                        buildings_in_logic=buildings_in_logic, home=bn_home,
                     ),
                     profile_dv=0.0,
-                    extras=dict(cumulative_extras),
-                    extras_delta={},
                 )
             else:
                 continue
         for key, rep in rocket.reps.items():
             sphere_rank_reps[key] = rep
-        cumulative_ranks = rocket.ranks
-        cumulative_extras = dict(rocket.extras)
+        cumulative_sig = rocket.signature
         cumulative_reps = rocket.reps_collected
         ladder.spheres.append(SphereBoundary(
             name=label,
             location_name=location_name,
             is_predictable=is_pred,
-            ranks=rocket.ranks,
-            ranks_delta=rocket.delta,
+            provides=rocket.signature,
+            delta=rocket.delta,
             reps_collected=rocket.reps_collected,
-            extras=dict(rocket.extras),
-            extras_delta=dict(rocket.extras_delta),
             flags=rocket.flags,
             profile_dv=rocket.profile_dv,
             signature=ladder.location_signatures.get(location_name),
@@ -3003,7 +3127,7 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
 
     world._sphere_ladder = ladder
     world._sphere_rank_reps = sphere_rank_reps
-    world._sphere_rank_cumulative = cumulative_ranks
+    world._sphere_rank_cumulative = cumulative_sig
 
     # Science-instrument early cap (S_sci) — complete_tech_tree only.
     # The funding pass credits temperature/pressure instrument science on
@@ -3039,19 +3163,18 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
     # Tech-tree band funding: walk the chain accumulating science and
     # assign each tech tier a funding sphere.  Without this, R&D copies
     # have no chain-placement target and float to early bands.
-    tech_sigs, tech_min_ranks, tech_min_extras, band_funding = (
+    tech_sigs, tech_min_sigs, band_funding = (
         _compute_tech_tier_signatures_rank(world, ladder, ctx)
     )
     ladder.location_signatures.update(tech_sigs)
-    location_min_ranks.update(tech_min_ranks)
-    # Mirror tech-tree min_extras alongside min_ranks so the chain-
-    # ordering rule sees R&D / PSI requirements per tech location.
-    location_min_extras: dict[str, dict[str, int]] = dict(tech_min_extras)
+    # Mirror tech-tree capability signatures so the chain-ordering rule sees
+    # rank + R&D / PSI requirements per tech location.
+    location_signatures.update(tech_min_sigs)
 
-    # Inject R&D into the chain at each funding sphere so subsequent
-    # spheres' cumulative_extras reflect "by sphere S, player has R&D=B".
-    # Without this the chain-ordering rule treats every R&D copy as
-    # post-goal and bans them everywhere reachable.
+    # Inject R&D into the chain at each funding sphere so subsequent spheres'
+    # cumulative ``provides`` reflect "by sphere S, player has R&D=B".  Without
+    # this the chain-ordering rule treats every R&D copy as post-goal and bans
+    # them everywhere reachable.
     for band, funding_sphere in band_funding.items():
         # Find funding sphere's index in ladder.spheres.
         idx = None
@@ -3061,16 +3184,17 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
                 break
         if idx is None:
             continue
-        cur = funding_sphere.extras_delta.get(PROGRESSIVE_RD_NAME, 0)
-        prior_at_funding = funding_sphere.extras.get(PROGRESSIVE_RD_NAME, 0) - cur
-        new_count = max(band, funding_sphere.extras.get(PROGRESSIVE_RD_NAME, 0))
-        funding_sphere.extras[PROGRESSIVE_RD_NAME] = new_count
-        funding_sphere.extras_delta[PROGRESSIVE_RD_NAME] = new_count - prior_at_funding
+        cur = funding_sphere.delta.counted(PROGRESSIVE_RD_NAME)
+        prior_at_funding = funding_sphere.provides.counted(PROGRESSIVE_RD_NAME) - cur
+        new_count = max(band, funding_sphere.provides.counted(PROGRESSIVE_RD_NAME))
+        funding_sphere.provides = funding_sphere.provides.with_counted(
+            PROGRESSIVE_RD_NAME, new_count)
+        funding_sphere.delta = funding_sphere.delta.with_counted(
+            PROGRESSIVE_RD_NAME, new_count - prior_at_funding)
         # Propagate forward to all later sphere cumulatives.
         for later in ladder.spheres[idx + 1:]:
-            later.extras[PROGRESSIVE_RD_NAME] = max(
-                later.extras.get(PROGRESSIVE_RD_NAME, 0), new_count,
-            )
+            later.provides = later.provides.with_counted(
+                PROGRESSIVE_RD_NAME, new_count)
 
     # Bootstrap-local rule on starting-inv / KSC / First Launch.
     _install_bootstrap_local_rule(world)
@@ -3087,26 +3211,27 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
     # the first splashdown need a capsule; First Launch and Starting Inventory
     # sit at sphere 0.  Discarding them from ``bootstrap_locations`` lets the
     # unified sphere rule gate them (it skips the bootstrap set).
-    _capsule_kit = MinimumRanks.empty().with_axis(RankAxisKey.CAPSULE, 1)
-    _gate_early: dict[str, MinimumRanks] = {
+    _capsule_kit = Signature.empty().with_rank(RankAxisKey.CAPSULE, 1)
+    _gate_early: dict[str, Signature] = {
         name: _capsule_kit for name in world.location_builder.ksc_biome_names
     }
-    _gate_early[f"{home} First Launch"] = MinimumRanks.empty()
+    _gate_early[f"{home} First Launch"] = Signature.empty()
     for loc in world.multiworld.get_locations(world.player):
         if loc.address is None:
             continue
         if loc.name == "Splashdown":
             _gate_early[loc.name] = _capsule_kit
         elif loc.name.startswith("Starting Inventory"):
-            _gate_early[loc.name] = MinimumRanks.empty()
-    for _name, _ranks in _gate_early.items():
-        location_min_ranks.setdefault(_name, _ranks)
+            _gate_early[loc.name] = Signature.empty()
+    for _name, _need in _gate_early.items():
+        location_signatures.setdefault(_name, _need)
         bootstrap_locations.discard(_name)
 
     chain_full_extras: dict[str, int] = {}
     for sphere in ladder.spheres:
-        for name, count in sphere.extras.items():
-            chain_full_extras[name] = max(chain_full_extras.get(name, 0), count)
+        for c in sphere.provides.counted_reqs:
+            chain_full_extras[c.kind] = max(
+                chain_full_extras.get(c.kind, 0), c.level)
     # Inject the tech tree's PSI need at the chain level (mirrors the R&D band
     # injection above).  Only the complete_tech_tree goal funds its science
     # assuming PSI=PROGRESSIVE_PSI_COUNT (see _pick_tech_tree_anchors, gated on
@@ -3123,9 +3248,8 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
         chain_full_extras[_PSI_NAME] = max(
             chain_full_extras.get(_PSI_NAME, 0), PROGRESSIVE_PSI_COUNT,
         )
-    # Expose the finalized per-location rank/extras maps for analysis tooling.
-    world._location_min_ranks = location_min_ranks
-    world._location_min_extras = location_min_extras
+    # Expose the finalized per-location capability signatures for analysis.
+    world._location_signatures = location_signatures
 
     # Access rule.  The feasibility bracket is computed in every mode (so the
     # unified placement rule's loc_sphere always uses the chain's oracle);
@@ -3138,14 +3262,14 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
     #     in place, gating the whole seed on real physics for verification.
     ladder_mode = _ACCESS_RULE_MODE in ("ladder", "strict_ladder")
     _install_ladder_rules(
-        world, ladder, location_min_ranks, location_min_extras,
+        world, ladder, location_signatures,
         bootstrap_locations,
         save_original=(_ACCESS_RULE_MODE == "strict_ladder"),
         install_access=ladder_mode,
     )
     # Single placement authority for every mode: the windowed sphere rule.
     _install_unified_sphere_rules(
-        world, ladder, location_min_ranks, location_min_extras,
+        world, ladder, location_signatures,
         bootstrap_locations,
     )
 
@@ -3161,7 +3285,31 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
     # beatability sweep (advancement-only) never collects them and the goal is
     # unreachable.  Non-goal pacing contracts may demote freely.
     rep_part_names |= {spec.item_name for spec in world.goal_contract_specs}
-    _demote_non_rep_parts(world, rep_part_names, cumulative_ranks,
+    # In count / progressive_unlock modes the player must COMPLETE X non-goal
+    # contracts to unlock the goal (each emits a CONTRACT_COMPLETED event the
+    # threshold counts), so those contracts are GOAL-PATH-REQUIRED.  Two classes
+    # of item must therefore stay PROGRESSION or the threshold / Victory becomes
+    # unreachable (AP only guarantees PROGRESSION items reachable; a USEFUL item
+    # scatters anywhere, including past-goal bodies the chain never reaches):
+    #
+    #   (a) Each non-goal contract's GATE ITEM (its ``item_name``): the contract
+    #       rule is ``state.has(gate_item) AND can_deliver``, so without the gate
+    #       item collected the contract is never completable.  Demoting it to
+    #       USEFUL strands it (observed: gate items landing on Ike / Moho / Pol
+    #       returns, unreachable in a Mun-flag chain) → 0 contracts completable.
+    #   (b) The required PARTS of those contracts: ``required_part_names_for``
+    #       returns the lightest standalone rep per required category (drill /
+    #       ore_tank / battery / science_lab) so the kept set is minimal; the
+    #       chain-guaranteed payload reps (crew / relay / power) are already
+    #       folded into cumulative_reps by _contract_payload_rep_names.
+    from .contracts import required_part_names_for
+    from .options import GoalContractMode
+    if world.options.goal_contract_mode.value in (
+            GoalContractMode.option_count,
+            GoalContractMode.option_progressive_unlock):
+        rep_part_names |= {spec.item_name for spec in world.contract_specs}
+        rep_part_names |= required_part_names_for(world.contract_specs)
+    _demote_non_rep_parts(world, rep_part_names, cumulative_sig,
                           chain_extras=chain_full_extras)
     # === DIAGNOSTIC (temporary, gated) ===
     import os as _os
@@ -3172,7 +3320,7 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
             _dout.write(f'=== CHAIN ({len(ladder.spheres)} spheres) ===\n')
             for _i, _s in enumerate(ladder.spheres):
                 _dout.write(f'  [{_i}] {_s.name} @ {_s.location_name}\n')
-                _dout.write(f'      ranks={list(_s.ranks.upper_bounds)}\n')
+                _dout.write(f'      provides={list(_s.provides.reqs)}\n')
                 _dout.write(f'      reps_collected ({len(_s.reps_collected)}):'
                             f' {sorted(_s.reps_collected)}\n')
                 _dout.write(f'      bumper flags: has_launch={_s.flags.has_launch_engine}, '
@@ -3215,8 +3363,7 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
             _out.write(f'=== CHAIN ({len(ladder.spheres)} spheres) ===\n')
             for _i, _s in enumerate(ladder.spheres):
                 _out.write(f'  [{_i}] {_s.name} @ {_s.location_name}\n')
-                _out.write(f'      ranks={list(_s.ranks.upper_bounds)}\n')
-                _out.write(f'      extras={dict(_s.extras)}\n')
+                _out.write(f'      provides={list(_s.provides.reqs)}\n')
             _pool = world.multiworld.itempool
             _by_class = {}
             for _it in _pool:
@@ -3295,7 +3442,6 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
     local_early = world.multiworld.local_early_items[world.player]
     if launch_sphere is not None:
         for (_axis, _rank), rep_name in sphere_rank_reps.items():
-            launch_ceil = dict(launch_sphere.ranks.upper_bounds)
-            if launch_ceil.get(_axis, 0) >= _rank:
+            if launch_sphere.provides.rank(_axis) >= _rank:
                 local_early[rep_name] = max(local_early.get(rep_name, 0), 1)
 

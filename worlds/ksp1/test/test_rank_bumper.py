@@ -15,8 +15,8 @@ import unittest
 from worlds.ksp1.bodies import BodyName, MissionBuilder
 from worlds.ksp1.parts import PART_DB
 from worlds.ksp1.ranks import DEFAULT_CONTEXT, RankAxisKey, RankContext
+from worlds.ksp1.requirements import Rank, Signature
 from worlds.ksp1.sphere_ladder import (
-    MinimumRanks,
     _pre_pass_for_ranks,
     _rank_admits_item,
     minimal_ranks_for,
@@ -26,7 +26,7 @@ from worlds.ksp1.sphere_ladder import (
 MISSION_BUILDER = MissionBuilder(home=BodyName.KERBIN)
 
 
-def _bumper(loc: str, seed: int = 42, prior: MinimumRanks = MinimumRanks.empty()):
+def _bumper(loc: str, seed: int = 42, prior: Signature = Signature.empty()):
     return minimal_ranks_for(
         loc, prior, DEFAULT_CONTEXT,
         difficulty="normal",
@@ -39,14 +39,14 @@ def _bumper(loc: str, seed: int = 42, prior: MinimumRanks = MinimumRanks.empty()
 
 class TestRankPrePass(unittest.TestCase):
     def test_empty_admits_only_non_ranked_parts(self) -> None:
-        """An empty MinimumRanks ceiling rejects every item that has any
+        """An empty Signature ceiling rejects every item that has any
         rank — only non-ranked items pass.  Ion is the lone non-ranked
         engine (it's out of logic, so it's off the engine axes; see
         ``_engine_vac``), so it slips through the rank gate here — but
         capability's ``_filter_engines_for_ion`` strips it at evaluation
         time, keeping it out of logic in practice."""
         flags = _pre_pass_for_ranks(
-            MinimumRanks.empty(), DEFAULT_CONTEXT,
+            Signature.empty(), DEFAULT_CONTEXT,
             start_with_clamps=True, progressive_launch_pad=False,
             launch_pad_caps=None,
         )
@@ -59,7 +59,7 @@ class TestRankPrePass(unittest.TestCase):
         """With every axis at its maximum bucket, every part participating
         in any rank axis is admitted."""
         from worlds.ksp1.ranks import RANK_AXES, max_rank_for
-        all_max = MinimumRanks(tuple((a.key, max_rank_for(a.key)) for a in RANK_AXES))
+        all_max = Signature.of(Rank(a.key, max_rank_for(a.key)) for a in RANK_AXES)
         flags = _pre_pass_for_ranks(
             all_max, DEFAULT_CONTEXT,
             start_with_clamps=True, progressive_launch_pad=False,
@@ -90,13 +90,13 @@ class TestRankBumperFeasibility(unittest.TestCase):
         r = _bumper("Mun Landing 1")
         self.assertIsNotNone(r)
         # Landing missions should pick a landing-leg axis bump.
-        axes = {k for k, _ in r.ranks.upper_bounds}
+        axes = {rq.axis for rq in r.signature.rank_reqs}
         self.assertIn(RankAxisKey.LANDING_LEG, axes)
 
     def test_duna_landing_picks_heat_shield(self) -> None:
         r = _bumper("Duna Landing 1")
         self.assertIsNotNone(r)
-        axes = {k for k, _ in r.ranks.upper_bounds}
+        axes = {rq.axis for rq in r.signature.rank_reqs}
         self.assertIn(RankAxisKey.HEAT_SHIELD, axes,
                       "Duna landing must require a heat shield")
 
@@ -107,7 +107,7 @@ class TestRankBumperDeterminism(unittest.TestCase):
     def test_repeatable_with_same_seed(self) -> None:
         a = _bumper("Mun Landing 1", seed=1234)
         b = _bumper("Mun Landing 1", seed=1234)
-        self.assertEqual(a.ranks, b.ranks)
+        self.assertEqual(a.signature, b.signature)
         self.assertEqual(a.reps, b.reps)
 
     def test_different_seeds_diverge(self) -> None:

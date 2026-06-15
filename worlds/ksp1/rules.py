@@ -43,6 +43,7 @@ from .locations import (
 )
 from .options import Difficulty, Goal, GoalContractMode, ItemPacing
 from .tech_tree import MAX_TIER, MAX_RD_BAND, cumulative_tier_cost, TECH_NODES, LEAF_TECH_NODES
+from .gates import AccumulationGate, Resource
 
 if TYPE_CHECKING:
     from .world import KSP1World
@@ -160,12 +161,13 @@ def _can_afford_tier(
 def _make_science_threshold_rule(
     player: int, threshold: float, safety: float, home: BodyName,
 ) -> Callable[[CollectionState], bool]:
-    """Return a rule that passes when accessible science * safety >= threshold."""
-    def rule(state: CollectionState) -> bool:
+    """Return a rule that passes when accessible science * safety >= threshold.
+    Expressed as a SCIENCE :class:`~.gates.AccumulationGate`."""
+    def measure(state: CollectionState) -> float:
         cap = get_capability(state, player)
         psi_tier = state.count("Progressive Science Instrument", player)
-        return bankable_science(cap, psi_tier, home) * safety >= threshold
-    return rule
+        return bankable_science(cap, psi_tier, home) * safety
+    return AccumulationGate(Resource.SCIENCE, threshold).runtime_rule(measure)
 
 
 # ---------------------------------------------------------------------------
@@ -430,8 +432,10 @@ def _set_contract_rules(world: KSP1World, player: int) -> None:
                      item=spec.item_name) -> bool:
                 return (state.has(item, player)
                         and get_capability(state, player).contract_access.get(cid, False))
-        # Both non-goal reward slots share the one gate+capability rule.
-        for loc_name in spec.location_names:
+        # Every non-goal reward slot (base 2 + Contract Repeats) shares the one
+        # gate+capability rule, so the extra slots land at the contract's own
+        # sphere as buffer-fill.
+        for loc_name in spec.location_names(world.non_goal_slot_count):
             world.get_location(loc_name).access_rule = rule
 
         # Non-goal completion event shares the rule (count / progressive_unlock):
@@ -458,10 +462,11 @@ def _set_threshold_rules(world: KSP1World, player: int) -> None:
     threshold unlocks exactly when ``required_count`` contracts are completable
     in logic, releasing its locked goal item. No-op in findable / starting."""
     from .contracts import CONTRACT_COMPLETED_EVENT
+    def measure(state: CollectionState) -> float:
+        return state.count(CONTRACT_COMPLETED_EVENT, player)
     for loc_name, count, _item in world.contract_threshold_defs:
-        def rule(state: CollectionState, _c=count) -> bool:
-            return state.has(CONTRACT_COMPLETED_EVENT, player, _c)
-        world.get_location(loc_name).access_rule = rule
+        gate = AccumulationGate(Resource.CONTRACT_COMPLETION, count)
+        world.get_location(loc_name).access_rule = gate.runtime_rule(measure)
 
 
 def _set_mission_rules(world: KSP1World, player: int) -> None:

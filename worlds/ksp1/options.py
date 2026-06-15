@@ -371,6 +371,19 @@ class ProgressiveLaunchPad(Toggle):
     default = 1
 
 
+class BuildingsInLogic(Toggle):
+    """
+    Gate curated KSP facilities (VAB/SPH, Tracking Station, Astronaut Complex)
+    as in-logic progression.
+
+    When off (default), all facilities are maxed — today's behavior, no facility
+    gates anything. When on, curated buildings become gated capability effects
+    (wired by the buildings-in-logic work; no on behavior yet).
+    """
+    display_name = "Buildings In Logic"
+    default = 0
+
+
 class ContractTypeWeights(OptionDict):
     """
     Relative weight of each contract mission type in the non-goal contract pool.
@@ -460,6 +473,18 @@ class AllowMissionsHarderThanGoal(Toggle):
     default = 0
 
 
+class ContractRepeats(NamedRange):
+    """
+    Extra reward slots each non-goal contract yields beyond the base 2, as
+    buffer-fill across spheres. 0 = today's behavior. (Client offering a
+    contract multiple times is a fast-follow.)
+    """
+    display_name = "Contract Repeats"
+    range_start = 0
+    range_end = 8
+    default = 0
+
+
 @dataclass
 class KSP1Options(PerGameCommonOptions):
     goal: Goal
@@ -474,11 +499,13 @@ class KSP1Options(PerGameCommonOptions):
     exclude_locations: KSP1ExcludeLocations
     exclude_late_tech_tree: ExcludeLateTechTree
     progressive_launch_pad: ProgressiveLaunchPad
+    buildings_in_logic: BuildingsInLogic
     contract_type_weights: ContractTypeWeights
     contracts_available: ContractsAvailable
     contracts_required_for_goal: ContractsRequiredForGoal
     goal_contract_mode: GoalContractMode
     allow_missions_harder_than_goal: AllowMissionsHarderThanGoal
+    contract_repeats: ContractRepeats
     flag_bodies: FlagBodies
     return_bodies: ReturnBodies
     sample_return_bodies: SampleReturnBodies
