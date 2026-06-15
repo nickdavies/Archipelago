@@ -323,8 +323,15 @@ def _evaluate(
     info: _LocationMissionInfo,
     diff: DifficultyProfile,
     mission_builder: MissionBuilder,
+    run_parallel: bool = True,
 ) -> ProfileResult:
-    """Dispatch to the right evaluator for a location's mission type."""
+    """Dispatch to the right evaluator for a location's mission type.
+
+    ``run_parallel=False`` (used by the bumper's guidance trials) skips the
+    exact asparagus search — serial mass is a cheap, order-preserving proxy for
+    ranking candidate bumps; the main-loop feasibility check and rescue keep the
+    exact parallel build.
+    """
     if info.mission_type == MissionType.SOUNDING:
         return _evaluate_sounding(flags, info.threshold_km or 0.0,
                                   mission_builder.home_body)
@@ -349,6 +356,7 @@ def _evaluate(
         extra_payload_parts=extra_payload,
         mission_transform=mission_transform,
         requires_eva=info.requires_eva,
+        run_parallel=run_parallel,
     )
 
 
@@ -711,6 +719,14 @@ def _rank_admits_item(item_name: str, ranks: Signature, ctx: RankContext) -> boo
 # ``Signature.reqs`` tuple plus options.
 _RANK_PRE_PASS_CACHE: dict[tuple, EquipmentFlags] = {}
 
+# Bump-selection telemetry (gated by KSP_BUMP_STATS=1; off by default, zero
+# cost otherwise).  Each appended record is one trialed candidate:
+# (failure_types, axis, new_rank, feasible, reduced_blockers, chosen).  Used
+# offline to learn which axes never/rarely help the bumper so the candidate set
+# can be pruned by DATA, not guesswork.
+_BUMP_STATS_ON: bool = os.environ.get("KSP_BUMP_STATS") == "1"
+_BUMP_STATS: list = []
+
 
 def _enrich_kit_alternates(kit, ctx: RankContext) -> None:
     """Populate ``kit.alternates`` and ``kit.stage_*_alternates`` in place.
@@ -1056,7 +1072,8 @@ def _pick_rank_rep_scored(
             reps_only=frozenset(trial_reps),
             buildings_in_logic=buildings_in_logic, home=home,
         )
-        trial_result = _evaluate(trial_flags, info, diff, mission_builder)
+        trial_result = _evaluate(trial_flags, info, diff, mission_builder,
+                                 run_parallel=False)
         feasibility = 0 if trial_result.feasible else 1
         mass = trial_result.launch_mass or float("inf")
         # Blocker reduction is the real "closer to feasible" signal;
@@ -1117,14 +1134,10 @@ def _axes_for_stage_diag(stage_diag) -> tuple[RankAxisKey, ...]:
         return ()
     # Performance failures (DV_SHORT / TWR_SHORT / DRY_MASS_KILLS_RATIO):
     # a too-weak rocket is fixed by EITHER more propulsion/staging OR less
-    # payload mass.  The mass lever matters most on heavy-cascade ascents
-    # (Moho/Pol/Eeloo sample return drag a 1000-3000 t terminal payload up
-    # the gravity well): a lighter capsule / lighter support equipment
-    # shrinks the cascade far more than another engine can lift it.  An
-    # earlier narrow set here (thrust/fuel axes only) omitted the
-    # payload-reducers and capped out fast, dumping those missions into the
-    # rescue path.  Hand back the full NO_VIABLE_STAGE lever set and let the
-    # scored picker trial-evaluate which one actually closes the gap.
+    # payload mass.  Because a rank bump admits *better* (e.g. lighter-dry)
+    # parts, most axes can plausibly help, so the scored picker trial-evaluates
+    # the full lever set and ranks them.  (Data-driven pruning of axes that
+    # never help is under analysis — see KSP_BUMP_STATS instrumentation.)
     return _RANK_BUMP_TABLE[BlockingReason.NO_VIABLE_STAGE]
 
 
@@ -1744,6 +1757,21 @@ _MASS_RELATED_FAILURES = frozenset({
     "dv_short", "twr_short", "dry_mass_kills_ratio", "mass_cap_exceeded",
 })
 
+# Empirically-dominant bump axes (KSP_BUMP_STATS analysis over varied
+# goals/homes incl. hard aliens): these — engines, fuel tanks, staging
+# decouplers, SRB, heat shield — account for ~99% of chosen bumps on
+# performance failures.  The remaining axes (payload-reducer support gear:
+# capsule / probe / solar / SAS / parachute / landing leg, and relay) are a
+# real but <1% tail.  ``_pick_rank_bump_scored`` trials this tier FIRST and
+# only expands to the tail when tier-1 makes no progress — keeping the tail
+# reachable (robust to physics changes) instead of pruning it.
+_TIER1_BUMP_AXES: frozenset[RankAxisKey] = frozenset({
+    RankAxisKey.LAUNCH_ENGINE, RankAxisKey.VAC_ENGINE, RankAxisKey.SRB,
+    RankAxisKey.LFO_TANK, RankAxisKey.LF_TANK, RankAxisKey.XENON_TANK,
+    RankAxisKey.MONOPROP_TANK, RankAxisKey.STACK_DECOUPLER,
+    RankAxisKey.RADIAL_DECOUPLER, RankAxisKey.HEAT_SHIELD,
+})
+
 
 def _pick_rank_bump_scored(blocking, ranks: Signature, ctx: RankContext,
                            rng: Random, *,
@@ -1776,64 +1804,90 @@ def _pick_rank_bump_scored(blocking, ranks: Signature, ctx: RankContext,
                 candidates.add(axis)
     if not candidates:
         return None
-    scored: list[tuple[int, float, int, int, float, RankAxisKey]] = []
-    # Iterate in a deterministic, priority-group-aware order: lower
-    # priority group first, then axis value within group.  ``set``
-    # iteration is hash-randomized per Python process under the default
-    # PYTHONHASHSEED — different solve-check workers were taking
-    # different bumper paths on the same seed because each consumed the
-    # ``rng`` in a different order.
+    # Deterministic, priority-group-aware candidate order: ``set`` iteration is
+    # hash-randomized per process under the default PYTHONHASHSEED, which made
+    # different solve-check workers consume ``rng`` in different orders → diverge.
     def _cand_sort_key(a: RankAxisKey) -> tuple[int, str]:
         for i, g in enumerate(RANK_PRIORITY_GROUPS):
             if a in g:
                 return (i, a.value)
         return (len(RANK_PRIORITY_GROUPS), a.value)
-    for cand in sorted(candidates, key=_cand_sort_key):
-        new_rank = ranks.rank(cand) + 1
-        trial_ranks = ranks.with_rank(cand, new_rank)
-        trial_reps_set = None
-        if reps_only_mode and reps_collected is not None:
-            trial_reps = set(reps_collected)
-            sample_rep = _pick_rank_rep(cand, new_rank, ctx, rng)
-            if sample_rep is not None:
-                trial_reps.add(sample_rep)
-                _sig = rank_sig_for(sample_rep, ctx)
-                for _co_axis, _co_rank in _sig.axes:
-                    if _co_axis == cand:
-                        continue
-                    if trial_ranks.rank(_co_axis) < _co_rank:
-                        trial_ranks = trial_ranks.with_rank(_co_axis, _co_rank)
-            trial_reps_set = frozenset(trial_reps)
-        trial_flags = _pre_pass_for_ranks(
-            trial_ranks, ctx,
-            start_with_clamps=start_with_clamps,
-            progressive_launch_pad=progressive_launch_pad,
-            launch_pad_caps=launch_pad_caps,
-            pad_tier=pad_tier,
-            precollected_names=precollected_names,
-            reps_only=trial_reps_set,
-            buildings_in_logic=buildings_in_logic, home=home,
-        )
-        trial_result = _evaluate(trial_flags, info, diff, mission_builder)
-        feasibility_rank = 0 if trial_result.feasible else 1
-        mass = trial_result.launch_mass or float("inf")
-        group_idx = len(RANK_PRIORITY_GROUPS)
-        for i, g in enumerate(RANK_PRIORITY_GROUPS):
-            if cand in g:
-                group_idx = i
-                break
-        # Sort order: feasibility > blocker reduction > mass.  Putting
-        # n_blockers before mass: for infeasible candidates ``launch_mass``
-        # comes back as the *payload* mass from stage failures, so a
-        # tiny weak engine (ionEngine: 0.25 t) "looks lighter" than a
-        # strong heavy engine (LV-T91: 4 t) and gets picked, leaving
-        # the rep set unable to deliver hard missions like Moho / Bop.
-        # Blocker-reduction is the real "closer to feasible" signal.
-        scored.append((
-            feasibility_rank, len(trial_result.blocking), mass,
-            group_idx, rng.random(), cand,
-        ))
+
+    def _score(cands: list[RankAxisKey]) -> list:
+        out: list[tuple[int, float, int, int, float, RankAxisKey]] = []
+        for cand in sorted(cands, key=_cand_sort_key):
+            new_rank = ranks.rank(cand) + 1
+            trial_ranks = ranks.with_rank(cand, new_rank)
+            trial_reps_set = None
+            if reps_only_mode and reps_collected is not None:
+                trial_reps = set(reps_collected)
+                sample_rep = _pick_rank_rep(cand, new_rank, ctx, rng)
+                if sample_rep is not None:
+                    trial_reps.add(sample_rep)
+                    _sig = rank_sig_for(sample_rep, ctx)
+                    for _co_axis, _co_rank in _sig.axes:
+                        if _co_axis == cand:
+                            continue
+                        if trial_ranks.rank(_co_axis) < _co_rank:
+                            trial_ranks = trial_ranks.with_rank(_co_axis, _co_rank)
+                trial_reps_set = frozenset(trial_reps)
+            trial_flags = _pre_pass_for_ranks(
+                trial_ranks, ctx,
+                start_with_clamps=start_with_clamps,
+                progressive_launch_pad=progressive_launch_pad,
+                launch_pad_caps=launch_pad_caps,
+                pad_tier=pad_tier,
+                precollected_names=precollected_names,
+                reps_only=trial_reps_set,
+                buildings_in_logic=buildings_in_logic, home=home,
+            )
+            trial_result = _evaluate(trial_flags, info, diff, mission_builder,
+                                     run_parallel=False)
+            feasibility_rank = 0 if trial_result.feasible else 1
+            mass = trial_result.launch_mass or float("inf")
+            group_idx = len(RANK_PRIORITY_GROUPS)
+            for i, g in enumerate(RANK_PRIORITY_GROUPS):
+                if cand in g:
+                    group_idx = i
+                    break
+            # Sort order: feasibility > blocker reduction > mass (n_blockers
+            # before mass: a tiny weak engine "looks lighter" on infeasible
+            # trials and would get mis-picked; blocker-reduction is the real
+            # closer-to-feasible signal).
+            out.append((
+                feasibility_rank, len(trial_result.blocking), mass,
+                group_idx, rng.random(), cand,
+            ))
+        return out
+
+    # Tiered: trial the empirically-dominant axes (``_TIER1_BUMP_AXES``) first;
+    # expand to the rare payload-reducer/relay tail ONLY when tier-1 makes no
+    # progress (no feasible candidate AND none cuts the blocker count).  Skips
+    # the long tail in the common case while keeping it reachable.
+    _cur_nblock = len(blocking)
+    tier1 = [c for c in candidates if c in _TIER1_BUMP_AXES]
+    tier2 = [c for c in candidates if c not in _TIER1_BUMP_AXES]
+    if not tier1:
+        tier1, tier2 = list(candidates), []
+    scored = _score(tier1)
     scored.sort()
+    _progress = bool(scored) and (scored[0][0] == 0 or scored[0][1] < _cur_nblock)
+    if not _progress and tier2:
+        scored.extend(_score(tier2))
+        scored.sort()
+
+    if _BUMP_STATS_ON and scored:
+        _chosen = scored[0][-1]
+        _cur_nblock = len(blocking)
+        _failures = tuple(sorted({
+            b.stage_diag.failure.value for b in blocking
+            if getattr(b, "stage_diag", None) is not None
+        }))
+        for _feas, _nblk, _mass, _gidx, _rnd, _cand in scored:
+            _BUMP_STATS.append((
+                _failures, _cand.value, ranks.rank(_cand) + 1,
+                _feas == 0, _nblk < _cur_nblock, _cand is _chosen,
+            ))
 
     return scored[0][-1]
 

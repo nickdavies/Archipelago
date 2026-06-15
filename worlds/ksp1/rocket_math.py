@@ -281,20 +281,27 @@ def _size_parallel_unit(payload, e_mass, n_eng_core, n_eng_boost,
     R_minus_1 = math.exp(required_dv / isp_g0) - 1.0
     hi = max(R_minus_1 * (payload + e_mass * n_eng_core) / (n_boost + 1), 0.05)
     grow = 0
-    while dv_exact(hi) < required_dv and grow < _PARALLEL_FUEL_GROW:
+    dv_hi = dv_exact(hi)
+    while dv_hi < required_dv and grow < _PARALLEL_FUEL_GROW:
         hi *= 2.0
         grow += 1
-    if dv_exact(hi) < required_dv:
+        dv_hi = dv_exact(hi)
+    if dv_hi < required_dv:
         return None
-    lo = 0.0  # always search DOWN from a sufficient hi to the true minimum
+    # Search DOWN from a sufficient hi to the true minimum.  ``dv_hi`` tracks the
+    # dv at the current ``hi`` (always >= required), so the final hi's dv needs
+    # no recompute — saves two dv_exact per call (grow-exit + return) vs always
+    # re-evaluating, with byte-identical results.
+    lo = 0.0
     for _ in range(_PARALLEL_BISECT_ITERS):
         mid = 0.5 * (lo + hi)
-        if dv_exact(mid) >= required_dv:
-            hi = mid
+        dv_mid = dv_exact(mid)
+        if dv_mid >= required_dv:
+            hi, dv_hi = mid, dv_mid
         else:
             lo = mid
     col_dry = _pack_dry(hi, packable, 1)
-    return hi, col_dry, dv_exact(hi)
+    return hi, col_dry, dv_hi
 
 
 # ---------------------------------------------------------------------------

@@ -2402,6 +2402,7 @@ def evaluate_mission_detailed(
     extra_payload_parts: tuple[MiscEquipment, ...] = (),
     mission_transform: Optional[Callable[[list], list]] = None,
     requires_eva: bool | None = None,
+    run_parallel: bool = True,
 ) -> ProfileResult:
     """
     Evaluate a specific mission and return the winning ProfileResult
@@ -2539,6 +2540,14 @@ def evaluate_mission_detailed(
     eva_required = (mission_type in MISSION_TYPES_REQUIRING_EVA
                     if requires_eva is None else requires_eva)
 
+    # ``run_parallel`` controls whether the exact asparagus (parallel-staged)
+    # build is searched.  The bumper's GUIDANCE trials pass run_parallel=False:
+    # serial mass is a fine ranking proxy (asparagus only makes a build lighter,
+    # so the serial dv/mass ordering tracks the parallel one) and avoids the
+    # 42-config parallel-stage search on the bumper's many infeasible trials —
+    # the dominant cost.  The main-loop feasibility decision and the rescue keep
+    # run_parallel=True so the committed kit (and asparagus-only missions) are
+    # judged exactly.
     all_blocking: list[BlockingInfo] = []
     seen: set[str] = set()
     for is_crewed in _crewed_options(crewed, flags):
@@ -2547,6 +2556,7 @@ def evaluate_mission_detailed(
                                        is_crewed=is_crewed,
                                        home=mission_builder.home,
                                        extra_payload_parts=extra_payload_parts,
+                                       run_parallel=run_parallel,
                                        requires_eva=eva_required)
             if result.feasible:
                 return result
