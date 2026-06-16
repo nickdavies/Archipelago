@@ -52,6 +52,7 @@ from .items import (
 )
 from .parts import (
     CapabilityFlag,
+    Decoupler,
     Engine,
     FuelTank,
     MiscEquipment,
@@ -73,6 +74,34 @@ _BASIC_SCIENCE_INSTRUMENTS: frozenset[str] = frozenset(
                 or CapabilityFlag.BAROMETER in p.provides)
            for p in parts)
 )
+
+
+# Deep-interplanetary enabler parts — injected into the cumulative kit once the
+# chain crosses ``_DEEP_INJECT_DV_FRAC`` of its dv range, but ONLY for seeds whose
+# hardest mission is genuinely interplanetary (``_DEEP_INJECT_MIN_DV``).  The
+# high-dv transfer stages of deep missions (~8.5 km/s vacuum burns) close ONLY
+# via a high-Isp nuclear engine (serial) or chemical asparagus (fuel-line
+# crossfeed) — both are top-rank outliers the reps-only bumper reaches only ~45%
+# of the time, so without this it dead-ends on DRY_MASS_KILLS_RATIO and the goal
+# anchor raises OptionError.  See ``project_060_deep_interplanetary_enablers``.
+# nuclear + fuel line are named (critical, present in every pack — user-approved);
+# the radial decoupler (sheds the asparagus booster ring) is derived by property.
+_NUCLEAR_ENGINE_NAME = "nuclearEngine"
+_FUEL_LINE_NAME = "fuelLine"
+_LIGHTEST_RADIAL_DECOUPLER: Optional[str] = min(
+    (nm for nm, parts in PART_DB.items()
+     if any(isinstance(p, Decoupler) and p.kind == "radial" for p in parts)),
+    key=lambda nm: PART_DB[nm][0].mass, default=None,
+)
+_DEEP_SPACE_ENABLERS: frozenset[str] = frozenset(
+    n for n in (_NUCLEAR_ENGINE_NAME, _FUEL_LINE_NAME, _LIGHTEST_RADIAL_DECOUPLER)
+    if n is not None and n in PART_DB
+)
+# Inject once the chain's dv crosses this fraction of its max (mid-run band), and
+# only when that max is interplanetary-deep — keeps Mun/Minmus/simple seeds free
+# of the enablers (preserves early-game variance; the bumper finds its own kit).
+_DEEP_INJECT_DV_FRAC: float = 0.5
+_DEEP_INJECT_MIN_DV: float = 12000.0
 
 
 if TYPE_CHECKING:
@@ -3121,7 +3150,39 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
     cumulative_sig = Signature.empty()
     cumulative_reps: frozenset[str] = frozenset()
     sphere_rank_reps: dict[tuple[RankAxisKey, int], str] = {}
+
+    # Deep-interplanetary enabler inject (see _DEEP_SPACE_ENABLERS).  Only when
+    # the hardest mission is interplanetary-deep; the parts are folded into the
+    # cumulative kit the first time the walk reaches a sphere past
+    # _DEEP_INJECT_DV_FRAC of the dv range, so every deeper mission can build its
+    # high-dv stage (nuclear serial or chemical asparagus) instead of dead-ending.
+    # Bumping cumulative_sig to their ranks also pins their fill placement to this
+    # mid-run band via _item_min_sphere (else they'd be sphere-0 free filler).
+    # dv per sphere name via _goal_dv — covers goal/contract anchors too (those
+    # have address=None so they're absent from ladder.location_signatures, and
+    # the deepest missions ARE the goals, so a stale 0.0 there would skip the
+    # inject and the goal anchor would still raise OptionError).
+    _sphere_dv_by_name = {
+        n: _goal_dv(n, world.mission_builder) for _, n, _ in all_sphere_names
+    }
+    _deep_enablers = _DEEP_SPACE_ENABLERS - precollected_names
+    _deep_max_dv = max(_sphere_dv_by_name.values(), default=0.0)
+    _deep_inject_dv = (
+        _DEEP_INJECT_DV_FRAC * _deep_max_dv
+        if _deep_enablers and _deep_max_dv >= _DEEP_INJECT_MIN_DV
+        else float("inf")
+    )
+    _deep_injected = False
+
     for label, location_name, is_pred in all_sphere_names:
+        if (not _deep_injected
+                and _sphere_dv_by_name.get(location_name, 0.0) >= _deep_inject_dv):
+            cumulative_reps = cumulative_reps | _deep_enablers
+            for _ep in _deep_enablers:
+                for _ax, _rk in rank_sig_for(_ep, ctx).axes:
+                    if _rk > cumulative_sig.rank(_ax):
+                        cumulative_sig = cumulative_sig.with_rank(_ax, _rk)
+            _deep_injected = True
         rocket = minimal_ranks_for(
             location_name, cumulative_sig, ctx,
             difficulty=difficulty,
@@ -3150,6 +3211,12 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
                     signature=merged,
                     delta=intrinsic,
                     reps={},
+                    # Preserve the accumulated kit — the intrinsic fallback
+                    # only knows the location's signature, not its reps, so
+                    # defaulting reps_collected to empty would wipe every rep
+                    # collected so far (incl. the deep-space enablers injected
+                    # above), stranding them and the chain below.
+                    reps_collected=cumulative_reps,
                     flags=_pre_pass_for_ranks(
                         merged, ctx,
                         start_with_clamps=start_with_clamps,
