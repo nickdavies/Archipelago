@@ -3182,7 +3182,13 @@ def _build_ladder_graph_walk(
         if not present:
             continue
         # Walk this body's present events in dependency order.
-        for ev in sorted(present, key=lambda e: _GRAPH_WALK_EVENT_ORDER[e]):
+        # Tie-break the event-order on the event value: FLYBY/SOI_LEAVE (both 0),
+        # ORBIT/EVA_IN_ORBIT (both 1), LANDING/CREWED_LANDING/FLAG_PLANT (all 2)
+        # share an order, and ``present`` is a set whose iteration is hash-
+        # randomized per process.  Without the tie-break the shared rng threads
+        # through these missions in a different order across processes -> the
+        # bumper's rep picks (and thus the whole ladder) become non-reproducible.
+        for ev in sorted(present, key=lambda e: (_GRAPH_WALK_EVENT_ORDER[e], e)):
             loc_name = locname_for[(b.name.value, ev)]
             info = _parse_location(loc_name)
             if info is None:
@@ -3384,7 +3390,13 @@ def _build_ladder_graph_walk(
         present = body_events.get(b.name.value)
         if not present:
             continue
-        for ev in sorted(present, key=lambda e: _GRAPH_WALK_EVENT_ORDER[e]):
+        # Tie-break the event-order on the event value: FLYBY/SOI_LEAVE (both 0),
+        # ORBIT/EVA_IN_ORBIT (both 1), LANDING/CREWED_LANDING/FLAG_PLANT (all 2)
+        # share an order, and ``present`` is a set whose iteration is hash-
+        # randomized per process.  Without the tie-break the shared rng threads
+        # through these missions in a different order across processes -> the
+        # bumper's rep picks (and thus the whole ladder) become non-reproducible.
+        for ev in sorted(present, key=lambda e: (_GRAPH_WALK_EVENT_ORDER[e], e)):
             loc_name = locname_for[(b.name.value, ev)]
             info = _parse_location(loc_name)
             if info is None:
