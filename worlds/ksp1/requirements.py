@@ -75,8 +75,31 @@ class Counted:
         return ("counted", self.kind)
 
 
+@dataclass(frozen=True)
+class Item:
+    """Need ``has(name)`` — a specific NON-PHYSICS gate item (e.g. a contract
+    award item, whose real rule is ``has(award) AND can_deliver``).
+
+    **Unique provider:** only this exact item satisfies it.  **Access-only:** it
+    gates a location's *reachability* but is NOT a rocket capability, so no sphere
+    *provides* it — it is excluded from the physics covering test (see
+    :meth:`Signature.covers`).  Lives in the same Signature as the physics
+    thresholds so a single rule-deriver covers physics and non-physics gates
+    uniformly (the two-axis model).
+    """
+
+    name: str
+
+    unique_provider: bool = True
+    level: int = 1  # binary gate; kept for the max-merge in Signature.of
+
+    @property
+    def key(self) -> ReqKey:
+        return ("item", self.name)
+
+
 # A threshold requirement: the elements a Signature is built from.
-Threshold = Union[Rank, Counted]
+Threshold = Union[Rank, Counted, Item]
 
 
 @dataclass(frozen=True)
@@ -132,6 +155,10 @@ class Signature:
     def counted_reqs(self) -> tuple[Counted, ...]:
         return tuple(r for r in self.reqs if isinstance(r, Counted))
 
+    @property
+    def item_reqs(self) -> tuple[Item, ...]:
+        return tuple(r for r in self.reqs if isinstance(r, Item))
+
     def __bool__(self) -> bool:
         return bool(self.reqs)
 
@@ -152,6 +179,9 @@ class Signature:
     def with_counted(self, kind: str, level: int) -> "Signature":
         return self.with_req(Counted(kind, level))
 
+    def with_item(self, name: str) -> "Signature":
+        return self.with_req(Item(name))
+
     def merged_max(self, other: "Signature") -> "Signature":
         """Element-wise max over the union of keys (the cumulative-chain merge)."""
         if not self.reqs:
@@ -168,6 +198,8 @@ class Signature:
         so any positive demand on an absent key fails the test.
         """
         for r in need.reqs:
+            if isinstance(r, Item):
+                continue  # access-only gate; no sphere provides it (non-physics)
             if self.level_on(r.key) < r.level:
                 return False
         return True

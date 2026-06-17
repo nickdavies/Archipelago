@@ -457,6 +457,41 @@ class KSP1World(World):
         from .sphere_ladder import apply_sphere_ladder
         apply_sphere_ladder(self)
 
+    def fill_hook(self, progitempool, usefulitempool, filleritempool,
+                  fill_locations) -> None:
+        """Order non-progression items MOST-restricted first for AP's fill.
+
+        ``remaining_fill`` pops items from the END of the pool and places each
+        at the first valid location.  A high-rank non-progression part is valid
+        only at high spheres (its lower-bound placement rule), so if less-
+        restricted items are placed first they can take the scarce high-sphere
+        spots and wedge the few high-rank parts at the end (observed: SSR alien
+        FILL_ERR on a couple of tank/adapter parts).  Sorting OUR non-progression
+        items by ladder position so the hardest sit at the END (popped first)
+        makes fill go most-restricted → least-restricted — a generic remedy for
+        ordering-induced (not capacity) fill failures.
+
+        Progression is deliberately left untouched: its restrictive fill already
+        succeeds, and biasing the progression order is the known-negative lever
+        (it exposes counted-progressive self-locking — see the fill-failure
+        post-mortem).  Other players' items keep their order.
+        """
+        from .sphere_ladder import _item_min_sphere
+        ladder = getattr(self, "_sphere_ladder", None)
+        if ladder is None:
+            return
+        spheres = ladder.spheres
+        for pool in (usefulitempool, filleritempool):
+            mine = [it for it in pool if it.player == self.player]
+            if not mine:
+                continue
+            # ascending min_sphere → hardest (highest) last → popped first
+            mine.sort(key=lambda it: _item_min_sphere(it, spheres))
+            it = iter(mine)
+            for i, item in enumerate(pool):
+                if item.player == self.player:
+                    pool[i] = next(it)
+
     def post_fill(self) -> None:
         # strict_ladder cross-check: the cheap sphere-bracket access rules
         # were used during fill.  Swap the saved capability access rules
