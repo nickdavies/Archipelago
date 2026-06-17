@@ -1945,106 +1945,6 @@ def _goal_dv(name: str, mission_builder: MissionBuilder) -> float:
     return min(sum(e.base_dv for e in profile) for profile in profiles)
 
 
-def _goal_relevant_bodies(world: "KSP1World") -> frozenset[str]:
-    """Return body names that should be eligible as intermediate spheres
-    for the player's goal.  A body is "relevant" iff:
-
-    - it's in Kerbin's SOI (always: Kerbin/Mun/Minmus are warmup territory)
-    - it's a goal body itself
-    - it's a parent SOI of a goal body (containing-SOI chain)
-    - it's a sibling of a goal body (shares the same parent SOI)
-    - it's a child of a goal body (orbits the goal body)
-
-    For a Minmus-only goal: {Kerbin, Mun, Minmus} — no interplanetary
-    intermediates.  For a Duna goal: adds Sun-SOI planets + Duna's moons.
-    Prevents the bumper from being forced to over-spend on Relay / Heat
-    Shield to clear off-path intermediates.
-    """
-    from .bodies import ALL_BODIES, BODY_BY_NAME, BodyName, home_system_bodies
-    from .rules import goal_spec_location_names
-
-    # Home-system bodies are always relevant — the player has to fly
-    # through them to leave home, so they're warmup territory.
-    relevant: set[str] = {str(b) for b in home_system_bodies(world.mission_builder.home)}
-
-    goal_bodies: set[str] = set()
-    for loc_name in goal_spec_location_names(world.goal_spec):
-        parsed = MissionLocation.parse(loc_name)
-        if parsed is not None:
-            goal_bodies.add(parsed.body)
-
-    for g in goal_bodies:
-        relevant.add(g)
-        g_body = BODY_BY_NAME.get(g)
-        if g_body is None:
-            continue
-        # Parent SOI chain
-        cur = g_body.parent
-        while cur is not None:
-            relevant.add(cur)
-            cur_body = BODY_BY_NAME.get(cur)
-            cur = cur_body.parent if cur_body else None
-        # Siblings + children
-        for b in ALL_BODIES:
-            if b.parent == g_body.parent and b.name != g_body.name:
-                relevant.add(b.name)
-            if b.parent == g_body.name:
-                relevant.add(b.name)
-
-    return frozenset(relevant)
-
-
-def _select_intermediates(
-    world: "KSP1World",
-    launch_dv: float,
-    orbit_dv: float,
-    goal_dv: float,
-    signatures: dict[str, LocationSignature],
-) -> tuple[list[str], list[str]]:
-    """Pick random intermediate spheres between predictable anchors.
-
-    Two bands (per plan):
-      - launch → orbit: randint(1, 3) intermediates
-      - orbit → goal:   randint(2, 7) intermediates
-
-    Filters:
-      1. dv strictly between the band's endpoints
-      2. body is "goal-relevant" (see ``_goal_relevant_bodies``) — keeps
-         off-path bodies out (e.g. Gilly for a Minmus goal).
-    """
-    if goal_dv <= 0.0:
-        # No goal sphere (e.g. complete_tech_tree) — no orbit→goal band.
-        goal_dv = float("inf")
-
-    relevant_bodies = _goal_relevant_bodies(world)
-    home = str(world.mission_builder.home)
-    bootstrap_names = (f"{home} First Launch", f"{home} Orbit 1")
-
-    pool_low: list[str] = []
-    pool_mid: list[str] = []
-    for name, sig in signatures.items():
-        if name in bootstrap_names:
-            continue
-        parsed = MissionLocation.parse(name)
-        if parsed is None or parsed.body not in relevant_bodies:
-            # Tech-tree / KSC / off-path body — not a valid intermediate.
-            continue
-        if launch_dv < sig.dv < orbit_dv:
-            pool_low.append(name)
-        elif orbit_dv < sig.dv < goal_dv:
-            pool_mid.append(name)
-
-    rng = world.random
-    n_low = min(rng.randint(1, 3), len(pool_low))
-    # Floor at 3 mid intermediates so the orbit→goal kit growth is spread
-    # across several spheres rather than packed into S_goal (fewer fill errs
-    # when the goal requires a lot of progressives — e.g. Duna Return).
-    n_mid = min(rng.randint(3, 7), len(pool_mid))
-    chosen_low = rng.sample(pool_low, n_low) if n_low else []
-    chosen_mid = rng.sample(pool_mid, n_mid) if n_mid else []
-    return chosen_low, chosen_mid
-
-
 def _predictable_spheres(world: "KSP1World") -> list[tuple[str, str]]:
     """Return (label, location_name) tuples for the always-enforced spheres.
 
@@ -3145,11 +3045,8 @@ def _build_ladder_graph_walk(
     bn_home: BodyName,
 ) -> tuple[SphereLadder, dict[str, Signature], Signature,
            frozenset[str], dict[tuple[RankAxisKey, int], str]]:
-    """Graph-walk sphere ladder (flagged via ``KSP_GRAPH_WALK``).
-
-    Replaces the from-empty intrinsic loop + ``_select_intermediates`` + linear
-    chain-walk with a dependency-ordered walk of the mission graph (the
-    validated PASS-2 hierarchy in ``scratchpad/analyze_prior_path.py``):
+    """Build the sphere ladder by a dependency-ordered walk of the mission
+    graph (the validated PASS-2 hierarchy in ``scratchpad/analyze_prior_path.py``):
 
       * ``base`` = home-orbit kit (``minimal_ranks_for("<home> Orbit 1", empty)``).
       * Planets (``parent is None``, excl. Kerbol) and home-moons inherit the
@@ -3570,236 +3467,22 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
     )
     _diff = DIFFICULTY_PROFILES[difficulty]
 
-    if os.environ.get("KSP_GRAPH_WALK") == "1":
-        # Flagged graph-walk path: replace the from-empty intrinsic loop +
-        # _select_intermediates + linear chain-walk with a dependency-ordered
-        # walk of the mission graph (validated PASS-2 hierarchy).  Produces the
-        # same three downstream-consumed outputs.
-        (ladder, location_signatures, cumulative_sig,
-         cumulative_reps, sphere_rank_reps) = _build_ladder_graph_walk(
-            world, ladder, ctx,
-            difficulty=difficulty,
-            progressive_launch_pad=progressive_launch_pad,
-            start_with_clamps=start_with_clamps,
-            buildings_in_logic=buildings_in_logic,
-            precollected_names=precollected_names,
-            home=home, bn_home=bn_home,
-        )
-        world._sphere_ladder = ladder
-        world._sphere_rank_reps = sphere_rank_reps
-        world._sphere_rank_cumulative = cumulative_sig
-    else:
-        location_signatures: dict[str, Signature] = {}
-        _sig_by_mission: dict[tuple, Optional[Signature]] = {}
-        for loc in world.multiworld.get_locations(world.player):
-            if loc.address is None or loc.name in infeasible:
-                continue
-            info = _parse_location(loc.name)
-            if info is None:
-                continue
-            # Canonical mission key — dedup locations that share one mission.
-            mkey = _mission_key(info)
-            if mkey in _sig_by_mission:
-                derived = _sig_by_mission[mkey]
-            else:
-                # Minimal kit grown from nothing (the chain's own bumper) — the
-                # intrinsic per-location requirement.  The previous max-flags kit
-                # over-specified support gear (best antenna/capsule/SAS), pinning
-                # every mission to the top sphere; this is the empty-prior minimum
-                # the rest of the code already assumes (see the chain-walk
-                # fallback comment below).
-                rocket = minimal_ranks_for(
-                    loc.name, Signature.empty(), ctx,
-                    difficulty=difficulty,
-                    progressive_launch_pad=progressive_launch_pad,
-                    start_with_clamps=start_with_clamps,
-                    rng=world.random,
-                    mission_builder=world.mission_builder,
-                    precollected_names=precollected_names,
-                    buildings_in_logic=buildings_in_logic,
-                )
-                # Intrinsic per-location requirement is the RANK ceiling only —
-                # the from-empty bumper's counted (pad) bumps are discarded here;
-                # the precise per-mission pad gate is recorded later by
-                # ``_install_ladder_rules`` from each mission's own launch mass.
-                derived = (Signature.of(rocket.signature.rank_reqs)
-                           if rocket is not None else None)
-                _sig_by_mission[mkey] = derived
-            if derived is None:
-                continue
-            location_signatures[loc.name] = derived
-            ladder.location_signatures[loc.name] = LocationSignature(
-                dv=_goal_dv(loc.name, world.mission_builder),
-                requirements=tuple(),
-                body_chain_depth=_body_chain_depth(info.body, world.mission_builder.home),
-            )
-
-        # Predictable spheres provide the spine.
-        predictable_labels = [(label, name) for label, name in _predictable_spheres(world)]
-        predictable_names = {name for _, name in predictable_labels}
-
-        # Look up dv of the three anchors (defaults if missing).
-        launch_sig = ladder.location_signatures.get(f"{home} First Launch")
-        orbit_sig = ladder.location_signatures.get(f"{home} Orbit 1")
-        launch_dv = launch_sig.dv if launch_sig else 0.0
-        orbit_dv = orbit_sig.dv if orbit_sig else 3400.0
-        goal_dv = 0.0
-        for label, name in predictable_labels:
-            if label.startswith("S_goal"):
-                sig = ladder.location_signatures.get(name)
-                if sig:
-                    goal_dv = max(goal_dv, sig.dv)
-
-        # Pick intermediates between launch→orbit and orbit→goal.
-        chosen_low, chosen_mid = _select_intermediates(
-            world, launch_dv, orbit_dv, goal_dv, ladder.location_signatures,
-        )
-
-        # Build full sphere list sorted by signature dv (tie-break on body
-        # chain depth then name for determinism).
-        all_sphere_names: list[tuple[str, str, bool]] = []
-        for label, name in predictable_labels:
-            all_sphere_names.append((label, name, True))
-        for name in chosen_low:
-            all_sphere_names.append((f"S_intermediate_lo[{name}]", name, False))
-        for name in chosen_mid:
-            all_sphere_names.append((f"S_intermediate_mid[{name}]", name, False))
-
-        def _sort_key(entry):
-            label, name, _pred = entry
-            # Predictable spheres are anchored to canonical positions:
-            # S_launch first (group 0), S_orbit next (group 1), intermediates
-            # in the middle (group 2), and S_goal last (group 3).  Within
-            # the intermediate band, sort by min_kit complexity first so
-            # the chain walk grows gradually — sphere with small min_kit
-            # adds a tiny delta on top of prior; sphere with large min_kit
-            # absorbs the bigger jump only after smaller ones have built
-            # up the cumulative kit.  This prevents the "Duna Landing 1
-            # picked as first mid-band and gets 16 chain bumps in one
-            # sphere" failure mode.
-            if label == "S_launch":
-                group = 0
-            elif label == "S_orbit":
-                group = 1
-            elif label.startswith("S_goal"):
-                group = 3
-            else:
-                group = 2
-            sig = ladder.location_signatures.get(name)
-            if sig is None:
-                return (group, 0, 0.0, 0, name)
-            min_rank_size = len(
-                location_signatures.get(name, Signature.empty()).rank_reqs
-            )
-            return (group, min_rank_size, sig.dv, sig.body_chain_depth, name)
-
-        all_sphere_names.sort(key=_sort_key)
-
-        # Walk the chain in rank space.  Reps-only mode: each bumper call
-        # uses ONLY the reps collected so far + precollected items for its
-        # feasibility check, matching what fill places as PROGRESSION.
-        cumulative_sig = Signature.empty()
-        cumulative_reps: frozenset[str] = frozenset()
-        sphere_rank_reps: dict[tuple[RankAxisKey, int], str] = {}
-
-        # Deep-interplanetary enabler inject (see _DEEP_SPACE_ENABLERS).  Only when
-        # the hardest mission is interplanetary-deep; the parts are folded into the
-        # cumulative kit the first time the walk reaches a sphere past
-        # _DEEP_INJECT_DV_FRAC of the dv range, so every deeper mission can build its
-        # high-dv stage (nuclear serial or chemical asparagus) instead of dead-ending.
-        # Bumping cumulative_sig to their ranks also pins their fill placement to this
-        # mid-run band via _item_min_sphere (else they'd be sphere-0 free filler).
-        # dv per sphere name via _goal_dv — covers goal/contract anchors too (those
-        # have address=None so they're absent from ladder.location_signatures, and
-        # the deepest missions ARE the goals, so a stale 0.0 there would skip the
-        # inject and the goal anchor would still raise OptionError).
-        _sphere_dv_by_name = {
-            n: _goal_dv(n, world.mission_builder) for _, n, _ in all_sphere_names
-        }
-        _deep_enablers = _DEEP_SPACE_ENABLERS - precollected_names
-        _deep_max_dv = max(_sphere_dv_by_name.values(), default=0.0)
-        _deep_inject_dv = (
-            _DEEP_INJECT_DV_FRAC * _deep_max_dv
-            if _deep_enablers and _deep_max_dv >= _DEEP_INJECT_MIN_DV
-            else float("inf")
-        )
-        _deep_injected = False
-
-        for label, location_name, is_pred in all_sphere_names:
-            if (not _deep_injected
-                    and _sphere_dv_by_name.get(location_name, 0.0) >= _deep_inject_dv):
-                cumulative_reps = cumulative_reps | _deep_enablers
-                for _ep in _deep_enablers:
-                    for _ax, _rk in rank_sig_for(_ep, ctx).axes:
-                        if _rk > cumulative_sig.rank(_ax):
-                            cumulative_sig = cumulative_sig.with_rank(_ax, _rk)
-                _deep_injected = True
-            rocket = minimal_ranks_for(
-                location_name, cumulative_sig, ctx,
-                difficulty=difficulty,
-                progressive_launch_pad=progressive_launch_pad,
-                start_with_clamps=start_with_clamps,
-                rng=world.random,
-                mission_builder=world.mission_builder,
-                prior_reps=cumulative_reps,
-                precollected_names=precollected_names,
-                buildings_in_logic=buildings_in_logic,
-            )
-            if rocket is None:
-                if is_pred:
-                    # Chain-walk failure on a predictable anchor.  Fall back
-                    # to the intrinsic per-location ranks (computed earlier
-                    # from an empty prior) and merge into cumulative.  If
-                    # even THAT is missing, the location is truly infeasible.
-                    intrinsic = location_signatures.get(location_name)
-                    if intrinsic is None:
-                        raise OptionError(
-                            f"Sphere ladder: predictable anchor {label} "
-                            f"({location_name!r}) is unreachable under any rank kit."
-                        )
-                    merged = cumulative_sig.merged_max(intrinsic)
-                    rocket = RankBumperResult(
-                        signature=merged,
-                        delta=intrinsic,
-                        reps={},
-                        # Preserve the accumulated kit — the intrinsic fallback
-                        # only knows the location's signature, not its reps, so
-                        # defaulting reps_collected to empty would wipe every rep
-                        # collected so far (incl. the deep-space enablers injected
-                        # above), stranding them and the chain below.
-                        reps_collected=cumulative_reps,
-                        flags=_pre_pass_for_ranks(
-                            merged, ctx,
-                            start_with_clamps=start_with_clamps,
-                            progressive_launch_pad=progressive_launch_pad,
-                            launch_pad_caps=world.mission_builder.launch_pad_caps,
-                            pad_tier=cumulative_sig.counted(PROGRESSIVE_LAUNCH_PAD_NAME),
-                            precollected_names=precollected_names,
-                            buildings_in_logic=buildings_in_logic, home=bn_home,
-                        ),
-                        profile_dv=0.0,
-                    )
-                else:
-                    continue
-            for key, rep in rocket.reps.items():
-                sphere_rank_reps[key] = rep
-            cumulative_sig = rocket.signature
-            cumulative_reps = rocket.reps_collected
-            ladder.spheres.append(SphereBoundary(
-                name=label,
-                location_name=location_name,
-                is_predictable=is_pred,
-                provides=rocket.signature,
-                delta=rocket.delta,
-                reps_collected=rocket.reps_collected,
-                flags=rocket.flags,
-                profile_dv=rocket.profile_dv,
-                signature=ladder.location_signatures.get(location_name),
-            ))
-
-        world._sphere_ladder = ladder
-        world._sphere_rank_reps = sphere_rank_reps
-        world._sphere_rank_cumulative = cumulative_sig
+    # Dependency-ordered walk of the mission graph builds the sphere ladder and
+    # its downstream-consumed outputs: per-location signatures, the cumulative
+    # signature/reps, and the per-(axis, rank) reps.
+    (ladder, location_signatures, cumulative_sig,
+     cumulative_reps, sphere_rank_reps) = _build_ladder_graph_walk(
+        world, ladder, ctx,
+        difficulty=difficulty,
+        progressive_launch_pad=progressive_launch_pad,
+        start_with_clamps=start_with_clamps,
+        buildings_in_logic=buildings_in_logic,
+        precollected_names=precollected_names,
+        home=home, bn_home=bn_home,
+    )
+    world._sphere_ladder = ladder
+    world._sphere_rank_reps = sphere_rank_reps
+    world._sphere_rank_cumulative = cumulative_sig
 
     # Science-instrument early cap (S_sci) — complete_tech_tree only.
     # The funding pass credits temperature/pressure instrument science on
