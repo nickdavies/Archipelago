@@ -2746,6 +2746,41 @@ def _first_covering_sphere(spheres, need: Signature) -> int:
     return len(spheres)
 
 
+_SIZE_ONLY_AXES: Optional[frozenset] = None
+
+
+def _size_only_axes() -> frozenset:
+    """Rank axes whose rank reflects SIZE, not capability — derived, never
+    hardcoded.  An axis is size-only iff its parts all share a fuel/dry ratio
+    (relative spread < 30%): then a higher rank is a *bigger* part, not a
+    *better* one (same dv-per-mass).  Today this derives the LFO and Xenon tank
+    axes (constant ratio); LF/monoprop tanks vary, so they stay capability ranks.
+
+    Used by placement only: a size-only axis contributes just its presence
+    (rank 1) to an item's placement floor, so a big tank places as early as a
+    small one (the first-tank-of-a-fuel-type is the real unlock; size is free).
+    The bumper still sees the full rank — size matters for part-count feasibility.
+    """
+    global _SIZE_ONLY_AXES
+    if _SIZE_ONLY_AXES is None:
+        from .parts import PART_DB, FuelTank
+        from .ranks import RankAxisKey
+        ft_axis = {"lfo": RankAxisKey.LFO_TANK, "lf": RankAxisKey.LF_TANK,
+                   "xenon": RankAxisKey.XENON_TANK,
+                   "monoprop": RankAxisKey.MONOPROP_TANK}
+        ratios: dict = {}
+        for parts in PART_DB.values():
+            for p in parts:
+                if isinstance(p, FuelTank) and p.dry_mass > 0:
+                    ax = ft_axis.get(p.fuel_type)
+                    if ax is not None:
+                        ratios.setdefault(ax, []).append(p.fuel_mass / p.dry_mass)
+        _SIZE_ONLY_AXES = frozenset(
+            ax for ax, rs in ratios.items()
+            if rs and (max(rs) - min(rs)) / (sum(rs) / len(rs)) < 0.30)
+    return _SIZE_ONLY_AXES
+
+
 def _item_min_sphere(item, spheres) -> int:
     """Ladder position of an item — the first sphere at which it becomes
     available, and therefore the earliest location sphere it may sit at.
@@ -2760,7 +2795,12 @@ def _item_min_sphere(item, spheres) -> int:
     """
     sig = getattr(item, "rank_sig", None)
     if sig is not None and sig.axes:
-        need = Signature.of(Rank(ax, rk) for ax, rk in sig.axes)
+        # Size-only axes (ratio-constant tanks) count only their presence toward
+        # the placement floor: a bigger tank is the same dv-per-mass, so it places
+        # as early as the small one rather than pinning to a late "size" sphere.
+        _so = _size_only_axes()
+        need = Signature.of(
+            Rank(ax, 1 if ax in _so else rk) for ax, rk in sig.axes)
         idx = _first_covering_sphere(spheres, need)
         return 0 if idx == len(spheres) else idx
     tier = getattr(item, "_sphere_tier", None)
