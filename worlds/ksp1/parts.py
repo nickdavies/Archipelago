@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Callable, Optional, Union
 
+from .part_geometry import PartRole, derive_roles
+
 
 # ---------------------------------------------------------------------------
 # Capability flags — single source of truth for MiscEquipment.provides values
@@ -78,7 +80,11 @@ class FuelTank:
     fuel_type: str          # "lfo" | "lf" | "xenon" | "monoprop" (derived tag)
     size_class: float       # metres
     max_count: int = 0      # 0 = unlimited; >0 caps optimizer tank count (adapters)
-    is_radial: bool = False # srf-only side tank; can't be a stage's central spine
+    # Structural roles derived from attach-node geometry (see part_geometry).
+    # SPINE = can be a stage's central stackable column; RADIAL_MOUNT = side/drop
+    # booster only.  Replaces the old bulkhead-only is_radial, which mis-modelled
+    # single-node/slanted/coupler tanks (FL-C1000, slant adapters) as spines.
+    roles: frozenset[PartRole] = field(default_factory=frozenset)
     # Per-propellant mass at 100% fill (tonnes), e.g. {"LiquidFuel": 0.5,
     # "Oxidizer": 0.5} for an LFO tank. Lets an engine that needs only a
     # subset of the carried propellants drain the rest — except MonoPropellant,
@@ -1209,7 +1215,7 @@ def _build_part(part_type: type, cfg: dict, overrides: dict, name: str) -> AnyPa
             fuel_type=_fuel_type_from_resources(resources),
             size_class=size,
             max_count=overrides.get("max_count", 0),
-            is_radial=is_radial_only,
+            roles=derive_roles(cfg),
             fuel_masses=fuel_masses,
         )
 

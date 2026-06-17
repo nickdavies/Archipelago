@@ -17,6 +17,7 @@ from .parts import (
     Engine, FuelTank, SolidBooster, MultiMount,
     MAX_RADIAL_ENGINES,
 )
+from .part_geometry import PartRole
 from .capability_reasons import StageDiagnostic, StageFailure
 
 G0: float = 9.80665  # standard gravity, m/s²
@@ -99,19 +100,21 @@ def _tank_ratio(t):
 
 
 def _packable_tanks(tanks, engine):
-    """Return ``(packable, rho_star)``: the mountable, non-radial, near-best-ratio
-    tanks for this engine (largest first) and the best fuel:dry ratio among them.
+    """Return ``(packable, rho_star)``: the mountable, spine-stackable,
+    near-best-ratio tanks for this engine (largest first) and the best fuel:dry
+    ratio among them.
 
-    Only tanks the ``engine`` can mount on survive — radial side-tanks (no
-    central stack node) are excluded and the optimizer's size gate
-    (``engine.size_class <= tank.size_class``) is applied.  Among those, tanks
-    more than ``_TANK_PACK_RATIO_TOLERANCE`` worse than the best fuel:dry ratio
-    are dropped: for uniform-ratio fuel types this keeps every tank (the pack is
-    just "largest first"), but for an LF engine seeing oxidizer-drained LFO
-    views it discards the dead-oxidizer tanks, keeping the build's mass honest.
-    ``rho_star`` is returned so the caller need not recompute the max."""
+    Only tanks the ``engine`` can mount on survive — non-SPINE tanks (radial side
+    tanks, single-node tanks like the FL-C1000, slanted/coupler adapters) can't
+    form a central stackable column and are excluded, and the optimizer's size
+    gate (``engine.size_class <= tank.size_class``) is applied.  Among those,
+    tanks more than ``_TANK_PACK_RATIO_TOLERANCE`` worse than the best fuel:dry
+    ratio are dropped: for uniform-ratio fuel types this keeps every tank (the
+    pack is just "largest first"), but for an LF engine seeing oxidizer-drained
+    LFO views it discards the dead-oxidizer tanks, keeping the build's mass
+    honest.  ``rho_star`` is returned so the caller need not recompute the max."""
     mountable = [t for t in tanks
-                 if not t.is_radial and t.fuel_mass > 0.0
+                 if PartRole.SPINE in t.roles and t.fuel_mass > 0.0
                  and engine.size_class <= t.size_class]
     if not mountable:
         return [], 0.0

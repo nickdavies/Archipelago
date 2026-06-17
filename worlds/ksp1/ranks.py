@@ -43,6 +43,7 @@ from .parts import (
     Parachute,
     SolidBooster,
 )
+from .part_geometry import PartRole
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +138,13 @@ def _make_tank_scorer(fuel_type: str) -> Callable[[AnyPart, RankContext], Option
         if not isinstance(p, FuelTank):
             return None
         if p.fuel_type != fuel_type:
+            return None
+        # Only spine-stackable tanks belong on the tank rank axis: the axis gates
+        # the central fuel column, and a rep designated here must be a tank the
+        # capability builder can actually stack.  Radial/coupler/single-node
+        # tanks fall off the axis (they stay useful-pool bonus parts) — this is
+        # the single source of truth shared with rocket_math's spine filter.
+        if PartRole.SPINE not in p.roles:
             return None
         return p.dry_mass  # lower_better
     return _scorer

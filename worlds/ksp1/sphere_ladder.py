@@ -58,6 +58,7 @@ from .parts import (
     MiscEquipment,
     PART_DB,
 )
+from .part_geometry import PartRole
 from .ranks import (
     DEFAULT_CONTEXT, RANK_AXES, RANK_AXES_BY_KEY, RankAxisKey, RankContext,
     max_rank_for, rank_sig_for, ranks_for_context,
@@ -1385,6 +1386,7 @@ def minimal_ranks_for(
                     if name not in reps_collected
                     for p in parts
                     if isinstance(p, FuelTank) and p.fuel_type in want_ft
+                    and PartRole.SPINE in p.roles
                     and p.size_class >= sd.min_tank_size_needed
                 ]
                 if not valid:
