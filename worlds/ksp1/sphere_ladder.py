@@ -2516,7 +2516,7 @@ def _install_ladder_rules(
     contract_gate: dict[str, str] = {}
     for spec in (*getattr(world, "contract_specs", ()),
                  *getattr(world, "goal_contract_specs", ())):
-        for slot in spec.location_names():
+        for slot in spec.location_names(world.non_goal_slot_count):
             contract_gate[slot] = spec.item_name
     for loc in world.multiworld.get_locations(player):
         if loc.address is None or loc.name in bootstrap_locations:
@@ -2670,7 +2670,7 @@ def _install_cheap_mission_reps(world: "KSP1World", ladder: SphereLadder) -> Non
     for spec in (*getattr(world, "contract_specs", ()),
                  *getattr(world, "goal_contract_specs", ())):
         best: Optional[tuple[int, frozenset[str]]] = None
-        for ln in spec.location_names():
+        for ln in spec.location_names(world.non_goal_slot_count):
             j = bracket.get(ln)
             if j is not None and (best is None or j < best[0]):
                 best = (j, frozenset(spheres[j].reps_collected))
@@ -2860,30 +2860,46 @@ def _install_unified_sphere_rules(
     # routes them there.
     _bootstrap_kit = spheres[0].reps_collected if spheres else frozenset()
 
-    # Contract AWARD items extend the kit-exact ban generically.  A contract's
-    # award (gate) item is required to reach its own completion location (the
-    # access rule is ``has(award) AND can_deliver``), so it must be collectable
-    # BELOW the completion sphere — identical to a rep's bound, just keyed on the
-    # contract's completion location instead of a part's introduction.  Every
-    # contract spec contributes ``award_item -> completion_sphere``; folded into
-    # min_kit at that sphere it is banned at/above its completion, exactly like a
-    # rep (no per-contract-type special-casing).
-    award_intro: dict[str, int] = {}
+    # Contract AWARD items float FREELY (sequence-break: contracts land at varied
+    # points each seed instead of riding the physics ladder, giving off-physics
+    # gating + variance, and off-loading low-sphere fill pressure).  An award is
+    # placeable at ANY location, banned ONLY on its OWN contract's reward locations
+    # (where the access rule is ``has(award) AND ...`` — a self-cycle).  The one
+    # exception is a FINDABLE goal item, which caps at the deepest goal sphere so a
+    # goal item never floats past the goal itself (a correctness bound, not pacing).
+    # NO lower bound: a deep (high-completion) contract must be able to use the
+    # plentiful low spheres — flooring its award at a high completion crowds it into
+    # the scarce ladder top and wedges fill (measured: SSR count/progressive
+    # regressed 5/5 -> 4/5 when floored at completion, recover to 5/5 with no floor,
+    # variance preserved).  The ``can_deliver`` half of the access rule keeps the
+    # contract physics-sound wherever the award lands.  (Replaces the old
+    # sphere-granular ban that forced the award strictly BELOW completion — which
+    # pinned contracts to physics order and made a completion=0 award unplaceable.)
+    award_own_locs: dict[str, set[str]] = {}
+    _goal_award_names: set[str] = set()
     for spec in (*getattr(world, "contract_specs", ()),
                  *getattr(world, "goal_contract_specs", ())):
-        cs = loc_sphere.get(spec.location_name)
-        if cs is None:
+        own = [ln for ln in spec.location_names(world.non_goal_slot_count)
+               if ln in loc_sphere]
+        if not own:
             continue
-        prev = award_intro.get(spec.item_name)
-        award_intro[spec.item_name] = cs if prev is None else min(prev, cs)
-    _award_by_s: dict[int, set[str]] = {}
-    for _nm, _s in award_intro.items():
-        _award_by_s.setdefault(_s, set()).add(_nm)
-    award_cum: list[frozenset[str]] = []
-    _acc: set[str] = set()
-    for _s in range(len(spheres) + 1):
-        _acc |= _award_by_s.get(_s, set())
-        award_cum.append(frozenset(_acc))
+        award_own_locs.setdefault(spec.item_name, set()).update(own)
+        if spec.is_goal:
+            _goal_award_names.add(spec.item_name)
+    # Deepest goal-contract reward location = the findable goal-item float cap.
+    _goal_diff_sphere = max(
+        (loc_sphere[ln]
+         for spec in getattr(world, "goal_contract_specs", ())
+         for ln in spec.location_names(world.non_goal_slot_count)
+         if ln in loc_sphere),
+        default=len(spheres))
+    award_names = frozenset(award_own_locs)
+    # Ceiling: goal items stay within the goal's difficulty; everything else has
+    # no upper bound (len(spheres) > every real location sphere = free float).
+    award_ceiling: dict[str, int] = {
+        nm: (_goal_diff_sphere if nm in _goal_award_names else len(spheres))
+        for nm in award_names
+    }
 
     for loc in world.multiworld.get_locations(player):
         if loc.name in bootstrap_locations:
@@ -2901,12 +2917,13 @@ def _install_unified_sphere_rules(
         # UPPER bound only (no lower bound): a rep is admitted at every location
         # whose kit doesn't include it, i.e. anywhere below the sphere that first
         # needs it.  Immune to sphere-index lumpiness (keys on the actual kit).
-        _min_kit = ((spheres[L].reps_collected | award_cum[L])
+        _min_kit = (spheres[L].reps_collected
                     if L < len(spheres) else frozenset())
 
         def _rule(item, _p=player, _L=L, _spheres=spheres, _orig=existing,
                   _sig=my_sig, _lo=cascade_lo, _mk=_min_kit,
-                  _boot=_bootstrap_kit) -> bool:
+                  _boot=_bootstrap_kit, _loc=loc.name, _an=award_names,
+                  _ac=award_ceiling, _ao=award_own_locs) -> bool:
             if _orig is not None and not _orig(item):
                 return False
             if item.player != _p:
@@ -2918,6 +2935,13 @@ def _install_unified_sphere_rules(
                 # counted progressives, contract gate items, goal items).
                 return not item.advancement   # filler-only
             if item.advancement:
+                if item.name in _an:
+                    # Contract AWARD: placeable anywhere up to its ceiling
+                    # (completion + N), banned ONLY on its own contract's reward
+                    # locations (the has(award) self-cycle).  No lower bound.
+                    if _loc in _ao.get(item.name, ()):
+                        return False
+                    return _L <= _ac[item.name]
                 tier = getattr(item, "_sphere_tier", None)
                 if tier is not None:
                     # Counted progressive (R&D / Pad / PSI) — the UNIQUE
