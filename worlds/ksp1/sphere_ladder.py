@@ -2629,6 +2629,54 @@ def _install_ladder_rules(
     world._cheap_access_bracket = bracket_by_loc
     if save_original and install_access:
         world._strict_ladder_saved_rules = saved
+    _install_cheap_mission_reps(world, ladder)
+
+
+def _install_cheap_mission_reps(world: "KSP1World", ladder: SphereLadder) -> None:
+    """Precompute, per ``(body, event)``, the cheap bracket reps that gate that
+    mission — the SAME ``has_all(reps)`` the location's access rule uses.
+
+    Lets the goal rule (and other body-access consumers) decide "can the player
+    do <event> at <body>?" with a microsecond ``state.has_all`` check instead of
+    a live ``get_capability`` call, keeping the goal completion condition on the
+    same cheap ladder oracle as the location rules.  Keyed by the lowest bracket
+    sphere across an event's duplicate slots (they share one mission).
+    """
+    bracket = getattr(world, "_cheap_access_bracket", {})
+    spheres = ladder.spheres
+    reps_by_event: dict[tuple[str, str], tuple[int, frozenset[str]]] = {}
+    for loc in world.multiworld.get_locations(world.player):
+        if loc.address is None:
+            continue
+        ml = MissionLocation.parse(loc.name)
+        if ml is None:
+            continue
+        j = bracket.get(loc.name)
+        if j is None:
+            continue
+        key = (ml.body, ml.event.value)
+        prev = reps_by_event.get(key)
+        if prev is None or j < prev[0]:
+            reps_by_event[key] = (j, frozenset(spheres[j].reps_collected))
+    world._cheap_mission_reps = {k: v[1] for k, v in reps_by_event.items()}
+
+    # Per-contract delivery reps: the bracket reps of the contract's mission
+    # location(s) — the cheap stand-in for ``contract_access[cid]`` (can the
+    # player deliver the payload).  ``has_all(reps)`` ⟹ the bracket kit flies the
+    # contract mission with its payload, so it's conservative-sound like the
+    # ordinary mission gates, and lets the contract access rule stay off
+    # ``get_capability`` during fill.
+    contract_reps: dict[str, frozenset[str]] = {}
+    for spec in (*getattr(world, "contract_specs", ()),
+                 *getattr(world, "goal_contract_specs", ())):
+        best: Optional[tuple[int, frozenset[str]]] = None
+        for ln in spec.location_names():
+            j = bracket.get(ln)
+            if j is not None and (best is None or j < best[0]):
+                best = (j, frozenset(spheres[j].reps_collected))
+        if best is not None:
+            contract_reps[spec.contract_id] = best[1]
+    world._cheap_contract_reps = contract_reps
 
 
 def _first_covering_sphere(spheres, need: Signature) -> int:
@@ -2940,6 +2988,18 @@ def _compute_tech_tier_signatures_rank(
     # places — not what the rank ceiling would *abstractly* admit.
     sphere_science: list[tuple[SphereBoundary, float]] = []
     from .items import PROGRESSIVE_SCIENCE_INSTRUMENT_NAME
+    from .locations import EventName as _EvN
+    # Per-(body, event) cheap bracket: the reps of the FIRST sphere whose
+    # cumulative kit proves that body/event reachable.  bankable_science reads
+    # ORBIT/RETURN/CREWED_LANDING, and the per-sphere ``cap`` is already computed
+    # here for the science sum — so recording the first-true sphere's reps costs
+    # nothing and lets the runtime science rule use a cheap ``has_all(reps)``
+    # instead of a live ``get_capability``.  Derived FROM this funding pass, so
+    # the runtime measure stays consistent with tier placement by construction
+    # (bracket-true at sphere s ⟺ this pass's cap-access at s — access is
+    # monotonic along the chain).
+    _sci_events = (_EvN.ORBIT, _EvN.RETURN, _EvN.CREWED_LANDING)
+    science_brackets: dict[tuple, frozenset[str]] = {}
     for sphere in ladder.spheres:
         admitted = (sphere.reps_collected
                     | (precollected_names & frozenset(PART_DB.keys())))
@@ -2960,6 +3020,14 @@ def _compute_tech_tier_signatures_rank(
         )
         psi_tier = provides.counted(PROGRESSIVE_SCIENCE_INSTRUMENT_NAME)
         sphere_science.append((sphere, bankable_science(cap, psi_tier, home) * safety))
+        _reps_fs = frozenset(sphere.reps_collected)
+        for _b in ALL_BODIES:
+            _bc = cap.bodies[_b.name]
+            for _ev in _sci_events:
+                _key = (_b.name, _ev)
+                if _key not in science_brackets and _bc.access[_ev]:
+                    science_brackets[_key] = _reps_fs
+    world._science_body_event_reps = science_brackets
 
     sigs: dict[str, LocationSignature] = {}
     min_sigs_out: dict[str, Signature] = {}

@@ -2780,6 +2780,28 @@ def _compute_capability(state: CollectionState, player: int) -> RocketCapability
     return cap
 
 
+def cheap_flags(state: CollectionState, player: int) -> EquipmentFlags:
+    """The cheap half of capability: the equipment flags from the pre-pass,
+    WITHOUT the per-body mission evaluation (the rocket optimizer).
+
+    ``compute_capability_from_items`` assesses bodies lazily, so building the
+    flags is cheap — only touching ``cap.bodies[...].access`` runs the
+    optimizer.  Rules that read ONLY instrument / relay / capsule / power flags
+    (KSC science, the science-budget instrument inputs) use this to stay off the
+    expensive ``get_capability`` path during fill.
+    """
+    world = state.multiworld.worlds[player]
+    options = world.options
+    return _pre_pass(
+        lambda name: state.count(name, player),
+        bool(options.start_with_launch_clamps.value),
+        bool(options.progressive_launch_pad.value),
+        launch_pad_caps=world.mission_builder.launch_pad_caps,
+        buildings_in_logic=bool(options.buildings_in_logic.value),
+        home=world.mission_builder.home,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Import-time assertions — pytest catches violations automatically
 # ---------------------------------------------------------------------------

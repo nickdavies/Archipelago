@@ -26,7 +26,7 @@ from .bodies import (
     ALL_BODIES, BODY_BY_NAME, BodyName, MissionType,
     home_system_bodies, relay_tier_table_for, science_budget,
 )
-from .capability import get_capability
+from .capability import get_capability, cheap_flags, _compute_sounding_altitude
 from .items import ITEM_TABLE, PROGRESSIVE_RD_NAME, SCIENCE_PACK_NAMES
 from .locations import (
     EVENT_BY_NAME,
@@ -93,6 +93,35 @@ def _make_all_parts_rule(player: int) -> Callable[[CollectionState], bool]:
     return rule
 
 
+def _make_goal_event_rule(
+    player: int, bodies, event: EventName,
+) -> Callable[[CollectionState], bool]:
+    """Goal sub-rule: every ``body`` is reachable for ``event`` under the cheap
+    ladder oracle — the SAME ``has_all(bracket reps)`` the event's location rule
+    uses (``world._cheap_mission_reps``).  Keeps the victory condition on the
+    cheap system instead of a live ``get_capability`` per goal body/event.
+
+    A body/event with no bracket entry (e.g. model-infeasible) falls back to the
+    all-parts proxy — conservative, matching the proxy access rule.
+    """
+    bt = tuple(bodies)
+    ev = event.value
+
+    def rule(state: CollectionState) -> bool:
+        world = state.multiworld.worlds[player]
+        reps_map = getattr(world, "_cheap_mission_reps", None)
+        if reps_map is None:
+            return False  # pre-ladder: conservatively unreachable (Golden Rule)
+        for b in bt:
+            reps = reps_map.get((b.value, ev))
+            need = reps if reps is not None else _ALL_PROGRESSION_ITEMS
+            if not state.has_all(need, player):
+                return False
+        return True
+
+    return rule
+
+
 # ---------------------------------------------------------------------------
 # Science heuristic helpers
 # ---------------------------------------------------------------------------
@@ -133,6 +162,41 @@ def bankable_science(cap, psi_tier: int, home: BodyName) -> float:
     return total
 
 
+def _cheap_bankable_science(
+    state: CollectionState, player: int, world, home: BodyName,
+) -> float:
+    """``bankable_science`` with per-body access from the ladder's precomputed
+    science brackets (``world._science_body_event_reps``) instead of a live
+    ``get_capability``.  Per-body access ``has_all(bracket reps)`` is conservative
+    (⟹ the kit really flies it) and consistent with the funding placement that
+    derived the brackets, so the science gate stays on the cheap ladder oracle.
+    Instrument/relay inputs come from the cheap pre-pass + ``state.count``.
+    """
+    reps_map = world._science_body_event_reps
+    flags = cheap_flags(state, player)
+    psi_tier = state.count("Progressive Science Instrument", player)
+    relay_table = relay_tier_table_for(home)
+    total = 0.0
+    for body in ALL_BODIES:
+        orbit = reps_map.get((body.name, EventName.ORBIT))
+        if orbit is None or not state.has_all(orbit, player):
+            continue
+        ret = reps_map.get((body.name, EventName.RETURN))
+        can_recover = ret is not None and state.has_all(ret, player)
+        can_transmit = flags.relay_tier >= relay_table[body.name]
+        if not (can_recover or can_transmit):
+            continue
+        cl = reps_map.get((body.name, EventName.CREWED_LANDING))
+        crewed = cl is not None and state.has_all(cl, player)
+        contribution = science_budget(
+            body, flags.has_thermometer, flags.has_barometer,
+            flags.has_capsule, crewed, home=home, psi_tier=psi_tier)
+        if not can_recover:
+            contribution *= _TRANSMIT_ONLY_DISCOUNT
+        total += contribution
+    return total
+
+
 def _accessible_science(
     state: CollectionState, player: int, safety: float, home: BodyName,
 ) -> float:
@@ -140,11 +204,15 @@ def _accessible_science(
     Estimate the total science the player can earn from all bodies they can
     currently reach, given their current instrument and crew equipment.
 
-    Multiplied by the safety factor before returning.
+    Multiplied by the safety factor before returning.  Uses the cheap ladder
+    science brackets (built in pre_fill).  Rules only evaluate after pre_fill, so
+    if the brackets are absent the ladder isn't built yet — conservatively report
+    no accessible science (Golden Rule) rather than fall back to capability.
     """
-    cap = get_capability(state, player)
-    psi_tier = state.count("Progressive Science Instrument", player)
-    return bankable_science(cap, psi_tier, home) * safety
+    world = state.multiworld.worlds[player]
+    if getattr(world, "_science_body_event_reps", None) is None:
+        return 0.0
+    return _cheap_bankable_science(state, player, world, home) * safety
 
 
 def _can_afford_tier(
@@ -164,9 +232,7 @@ def _make_science_threshold_rule(
     """Return a rule that passes when accessible science * safety >= threshold.
     Expressed as a SCIENCE :class:`~.gates.AccumulationGate`."""
     def measure(state: CollectionState) -> float:
-        cap = get_capability(state, player)
-        psi_tier = state.count("Progressive Science Instrument", player)
-        return bankable_science(cap, psi_tier, home) * safety
+        return _accessible_science(state, player, safety, home)
     return AccumulationGate(Resource.SCIENCE, threshold).runtime_rule(measure)
 
 
@@ -228,13 +294,17 @@ def _can_do_ksc_science(state: CollectionState, player: int) -> bool:
 
     Path 1: Crewed EVA (EVA report / surface sample) — just needs a capsule.
     Path 2: Rover with science instruments — probe + wheels + power + instrument.
+
+    Reads only equipment flags (no per-body mission access), so it uses the
+    cheap pre-pass instead of the full ``get_capability`` — KSC science never
+    needs the rocket optimizer.
     """
-    cap = get_capability(state, player)
-    if cap.has_capsule:
+    flags = cheap_flags(state, player)
+    if flags.has_capsule:
         return True
-    if (cap.has_probe_core and cap.has_wheel
-            and cap.power_profile != "none"
-            and (cap.has_thermometer or cap.has_barometer)):
+    if (flags.has_probe_core and flags.has_wheel
+            and (flags.has_rtg or flags.has_solar)
+            and (flags.has_thermometer or flags.has_barometer)):
         return True
     return False
 
@@ -256,33 +326,42 @@ def _set_ksc_biome_rules(world: KSP1World, player: int) -> None:
 # access rule.
 # ---------------------------------------------------------------------------
 
+# These home-body rules read only equipment flags + the sounding-rocket sizing,
+# so they use the cheap pre-pass instead of the full ``get_capability`` (no
+# per-body mission optimizer).  ``_compute_sounding_altitude(flags, home_body)``
+# is exactly what ``cap.sounding_altitude_km`` is computed from.
 def _make_altitude_rule(player: int, threshold_km: float) -> Callable[[CollectionState], bool]:
     def rule(state: CollectionState) -> bool:
-        return get_capability(state, player).sounding_altitude_km >= threshold_km
+        flags = cheap_flags(state, player)
+        home_body = state.multiworld.worlds[player].mission_builder.home_body
+        return _compute_sounding_altitude(flags, home_body) >= threshold_km
     return rule
 
 
 def _make_first_launch_rule(player: int) -> Callable[[CollectionState], bool]:
     """Any propulsion OR capsule (kerbal EVA counts as launch)."""
     def rule(state: CollectionState) -> bool:
-        cap = get_capability(state, player)
-        return cap.sounding_altitude_km > 0 or cap.has_capsule
+        flags = cheap_flags(state, player)
+        home_body = state.multiworld.worlds[player].mission_builder.home_body
+        return _compute_sounding_altitude(flags, home_body) > 0 or flags.has_capsule
     return rule
 
 
 def _make_first_landing_rule(player: int) -> Callable[[CollectionState], bool]:
     """Propulsion + safe descent OR capsule (EVA landing)."""
     def rule(state: CollectionState) -> bool:
-        cap = get_capability(state, player)
-        if cap.sounding_altitude_km > 0 and (cap.has_parachutes or cap.has_throttleable_engine):
+        flags = cheap_flags(state, player)
+        home_body = state.multiworld.worlds[player].mission_builder.home_body
+        if (_compute_sounding_altitude(flags, home_body) > 0
+                and (flags.has_parachutes or flags.has_throttleable_engine)):
             return True
-        return cap.has_capsule
+        return flags.has_capsule
     return rule
 
 
 def _make_staging_rule(player: int) -> Callable[[CollectionState], bool]:
     def rule(state: CollectionState) -> bool:
-        return get_capability(state, player).staging_tier >= 1
+        return cheap_flags(state, player).staging_tier >= 1
     return rule
 
 
@@ -307,16 +386,22 @@ def _make_splashdown_rule(
     )
 
     def rule(state: CollectionState) -> bool:
-        cap = get_capability(state, player)
+        # Home-ocean path uses only cheap flags + the sounding-rocket sizing.
+        flags = cheap_flags(state, player)
         if home_has_ocean:
-            if (cap.sounding_altitude_km >= threshold_km
-                    and (cap.has_parachutes or cap.has_throttleable_engine)):
+            if (_compute_sounding_altitude(flags, home_body) >= threshold_km
+                    and (flags.has_parachutes or flags.has_throttleable_engine)):
                 return True
-        for body_name in other_ocean_bodies:
-            bp = cap.bodies.get(body_name)
-            if bp is not None and bp.access[EventName.LANDING]:
-                return True
-        return False
+        # Other-ocean-body LANDING uses the cheap ladder brackets (the same
+        # has_all(reps) the Landing locations gate on), not a live capability.
+        world = state.multiworld.worlds[player]
+        reps_map = getattr(world, "_cheap_mission_reps", None)
+        if reps_map is not None:
+            for body_name in other_ocean_bodies:
+                reps = reps_map.get((body_name.value, EventName.LANDING.value))
+                if reps is not None and state.has_all(reps, player):
+                    return True
+        return False  # pre-ladder or no ocean-body landing reachable (conservative)
     return rule
 
 
@@ -430,8 +515,18 @@ def _set_contract_rules(world: KSP1World, player: int) -> None:
         else:
             def rule(state: CollectionState, cid=spec.contract_id,
                      item=spec.item_name) -> bool:
-                return (state.has(item, player)
-                        and get_capability(state, player).contract_access.get(cid, False))
+                if not state.has(item, player):
+                    return False
+                world = state.multiworld.worlds[player]
+                creps = getattr(world, "_cheap_contract_reps", None)
+                if creps is None:
+                    return False  # pre-ladder: conservatively not completable
+                # Cheap delivery gate: the contract's bracket reps (has_all ⟹ the
+                # kit delivers, conservative).  An unbracketed non-proxy contract
+                # falls back to the all-parts proxy.
+                reps = creps.get(cid)
+                return state.has_all(
+                    reps if reps is not None else _ALL_PROGRESSION_ITEMS, player)
         # Every non-goal reward slot (base 2 + Contract Repeats) shares the one
         # gate+capability rule, so the extra slots land at the contract's own
         # sphere as buffer-fill.
@@ -1097,14 +1192,8 @@ def _make_goal_spec_rule(
 
     # Flag bodies
     if spec.flag_bodies:
-        flag_bodies = spec.flag_bodies
-        def flag_rule(state: CollectionState) -> bool:
-            cap = get_capability(state, player)
-            for b in flag_bodies:
-                if not cap.bodies[b].access[EventName.FLAG_PLANT]:
-                    return False
-            return True
-        sub_rules.append(flag_rule)
+        sub_rules.append(_make_goal_event_rule(
+            player, spec.flag_bodies, EventName.FLAG_PLANT))
 
     # Return bodies
     proxy_return = [b for b in spec.return_bodies
@@ -1112,14 +1201,8 @@ def _make_goal_spec_rule(
                                                    model_infeasible_locations)]
     normal_return = [b for b in spec.return_bodies if b not in proxy_return]
     if normal_return:
-        nr = tuple(normal_return)
-        def return_rule(state: CollectionState) -> bool:
-            cap = get_capability(state, player)
-            for b in nr:
-                if not cap.bodies[b].access[EventName.RETURN]:
-                    return False
-            return True
-        sub_rules.append(return_rule)
+        sub_rules.append(_make_goal_event_rule(
+            player, normal_return, EventName.RETURN))
     if proxy_return:
         sub_rules.append(_make_all_parts_rule(player))
 
@@ -1129,38 +1212,20 @@ def _make_goal_spec_rule(
                                                    model_infeasible_locations)]
     normal_sample = [b for b in spec.sample_return_bodies if b not in proxy_sample]
     if normal_sample:
-        ns = tuple(normal_sample)
-        def sample_rule(state: CollectionState) -> bool:
-            cap = get_capability(state, player)
-            for b in ns:
-                if not cap.bodies[b].access[EventName.SAMPLE_RETURN]:
-                    return False
-            return True
-        sub_rules.append(sample_rule)
+        sub_rules.append(_make_goal_event_rule(
+            player, normal_sample, EventName.SAMPLE_RETURN))
     if proxy_sample:
         sub_rules.append(_make_all_parts_rule(player))
 
     # Orbit bodies
     if spec.orbit_bodies:
-        orbit_bodies = spec.orbit_bodies
-        def orbit_rule(state: CollectionState) -> bool:
-            cap = get_capability(state, player)
-            for b in orbit_bodies:
-                if not cap.bodies[b].access[EventName.ORBIT]:
-                    return False
-            return True
-        sub_rules.append(orbit_rule)
+        sub_rules.append(_make_goal_event_rule(
+            player, spec.orbit_bodies, EventName.ORBIT))
 
     # Flyby bodies
     if spec.flyby_bodies:
-        flyby_bodies = spec.flyby_bodies
-        def flyby_rule(state: CollectionState) -> bool:
-            cap = get_capability(state, player)
-            for b in flyby_bodies:
-                if not cap.bodies[b].access[EventName.FLYBY]:
-                    return False
-            return True
-        sub_rules.append(flyby_rule)
+        sub_rules.append(_make_goal_event_rule(
+            player, spec.flyby_bodies, EventName.FLYBY))
 
     # Complete tech tree
     if spec.complete_tech_tree:
