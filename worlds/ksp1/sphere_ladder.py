@@ -2978,6 +2978,7 @@ def _install_unified_sphere_rules(
 
 def _compute_tech_tier_signatures_rank(
     world: "KSP1World", ladder: SphereLadder, ctx: RankContext,
+    location_signatures: dict[str, Signature],
 ) -> tuple[dict[str, LocationSignature], dict[str, Signature],
            dict[int, SphereBoundary]]:
     """Rank-space port of the legacy ``_compute_tech_tier_signatures``.
@@ -3025,22 +3026,31 @@ def _compute_tech_tier_signatures_rank(
     # monotonic along the chain).
     _sci_events = (_EvN.ORBIT, _EvN.RETURN, _EvN.LANDING, _EvN.CREWED_LANDING)
     science_brackets: dict[tuple, frozenset[str]] = {}
-    # Per-body ORBIT/RETURN/CREWED_LANDING reachability, accumulated
-    # monotonically along the (superset-ordered) sphere chain.  Per-body access
-    # is monotone — once a body proves an event at sphere s it proves it at
-    # every later sphere — so once all three events are True the body is
-    # ``_resolved`` and we never touch ``cap.bodies[*]`` for it again.  Touching
-    # ``.access`` is what triggers the (expensive) per-body mission optimizer;
-    # for a resolved body both its bracket (already recorded) and its science
-    # contribution (determined by its True access plus the sphere's cheap
-    # flag-level instrument/relay state) need no further optimizer work.
-    # Skipping resolved bodies removes the dominant generation cost: re-assessing
-    # already-reachable bodies at every later sphere.
-    _acc: dict[str, dict] = {
-        _b.name: {_ev: False for _ev in _sci_events} for _b in ALL_BODIES
-    }
-    _resolved: set[str] = set()
-    for sphere in ladder.spheres:
+    # Per-(body,event) science bracket from the ladder ORDERING, not a per-sphere
+    # physics re-solve.  The bumper already placed every mission; the first sphere
+    # whose cumulative ``provides`` covers a (body,event) mission's signature is a
+    # cheap rank-cover bracket (``_first_covering_sphere``).  Measured to be
+    # STRICTLY LATER than the old reps-based ``_assess_one_body`` bracket — i.e.
+    # MORE conservative science (Golden-Rule safe: real collectable science is
+    # already heavily underestimated) — and it removes the dominant generation
+    # cost (no ``cap.bodies[*].access`` touch ⟹ the per-body optimizer never runs;
+    # the per-sphere ``cap`` here supplies only cheap flag-level relay/instrument
+    # state).
+    spheres = ladder.spheres
+    _cover_idx: dict[tuple, int] = {}
+    for _b in ALL_BODIES:
+        for _ev in _sci_events:
+            _sig = location_signatures.get(f"{_b.name.value} {_ev.value} 1")
+            if _sig is None:
+                continue
+            _ci = _first_covering_sphere(spheres, _sig)
+            if _ci < len(spheres):
+                _cover_idx[(_b.name, _ev)] = _ci
+                science_brackets[(_b.name, _ev)] = frozenset(
+                    spheres[_ci].reps_collected)
+    world._science_body_event_reps = science_brackets
+
+    for _si, sphere in enumerate(spheres):
         admitted = (sphere.reps_collected
                     | (precollected_names & frozenset(PART_DB.keys())))
         provides = sphere.provides
@@ -3051,6 +3061,8 @@ def _compute_tech_tier_signatures_rank(
                 return counted
             return 1 if name in _adm else 0
 
+        # Flags only (relay tier + instruments).  Bodies stay lazy/untouched, so
+        # no per-body optimizer runs; per-body access comes from ``_cover_idx``.
         cap, _flags = compute_capability_from_items(
             _count, difficulty_name,
             start_with_clamps=clamps,
@@ -3059,22 +3071,16 @@ def _compute_tech_tier_signatures_rank(
             buildings_in_logic=bool(world.options.buildings_in_logic),
         )
         psi_tier = provides.counted(PROGRESSIVE_SCIENCE_INSTRUMENT_NAME)
-        _reps_fs = frozenset(sphere.reps_collected)
-        for _b in ALL_BODIES:
-            if _b.name in _resolved:
-                continue
-            _ba = _acc[_b.name]
-            _bc = cap.bodies[_b.name]
-            for _ev in _sci_events:
-                if not _ba[_ev] and _bc.access[_ev]:
-                    _ba[_ev] = True
-                    science_brackets[(_b.name, _ev)] = _reps_fs
-            if all(_ba.values()):
-                _resolved.add(_b.name)
+        _acc = {
+            _b.name: {
+                _ev: (_cover_idx.get((_b.name, _ev), len(spheres)) <= _si)
+                for _ev in _sci_events
+            }
+            for _b in ALL_BODIES
+        }
         sphere_science.append(
             (sphere,
              bankable_science(cap, psi_tier, home, access=_acc) * safety))
-    world._science_body_event_reps = science_brackets
 
     sigs: dict[str, LocationSignature] = {}
     min_sigs_out: dict[str, Signature] = {}
@@ -3634,7 +3640,7 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
     # assign each tech tier a funding sphere.  Without this, R&D copies
     # have no chain-placement target and float to early bands.
     tech_sigs, tech_min_sigs, band_funding = (
-        _compute_tech_tier_signatures_rank(world, ladder, ctx)
+        _compute_tech_tier_signatures_rank(world, ladder, ctx, location_signatures)
     )
     ladder.location_signatures.update(tech_sigs)
     # Mirror tech-tree capability signatures so the chain-ordering rule sees
