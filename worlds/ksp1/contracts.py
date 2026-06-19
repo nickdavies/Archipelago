@@ -1228,7 +1228,8 @@ def _tech_tree_anchor_bodies(world, flags, diff, mb) -> list[BodyName]:
     def body_yield(body) -> float:
         return science_budget(
             body, has_thermometer=True, has_barometer=True, has_capsule=True,
-            can_land_crewed=body.can_land, home=home, psi_tier=3)
+            can_land_crewed=body.can_land, can_land_uncrewed=body.can_land,
+            home=home, psi_tier=3)
 
     accumulated = sum(body_yield(BODY_BY_NAME[bn]) for bn in home_set)
     picked: list[BodyName] = []

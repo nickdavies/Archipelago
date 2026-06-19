@@ -2101,6 +2101,7 @@ def _pick_tech_tree_anchors(
             has_barometer=True,
             has_capsule=True,
             can_land_crewed=body.can_land,
+            can_land_uncrewed=body.can_land,
             home=home,
             psi_tier=3,
         )
@@ -3022,7 +3023,7 @@ def _compute_tech_tier_signatures_rank(
     # the runtime measure stays consistent with tier placement by construction
     # (bracket-true at sphere s ⟺ this pass's cap-access at s — access is
     # monotonic along the chain).
-    _sci_events = (_EvN.ORBIT, _EvN.RETURN, _EvN.CREWED_LANDING)
+    _sci_events = (_EvN.ORBIT, _EvN.RETURN, _EvN.LANDING, _EvN.CREWED_LANDING)
     science_brackets: dict[tuple, frozenset[str]] = {}
     # Per-body ORBIT/RETURN/CREWED_LANDING reachability, accumulated
     # monotonically along the (superset-ordered) sphere chain.  Per-body access

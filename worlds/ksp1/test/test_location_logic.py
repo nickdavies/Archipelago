@@ -51,6 +51,13 @@ def _make_body_cap(events) -> MagicMock:
     All EventName values are present; unlisted ones default to False.
     """
     bp = MagicMock()
+    events = set(events)
+    # Physical invariant: crewed landing implies uncrewed (robotic) landing — a
+    # heavier crewed craft touching down means a lighter probe can too.  Keeps
+    # the surface-instrument science gate (LANDING) consistent with the
+    # surface-sample crew gate (CREWED_LANDING).
+    if EventName.CREWED_LANDING in events:
+        events.add(EventName.LANDING)
     bp.access = {e: (e in events) for e in EventName}
     return bp
 

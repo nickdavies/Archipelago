@@ -157,11 +157,13 @@ def bankable_science(cap, psi_tier: int, home: BodyName,
             acc = access[body.name]
             a_orbit = acc[EventName.ORBIT]
             a_return = acc[EventName.RETURN]
+            a_land = acc[EventName.LANDING]
             a_crewed = acc[EventName.CREWED_LANDING]
         else:
             body_cap = cap.bodies[body.name]
             a_orbit = body_cap.access[EventName.ORBIT]
             a_return = body_cap.access[EventName.RETURN]
+            a_land = body_cap.access[EventName.LANDING]
             a_crewed = body_cap.access[EventName.CREWED_LANDING]
         if not a_orbit:
             continue
@@ -173,6 +175,7 @@ def bankable_science(cap, psi_tier: int, home: BodyName,
             body, cap.has_thermometer, cap.has_barometer,
             cap.has_capsule, a_crewed,
             home=home, psi_tier=psi_tier,
+            can_land_uncrewed=a_land,
         )
         if not can_recover:
             contribution *= _TRANSMIT_ONLY_DISCOUNT
@@ -206,9 +209,12 @@ def _cheap_bankable_science(
             continue
         cl = reps_map.get((body.name, EventName.CREWED_LANDING))
         crewed = cl is not None and state.has_all(cl, player)
+        lnd = reps_map.get((body.name, EventName.LANDING))
+        can_land = lnd is not None and state.has_all(lnd, player)
         contribution = science_budget(
             body, flags.has_thermometer, flags.has_barometer,
-            flags.has_capsule, crewed, home=home, psi_tier=psi_tier)
+            flags.has_capsule, crewed, home=home, psi_tier=psi_tier,
+            can_land_uncrewed=can_land)
         if not can_recover:
             contribution *= _TRANSMIT_ONLY_DISCOUNT
         total += contribution

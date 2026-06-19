@@ -1921,13 +1921,20 @@ def science_budget(
     can_land_crewed: bool,
     home: BodyName,
     psi_tier: int = 0,
+    *,
+    can_land_uncrewed: bool,
 ) -> float:
     """
     Estimate the total science collectible from *body* given the player's
     current instrument and crew capabilities.
 
     Conservative (golden rule): uses min(fly_low, fly_high) for flying
-    situations, does not count surface-sample crew value without crewed landing.
+    situations, does not count surface-sample crew value without crewed landing,
+    and does not count surface *instrument* science without an (uncrewed)
+    landing — surface readings require physically landing a craft, and the
+    client only awards them on a real touchdown.  ``can_land_uncrewed`` is the
+    player's ability to land a (robotic) craft; ``can_land_crewed`` (which
+    implies it) additionally unlocks the surface-sample crew value.
 
     Base instrument values (from KSP science definitions):
       Thermometer: 8   Barometer: 12   Crew Report: 5   EVA Report: 8
@@ -1996,21 +2003,21 @@ def science_budget(
             eff_fly_low, eff_fly_high
         )
 
-    # Landed science (scales with biome count)
+    # Landed science (scales with biome count).  Surface INSTRUMENT readings
+    # require landing a craft (uncrewed is enough — a probe places the
+    # instruments); the surface SAMPLE crew value (in crew_surface_val)
+    # additionally requires crewed landing.  A body the player can only orbit
+    # yields no surface science.
     landed = 0.0
     if body.can_land and body.num_biomes > 0:
-        landed = (
-            (base_instr + psi_landed) * eff_landed
-            + crew_surface_val * eff_landed
-        ) * body.num_biomes
+        landed_instr = (base_instr + psi_landed) * eff_landed if can_land_uncrewed else 0.0
+        landed = (landed_instr + crew_surface_val * eff_landed) * body.num_biomes
 
-    # Splashed science (ocean biomes only)
+    # Splashed science (ocean biomes only) — same landing gate.
     splashed = 0.0
     if body.has_ocean and body.num_splash_biomes > 0:
-        splashed = (
-            (base_instr + psi_splashed) * eff_splashed
-            + crew_surface_val * eff_splashed
-        ) * body.num_splash_biomes
+        splashed_instr = (base_instr + psi_splashed) * eff_splashed if can_land_uncrewed else 0.0
+        splashed = (splashed_instr + crew_surface_val * eff_splashed) * body.num_splash_biomes
 
     return orbital + flying + landed + splashed
 
