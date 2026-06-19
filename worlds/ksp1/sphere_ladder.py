@@ -3024,6 +3024,21 @@ def _compute_tech_tier_signatures_rank(
     # monotonic along the chain).
     _sci_events = (_EvN.ORBIT, _EvN.RETURN, _EvN.CREWED_LANDING)
     science_brackets: dict[tuple, frozenset[str]] = {}
+    # Per-body ORBIT/RETURN/CREWED_LANDING reachability, accumulated
+    # monotonically along the (superset-ordered) sphere chain.  Per-body access
+    # is monotone — once a body proves an event at sphere s it proves it at
+    # every later sphere — so once all three events are True the body is
+    # ``_resolved`` and we never touch ``cap.bodies[*]`` for it again.  Touching
+    # ``.access`` is what triggers the (expensive) per-body mission optimizer;
+    # for a resolved body both its bracket (already recorded) and its science
+    # contribution (determined by its True access plus the sphere's cheap
+    # flag-level instrument/relay state) need no further optimizer work.
+    # Skipping resolved bodies removes the dominant generation cost: re-assessing
+    # already-reachable bodies at every later sphere.
+    _acc: dict[str, dict] = {
+        _b.name: {_ev: False for _ev in _sci_events} for _b in ALL_BODIES
+    }
+    _resolved: set[str] = set()
     for sphere in ladder.spheres:
         admitted = (sphere.reps_collected
                     | (precollected_names & frozenset(PART_DB.keys())))
@@ -3043,14 +3058,21 @@ def _compute_tech_tier_signatures_rank(
             buildings_in_logic=bool(world.options.buildings_in_logic),
         )
         psi_tier = provides.counted(PROGRESSIVE_SCIENCE_INSTRUMENT_NAME)
-        sphere_science.append((sphere, bankable_science(cap, psi_tier, home) * safety))
         _reps_fs = frozenset(sphere.reps_collected)
         for _b in ALL_BODIES:
+            if _b.name in _resolved:
+                continue
+            _ba = _acc[_b.name]
             _bc = cap.bodies[_b.name]
             for _ev in _sci_events:
-                _key = (_b.name, _ev)
-                if _key not in science_brackets and _bc.access[_ev]:
-                    science_brackets[_key] = _reps_fs
+                if not _ba[_ev] and _bc.access[_ev]:
+                    _ba[_ev] = True
+                    science_brackets[(_b.name, _ev)] = _reps_fs
+            if all(_ba.values()):
+                _resolved.add(_b.name)
+        sphere_science.append(
+            (sphere,
+             bankable_science(cap, psi_tier, home, access=_acc) * safety))
     world._science_body_event_reps = science_brackets
 
     sigs: dict[str, LocationSignature] = {}

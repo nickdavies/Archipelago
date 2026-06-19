@@ -126,7 +126,8 @@ def _make_goal_event_rule(
 # Science heuristic helpers
 # ---------------------------------------------------------------------------
 
-def bankable_science(cap, psi_tier: int, home: BodyName) -> float:
+def bankable_science(cap, psi_tier: int, home: BodyName,
+                     access=None) -> float:
     """Per-body science contributions, gated on the player's ability to
     actually extract science from each body.
 
@@ -140,20 +141,37 @@ def bankable_science(cap, psi_tier: int, home: BodyName) -> float:
     per-sphere tier-funding pass MUST use it — duplicating the loop with
     a different gate produces a silent mismatch where the ladder thinks
     the seed is solvable but the rule disagrees at fill time.
+
+    ``access`` optionally supplies per-body ORBIT/RETURN/CREWED_LANDING
+    reachability as ``{body_name: {EventName: bool}}``.  When given, the
+    per-body access is read from it instead of ``cap.bodies[*].access`` —
+    the funding pass uses this to feed cached, monotonically-accumulated
+    access so it need not re-run the (expensive) per-body optimizer for
+    bodies already proven reachable at an earlier sphere.  Instrument and
+    relay flags still come from ``cap`` (cheap, flag-level).
     """
     relay_table = relay_tier_table_for(home)
     total = 0.0
     for body in ALL_BODIES:
-        body_cap = cap.bodies[body.name]
-        if not body_cap.access[EventName.ORBIT]:
+        if access is not None:
+            acc = access[body.name]
+            a_orbit = acc[EventName.ORBIT]
+            a_return = acc[EventName.RETURN]
+            a_crewed = acc[EventName.CREWED_LANDING]
+        else:
+            body_cap = cap.bodies[body.name]
+            a_orbit = body_cap.access[EventName.ORBIT]
+            a_return = body_cap.access[EventName.RETURN]
+            a_crewed = body_cap.access[EventName.CREWED_LANDING]
+        if not a_orbit:
             continue
-        can_recover = body_cap.access[EventName.RETURN]
+        can_recover = a_return
         can_transmit = cap.relay_tier >= relay_table[body.name]
         if not (can_recover or can_transmit):
             continue
         contribution = science_budget(
             body, cap.has_thermometer, cap.has_barometer,
-            cap.has_capsule, body_cap.access[EventName.CREWED_LANDING],
+            cap.has_capsule, a_crewed,
             home=home, psi_tier=psi_tier,
         )
         if not can_recover:
