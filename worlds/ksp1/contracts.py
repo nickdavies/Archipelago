@@ -1355,6 +1355,28 @@ def generate_contracts(world: "KSP1World") -> tuple[list[ContractSpec], list[Con
 
     chosen = _weighted_sample_without_replacement(
         rng, candidates, weights, _resolve_count(world))
+
+    # Home-body contract floor: guarantee a minimum number of home-body
+    # contracts (the earliest-reachable locations in a run) so the item fill
+    # always has enough early slots to assemble a deep goal's kit.  Without it,
+    # far-home / broad-goal seeds can rarely run out of reachable early slots and
+    # strand a progression item (an unsolvable seed).  Drawn from the already-
+    # feasible, cap-respecting home candidates — generic across contract types —
+    # randomly, on top of the ordinary count.
+    floor = world.options.home_contract_floor.value
+    if floor > 0:
+        picked = {s.contract_id for s in chosen}
+        home_have = sum(1 for s in chosen if s.body == home)
+        if home_have < floor:
+            home_pool = [s for s in candidates
+                         if s.body == home and s.contract_id not in picked]
+            rng.shuffle(home_pool)
+            for s in home_pool:
+                if home_have >= floor:
+                    break
+                chosen.append(s)
+                home_have += 1
+
     # Goals become contracts: one goal-contract per goal achievement, mandatory.
     return chosen, _goal_contract_specs(world.goal_spec)
 

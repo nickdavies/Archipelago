@@ -485,6 +485,28 @@ class ContractRepeats(NamedRange):
     default = 0
 
 
+class HomeContractFloor(Range):
+    """
+    Minimum number of home-body contracts guaranteed in the seed, regardless of
+    the ordinary contract selection.
+
+    Home-body contracts are the earliest-reachable locations in a run, so this
+    floor guarantees the item fill always has enough early slots to assemble a
+    deep goal's kit. Without it, far-home / broad-goal seeds can rarely run out
+    of reachable early slots and strand a progression item (an unsolvable seed).
+    The floor draws from whatever home-safe contract types are available — so it
+    stays generic as new contract types are added — and picks them randomly each
+    seed, so it adds slack without making starts samey.
+
+    0 = off (no guarantee). Counts toward the contract pool; does not raise the
+    per-contract reward-slot count.
+    """
+    display_name = "Home Contract Floor"
+    range_start = 0
+    range_end = 20
+    default = 5
+
+
 @dataclass
 class KSP1Options(PerGameCommonOptions):
     goal: Goal
@@ -506,6 +528,7 @@ class KSP1Options(PerGameCommonOptions):
     goal_contract_mode: GoalContractMode
     allow_missions_harder_than_goal: AllowMissionsHarderThanGoal
     contract_repeats: ContractRepeats
+    home_contract_floor: HomeContractFloor
     flag_bodies: FlagBodies
     return_bodies: ReturnBodies
     sample_return_bodies: SampleReturnBodies
