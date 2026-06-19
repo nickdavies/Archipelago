@@ -381,10 +381,11 @@ class TestKerbinEarlyLocations(KSP1TestBase):
     def test_altitude_checks_gate_with_sounding(self):
         """Altitude check locations require strictly increasing sounding thresholds.
 
-        Uses mocked capability to avoid depending on the SRB physics model.
-        Altitudes are read from the Kerbin home location set so this stays
-        correct if the milestone schedule shifts (Phase 3a moved from
-        5/15/25/…/70 to 5/10/16/20/30/45/70).
+        Mocks the sounding-altitude computation (``_compute_sounding_altitude``,
+        the cheap-flags function the altitude rule actually calls) to avoid
+        depending on the SRB physics model.  Altitudes are read from the Kerbin
+        home location set so this stays correct if the milestone schedule shifts
+        (Phase 3a moved from 5/15/25/…/70 to 5/10/16/20/30/45/70).
         """
         altitudes = sorted(
             int(loc.threshold_km)
@@ -395,9 +396,7 @@ class TestKerbinEarlyLocations(KSP1TestBase):
         )
 
         # sounding = 10 km: only the lowest milestones pass
-        cap = _make_zero_cap()
-        cap.sounding_altitude_km = 10.0
-        with patch("worlds.ksp1.rules.get_capability", return_value=cap):
+        with patch("worlds.ksp1.rules._compute_sounding_altitude", return_value=10.0):
             for km in altitudes:
                 name = f"Kerbin {km}km Altitude"
                 if km <= 10:
@@ -408,9 +407,7 @@ class TestKerbinEarlyLocations(KSP1TestBase):
                                      f"{km} km check must fail with 10 km sounding")
 
         # sounding = 50 km: everything below 50 km passes, top tier fails
-        cap2 = _make_zero_cap()
-        cap2.sounding_altitude_km = 50.0
-        with patch("worlds.ksp1.rules.get_capability", return_value=cap2):
+        with patch("worlds.ksp1.rules._compute_sounding_altitude", return_value=50.0):
             for km in altitudes:
                 name = f"Kerbin {km}km Altitude"
                 if km <= 50:
