@@ -1493,14 +1493,6 @@ _F4_DV_SPLITS: dict[int, tuple[tuple[float, ...], ...]] = {
         (0.6, 0.4),
         (0.7, 0.3),
     ),
-    3: (
-        (0.5, 0.3, 0.2),
-        (0.4, 0.4, 0.2),
-        (0.4, 0.3, 0.3),
-        (0.5, 0.25, 0.25),
-        (0.6, 0.2, 0.2),
-        (0.3, 0.4, 0.3),
-    ),
 }
 
 # Per-stage TWR floor.  Stage 1 (liftoff) uses whatever the caller passes
@@ -1511,9 +1503,12 @@ _F4_DV_SPLITS: dict[int, tuple[tuple[float, ...], ...]] = {
 _F4_TWR_MIDDLE: float = 1.0          # sustainer (vacuum, already moving)
 _F4_TWR_TOP_CIRCULARIZE: float = 0.8 # circularisation (near-orbital, horizontal burn)
 
-# Max K supported in MVP. Diminishing returns past 3; K=4 adds extra
-# decoupler mass that rarely beats K=3.
-_F4_MAX_K: int = 3
+# Max ascent stages.  Capped at 2: measured across 50k+ ascent evaluations,
+# K=3 rescued feasibility 0 times (K≤2 is the feasibility frontier) and beat
+# K=2 on launch mass only ~1% of the time, while accounting for ~54% of
+# multi-stage stage-builds.  Dropping K=3 is feasibility-identical and at most
+# ~1% mass-conservative (the Golden-Rule-safe direction).
+_F4_MAX_K: int = 2
 
 
 def find_optimal_multistage_ascent(
