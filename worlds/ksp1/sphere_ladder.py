@@ -624,15 +624,27 @@ def _pick_bump(
 # stable for cache hashing; per-priority-group selection happens in
 # ``_RANK_PRIORITY_GROUPS``.
 _RANK_BUMP_TABLE: dict[BlockingReason, tuple[RankAxisKey, ...]] = {
+    # A stage that can't close (dv/twr/dry-mass) is fixed only by propulsion,
+    # staging, or a lighter command module (payload reduction) — so the lever set
+    # is restricted to those.  Equipment is deliberately excluded:
+    #   * LANDING_LEG / RELAY / SOLAR / SAS are pure mass with no dv or profile
+    #     effect; they reach the kit via their own pre-check blockers
+    #     (LANDING_LEGS_MISSING, RELAY_TIER_TOO_LOW, ...).
+    #   * HEAT_SHIELD / PARACHUTE *do* cut dv (they unlock the cheap
+    #     ATMO_LANDING_AERO profile, dv=100 m/s, over a propulsive landing —
+    #     bodies.py:1266) — but the capability surfaces that precisely: it returns
+    #     the UNION of blockers across all profile alternatives (capability.py:
+    #     2586), emitting NO_HEAT_SHIELD / NO_PARACHUTE when an aero profile is the
+    #     cheaper unlock, which map to those axes.
+    # Trialing all six here instead was ~44% of all bumper trials, ~94% no-ops
+    # (KSP_BUMP_STATS): each candidate costs a full serial FOS, and equipment can
+    # never close a stage failure.
     BlockingReason.NO_VIABLE_STAGE: (
         RankAxisKey.LFO_TANK, RankAxisKey.LF_TANK, RankAxisKey.XENON_TANK,
         RankAxisKey.LAUNCH_ENGINE, RankAxisKey.VAC_ENGINE,
         RankAxisKey.STACK_DECOUPLER, RankAxisKey.SRB,
         RankAxisKey.RADIAL_DECOUPLER,
         RankAxisKey.CAPSULE, RankAxisKey.PROBE_SAS,
-        RankAxisKey.SOLAR, RankAxisKey.RELAY,
-        RankAxisKey.PARACHUTE, RankAxisKey.LANDING_LEG,
-        RankAxisKey.HEAT_SHIELD, RankAxisKey.SAS,
     ),
     BlockingReason.NO_ENGINE: (
         RankAxisKey.VAC_ENGINE, RankAxisKey.LAUNCH_ENGINE,
@@ -1164,10 +1176,11 @@ def _axes_for_stage_diag(stage_diag) -> tuple[RankAxisKey, ...]:
         return ()
     # Performance failures (DV_SHORT / TWR_SHORT / DRY_MASS_KILLS_RATIO):
     # a too-weak rocket is fixed by EITHER more propulsion/staging OR less
-    # payload mass.  Because a rank bump admits *better* (e.g. lighter-dry)
-    # parts, most axes can plausibly help, so the scored picker trial-evaluates
-    # the full lever set and ranks them.  (Data-driven pruning of axes that
-    # never help is under analysis — see KSP_BUMP_STATS instrumentation.)
+    # payload mass (a lighter command module).  A rank bump admits *better*
+    # (e.g. lighter-dry) parts, so the propulsion/staging/command lever set can
+    # plausibly help and the scored picker ranks them.  Equipment is NOT in this
+    # set — it can never close a stage and was ~44% of all bumper trials at ~94%
+    # no-op (see the NO_VIABLE_STAGE table above for the full rationale).
     return _RANK_BUMP_TABLE[BlockingReason.NO_VIABLE_STAGE]
 
 
