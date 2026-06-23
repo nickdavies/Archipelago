@@ -175,7 +175,29 @@ def _pack_columns(fuel_target, packable, cols):
 def _covering_tank(packable, remaining):
     """Smallest packable tank that can hold ``remaining`` (it gets partial-filled
     to it); the largest tank if none is big enough.  Allocation-free.  Shared by
-    ``_pack_columns`` and ``_pack_dry`` so their dry mass always agrees."""
+    ``_pack_columns`` and ``_pack_dry`` so their dry mass always agrees.
+
+    Fast path (byte-identical to the forward scan below): a covering call almost
+    always follows a FULL greedy pack, so ``remaining`` is below the smallest
+    packable tank's fuel (measured: 100% of calls).  Then every tank covers it,
+    so the answer is the smallest-fuel tank — tie-broken to the FIRST in packable
+    (largest-first) order, exactly as the scan's ``< cov_fuel`` does.  packable is
+    sorted fuel-descending, so equal-min-fuel tanks are contiguous at the end:
+    return the last element when its fuel is unique (the common case, O(1)), else
+    walk back over the tied run to its first member.  Avoids the O(len) scan that
+    dominated this hot leaf (avg ~5.5 tanks/call)."""
+    smallest = packable[-1]
+    if remaining <= smallest.fuel_mass:
+        mf = smallest.fuel_mass
+        if len(packable) == 1 or packable[-2].fuel_mass != mf:
+            return smallest                  # unique smallest fuel — the covering
+        cov = smallest                       # ties at min fuel: take first-in-order
+        for t in reversed(packable):
+            if t.fuel_mass == mf:
+                cov = t
+            else:
+                break
+        return cov
     cov = None
     cov_fuel = float("inf")
     for t in packable:
