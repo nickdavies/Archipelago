@@ -1,4 +1,5 @@
 import math
+import os
 import random
 from typing import Any
 
@@ -27,6 +28,15 @@ from .locations import (
 )
 from .options import Goal, GoalContractMode, KSP1Options, STARTING_BODY_POOLS, StartingBody
 from .tech_tree import MAX_TIER, NODES_BY_TIER, TECH_NODES, TIER_TO_BAND
+
+
+# Diagnostic flag: keep the strict_ladder post_fill physics cross-check but
+# DISABLE the re-fill fallback — raise instead of rescuing.  For perf testing
+# (the fallback is a whole-seed capability re-fill that otherwise dominates
+# slow-goal wall time) and correctness testing (a cheap-rule-vs-capability
+# divergence fails loudly here instead of being silently repaired).  Default
+# off = normal rescue behaviour.
+_NO_STRICT_LADDER_FALLBACK = os.environ.get("KSP_NO_STRICT_LADDER_FALLBACK") == "1"
 
 
 class KSP1State(LogicMixin):
@@ -506,22 +516,32 @@ class KSP1World(World):
         if self.multiworld.can_beat_game():
             return  # cheap-rule fill is winnable under capability — done
 
-        # FALLBACK.  The cheap fill produced a placement capability can't
-        # solve — a reps-only-vs-capability divergence (currently only on
-        # hard alien-home interplanetary goals; never Kerbin).  Rather than
-        # abort, log the divergence (the punch-list for the round-trip fix)
+        # The cheap-rule fill produced a placement capability can't solve — a
+        # cheap-rule-vs-capability divergence (now rare, ~0.5%, mostly Laythe
+        # deep-interplanetary after the contract-rule unification).
+        self._strict_ladder_fell_back = True
+        summary = self._strict_ladder_divergence_summary()
+
+        if _NO_STRICT_LADDER_FALLBACK:
+            # Diagnostic mode: keep the strict physics cross-check but skip the
+            # rescue — surface the divergence as a hard failure (perf +
+            # correctness testing).  solve-check classifies this as UNSOLVABLE.
+            raise OptionError(
+                "strict_ladder cross-check failed and the fallback is disabled "
+                f"(KSP_NO_STRICT_LADDER_FALLBACK): home={self.mission_builder.home} "
+                f"goal={self.options.goal.current_key} — {summary}"
+            )
+
+        # FALLBACK.  Log the divergence (the punch-list for the round-trip fix)
         # and RE-FILL with the capability rules now active — equivalent to
-        # strict_validation for this one seed.  Rare, so the slow fill is
-        # only paid where the cheap path is unsound.
+        # strict_validation for this one seed.  Rare, so the slow fill is only
+        # paid where the cheap path is unsound.
         import logging
         from Fill import distribute_items_restrictive
-        from Options import OptionError
-        self._strict_ladder_fell_back = True
         logging.warning(
             "KSP1 strict_ladder fallback (re-fill with capability rules): "
             "home=%s goal=%s — %s",
-            self.mission_builder.home, self.options.goal.current_key,
-            self._strict_ladder_divergence_summary(),
+            self.mission_builder.home, self.options.goal.current_key, summary,
         )
         cleared = []
         for loc in self.multiworld.get_locations(self.player):
