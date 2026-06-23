@@ -917,11 +917,18 @@ def evaluate_contract(
     flags: "EquipmentFlags",
     diff: DifficultyProfile,
     mission_builder: MissionBuilder,
+    run_parallel: bool = True,
 ):
     """Full-kit mission evaluation for a contract with its required-part payload
     on the manifest, or None if a required category has no available part.
     Shared by the feasibility check and the harder-than-goal launch-mass cap, so
-    they read the same numbers."""
+    they read the same numbers.
+
+    ``run_parallel=False`` uses the cheap conservative SERIAL build (no asparagus
+    search).  Since asparagus only lightens a rocket, the serial mass is an UPPER
+    bound on the exact mass and serial-feasible ⟹ asparagus-feasible — so the
+    generator uses serial as a cheap pre-pass and only pays the asparagus build
+    when serial can't already decide acceptance (see ``generate_contracts``)."""
     manifest = required_part_manifest(spec, flags)
     if manifest is None:
         return None
@@ -932,6 +939,7 @@ def evaluate_contract(
         flags, diff, spec.body, td.base_mission_type, td.crewed,
         mission_builder, extra_payload_parts=manifest,
         mission_transform=spec.mission_transform(mission_builder),
+        run_parallel=run_parallel,
     )
 
 
@@ -1346,11 +1354,22 @@ def generate_contracts(world: "KSP1World") -> tuple[list[ContractSpec], list[Con
                     and mb.relay_tier_by_body.get(body.name, 0) > goal_relay_tier):
                 continue  # needs comms beyond the goal's reach (option-gated)
             spec = ContractSpec(ct, body.name)
-            result = evaluate_contract(spec, full, diff, mb)
-            if result is None or not result.feasible:
-                continue  # missing a required part, or can't be delivered at all
-            if goal_mass > 0 and result.launch_mass > goal_mass:
-                continue  # harder than the goal mission, by launch mass (option-gated)
+            # Serial-first: the conservative serial build is an UPPER bound on the
+            # exact (asparagus) mass and serial-feasible ⟹ asparagus-feasible, so
+            # when serial already clears feasibility AND the mass cap the asparagus
+            # verdict is identical — accept without the expensive asparagus build.
+            # Only escalate to asparagus when serial is infeasible or over the cap
+            # (the borderline/hard contracts that asparagus might still rescue).
+            result = evaluate_contract(spec, full, diff, mb, run_parallel=False)
+            if result is None:
+                continue  # missing a required part (kit-independent; asparagus won't help)
+            if not (result.feasible
+                    and (goal_mass <= 0 or result.launch_mass <= goal_mass)):
+                result = evaluate_contract(spec, full, diff, mb)  # exact asparagus
+                if result is None or not result.feasible:
+                    continue  # missing a required part, or can't be delivered at all
+                if goal_mass > 0 and result.launch_mass > goal_mass:
+                    continue  # harder than the goal mission, by launch mass (option-gated)
             candidates.append(spec)
 
     chosen = _weighted_sample_without_replacement(
