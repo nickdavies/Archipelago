@@ -2514,6 +2514,17 @@ def _install_ladder_rules(
     # location so post_fill can swap it back in and independently
     # re-verify the cheap-rule fill is winnable under real capability.
     saved: dict[str, object] = {}
+    # Contract-ruled locations (completion slots, completion events, goal-contract
+    # mission events) already carry a CHEAP real rule (has(award) AND
+    # has_all(cheap_contract_reps); rules._set_contract_rules).  Overriding it with
+    # the generic bracket rule buys no speed (both are cheap) but DIVERGES the
+    # fill-time rule from the post_fill rule — the bracket rule keys on the sphere's
+    # cumulative reps_collected (not the contract's own cheap_contract_reps) and
+    # omits the award gate on goal-contract events, so fill stranded the award /
+    # required parts and the strict_ladder cross-check then forced an expensive
+    # whole-seed capability re-fill.  Leave these rules in place so fill and
+    # post_fill use the SAME rule (single source of truth).
+    contract_ruled: set = getattr(world, "_contract_ruled_locations", set())
     bracket_by_mission: dict[tuple, Optional[int]] = {}
     # Per-location feasibility bracket (first sphere whose cumulative kit can
     # FLY the mission).  This is the single source of truth for a mission's
@@ -2621,7 +2632,7 @@ def _install_ladder_rules(
         if _gate is not None:
             location_signatures[loc.name] = location_signatures.get(
                 loc.name, Signature.empty()).with_item(_gate)
-        if install_access:
+        if install_access and loc.name not in contract_ruled:
             if save_original:
                 saved[loc.name] = loc.access_rule
             sphere = spheres[j]

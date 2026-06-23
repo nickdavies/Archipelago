@@ -513,6 +513,15 @@ def _set_contract_rules(world: KSP1World, player: int) -> None:
     # /explain reads this set (world._contract_uses_proxy) rather than re-deriving
     # the predicate, so the reported gate can't drift from the rule actually set.
     world._proxy_contract_ids = set()
+    # Single record of which locations carry a contract rule (completion slots,
+    # completion events, and goal-contract mission events).  The sphere-ladder
+    # rule installer reads this to LEAVE these rules in place during fill instead
+    # of overriding them with the generic bracket rule: the contract rule is
+    # already cheap (no get_capability), so overriding it gains no speed but
+    # diverges the fill-time rule from the post_fill rule (different rep set, and
+    # the bracket rule omits the award gate on goal-contract events) — which
+    # stranded items and forced the expensive strict_ladder fallback re-fill.
+    world._contract_ruled_locations = set()
     # In count / progressive_unlock each non-goal contract has a completion-event
     # location; it shares the contract's rule so has("Contract Completed", X)
     # counts contracts completable in logic.
@@ -556,6 +565,7 @@ def _set_contract_rules(world: KSP1World, player: int) -> None:
         # sphere as buffer-fill.
         for loc_name in spec.location_names(world.non_goal_slot_count):
             world.get_location(loc_name).access_rule = rule
+            world._contract_ruled_locations.add(loc_name)
 
         # Non-goal completion event shares the rule (count / progressive_unlock):
         # reachable iff the contract is completable, so it contributes one to the
@@ -563,6 +573,7 @@ def _set_contract_rules(world: KSP1World, player: int) -> None:
         if counts_contracts and not spec.is_goal:
             ev_name = spec.display_name.replace("Contract: ", "Contract Complete: ", 1)
             world.get_location(ev_name).access_rule = rule
+            world._contract_ruled_locations.add(ev_name)
 
         # A goal contract's matching mission event(s) share its EXACT rule, so
         # the (now ordinary) event is reachable iff the goal contract is
@@ -572,6 +583,7 @@ def _set_contract_rules(world: KSP1World, player: int) -> None:
         if spec.is_goal and ev is not None:
             for ev_loc in event_locations(spec.body, ev):
                 world.get_location(str(ev_loc)).access_rule = rule
+                world._contract_ruled_locations.add(str(ev_loc))
 
 
 def _set_threshold_rules(world: KSP1World, player: int) -> None:
