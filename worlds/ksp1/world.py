@@ -509,11 +509,24 @@ class KSP1World(World):
         saved = getattr(self, "_strict_ladder_saved_rules", None)
         if not saved:
             return
+        # Snapshot the cheap bracket rules the fill used, then swap the saved
+        # capability rules in for the cross-check.  AP's can_beat_game reads
+        # loc.access_rule, so the physics check must temporarily install the real
+        # rules — but it is ONE sweep (~1.3s).  Leaving them installed would make
+        # the spoiler playthrough's prune pass (many can_beat_game sweeps) re-pay
+        # the full get_capability cost (~25s), so restore the cheap rules after a
+        # passing check — the spoiler then describes the seed with the same
+        # (conservative) rules the fill actually used.
+        cheap_rules = {}
         for loc in self.multiworld.get_locations(self.player):
             orig = saved.get(loc.name)
             if orig is not None:
+                cheap_rules[loc.name] = loc.access_rule
                 loc.access_rule = orig
         if self.multiworld.can_beat_game():
+            for loc in self.multiworld.get_locations(self.player):
+                if loc.name in cheap_rules:
+                    loc.access_rule = cheap_rules[loc.name]
             return  # cheap-rule fill is winnable under capability — done
 
         # The cheap-rule fill produced a placement capability can't solve — a
