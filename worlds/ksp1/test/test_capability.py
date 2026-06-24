@@ -68,7 +68,8 @@ _SHIELD_125 = _part("HeatShield1")
 _SHIELD_25 = _part("HeatShield2")
 
 # Parachutes
-_MK16 = _part("parachuteSingle")
+_MK16 = _part("parachuteSingle")        # inline (stack-node) chute
+_MK2R = _part("parachuteRadial")        # radial (surface-mount) chute
 
 # Landing Legs
 _LT1 = _part("landingLeg1")
@@ -139,14 +140,15 @@ def _make_flags(
         if not p.is_drogue:
             flags.has_parachutes = True
             flags.available_parachutes.append(p)
-            flags.parachute_count += 1
-            flags.total_chute_drag_area += p.drag_area
-    # Mirror _pre_pass: pick asymptote-best non-drogue chute up front
-    # so _required_chute_count can read it directly.
-    _non_drogue = [p for p in flags.available_parachutes if not p.is_drogue]
-    if _non_drogue:
-        flags.best_chute = min(_non_drogue,
-                                key=lambda p: p.mass / max(p.drag_area, 1e-3))
+    # Mirror _pre_pass: pick the best overall + best-of-each-kind chutes up front
+    # so the landing solver reads them directly.
+    if flags.available_parachutes:
+        _key = lambda p: p.mass / max(p.drag_area, 1e-3)
+        flags.best_chute = min(flags.available_parachutes, key=_key)
+        _rad = [p for p in flags.available_parachutes if p.is_radial]
+        _inl = [p for p in flags.available_parachutes if not p.is_radial]
+        flags.best_radial_chute = min(_rad, key=_key) if _rad else None
+        flags.best_inline_chute = min(_inl, key=_key) if _inl else None
 
     legs = legs or []
     for leg in legs:
@@ -341,9 +343,9 @@ class TestParachuteGate(unittest.TestCase):
         )
         flags.has_parachutes = True
         flags.available_parachutes = [_MK16, _MK16, _MK16]
-        flags.parachute_count = 3
-        flags.total_chute_drag_area = _MK16.drag_area * 3
-        flags.best_chute = _MK16  # set explicitly since we bypassed _make_flags's parachutes= path
+        # set explicitly since we bypassed _make_flags's parachutes= path
+        flags.best_chute = _MK16
+        flags.best_inline_chute = _MK16  # _MK16 is an inline chute
         return flags
 
     def test_mun_return_fails_without_parachutes(self) -> None:
@@ -368,12 +370,30 @@ class TestParachuteGate(unittest.TestCase):
 class TestParachuteCalculation(unittest.TestCase):
     """Test the required_chute_count helper."""
 
-    def test_kerbin_chute_calculation(self) -> None:
+    def test_one_inline_chute_lands_light_craft_on_kerbin(self) -> None:
+        # The single inline (stack-top) chute we assume lands a light craft on
+        # Kerbin's thick atmosphere.
+        flags = _make_flags(parachutes=[_MK16])
+        kerbin = BODY_BY_NAME[BodyName.KERBIN]
+        n = _required_chute_count(1.0, kerbin, flags, _normal_diff())
+        self.assertEqual(n, 1, "1 t on Kerbin should land under a single inline chute")
+
+    def test_inline_chutes_capped_at_one(self) -> None:
+        # Inline chutes can't be stacked past _MAX_INLINE_CHUTES (1): a craft
+        # needing more than one inline chute is infeasible on inline-only kit,
+        # even though several _MK16 are nominally "available".
         flags = _make_flags(parachutes=[_MK16, _MK16, _MK16, _MK16])
         kerbin = BODY_BY_NAME[BodyName.KERBIN]
         n = _required_chute_count(3.0, kerbin, flags, _normal_diff())
-        self.assertGreater(n, 0, "Should need at least 1 chute to land on Kerbin")
-        self.assertLessEqual(n, 4, "Should not need more chutes than available")
+        self.assertEqual(n, -1, "3 t needs >1 inline chute; inline is capped at 1")
+
+    def test_radial_chutes_scale(self) -> None:
+        # Radial chutes surface-mount around the body, so the same 3 t craft
+        # lands once a radial chute is available (count scales past 1).
+        flags = _make_flags(parachutes=[_MK2R])
+        kerbin = BODY_BY_NAME[BodyName.KERBIN]
+        n = _required_chute_count(3.0, kerbin, flags, _normal_diff())
+        self.assertGreater(n, 1, "3 t on Kerbin needs multiple radial chutes")
 
     def test_vacuum_body_needs_no_chutes(self) -> None:
         flags = _make_flags(parachutes=[])

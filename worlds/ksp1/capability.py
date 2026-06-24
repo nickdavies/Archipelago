@@ -93,6 +93,19 @@ _MAX_SAFE_LANDING_SPEED: float = 6.0
 # (conservative: assume a 1.25m diameter capsule/probe)
 _SHIP_CROSS_SECTION: float = math.pi * (1.25 / 2) ** 2
 
+# How many of each chute kind the physics check may assume on one craft.
+# Radial chutes surface-mount around the body, so many fit (the body
+# circumference is the only real limit).  An inline (stack) chute occupies the
+# craft's top node: a returning craft reliably has exactly ONE, and the
+# exceptions (multi-stack-top clusters, radial-booster nose mounts, a strut-cube
+# adapter) are geometry we deliberately don't model and can't detect — so the
+# conservative assumption (Golden Rule) is one inline chute.  A heavy thin-atmo
+# landing (e.g. Duna, where even a 1 t capsule needs ~6 chutes) therefore can't
+# be done with inline chutes at all — it needs radial chutes or the propulsive
+# (ATMO_LANDING_PROPULSIVE) descent scheme.
+_MAX_RADIAL_CHUTES: int = 50
+_MAX_INLINE_CHUTES: int = 1
+
 # Precomputed once: the part name + mass that provides FUEL_LINE (the
 # asparagus crossfeed enabler).  The real parallel-stage builder needs the
 # fuel line's mass/name to charge an asparagus crossfeed build.
@@ -162,7 +175,6 @@ class EquipmentFlags:
     has_wheel: bool = False
     has_throttleable_engine: bool = False
     has_aero_control_surface: bool = False
-    _has_inline_chute: bool = False     # internal: cap inline chutes at 1
 
     # Progressive-item binary gates (set by _pre_pass from progressive counts)
     has_launch_engine: bool = False     # Progressive Launch Engine ≥1
@@ -178,8 +190,6 @@ class EquipmentFlags:
     # Part references — None means not available.
     # Each stores the selected part so both .mass and .name are accessible.
     best_heat_shield: Optional[HeatShield] = None
-    total_chute_drag_area: float = 0.0             # sum of non-drogue drag areas
-    parachute_count: int = 0
     lightest_capsule: Optional[MiscEquipment] = None
     lightest_probe: Optional[MiscEquipment] = None
 
@@ -236,11 +246,14 @@ class EquipmentFlags:
     available_tanks: list[FuelTank] = field(default_factory=list)
     available_heat_shields: list[HeatShield] = field(default_factory=list)
     available_parachutes: list[Parachute] = field(default_factory=list)
-    # Asymptote-best non-drogue parachute (lowest mass-per-drag-area)
-    # picked once at ``_pre_pass`` time so ``_required_chute_count``
-    # doesn't ``min(...)`` per call.  ``None`` when the player has no
-    # non-drogue chutes.
+    # Best (lowest mass-per-drag-area) chute, picked once at ``_pre_pass`` time
+    # so the per-call landing solver never ``min(...)``s.  ``best_chute`` is the
+    # overall best (display/kit); ``best_radial_chute`` / ``best_inline_chute``
+    # are the best of each kind for ``_landing_chute_solution`` (radial chutes
+    # scale, inline are capped).  ``None`` when no chute of that kind is held.
     best_chute: Optional[Parachute] = None
+    best_radial_chute: Optional[Parachute] = None
+    best_inline_chute: Optional[Parachute] = None
     available_landing_legs: list[LandingLeg] = field(default_factory=list)
 
     # Multi-mount adapters/plates available to the player
@@ -507,8 +520,14 @@ def _pre_pass(item_count_fn: Callable[[str], int],
     # shortcut that surprised the bumper into picking a non-drogue rep
     # at higher ranks when a drogue-only kit could land with enough copies.
     if flags.available_parachutes:
-        flags.best_chute = min(flags.available_parachutes,
-                                key=lambda p: p.mass / max(p.drag_area, 1e-3))
+        _chute_key = lambda p: p.mass / max(p.drag_area, 1e-3)
+        flags.best_chute = min(flags.available_parachutes, key=_chute_key)
+        # Best of each kind, picked once here so the per-call landing solver is
+        # just two early-exit loops (no list-comp / min in the hot path).
+        _radial = [c for c in flags.available_parachutes if c.is_radial]
+        _inline = [c for c in flags.available_parachutes if not c.is_radial]
+        flags.best_radial_chute = min(_radial, key=_chute_key) if _radial else None
+        flags.best_inline_chute = min(_inline, key=_chute_key) if _inline else None
 
     # (lightest_probe=None when no probe found — gate blocks before use)
 
@@ -604,22 +623,15 @@ def _add_part_to_flags(flags: EquipmentFlags, part, count: int) -> None:
             flags.best_heat_shield = part
 
     elif isinstance(part, Parachute):
-        # Drogues now count toward parachute capability — the
-        # ``_required_chute_count`` physics check decides if drag area
-        # is sufficient (drogues need many copies to land a craft, but
-        # the math handles that).  Treating drogues as no-op was a
-        # gameplay-incorrect shortcut.
-        if part.is_radial:
-            flags.has_parachutes = True
-            flags.total_chute_drag_area += part.drag_area * count
-            flags.parachute_count += count
-            flags.available_parachutes.extend([part] * count)
-        elif not flags._has_inline_chute:
-            flags._has_inline_chute = True
-            flags.has_parachutes = True
-            flags.total_chute_drag_area += part.drag_area
-            flags.parachute_count += 1
-            flags.available_parachutes.append(part)
+        # Record every collected chute; the landing check (``_required_chute_count``
+        # → ``_landing_chute_solution``) picks the best part per kind and applies
+        # the radial-vs-inline attach-point caps.  The old code kept only the
+        # FIRST inline chute in PART_DB order (``parachuteDrogue``), which
+        # shadowed a strictly-better inline chute (``parachuteSingle``) — owning a
+        # drogue then made thin-atmo (Duna) landings spuriously fail with a usable
+        # chute in hand.
+        flags.has_parachutes = True
+        flags.available_parachutes.extend([part] * count)
 
     elif isinstance(part, LandingLeg):
         if part.tier > flags.landing_leg_tier:
@@ -2049,54 +2061,63 @@ def _required_chute_count(
     flags: EquipmentFlags,
     diff: DifficultyProfile,
 ) -> int:
-    """Return the number of parachutes (of ``flags.best_chute``) needed
-    to achieve terminal velocity ≤ ``_MAX_SAFE_LANDING_SPEED``.
+    """Number of parachutes needed to land ``landing_mass`` at terminal
+    velocity ≤ ``_MAX_SAFE_LANDING_SPEED``, or ``-1`` if no available chute set
+    can.  0 on vacuum bodies (no chutes needed).
 
-    ``flags.best_chute`` is precomputed in ``_pre_pass`` to be the
-    asymptote-best non-drogue chute (lowest mass-per-drag-area).  Two
-    chutes with identical drag but different masses
-    (``parachuteLarge``=0.3t vs ``parachuteRadial``=0.1t, both 500 m²)
-    give very different terminal-velocity asymptotes: the heavier
-    chute carries too much of its own weight and stalls above 6 m/s
-    on Duna no matter how many you stack, so the lighter one is the
-    only chute that can ever beat the safety threshold there.
+    Delegates to :func:`_landing_chute_solution`, which applies the
+    radial-vs-inline attach-point caps (``_MAX_RADIAL_CHUTES`` /
+    ``_MAX_INLINE_CHUTES``).  A chute's per-unit mass/drag sets an *asymptotic*
+    terminal velocity (stacking more never beats it): on Duna only the light
+    0.1 t / 500 m² chutes (``parachuteSingle`` / ``parachuteRadial``) stay under
+    6 m/s, but ``parachuteSingle`` is inline (cap 1) so it can't reach the ~6–37
+    copies a real Duna landing needs — that path is radial-only.
 
-    Workaround for the structural limitation that aero landings are
-    modelled as parachute-only OR engine-only — the real fix is a
-    mixed-strategy landing edge.  See
-    ``bugs/084-no-mixed-parachute-and-engine-landing.md``.
+    Aero landings are modelled as parachute-only here; the propulsive
+    alternative (``ATMO_LANDING_PROPULSIVE``) is a separate profile scheme.
+    See ``bugs/084-no-mixed-parachute-and-engine-landing.md``.
+    """
+    return _landing_chute_solution(landing_mass, body, flags, diff)[0]
 
-    Uses pessimistic mass estimate (landing_mass + all chutes) to
-    avoid under-counting (golden rule).  Returns ``-1`` if no count
-    of the chosen chute beats the threshold.
+
+def _landing_chute_solution(
+    landing_mass: float, body: Body, flags: EquipmentFlags,
+    diff: DifficultyProfile,
+) -> tuple[int, Optional[Parachute]]:
+    """Return ``(count, chute)`` for the cheapest chute set that lands
+    ``landing_mass`` at a safe speed, or ``(-1, None)`` if none can; ``(0, None)``
+    on vacuum bodies.
+
+    Radial chutes surface-mount around the body and scale up to
+    ``_MAX_RADIAL_CHUTES``; inline (stack-node) chutes are limited to
+    ``_MAX_INLINE_CHUTES`` attach points.  The best part of each kind is
+    precomputed in ``_pre_pass`` (``best_radial_chute`` / ``best_inline_chute``)
+    so this hot-path solver only runs the two early-exit loops; the kind that
+    lands the craft in the fewest chutes wins.  Pessimistic: the chutes' own mass
+    is added to the landing mass (golden rule).
     """
     if not body.has_atmosphere or body.atm_density_kg_m3 <= 0:
-        return 0  # vacuum body — no chutes needed
+        return 0, None  # vacuum body — no chutes needed
 
-    # Pessimistic upper bound: add mass of all available chutes
-    if not flags.available_parachutes:
-        return -1
-
-    chute = flags.best_chute
-    if chute is None:
-        return -1
-    # The AP item represents the parachute *type* being unlocked, not a single
-    # physical part.  Once unlocked, the player can attach as many as needed.
-    # Use a generous per-mission budget (50) so the physics check can succeed.
-    max_chutes = flags.parachute_count * 50
-
-    for n in range(1, max_chutes + 1):
-        total_mass = landing_mass + chute.mass * n
-        drag_area = chute.drag_area * n
-        v_term = terminal_velocity(
-            total_mass, body.surface_gravity,
-            body.atm_density_kg_m3,
-            diff.ship_cd, _SHIP_CROSS_SECTION, drag_area,
-        )
-        if v_term <= _MAX_SAFE_LANDING_SPEED:
-            return n
-
-    return -1  # even all chutes aren't enough
+    best_n, best_chute = -1, None
+    for chute, cap in (
+        (flags.best_radial_chute, _MAX_RADIAL_CHUTES),
+        (flags.best_inline_chute, _MAX_INLINE_CHUTES),
+    ):
+        if chute is None:
+            continue
+        for n in range(1, cap + 1):
+            total_mass = landing_mass + chute.mass * n
+            drag_area = chute.drag_area * n
+            v_term = terminal_velocity(
+                total_mass, body.surface_gravity, body.atm_density_kg_m3,
+                diff.ship_cd, _SHIP_CROSS_SECTION, drag_area,
+            )
+            if v_term <= _MAX_SAFE_LANDING_SPEED:
+                if best_n < 0 or n < best_n:
+                    best_n, best_chute = n, chute
+                break
+    return best_n, best_chute
 
 
 def _best_chute_for_body(
@@ -2104,11 +2125,10 @@ def _best_chute_for_body(
     diff: DifficultyProfile,
 ) -> tuple[int, str]:
     """Return (count, part_id) for the chute used in aero landing, or (0, "")."""
-    chute = flags.best_chute
-    if chute is None:
+    count, chute = _landing_chute_solution(landing_mass, body, flags, diff)
+    if count <= 0 or chute is None:
         return 0, ""
-    count = _required_chute_count(landing_mass, body, flags, diff)
-    return (max(1, count), chute.name) if count != 0 else (0, "")
+    return max(1, count), chute.name
 
 
 # ---------------------------------------------------------------------------
