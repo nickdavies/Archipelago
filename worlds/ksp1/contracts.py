@@ -1334,6 +1334,17 @@ def generate_contracts(world: "KSP1World") -> tuple[list[ContractSpec], list[Con
     goal_mass, goal_relay_tier = _difficulty_cap(world, full, diff, mb)
     goal_achievements = _goal_achievements(world.goal_spec)
 
+    # Single feasibility source of truth: a contract whose mission the model
+    # bans from this (difficulty, home) — the checked-in per-difficulty table,
+    # plus the Eve curated ban unless AllowEveOnExpert — is never generated.
+    # This is the SAME set + predicate the goal builder uses, so contracts and
+    # goals can't diverge (the bug this fixes: a contract targeting a mission
+    # the goal excludes, which then stranded as unreachable).  Local import
+    # breaks the rules <-> contracts module cycle.
+    from .rules import _all_locations_infeasible, _migrated_event_map
+    contract_event_of = _migrated_event_map()
+    model_infeasible = world.model_infeasible_locations
+
     candidates: list[ContractSpec] = []
     for ct in NON_GOAL_TYPES:
         if weights.get(str(ct), 0) <= 0:
@@ -1348,6 +1359,14 @@ def generate_contracts(world: "KSP1World") -> tuple[list[ContractSpec], list[Con
             # mission becomes a GOAL-contract instead (below), so a non-goal
             # contract here would collide / double up.
             if (body.name, td.base_mission_type) in goal_achievements:
+                continue
+            # Don't contractize a mission the model bans from this home (the
+            # per-difficulty feasibility table + Eve curated ban).  Only the
+            # return-type events have table entries, so this naturally filters
+            # Eve/Tylo/Laythe surface returns and leaves other types alone.
+            event = contract_event_of.get(ct)
+            if event is not None and _all_locations_infeasible(
+                    body.name, event, model_infeasible):
                 continue
             # Remoteness cap (cheap, so it gates before the optimizer eval).
             if (goal_relay_tier is not None and "relay" in td.required_categories

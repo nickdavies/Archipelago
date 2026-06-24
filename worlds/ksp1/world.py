@@ -11,7 +11,7 @@ from . import contracts, items, locations, regions, rules
 from .ksc_sites import ksc_site_slot_data
 from .rules import GoalSpec, resolve_goal_spec, goal_spec_location_names
 from .capability import CAPABILITY_ITEMS, RocketCapability
-from .data.feasibility import MODEL_INFEASIBLE_LOCATIONS
+from .data.feasibility import MODEL_INFEASIBLE_LOCATIONS_BY_DIFFICULTY
 from .bodies import (
     ALL_BODIES, BodyName, MissionBuilder, MissionType, RandomOrbitParams,
     generate_random_orbit_params, home_relative_science_values,
@@ -21,10 +21,24 @@ from .items import (
     PROGRESSIVE_RD_NAME, PROGRESSIVE_RD_COUNT,
 )
 from .locations import (
-    ALL_EVENTS, KSC_BIOMES, KSC_LOCATION_PREFIX,
+    ALL_EVENTS, EventName, KSC_BIOMES, KSC_LOCATION_PREFIX,
     LOCATION_NAME_TO_ID, LocationBuilder, MAX_TECH_SLOTS,
-    THRESHOLD_LOCATION_NAMES, TechTreeLocation,
+    THRESHOLD_LOCATION_NAMES, TechTreeLocation, event_locations,
     effective_starting_inv_count, effective_tech_slots_per_node,
+)
+
+# Difficulty index → name, matching ``options.Difficulty.value`` order.
+_DIFFICULTY_NAMES: tuple[str, ...] = ("casual", "normal", "expert", "insane")
+
+# Eve surface return / sample-return locations, excluded by default as a
+# deliberate curation choice (tedious to fly) rather than a feasibility verdict.
+# The per-difficulty feasibility table bans these at casual/normal anyway, but
+# the model considers them flyable at expert/insane — so without this explicit
+# set they'd resurface as goals/contracts there.  ``AllowEveOnExpert`` drops it.
+_EVE_CURATED_BAN_LOCATIONS: frozenset[str] = frozenset(
+    str(loc)
+    for event in (EventName.RETURN, EventName.SAMPLE_RETURN)
+    for loc in event_locations(BodyName.EVE, event)
 )
 from .options import Goal, GoalContractMode, KSP1Options, STARTING_BODY_POOLS, StartingBody
 from .tech_tree import MAX_TIER, NODES_BY_TIER, TECH_NODES, TIER_TO_BAND
@@ -232,8 +246,8 @@ class KSP1World(World):
 
     # AP location names whose mission the dv model can't verify from this
     # world's home, even given a full progressive kit + every part.
-    # Looked up at world-init time from the checked-in
-    # ``MODEL_INFEASIBLE_LOCATIONS`` table (regenerated offline by
+    # Looked up at world-init time from the checked-in per-difficulty
+    # ``MODEL_INFEASIBLE_LOCATIONS_BY_DIFFICULTY`` table (regenerated offline by
     # ``scripts/generate_feasibility.py``).  Completion-condition rules
     # for these locations fall back to the "all-parts collected" proxy
     # because the dv model can't model their ascents (Eve's 8 km/s,
@@ -294,15 +308,22 @@ class KSP1World(World):
         if isinstance(passthrough, dict) and self.game in passthrough:
             self._apply_slot_data(passthrough[self.game])
 
-        # Model-infeasible-locations set is a checked-in static lookup
-        # keyed by home body — generated offline by
-        # ``scripts/generate_feasibility.py`` so the banned-location set
-        # is deterministic per commit hash and never drifts between
-        # seeds.  An empty fallback covers homes not yet in the table
-        # (unreachable today; defensive).
-        self.model_infeasible_locations = MODEL_INFEASIBLE_LOCATIONS.get(
-            self.mission_builder.home, frozenset(),
+        # Model-infeasible-locations set: a checked-in static lookup keyed by
+        # (difficulty, home), generated offline by
+        # ``scripts/generate_feasibility.py`` so the banned-location set is
+        # deterministic per commit hash and never drifts between seeds.  One
+        # table per difficulty because feasibility depends on the dv margin.
+        # An empty fallback covers homes not yet in the table (defensive).
+        # Layered on top: the Eve curated ban (unless AllowEveOnExpert), so Eve
+        # surface returns stay out even at difficulties where they're flyable.
+        diff_name = _DIFFICULTY_NAMES[self.options.difficulty.value]
+        infeasible = set(
+            MODEL_INFEASIBLE_LOCATIONS_BY_DIFFICULTY.get(diff_name, {}).get(
+                self.mission_builder.home, frozenset())
         )
+        if not self.options.allow_eve_on_expert.value:
+            infeasible |= _EVE_CURATED_BAN_LOCATIONS
+        self.model_infeasible_locations = frozenset(infeasible)
         self.goal_spec = resolve_goal_spec(
             self.options, self.mission_builder.home,
             self.model_infeasible_locations,

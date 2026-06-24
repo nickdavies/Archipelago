@@ -286,11 +286,11 @@ class KSP1ExcludeLocations(ExcludeLocations):
     Locations that are excluded from containing progression items by default.
 
     Empty by default: missions the dv model can't verify from the active
-    home (Eve returns from any home, plus Tylo/Laythe returns from a
-    Kerbin home, etc.) are gated via the "all progression items
-    collected" proxy rule (see ``MODEL_INFEASIBLE_LOCATIONS`` in
-    ``data/feasibility.py``).  That mechanism already prevents fill
-    failures without taking the locations out of the progression pool.
+    home at the seed's difficulty (e.g. Eve surface returns) are gated via
+    the "all progression items collected" proxy rule (see
+    ``MODEL_INFEASIBLE_LOCATIONS_BY_DIFFICULTY`` in ``data/feasibility.py``).
+    That mechanism already prevents fill failures without taking the
+    locations out of the progression pool.
 
     The previous Kerbin-shaped hardcoded default (Eve / Tylo / Laythe
     returns) made non-Kerbin home configs trip over their own goal — a
@@ -473,6 +473,22 @@ class AllowMissionsHarderThanGoal(Toggle):
     default = 0
 
 
+class AllowEveOnExpert(Toggle):
+    """
+    Allow Eve surface return / sample-return missions as goals and contracts on
+    difficulties where the model considers them flyable (expert and insane).
+
+    Off (default): Eve return and sample-return are excluded everywhere as a
+    deliberate curation choice — they're physically achievable on the harder
+    difficulties but tedious to fly, so they never become a goal target or a
+    contract. On: they become available wherever the per-difficulty feasibility
+    model says they're achievable (in practice, expert/insane). At casual/normal
+    Eve is infeasible regardless, so this option only bites on expert+.
+    """
+    display_name = "Allow Eve On Expert"
+    default = 0
+
+
 class ContractRepeats(NamedRange):
     """
     Extra reward slots each non-goal contract yields beyond the base 2, as
@@ -527,6 +543,7 @@ class KSP1Options(PerGameCommonOptions):
     contracts_required_for_goal: ContractsRequiredForGoal
     goal_contract_mode: GoalContractMode
     allow_missions_harder_than_goal: AllowMissionsHarderThanGoal
+    allow_eve_on_expert: AllowEveOnExpert
     contract_repeats: ContractRepeats
     home_contract_floor: HomeContractFloor
     flag_bodies: FlagBodies
