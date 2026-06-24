@@ -18,6 +18,16 @@ from __future__ import annotations
 
 import logging
 import os
+# Non-progression (useful/filler) parts get a lower-bound placement floor a
+# fixed fraction of the ladder below their tier: ``floor = max(0, ms - FRAC*n)``.
+# The big margin keeps the band so wide that no same-tier category can
+# over-subscribe its slice of the ladder (which strands the tail with no valid
+# item->location matching → FillError), while still keeping a high-tier part out
+# of the early game (powerful != early).  A per-capacity floor (the old
+# ``cascade_lo``) is the "right" model but a static floor can't both pace a
+# contended category AND leave it room; the wide flat margin sidesteps that and
+# is overpower-bounded + solve-clean (0% fill failures at expert).  Tunable.
+_USEFUL_FLOOR_MARGIN_FRAC = 0.30
 from dataclasses import dataclass, field
 from random import Random
 from typing import Callable, TYPE_CHECKING, Optional
@@ -2786,38 +2796,6 @@ def _item_min_sphere(item, spheres) -> int:
     return 0
 
 
-def _compute_cascade_lo(
-    n: int, cap: dict[int, int], demand: dict[int, int],
-) -> dict[int, int]:
-    """Capacity-driven lower bound per advancement min_sphere.
-
-    A chain rep new at sphere ``k`` belongs at its prerequisite sphere
-    ``k-1``, but if that sphere (and the ones just below it) lack the room
-    to hold every rep that targets the region, the window must expand
-    *earlier*.  For each ``k`` with demand, walk back from ``k-1``
-    accumulating capacity until the spheres ``[lo, k-1]`` comfortably hold
-    the reps targeting that span (free room ≥ max(20%, 5)).  ``lo`` is how
-    far back reps with min_sphere ``k`` may be placed.
-    """
-    lo: dict[int, int] = {}
-    for k in range(1, n + 1):
-        if demand.get(k, 0) == 0:
-            continue
-        target = k - 1
-        need = 0
-        avail = 0
-        res = 0
-        for s in range(target, -1, -1):
-            avail += cap.get(s, 0)
-            need += demand.get(s + 1, 0)  # reps targeting s (min_sphere s+1)
-            margin = max(5, round(0.2 * avail))
-            res = s
-            if avail >= need + margin:
-                break
-        lo[k] = res
-    return lo
-
-
 def _install_unified_sphere_rules(
     world: "KSP1World",
     ladder: "SphereLadder",
@@ -2827,15 +2805,16 @@ def _install_unified_sphere_rules(
     """The unified placement rule — a per-item sphere *window* keyed on
     each item's ladder position ``ms = _item_min_sphere(item)``:
 
-      * PROGRESSION reps: ``cascade_lo[ms] <= L.sphere <= ms-1``.  The rep
-        must be collectable strictly before the sphere that needs it, so
-        AP's restrictive fill can always place it reachably (this is what
-        keeps fill from cornering itself on a broadly-gating item).  The
-        lower bound is normally ``ms-1`` and only widens earlier when the
-        prerequisite spheres lack capacity (the cascade, _compute_cascade_lo).
-      * USEFUL / filler: ``L.sphere >= ms`` — lower bound only, so a
-        surprise alternate never arrives before the rep chosen in its
-        stead, but may appear any time after.
+      * PROGRESSION reps: kit-exact UPPER bound only — admitted at any
+        location whose min_kit doesn't already include the rep (i.e. anywhere
+        below the sphere that first needs it).  No lower bound: AP's restrictive
+        fill needs that freedom to place broadly-gating reps reachably (a lower
+        bound collides with the min_kit upper bound and strands them).
+      * USEFUL / filler: lower bound only, ``L.sphere >= max(0, ms - margin)``
+        where ``margin = _USEFUL_FLOOR_MARGIN_FRAC * n`` — a surprise alternate
+        can't arrive *far* before its tier, but the wide margin keeps a
+        same-tier category from over-subscribing its band (which strands the
+        fill tail with no valid matching).  May appear any time after.
 
     Parts, R&D, Pad and PSI share this one sphere-index window.  Full
     soundness (every location reachable with the kit placed before it) is
@@ -2860,24 +2839,10 @@ def _install_unified_sphere_rules(
         else:
             loc_sphere[name] = _first_covering_sphere(spheres, need)
 
-    # Capacity-driven cascade.  A chain rep belongs at its prerequisite sphere
-    # (min_sphere-1), but high-rank reps whose prerequisite sphere is empty /
-    # thin are otherwise structurally unplaceable (banned below, chicken-and-egg
-    # at/above).  ``lo`` expands the window earlier sphere-by-sphere until the
-    # candidate spheres hold enough room.
-    from collections import Counter
-    cap: dict[int, int] = dict(Counter(loc_sphere.values()))
-    chain_reps: set[str] = set()
-    for s in spheres:
-        chain_reps |= s.reps_collected
-    demand: Counter = Counter()
-    for it in world.multiworld.itempool:
-        if it.player != player:
-            continue
-        if it.name in chain_reps or getattr(it, "_sphere_tier", None) is not None:
-            demand[_item_min_sphere(it, spheres)] += 1
-    cascade_lo = _compute_cascade_lo(len(spheres), cap, dict(demand))
-    world._cascade_lo = cascade_lo  # expose for analysis
+    # Non-progression placement floor: a fixed fraction of the ladder below each
+    # part's tier (see _USEFUL_FLOOR_MARGIN_FRAC).  Precomputed once as a sphere
+    # offset and applied in the rule below.
+    margin_off = round(_USEFUL_FLOOR_MARGIN_FRAC * len(spheres))
 
     # Bootstrap kit: reps needed from sphere 0 are in EVERY location's cumulative
     # min_kit, so the kit-exact ban would forbid them everywhere.  They belong in
@@ -2946,7 +2911,7 @@ def _install_unified_sphere_rules(
                     if L < len(spheres) else frozenset())
 
         def _rule(item, _p=player, _L=L, _spheres=spheres, _orig=existing,
-                  _sig=my_sig, _lo=cascade_lo, _mk=_min_kit,
+                  _sig=my_sig, _moff=margin_off, _mk=_min_kit,
                   _boot=_bootstrap_kit, _loc=loc.name, _an=award_names,
                   _ac=award_ceiling, _ao=award_own_locs) -> bool:
             if _orig is not None and not _orig(item):
@@ -2981,21 +2946,26 @@ def _install_unified_sphere_rules(
                 # Admit iff this rep is NOT in L's min_kit — i.e. L is reachable
                 # without it, so collecting it here can't be circular.  No lower
                 # bound: a rep may land anywhere below the sphere that first needs
-                # it (max fill freedom; pacing is handled by contracts/buildings,
-                # not by gating reps late).  Reps absent from every kit (spare
-                # high-rank parts) are in no min_kit → admitted everywhere.
-                # Bootstrap reps (needed from sphere 0) are in every kit →
-                # exempt to starting inventory.
+                # it (max fill freedom; the restrictive fill needs this room to
+                # place broadly-gating reps reachably — a cascade lower bound here
+                # collides with the min_kit upper bound and strands reps).
+                # Reps absent from every kit (spare high-rank parts) are in no
+                # min_kit → admitted everywhere.  Bootstrap reps (needed from
+                # sphere 0) are in every kit → exempt to starting inventory.
                 if item.name in _boot:
                     return True
                 return item.name not in _mk
             # Non-progression PART (filler): lower bound on sphere — a high-rank
-            # part may not appear before its tier (that would hand the player a
-            # powerful part early, dropping pacing/fun).  No upper bound.
+            # part may not appear far before its tier (that would hand the player a
+            # powerful part early, dropping pacing/fun).  No upper bound.  The
+            # floor sits a fixed fraction of the ladder below the part's tier
+            # (_USEFUL_FLOOR_MARGIN_FRAC): wide enough that a same-tier category
+            # can't over-subscribe its band (which would strand the fill tail),
+            # but high-tier parts still floor late.
             ms = _item_min_sphere(item, _spheres)
             if ms == 0:
                 return True
-            return _lo.get(ms, ms - 1) <= _L
+            return max(0, ms - _moff) <= _L
 
         loc.item_rule = _rule
 
