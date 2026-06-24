@@ -19,14 +19,17 @@ from __future__ import annotations
 import logging
 import os
 # Non-progression (useful/filler) parts get a lower-bound placement floor a
-# fixed fraction of the ladder below their tier: ``floor = max(0, ms - FRAC*n)``.
-# The big margin keeps the band so wide that no same-tier category can
-# over-subscribe its slice of the ladder (which strands the tail with no valid
-# item->location matching → FillError), while still keeping a high-tier part out
-# of the early game (powerful != early).  A per-capacity floor (the old
-# ``cascade_lo``) is the "right" model but a static floor can't both pace a
-# contended category AND leave it room; the wide flat margin sidesteps that and
-# is overpower-bounded + solve-clean (0% fill failures at expert).  Tunable.
+# fixed fraction of the LOCATIONS below their tier (computed per ladder in
+# _install_unified_sphere_rules).  The margin keeps the band so wide that no
+# same-tier category can over-subscribe its slice (which strands the tail with no
+# valid item->location matching → FillError), while still keeping a high-tier
+# part out of the early game (powerful != early).  Measuring the margin in
+# LOCATIONS, not spheres, is what makes it robust to skewed ladders: deep goals
+# (jool_moons from a Jool moon) leave the top spheres location-sparse, where a
+# sphere-index margin would floor recovery parts into a dead zone.  A true
+# per-capacity floor (the old ``cascade_lo``) is the "right" model but couldn't
+# both pace a contended category AND leave it room; this sidesteps that and is
+# overpower-bounded + solve-clean (0% fill at expert, kerbin + laythe).  Tunable.
 _USEFUL_FLOOR_MARGIN_FRAC = 0.30
 from dataclasses import dataclass, field
 from random import Random
@@ -2839,10 +2842,26 @@ def _install_unified_sphere_rules(
         else:
             loc_sphere[name] = _first_covering_sphere(spheres, need)
 
-    # Non-progression placement floor: a fixed fraction of the ladder below each
-    # part's tier (see _USEFUL_FLOOR_MARGIN_FRAC).  Precomputed once as a sphere
-    # offset and applied in the rule below.
-    margin_off = round(_USEFUL_FLOOR_MARGIN_FRAC * len(spheres))
+    # Non-progression placement floor (see _USEFUL_FLOOR_MARGIN_FRAC): a part at
+    # tier ``ms`` floors a fixed fraction of the *locations* below it — NOT a
+    # fixed fraction of spheres.  A sphere-index margin assumes locations are
+    # spread evenly; deep goals (e.g. jool_moons from a Jool moon) leave the top
+    # spheres location-sparse, so a high-tier recovery part would floor into a
+    # dead zone with no slots.  Shifting in LOCATION space guarantees
+    # ``[floor, top]`` always holds ~FRAC of all locations whatever the
+    # distribution.  Precompute floor-by-tier once (O(1) lookup in the rule).
+    import bisect
+    _loc_spheres_sorted = sorted(loc_sphere.values())
+    _shift = round(_USEFUL_FLOOR_MARGIN_FRAC * len(_loc_spheres_sorted))
+
+    def _floor_for_tier(ms: int) -> int:
+        # rank = #locations at sphere <= ms; step back _shift locations.
+        idx = bisect.bisect_right(_loc_spheres_sorted, ms) - _shift
+        if idx <= 0:
+            return 0
+        return _loc_spheres_sorted[idx] if idx < len(_loc_spheres_sorted) else 0
+
+    floor_by_tier = [_floor_for_tier(m) for m in range(len(spheres) + 1)]
 
     # Bootstrap kit: reps needed from sphere 0 are in EVERY location's cumulative
     # min_kit, so the kit-exact ban would forbid them everywhere.  They belong in
@@ -2911,7 +2930,7 @@ def _install_unified_sphere_rules(
                     if L < len(spheres) else frozenset())
 
         def _rule(item, _p=player, _L=L, _spheres=spheres, _orig=existing,
-                  _sig=my_sig, _moff=margin_off, _mk=_min_kit,
+                  _sig=my_sig, _floor=floor_by_tier, _mk=_min_kit,
                   _boot=_bootstrap_kit, _loc=loc.name, _an=award_names,
                   _ac=award_ceiling, _ao=award_own_locs) -> bool:
             if _orig is not None and not _orig(item):
@@ -2958,14 +2977,15 @@ def _install_unified_sphere_rules(
             # Non-progression PART (filler): lower bound on sphere — a high-rank
             # part may not appear far before its tier (that would hand the player a
             # powerful part early, dropping pacing/fun).  No upper bound.  The
-            # floor sits a fixed fraction of the ladder below the part's tier
-            # (_USEFUL_FLOOR_MARGIN_FRAC): wide enough that a same-tier category
-            # can't over-subscribe its band (which would strand the fill tail),
-            # but high-tier parts still floor late.
+            # floor sits a fixed fraction of the LOCATIONS below the part's tier
+            # (floor_by_tier / _USEFUL_FLOOR_MARGIN_FRAC): wide enough that a
+            # same-tier category can't over-subscribe its band (which would
+            # strand the fill tail) even when the top spheres are location-sparse,
+            # while high-tier parts still floor late.
             ms = _item_min_sphere(item, _spheres)
             if ms == 0:
                 return True
-            return max(0, ms - _moff) <= _L
+            return _floor[ms] <= _L
 
         loc.item_rule = _rule
 
