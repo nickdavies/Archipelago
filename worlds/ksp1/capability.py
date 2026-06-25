@@ -94,16 +94,17 @@ _MAX_SAFE_LANDING_SPEED: float = 6.0
 _SHIP_CROSS_SECTION: float = math.pi * (1.25 / 2) ** 2
 
 # How many of each chute kind the physics check may assume on one craft.
-# Radial chutes surface-mount around the body, so many fit (the body
-# circumference is the only real limit).  An inline (stack) chute occupies the
-# craft's top node: a returning craft reliably has exactly ONE, and the
-# exceptions (multi-stack-top clusters, radial-booster nose mounts, a strut-cube
-# adapter) are geometry we deliberately don't model and can't detect — so the
-# conservative assumption (Golden Rule) is one inline chute.  A heavy thin-atmo
-# landing (e.g. Duna, where even a 1 t capsule needs ~6 chutes) therefore can't
-# be done with inline chutes at all — it needs radial chutes or the propulsive
-# (ATMO_LANDING_PROPULSIVE) descent scheme.
-_MAX_RADIAL_CHUTES: int = 50
+# Radial chutes surface-mount around the body in symmetry groups; a group's
+# effective drag area scales SUPER-linearly (group^1.5, a KSP quirk — see
+# ``_radial_drag_multiplier``), so a realistic count lands a heavy craft.  The
+# cap is 7 neat groups of ``_RADIAL_SYMMETRY_GROUP`` (7×8=56) — a generous
+# attach-geometry bound.  An inline (stack) chute occupies the craft's top node:
+# a returning craft reliably has exactly ONE, and the exceptions (multi-stack-top
+# clusters, radial-booster nose mounts, a strut-cube adapter) are geometry we
+# deliberately don't model and can't detect — so the conservative assumption
+# (Golden Rule) is one inline chute, scaling linearly.
+_RADIAL_SYMMETRY_GROUP: int = 8   # KSP's max radial symmetry; bigger = more rings
+_MAX_RADIAL_CHUTES: int = 56      # 7 groups of 8
 _MAX_INLINE_CHUTES: int = 1
 
 # Precomputed once: the part name + mass that provides FUEL_LINE (the
@@ -2065,19 +2066,40 @@ def _required_chute_count(
     velocity ≤ ``_MAX_SAFE_LANDING_SPEED``, or ``-1`` if no available chute set
     can.  0 on vacuum bodies (no chutes needed).
 
-    Delegates to :func:`_landing_chute_solution`, which applies the
-    radial-vs-inline attach-point caps (``_MAX_RADIAL_CHUTES`` /
-    ``_MAX_INLINE_CHUTES``).  A chute's per-unit mass/drag sets an *asymptotic*
-    terminal velocity (stacking more never beats it): on Duna only the light
-    0.1 t / 500 m² chutes (``parachuteSingle`` / ``parachuteRadial``) stay under
-    6 m/s, but ``parachuteSingle`` is inline (cap 1) so it can't reach the ~6–37
-    copies a real Duna landing needs — that path is radial-only.
+    Delegates to :func:`_landing_chute_solution`, which tries the best radial
+    chute (drag area ∝ n^1.5, symmetric placement — scales heavily, capped at
+    ``_MAX_RADIAL_CHUTES``) and the best inline chute (drag ∝ n, capped at
+    ``_MAX_INLINE_CHUTES`` = 1 stack node), and takes whichever lands the craft
+    in the fewest chutes.  A thin-atmo landing (e.g. Duna) is therefore
+    radial-driven: one inline chute can't slow a heavy craft, but a realistic
+    number of symmetric radial chutes can.
 
     Aero landings are modelled as parachute-only here; the propulsive
     alternative (``ATMO_LANDING_PROPULSIVE``) is a separate profile scheme.
     See ``bugs/084-no-mixed-parachute-and-engine-landing.md``.
     """
     return _landing_chute_solution(landing_mass, body, flags, diff)[0]
+
+
+def _radial_drag_multiplier(n: int) -> float:
+    """Effective drag-area multiplier (in single-chute units) for ``n`` radial
+    chutes.  KSP scales a radial chute group placed IN SYMMETRY super-linearly
+    (``group^1.5`` — symmetric chutes are more efficient than independent ones),
+    but symmetry tops out at ``_RADIAL_SYMMETRY_GROUP``; past that you add more
+    rings, which stack linearly.  Closed form (no search): every full ring of
+    ``g`` contributes ``g^1.5``, plus one partial ring of the remainder.
+
+    This super-linear scaling is a non-obvious KSP engine quirk: the terminal
+    velocity of a craft under ``n`` symmetric radial chutes is
+    ``v = sqrt(m·B / n^α)`` with ``α = 1.5`` for radial-in-symmetry (``α = 1``
+    for stack chutes or radial chutes placed independently).  Without it the
+    model over-estimates radial chutes ~4×, spuriously banning real missions.
+    Derivation + measured per-chute constants:
+    https://forum.kerbalspaceprogram.com/topic/156287-boring-maths-on-parachutes-in-12/
+    """
+    g = _RADIAL_SYMMETRY_GROUP
+    full, rem = divmod(n, g)
+    return full * (g ** 1.5) + rem ** 1.5
 
 
 def _landing_chute_solution(
@@ -2088,27 +2110,27 @@ def _landing_chute_solution(
     ``landing_mass`` at a safe speed, or ``(-1, None)`` if none can; ``(0, None)``
     on vacuum bodies.
 
-    Radial chutes surface-mount around the body and scale up to
-    ``_MAX_RADIAL_CHUTES``; inline (stack-node) chutes are limited to
-    ``_MAX_INLINE_CHUTES`` attach points.  The best part of each kind is
-    precomputed in ``_pre_pass`` (``best_radial_chute`` / ``best_inline_chute``)
-    so this hot-path solver only runs the two early-exit loops; the kind that
-    lands the craft in the fewest chutes wins.  Pessimistic: the chutes' own mass
-    is added to the landing mass (golden rule).
+    Radial chutes scale super-linearly (``_radial_drag_multiplier``, symmetric
+    groups) up to ``_MAX_RADIAL_CHUTES``; inline (stack-node) chutes add linearly
+    and are limited to ``_MAX_INLINE_CHUTES`` attach points.  The best part of
+    each kind is precomputed in ``_pre_pass`` (``best_radial_chute`` /
+    ``best_inline_chute``) so this hot-path solver only runs the two early-exit
+    loops; the kind that lands the craft in the fewest chutes wins.  Pessimistic:
+    the chutes' own mass is added to the landing mass (golden rule).
     """
     if not body.has_atmosphere or body.atm_density_kg_m3 <= 0:
         return 0, None  # vacuum body — no chutes needed
 
     best_n, best_chute = -1, None
-    for chute, cap in (
-        (flags.best_radial_chute, _MAX_RADIAL_CHUTES),
-        (flags.best_inline_chute, _MAX_INLINE_CHUTES),
+    for chute, cap, is_radial in (
+        (flags.best_radial_chute, _MAX_RADIAL_CHUTES, True),
+        (flags.best_inline_chute, _MAX_INLINE_CHUTES, False),
     ):
         if chute is None:
             continue
         for n in range(1, cap + 1):
             total_mass = landing_mass + chute.mass * n
-            drag_area = chute.drag_area * n
+            drag_area = chute.drag_area * (_radial_drag_multiplier(n) if is_radial else n)
             v_term = terminal_velocity(
                 total_mass, body.surface_gravity, body.atm_density_kg_m3,
                 diff.ship_cd, _SHIP_CROSS_SECTION, drag_area,
