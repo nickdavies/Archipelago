@@ -2358,6 +2358,38 @@ def _demote_non_rep_parts(
     return demoted
 
 
+def _assert_gate_items_progression(world) -> None:
+    """Backstop invariant: every pooled item that an access rule gates on —
+    recorded in ``world.logic_required_items`` via the ``rules.require_item(s)``
+    chokepoint — MUST be PROGRESSION after classification.
+
+    A gate item demoted to USEFUL is never collected by AP's advancement-only
+    beatability sweep, so its location is unreachable-in-logic and any
+    PROGRESSION item fill placed there strands (the recurring "needed item
+    demoted to USEFUL" bug — e.g. a Progressive Launch Pad landing on a
+    contract whose gate item was demoted, capping the pad tier and making a
+    deep goal unsolvable).  Raising here turns that latent hazard into a loud
+    generation-time failure on the first affected seed instead of a rare
+    unsolvable seed in the wild.
+    """
+    from BaseClasses import ItemClassification
+    required = getattr(world, "logic_required_items", None)
+    if not required:
+        return
+    player = world.player
+    bad = sorted({
+        it.name for it in world.multiworld.itempool
+        if it.player == player and it.name in required
+        and not (it.classification & ItemClassification.progression)
+    })
+    if bad:
+        raise AssertionError(
+            "KSP1 classification backstop: access rules gate on these items, but "
+            "classification left them below PROGRESSION — fill can strand whatever "
+            f"it places behind them, making the seed unsolvable: {bad}"
+        )
+
+
 # Access-rule mode (prototype).  Controls how location reachability is
 # verified during AP fill:
 #   "strict_validation" — full capability physics on the actual collected
@@ -3771,36 +3803,31 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
     # touched.
     rep_part_names = set(cumulative_reps)
     rep_part_names |= set(sphere_rank_reps.values())  # belt-and-suspenders
-    # Goal-contract items gate Victory; they must stay PROGRESSION or the
-    # beatability sweep (advancement-only) never collects them and the goal is
-    # unreachable.  Non-goal pacing contracts may demote freely.
-    rep_part_names |= {spec.item_name for spec in world.goal_contract_specs}
-    # In count / progressive_unlock modes the player must COMPLETE X non-goal
-    # contracts to unlock the goal (each emits a CONTRACT_COMPLETED event the
-    # threshold counts), so those contracts are GOAL-PATH-REQUIRED.  Two classes
-    # of item must therefore stay PROGRESSION or the threshold / Victory becomes
-    # unreachable (AP only guarantees PROGRESSION items reachable; a USEFUL item
-    # scatters anywhere, including past-goal bodies the chain never reaches):
-    #
-    #   (a) Each non-goal contract's GATE ITEM (its ``item_name``): the contract
-    #       rule is ``state.has(gate_item) AND can_deliver``, so without the gate
-    #       item collected the contract is never completable.  Demoting it to
-    #       USEFUL strands it (observed: gate items landing on Ike / Moho / Pol
-    #       returns, unreachable in a Mun-flag chain) → 0 contracts completable.
-    #   (b) The required PARTS of those contracts: ``required_part_names_for``
-    #       returns the lightest standalone rep per required category (drill /
-    #       ore_tank / battery / science_lab) so the kept set is minimal; the
-    #       chain-guaranteed payload reps (crew / relay / power) are already
-    #       folded into cumulative_reps by _contract_payload_rep_names.
+    # Every item an access rule gates on — contract gate items (goal AND
+    # non-goal), goal-contract victory items, etc. — recorded as it was used,
+    # via the ``rules.require_item(s)`` chokepoint (``logic_required_items``).
+    # Keeping these PROGRESSION is the single, mode-agnostic guarantee that a
+    # gated location stays reachable-in-logic, so fill never strands a
+    # PROGRESSION item behind a demoted gate.  This REPLACES the old per-mode
+    # keep-lists (goal contracts + contracts-only-in-count/prog) that silently
+    # missed ``findable`` and stranded a Progressive Launch Pad on a non-goal
+    # contract.  ``_assert_gate_items_progression`` below fails generation if a
+    # gate item ever slips through again.
+    rep_part_names |= world.logic_required_items
+    # Count / progressive_unlock: completing X non-goal contracts unlocks the
+    # goal, so those contracts' DELIVERY parts must also stay PROGRESSION (their
+    # GATE items are already covered above).  ``required_part_names_for`` is the
+    # lightest standalone rep per required category (drill / ore_tank / battery /
+    # science_lab); chain-guaranteed payload reps are already in cumulative_reps.
     from .contracts import required_part_names_for
     from .options import GoalContractMode
     if world.options.goal_contract_mode.value in (
             GoalContractMode.option_count,
             GoalContractMode.option_progressive_unlock):
-        rep_part_names |= {spec.item_name for spec in world.contract_specs}
         rep_part_names |= required_part_names_for(world.contract_specs)
     _demote_non_rep_parts(world, rep_part_names, cumulative_sig,
                           chain_extras=chain_full_extras)
+    _assert_gate_items_progression(world)
     # === DIAGNOSTIC (temporary, gated) ===
     import os as _os
     if not _os.environ.get('KSP_PHASE2_DIAG'):

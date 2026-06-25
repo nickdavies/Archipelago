@@ -93,6 +93,40 @@ def _make_all_parts_rule(player: int) -> Callable[[CollectionState], bool]:
     return rule
 
 
+# ---------------------------------------------------------------------------
+# Gate chokepoint — the ONLY sanctioned way to gate a location on held items
+# ---------------------------------------------------------------------------
+#
+# Building the has-closure and recording the item dependency in ONE call makes
+# it structurally impossible to gate a location on an item without marking that
+# item logic-required.  The sphere-ladder classification pass keeps every
+# logic-required pooled item PROGRESSION; ``_assert_gate_items_progression``
+# fails generation if one slips through.  Together they turn the recurring "a
+# needed item got demoted to USEFUL, stranding whatever was placed behind it"
+# bug into a construction-time error instead of a rare unsolvable seed.
+
+def require_items(world: "KSP1World",
+                  item_names) -> Callable[[CollectionState], bool]:
+    """Return a ``has_all(item_names)`` rule and record those names as
+    logic-required on ``world``.  Use whenever a location's reachability
+    depends on holding a set of specific items."""
+    names = tuple(item_names)
+    player = world.player
+    world.logic_required_items.update(names)
+    return lambda state: state.has_all(names, player)
+
+
+def require_item(world: "KSP1World", name: str,
+                 count: int = 1) -> Callable[[CollectionState], bool]:
+    """Return a ``has(name[, count])`` rule and record ``name`` as
+    logic-required on ``world``.  The single-item form of ``require_items``."""
+    player = world.player
+    world.logic_required_items.add(name)
+    if count == 1:
+        return lambda state: state.has(name, player)
+    return lambda state: state.has(name, player, count)
+
+
 def _make_goal_event_rule(
     player: int, bodies, event: EventName,
 ) -> Callable[[CollectionState], bool]:
@@ -540,15 +574,20 @@ def _set_contract_rules(world: KSP1World, player: int) -> None:
         # never land on a model-infeasible body and keep the capability gate.
         uses_proxy = (spec.is_goal and ev is not None
                       and _all_locations_infeasible(spec.body, ev, infeasible))
+        # The contract's gate item, routed through the chokepoint so it's
+        # recorded logic-required (kept PROGRESSION) — you can't complete a
+        # contract without first finding its item, and a demoted gate item
+        # strands whatever progression fill placed on the contract location.
+        gate = require_item(world, spec.item_name)
         if uses_proxy:
             world._proxy_contract_ids.add(spec.contract_id)
-            def rule(state: CollectionState, item=spec.item_name,
+            def rule(state: CollectionState, _gate=gate,
                      _proxy=proxy_rule) -> bool:
-                return state.has(item, player) and _proxy(state)
+                return _gate(state) and _proxy(state)
         else:
             def rule(state: CollectionState, cid=spec.contract_id,
-                     item=spec.item_name) -> bool:
-                if not state.has(item, player):
+                     _gate=gate) -> bool:
+                if not _gate(state):
                     return False
                 world = state.multiworld.worlds[player]
                 creps = getattr(world, "_cheap_contract_reps", None)
@@ -655,8 +694,12 @@ def _set_mission_rules(world: KSP1World, player: int) -> None:
                 if item is None:
                     ap_loc.access_rule = cap_rule
                 else:
-                    def rule(state: CollectionState, _base=cap_rule, _item=item) -> bool:
-                        return state.has(_item, player) and _base(state)
+                    # Goal-contract gate item via the chokepoint (kept
+                    # PROGRESSION) — the event is reachable only with the
+                    # goal-contract item held.
+                    gate = require_item(world, item)
+                    def rule(state: CollectionState, _base=cap_rule, _gate=gate) -> bool:
+                        return _gate(state) and _base(state)
                     ap_loc.access_rule = rule
 
 
@@ -1204,11 +1247,14 @@ def _set_victory_rules(
         player, spec, safety, world.model_infeasible_locations,
         world.mission_builder.home,
     )
-    goal_items = tuple(s.item_name for s in world.goal_contract_specs)
+    # Goal-contract items gate Victory; route through the chokepoint so they're
+    # kept PROGRESSION (a demoted goal item the beatability sweep never collects
+    # makes the goal unreachable).
+    goal_gate = require_items(
+        world, [s.item_name for s in world.goal_contract_specs])
 
     def victory_rule(state: CollectionState) -> bool:
-        return (all(state.has(item, player) for item in goal_items)
-                and base_rule(state))
+        return goal_gate(state) and base_rule(state)
 
     world.get_location("Victory").access_rule = victory_rule
     world.multiworld.completion_condition[player] = (

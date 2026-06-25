@@ -280,6 +280,17 @@ class KSP1World(World):
     def generate_early(self) -> None:
         """Resolve goal spec and apply ExcludeLateTechTree."""
         self.capability_cache = {}
+        # Every pooled item name that some access rule gates on (via
+        # ``state.has``/``has_all``).  Populated at rule-construction time
+        # through the ``rules.require_item(s)`` chokepoint — building the
+        # has-closure and recording the dependency in one call makes it
+        # impossible to gate on an item without marking it logic-required.
+        # The sphere-ladder classification pass keeps every logic-required
+        # pooled item PROGRESSION, and ``_assert_gate_items_progression``
+        # fails generation if any slipped through — so "a needed item got
+        # demoted to USEFUL and stranded" is a construction-time error, not
+        # a rare unsolvable seed.
+        self.logic_required_items: set[str] = set()
         # Pool keys (atmospheric/standard/planets/all) resolve to a
         # concrete body via the seed RNG, then overwrite the option so
         # downstream code (and slot_data) sees a single body just like
