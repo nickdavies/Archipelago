@@ -65,21 +65,20 @@ class TestSphereChainOrdered(KSP1TestBase):
                     )
             prev = cum
 
-    def test_chain_groups_anchored(self) -> None:
-        """S_launch / S_orbit lead; S_goal* always trail; intermediates middle."""
+    def test_launch_sphere_leads(self) -> None:
+        """S_launch is always the first sphere.
+
+        (The old invariant 'S_goal* always trail' no longer holds: the
+        graph-walk ladder places every sphere at its true dv layer, so a
+        mid-difficulty goal like duna_return correctly sits mid-chain with
+        physically harder missions — outer-planet / sample-return spheres —
+        after it. Monotone-growth is covered by test_cumulative_ranks_monotone.)
+        """
         ladder = self.world._sphere_ladder
         spheres = ladder.spheres
         if not spheres:
             return
         self.assertEqual(spheres[0].name, "S_launch")
-        seen_goal = False
-        for s in spheres:
-            if s.name.startswith("S_goal"):
-                seen_goal = True
-            elif seen_goal:
-                self.fail(
-                    f"Non-goal sphere {s.name} appears after a S_goal sphere"
-                )
 
 
 class TestSmallGoalMunFlag(KSP1TestBase):

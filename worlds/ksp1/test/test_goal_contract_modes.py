@@ -154,6 +154,9 @@ class TestGoalModeValidation(unittest.TestCase):
                       contracts_available=5, contracts_required_for_goal=10)
 
     def test_zero_contracts_count_raises(self):
+        # home_contract_floor (default 5) adds home contracts on top of
+        # contracts_available, so it must also be 0 to actually generate zero
+        # contracts and exercise the count-mode "no contracts" guard.
         with self.assertRaises(OptionError):
             self._gen(goal="duna_return", goal_contract_mode="count",
-                      contracts_available=0)
+                      contracts_available=0, home_contract_floor=0)

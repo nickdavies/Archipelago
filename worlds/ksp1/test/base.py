@@ -71,3 +71,31 @@ class KSP1TestBase(WorldTestBase):
             apply_sphere_ladder(self.world)
             self._real_pre_fill_done = True
         yield
+
+    def test_all_state_can_reach_everything(self):
+        """KSP1 override of WorldTestBase's default reachability check.
+
+        Model-infeasible mission locations (the curated edge bans + per-home
+        dv-infeasible set, ``world.model_infeasible_locations``) are
+        deliberately EXCLUDED and carry an honest capability rule that stays
+        unreachable even with every item — the player genuinely can't fly them
+        (e.g. an Eve surface return while Eve ascent is banned). Exempt those
+        from the all-reachable assertion; every other location must still be
+        reachable and the seed must still be beatable.
+        """
+        if not (self.run_default_tests and self.constructed):
+            return
+        world = self.multiworld.worlds[self.player]
+        infeasible = getattr(world, "model_infeasible_locations", frozenset())
+        with self.subTest("Game", game=self.game, seed=self.multiworld.seed):
+            state = self.multiworld.get_all_state(False)
+            for location in self.multiworld.get_locations():
+                if location.name in infeasible:
+                    continue
+                with self.subTest("Location should be reached",
+                                  location=location.name):
+                    self.assertTrue(location.can_reach(state),
+                                    f"{location.name} unreachable")
+            with self.subTest("Beatable"):
+                self.multiworld.state = state
+                self.assertBeatable(True)
