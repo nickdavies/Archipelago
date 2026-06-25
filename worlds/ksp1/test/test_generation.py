@@ -274,6 +274,9 @@ class TestProgressiveRD(KSP1TestBase):
 class TestCompleteTechTreeGoalRD(KSP1TestBase):
     """complete_tech_tree goal requires Progressive R&D x MAX_RD_BAND."""
     options = {"goal": "complete_tech_tree"}
+    # Victory's science gate reads the cheap-ladder reps (_science_body_event_reps),
+    # a pre_fill side effect; without the real ladder it's conservatively unreachable.
+    needs_real_pre_fill = True
 
     def test_goal_unreachable_without_rd(self):
         """Victory location must be unreachable without Progressive R&D."""

@@ -249,6 +249,9 @@ KSP1TestBase = _SharedKSP1TestBase
 class TestMunReturnGoalReachability(KSP1TestBase):
     """Custom return_bodies=["Mun"] goal — reachable with all items, not with none."""
     options = {"goal": "mun_sample_return"}
+    # Victory routes through the cheap-ladder reps (_cheap_mission_reps), a pre_fill
+    # side effect; without the real ladder it's conservatively unreachable.
+    needs_real_pre_fill = True
 
     def test_victory_reachable_with_all_items(self):
         self.collect_all_but([])
@@ -269,6 +272,9 @@ class TestMunReturnGoalReachability(KSP1TestBase):
 class TestMunFlagGoal(KSP1TestBase):
     """Mun flag preset goal."""
     options = {"goal": "mun_flag"}
+    # Victory routes through the cheap-ladder reps (_cheap_mission_reps), a pre_fill
+    # side effect; without the real ladder it's conservatively unreachable.
+    needs_real_pre_fill = True
 
     def test_victory_reachable_with_all_items(self):
         self.collect_all_but([])
