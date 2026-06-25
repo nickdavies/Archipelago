@@ -17,7 +17,7 @@ Golden rule: when in doubt, say something is NOT achievable.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Callable
 
 from BaseClasses import CollectionState, ItemClassification
@@ -987,7 +987,9 @@ _PRESET_GOALS: dict[int, GoalSpec] = {
             BodyName.LAYTHE, BodyName.VALL, BodyName.TYLO,
             BodyName.BOP, BodyName.POL,
         ),
-        home_system_local=True,
+        # home_system_local is DERIVED in _filter_home_from_spec (True from a
+        # Jool home where these moons are local, False from Kerbin/Duna where
+        # this is a valid cross-system run) — never hardcoded on the preset.
     ),
 }
 
@@ -1099,12 +1101,20 @@ def resolve_goal_spec(options, home: BodyName,
 
 def _filter_home_from_spec(spec: GoalSpec, home: BodyName) -> GoalSpec:
     """Drop ``home`` from every body list (a goal can't ask the player to do
-    a mission on their starting body — trivially achievable), and stamp
-    ``home`` onto the returned spec so the spec is fully materialized.
+    a mission on their starting body — trivially achievable), stamp ``home``,
+    and DERIVE ``home_system_local``.
+
+    ``home_system_local`` is purely a byproduct of whether the resolved goal
+    happens to sit entirely within the home system — never a preset/user choice.
+    When it does (e.g. mun_flag from Kerbin, or jool_moons_return from a Jool
+    home), it's a focused local run and external bodies are banned from logic.
+    A goal that reaches outside the home system — e.g. jool_moons_return from
+    Kerbin, or mun_flag from Duna — is a perfectly valid, if ambitious,
+    cross-system mission; it's simply not "local".
     """
     def _strip(bodies: tuple[BodyName, ...]) -> tuple[BodyName, ...]:
         return tuple(b for b in bodies if b != home)
-    return GoalSpec(
+    materialized = GoalSpec(
         display_name=spec.display_name,
         flag_bodies=_strip(spec.flag_bodies),
         return_bodies=_strip(spec.return_bodies),
@@ -1112,9 +1122,11 @@ def _filter_home_from_spec(spec: GoalSpec, home: BodyName) -> GoalSpec:
         orbit_bodies=_strip(spec.orbit_bodies),
         flyby_bodies=_strip(spec.flyby_bodies),
         complete_tech_tree=spec.complete_tech_tree,
-        home_system_local=spec.home_system_local,
+        free_goal=spec.free_goal,
         home=home,
     )
+    return replace(materialized,
+                   home_system_local=materialized.is_home_system_only(home))
 
 
 def _validate_home_system_local(spec: GoalSpec) -> None:
