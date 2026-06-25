@@ -2549,7 +2549,7 @@ def _install_ladder_rules(
     player = world.player
     spheres = ladder.spheres
     diff = DIFFICULTY_PROFILES[
-        ["casual", "normal", "expert", "insane"][world.options.difficulty.value]
+        ["casual", "normal", "expert"][world.options.difficulty.value]
     ]
     mb = world.mission_builder
     buildings_in_logic = bool(world.options.buildings_in_logic)
@@ -3046,7 +3046,7 @@ def _compute_tech_tier_signatures_rank(
     from .tech_tree import TECH_NODES, TIER_TO_BAND, cumulative_tier_cost
 
     difficulty_idx = world.options.difficulty.value
-    difficulty_name = ["casual", "normal", "expert", "insane"][difficulty_idx]
+    difficulty_name = ["casual", "normal", "expert"][difficulty_idx]
     safety = effective_science_safety(world.options, difficulty_idx)
     pad_on = bool(world.options.progressive_launch_pad)
     clamps = bool(world.options.start_with_launch_clamps)
@@ -3588,7 +3588,7 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
     _RANK_PRE_PASS_CACHE.clear()
     ladder = SphereLadder()
     ctx = getattr(world, "_rank_context", DEFAULT_CONTEXT)
-    difficulty = ["casual", "normal", "expert", "insane"][
+    difficulty = ["casual", "normal", "expert"][
         world.options.difficulty.value
     ]
     progressive_launch_pad = bool(world.options.progressive_launch_pad)
@@ -3927,7 +3927,7 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
             _step_reach = sum(1 for _l in _locs if _l.can_reach(_sim_state))
             _out.write(f'  step 0: reachable={_step_reach}\n')
             from .capability import compute_capability_from_items as _ccfi
-            _diff_name = ["casual", "normal", "expert", "insane"][world.options.difficulty.value]
+            _diff_name = ["casual", "normal", "expert"][world.options.difficulty.value]
             for _i, _it in enumerate(_prog_list[:25], start=1):
                 _sim_state.collect(_it, prevent_sweep=True)
                 _step_reach = sum(1 for _l in _locs if _l.can_reach(_sim_state))

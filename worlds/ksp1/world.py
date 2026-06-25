@@ -28,7 +28,7 @@ from .locations import (
 )
 
 # Difficulty index → name, matching ``options.Difficulty.value`` order.
-_DIFFICULTY_NAMES: tuple[str, ...] = ("casual", "normal", "expert", "insane")
+_DIFFICULTY_NAMES: tuple[str, ...] = ("casual", "normal", "expert")
 
 # Curated edge bans: graph subsections too tedious to fly, banned by POLICY
 # (independent of the dv feasibility verdict).  Expressed as edges, not
@@ -878,7 +878,7 @@ class KSP1World(World):
 
         in_logic = loc_obj.can_reach(state)
         info = CHECK_MAP.get(target_name)
-        difficulty_name = ["casual", "normal", "expert", "insane"][
+        difficulty_name = ["casual", "normal", "expert"][
             self.options.difficulty.value
         ]
 

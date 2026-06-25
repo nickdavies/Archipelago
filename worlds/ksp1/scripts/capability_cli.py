@@ -245,7 +245,7 @@ def cmd_rocket(ap: APState, check_name: str, verbose: bool = False) -> None:
 
     info = CHECK_MAP.get(check_name)
 
-    difficulty_name = ["casual", "normal", "expert", "insane"][
+    difficulty_name = ["casual", "normal", "expert"][
         ap.slot_data.get("difficulty", 1)
     ]
 

@@ -179,11 +179,11 @@ MAX_STARTING_INV = 20
 MAX_TECH_SLOTS = 4
 
 #: Tech tree slots per node, scaled by difficulty.
-#: Keys are Difficulty option values (casual=0, normal=1, expert=2, insane=3).
-TECH_SLOTS_BY_DIFFICULTY: dict[int, int] = {0: 4, 1: 4, 2: 3, 3: 2}
+#: Keys are Difficulty option values (casual=0, normal=1, expert=2).
+TECH_SLOTS_BY_DIFFICULTY: dict[int, int] = {0: 4, 1: 4, 2: 3}
 
 #: Starting inventory slot counts by difficulty.
-STARTING_INV_COUNTS: dict[int, int] = {0: 20, 1: 15, 2: 10, 3: 5}
+STARTING_INV_COUNTS: dict[int, int] = {0: 20, 1: 15, 2: 10}
 
 #: Extra starting-inventory slots when progressive_launch_pad is enabled —
 #: gives the pool more zero-rule capacity to absorb items pushed out of

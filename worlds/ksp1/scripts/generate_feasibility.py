@@ -64,11 +64,11 @@ _PROBED_EVENTS: tuple[EventName, ...] = (EventName.RETURN, EventName.SAMPLE_RETU
 
 # One table is baked per difficulty.  Feasibility genuinely depends on
 # difficulty — the dv margin differs per profile (casual demands the most
-# cushion, insane the least), so a mission can be flyable at expert yet
+# cushion, expert the least), so a mission can be flyable at expert yet
 # infeasible at casual.  A single difficulty-agnostic table can't express
 # that, so the world reads the table matching the seed's difficulty.
-# Order matches ``options.Difficulty.value`` (0..3).
-DIFFICULTIES: tuple[str, ...] = ("casual", "normal", "expert", "insane")
+# Order matches ``options.Difficulty.value`` (0..2).
+DIFFICULTIES: tuple[str, ...] = ("casual", "normal", "expert")
 
 # Extra ``percent_margin`` added on top of EACH difficulty profile.  This is
 # a REP-SELECTION safety buffer, not a difficulty knob: the probe runs with

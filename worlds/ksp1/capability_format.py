@@ -574,7 +574,7 @@ def build_bug_report_dict(
     user_description: Optional[str] = None,
 ) -> dict:
     """Build a JSON-serializable bug report dict."""
-    difficulty_name = ["casual", "normal", "expert", "insane"][
+    difficulty_name = ["casual", "normal", "expert"][
         slot_data.get("difficulty", 1)
     ]
 

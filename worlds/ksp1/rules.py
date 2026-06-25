@@ -56,7 +56,6 @@ _SCIENCE_SAFETY: dict[int, float] = {
     Difficulty.option_casual: 0.50,
     Difficulty.option_normal: 0.70,
     Difficulty.option_expert: 0.85,
-    Difficulty.option_insane: 1.00,
 }
 
 

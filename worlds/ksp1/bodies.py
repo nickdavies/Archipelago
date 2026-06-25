@@ -98,9 +98,9 @@ DIFFICULTY_PROFILES: dict[str, DifficultyProfile] = {
     # plane_change_fraction models a window-timing SKILL: matching an inclined
     # target's plane is mostly avoidable by departing at the node, but it's a
     # non-obvious optimization beginners don't do.  So casual pays ~full,
-    # normal+ are expected to time it (lower and lower tolerance up the ladder),
-    # insane pays nothing.  Only ASCENT-to-encounter edges carry a plane change;
-    # descending X→parent is always free (see _add_home_return_paths).
+    # normal+ are expected to time it (lower and lower tolerance up the ladder).
+    # Only ASCENT-to-encounter edges carry a plane change; descending X→parent
+    # is always free (see _add_home_return_paths).
     "casual": DifficultyProfile(
         fixed_margin=200, percent_margin=0.30, plane_change_fraction=1.00,
         min_twr_atmo=1.5, min_twr_vac=1.2,
@@ -114,11 +114,6 @@ DIFFICULTY_PROFILES: dict[str, DifficultyProfile] = {
     "expert": DifficultyProfile(
         fixed_margin=50, percent_margin=0.05, plane_change_fraction=0.05,
         min_twr_atmo=1.3, min_twr_vac=1.1,
-        ship_cd=0.2, srb_needs_rcs=False,
-    ),
-    "insane": DifficultyProfile(
-        fixed_margin=0, percent_margin=0.00, plane_change_fraction=0.00,
-        min_twr_atmo=1.2, min_twr_vac=1.0,
         ship_cd=0.2, srb_needs_rcs=False,
     ),
 }

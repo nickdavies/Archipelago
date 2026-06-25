@@ -185,14 +185,12 @@ class Difficulty(Choice):
     casual  -- Generous margins; 20 starts, 4 tech slots/node, 50% science.
     normal  -- Default margins;  15 starts, 4 tech slots/node, 70% science.
     expert  -- Tight margins;    10 starts, 3 tech slots/node, 85% science.
-    insane  -- Exact delta-V;     5 starts, 2 tech slots/node, 100% science.
     """
     display_name = "Difficulty"
 
     option_casual = 0
     option_normal = 1
     option_expert = 2
-    option_insane = 3
 
     default = option_normal
 
@@ -210,7 +208,7 @@ class TechSlotsPerNode(NamedRange):
     raise Starting Inventory Count to give the fill algorithm more room.
     Short goals (mun_flag, duna_return) are unaffected.
 
-    auto -- Derived from Difficulty (casual/normal=4, expert=3, insane=2).
+    auto -- Derived from Difficulty (casual/normal=4, expert=3).
     1..4 -- Explicit override.
     """
     display_name = "Tech Slots Per Node"
@@ -237,7 +235,7 @@ class StartingInventoryCount(NamedRange):
     raise Tech Slots Per Node to give the fill algorithm more room.
     Short goals (mun_flag, duna_return) are unaffected.
 
-    auto  -- Derived from Difficulty (20/15/10/5).
+    auto  -- Derived from Difficulty (20/15/10).
     0..20 -- Explicit override.
     """
     display_name = "Starting Inventory Count"
@@ -259,7 +257,7 @@ class ScienceSafetyFactor(NamedRange):
 
     Does NOT affect fill success — only tech tree gating.  Safe to tune.
 
-    auto    -- Derived from Difficulty (casual=50, normal=70, expert=85, insane=100).
+    auto    -- Derived from Difficulty (casual=50, normal=70, expert=85).
     0..100  -- Explicit percentage override.
     """
     display_name = "Science Safety Factor"
@@ -477,14 +475,14 @@ class AllowMissionsHarderThanGoal(Toggle):
 class AllowEveOnExpert(Toggle):
     """
     Allow Eve surface return / sample-return missions as goals and contracts on
-    difficulties where the model considers them flyable (expert and insane).
+    difficulties where the model considers them flyable (expert).
 
     Off (default): Eve return and sample-return are excluded everywhere as a
     deliberate curation choice — they're physically achievable on the harder
     difficulties but tedious to fly, so they never become a goal target or a
     contract. On: they become available wherever the per-difficulty feasibility
-    model says they're achievable (in practice, expert/insane). At casual/normal
-    Eve is infeasible regardless, so this option only bites on expert+.
+    model says they're achievable (in practice, expert). At casual/normal
+    Eve is infeasible regardless, so this option only bites on expert.
     """
     display_name = "Allow Eve On Expert"
     default = 0

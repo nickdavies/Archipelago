@@ -7,7 +7,7 @@ bypassing the CollectionState so we don't need a full world setup.
 import unittest
 
 from worlds.ksp1.bodies import (
-    ALL_BODIES, BODY_BY_NAME, DIFFICULTY_PROFILES,
+    ALL_BODIES, BODY_BY_NAME, DIFFICULTY_PROFILES, DifficultyProfile,
     BodyName, MissionBuilder, MissionType, effective_dv,
 )
 
@@ -197,6 +197,18 @@ def _casual_diff():
     return DIFFICULTY_PROFILES["casual"]
 
 
+# A 0-margin profile (no dv/plane-change cushion) for tests that want the
+# physics budget as tractable as possible to isolate a single gate (e.g. the
+# parachute gate) rather than mission margins. Mirrors the retired "insane"
+# profile so those tests keep their intent without depending on a difficulty.
+def _zero_margin_diff():
+    return DifficultyProfile(
+        fixed_margin=0, percent_margin=0.00, plane_change_fraction=0.00,
+        min_twr_atmo=1.2, min_twr_vac=1.0,
+        ship_cd=0.2, srb_needs_rcs=False,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Minimum viable kit tests
 # ---------------------------------------------------------------------------
@@ -314,7 +326,7 @@ class TestParachuteGate(unittest.TestCase):
     """
     Kerbin reentry / aero landings require parachutes.
 
-    The "success" case uses insane difficulty (0 dv margins) and a powerful
+    The "success" case uses a 0-margin profile (no dv cushion) and a powerful
     rocket (3× Mainsail on S3-3600 first stage) to make the physics tractable
     while keeping the focus on the PARACHUTE gate itself, not mission margins.
     """
@@ -331,7 +343,7 @@ class TestParachuteGate(unittest.TestCase):
         )
 
     def _return_flags_with_chutes(self) -> EquipmentFlags:
-        """Full kit for success case; uses insane diff in the test call."""
+        """Full kit for success case; uses a 0-margin diff in the test call."""
         flags = _make_flags(
             engines=[_SWIVEL, _MAINSAIL],
             tanks=[_FL_T400, _FL_T800, _X200_32, _S3_3600],
@@ -356,15 +368,15 @@ class TestParachuteGate(unittest.TestCase):
         self.assertFalse(ok, "Mun return should fail without parachutes")
 
     def test_mun_return_succeeds_with_parachutes(self) -> None:
-        # Insane difficulty (0 margins) makes the dv/TWR budget tractable while
-        # keeping the parachute gate as the distinguishing factor.
-        # With insane diff + 3× Mainsail first stage + Mainsail mid-stage, the
-        # full return chain fits within the available thrust envelope.
+        # A 0-margin profile makes the dv/TWR budget tractable while keeping the
+        # parachute gate as the distinguishing factor. With 0 margins + 3×
+        # Mainsail first stage + Mainsail mid-stage, the full return chain fits
+        # within the available thrust envelope.
         flags = self._return_flags_with_chutes()
         profiles = MISSION_PROFILES.get((BodyName.MUN, MissionType.RETURN), [])
-        diff = DIFFICULTY_PROFILES["insane"]
+        diff = _zero_margin_diff()
         ok = _try_profiles(profiles, flags, diff, MissionType.RETURN, crewed=False, home=BodyName.KERBIN)
-        self.assertTrue(ok, "Mun return should succeed with parachutes at insane difficulty")
+        self.assertTrue(ok, "Mun return should succeed with parachutes at 0-margin difficulty")
 
 
 class TestParachuteCalculation(unittest.TestCase):
@@ -509,26 +521,26 @@ class TestStagingTier(unittest.TestCase):
 
 
 class TestDifficultyMargins(unittest.TestCase):
-    """Casual margins should require less dv than insane (no margins)."""
+    """Casual margins should require more dv than expert (the tightest difficulty)."""
 
-    def test_effective_dv_casual_greater_than_insane(self) -> None:
+    def test_effective_dv_casual_greater_than_expert(self) -> None:
         from worlds.ksp1.bodies import effective_dv, DIFFICULTY_PROFILES
         casual = DIFFICULTY_PROFILES["casual"]
-        insane = DIFFICULTY_PROFILES["insane"]
+        expert = DIFFICULTY_PROFILES["expert"]
         base = 1000.0
         self.assertGreater(
             effective_dv(base, casual),
-            effective_dv(base, insane),
+            effective_dv(base, expert),
         )
 
     def test_plane_change_included_at_casual(self) -> None:
         from worlds.ksp1.bodies import effective_dv, DIFFICULTY_PROFILES
         casual = DIFFICULTY_PROFILES["casual"]
-        insane = DIFFICULTY_PROFILES["insane"]
+        expert = DIFFICULTY_PROFILES["expert"]
         dv_casual = effective_dv(100.0, casual, plane_change_dv=1000.0)
-        dv_insane = effective_dv(100.0, insane, plane_change_dv=1000.0)
-        # Casual includes 50% of 1000 = 500 plane change; insane includes 0%
-        self.assertGreater(dv_casual, dv_insane)
+        dv_expert = effective_dv(100.0, expert, plane_change_dv=1000.0)
+        # Casual includes 100% of 1000 plane change; expert includes only 5%.
+        self.assertGreater(dv_casual, dv_expert)
 
 
 class TestInjectLadder(unittest.TestCase):

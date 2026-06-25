@@ -2817,7 +2817,7 @@ def _compute_capability(state: CollectionState, player: int) -> RocketCapability
     """Full capability computation from the current collection state."""
     world = state.multiworld.worlds[player]
     options = world.options
-    difficulty_name = ["casual", "normal", "expert", "insane"][options.difficulty.value]
+    difficulty_name = ["casual", "normal", "expert"][options.difficulty.value]
     start_with_clamps = bool(options.start_with_launch_clamps.value)
     cap, _ = compute_capability_from_items(
         lambda name: state.count(name, player),

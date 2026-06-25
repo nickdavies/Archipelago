@@ -406,7 +406,6 @@ Difficulty is exposed as named presets in the AP YAML options rather than raw nu
 | Casual | 200 m/s | 30% | Generous, tolerates significant imprecision |
 | Normal | 100 m/s | 15% | Default |
 | Expert | 50 m/s | 5% | Near-optimal play assumed |
-| Insane | 0 m/s | 0% | Exact delta-V values, no margin |
 
 ### Human Skill Flags
 

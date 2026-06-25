@@ -1029,13 +1029,13 @@ def _full_kit_flags(world: "KSP1World") -> "EquipmentFlags":
 
 
 def _difficulty(world: "KSP1World") -> DifficultyProfile:
-    name = ["casual", "normal", "expert", "insane"][world.options.difficulty.value]
+    name = ["casual", "normal", "expert"][world.options.difficulty.value]
     return DIFFICULTY_PROFILES[name]
 
 
 # Auto (-1) total non-goal contract count, by difficulty index. Harder settings
 # get fewer (tighter fill, faster gen). Calibrated further once data exists.
-_AUTO_COUNT_BY_DIFFICULTY = (12, 10, 8, 6)
+_AUTO_COUNT_BY_DIFFICULTY = (12, 10, 8)
 
 
 def _resolve_count(world: "KSP1World") -> int:
@@ -1173,8 +1173,8 @@ def _goal_max_relay_tier(goal_spec, mission_builder: MissionBuilder) -> int:
 # ---------------------------------------------------------------------------
 
 # random_contracts: fraction up the RETURN-mass scale, indexed by difficulty
-# (casual / normal / expert / insane). Harder settings allow harder contracts.
-_RANDOM_CONTRACTS_PERCENTILE: tuple[float, ...] = (0.5, 0.6, 0.7, 0.8)
+# (casual / normal / expert). Harder settings allow harder contracts.
+_RANDOM_CONTRACTS_PERCENTILE: tuple[float, ...] = (0.5, 0.6, 0.7)
 
 
 def _return_mass_scale(flags, diff, mb) -> list[tuple[float, BodyName]]:
