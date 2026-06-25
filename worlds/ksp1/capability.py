@@ -1949,37 +1949,82 @@ def _group_edges(profile: list[MissionEdge], staging_tier: int) -> list[list[Mis
     return groups
 
 
+def _required_power_source(
+    flags: EquipmentFlags, profile: list[MissionEdge], home: BodyName,
+) -> Optional[MiscEquipment]:
+    """Lightest power source adequate for the strictest per-leg power requirement
+    of ``profile``, or ``None`` when no leg needs power.
+
+    The per-leg ``after_aero`` walk (fixed solar is destroyed by a non-recovery
+    aero edge; the home parachute recovery is exempt because no leg flies after
+    it) is the SAME determination the forward power gate
+    (``_check_power_for_body`` via ``body_aero_destroyed``) makes — so the source
+    whose mass is charged is exactly the one the feasibility verdict required.
+    The gate runs first and blocks the profile when no adequate source exists,
+    so an adequate source is guaranteed here whenever a requirement is present.
+
+    Returning the *lightest* adequate source makes the charge MONOTONE in the
+    kit: owning extra equipment (e.g. an RTG on top of fixed solar) can only
+    lower the chosen mass, never raise it.  The previous code charged ``rtg``
+    whenever ``needs_retractable`` was set and one was owned, so acquiring an RTG
+    inflated the terminal payload and could push it past the parachute limit —
+    a strictly larger kit losing a mission (the bug-092 non-monotonicity).
+    """
+    home_surface = f"{home.value.lower()}_surface"
+    post_aero = False
+    needs_rtg = needs_retractable = needs_solar = False
+    for edge in profile:
+        # Mirror the forward gate: a heat-shield edge that is NOT the home
+        # parachute recovery destroys fixed solar for every later leg.
+        if edge.needs_heat_shield and not (
+                edge.edge_type == EdgeType.ATMO_LANDING_AERO
+                and edge.destination == home_surface):
+            post_aero = True
+        body = BODY_BY_NAME.get(edge.body)
+        if body is None:
+            continue
+        req = body.power_requirement
+        if req == "rtg":
+            needs_rtg = True
+        elif req in ("solar", "solar_marginal"):
+            if post_aero:
+                needs_retractable = True
+            else:
+                needs_solar = True
+    # Strictest first: rtg-only ⊂ retractable-or-rtg ⊂ any-solar-or-rtg.
+    if needs_rtg:
+        return flags.lightest_rtg
+    if needs_retractable:
+        cands = [c for c in (flags.lightest_solar_retractable, flags.lightest_rtg)
+                 if c is not None]
+        return min(cands, key=lambda p: p.mass) if cands else None
+    if needs_solar:
+        cands = [c for c in (flags.lightest_solar, flags.lightest_rtg)
+                 if c is not None]
+        return min(cands, key=lambda p: p.mass) if cands else None
+    return None
+
+
 def _support_equipment_mass(
     flags: EquipmentFlags, profile: list[MissionEdge],
     home: BodyName,
 ) -> tuple[float, list[tuple[int, str]]]:
     """
-    Return (mass, parts) for required support equipment (antenna, power)
-    based on the most demanding body in the mission profile.
+    Return (mass, parts) for required support equipment (antenna, power).
     Each part entry is (count, part_id).
+
+    Power is the lightest source adequate for the strictest per-leg requirement
+    (:func:`_required_power_source`) — the SAME requirement the forward power
+    gate enforces, charged as the lightest adequate part so the charge can't
+    exceed what a smaller kit pays (monotone) and can't diverge from the
+    feasibility verdict.  Relay is the lightest antenna meeting the strictest
+    tier across all edges.
     """
     mass = 0.0
     parts: list[tuple[int, str]] = []
 
-    # Find the most demanding relay tier and power requirement across all edges
-    max_relay = 0
-    power_req = "none"
-    needs_retractable = False
-    for edge in profile:
-        body = BODY_BY_NAME.get(edge.body)
-        if body is None:
-            continue
-        if edge.relay_tier > max_relay:
-            max_relay = edge.relay_tier
-        # Power: rtg > solar_marginal > solar > none
-        prio = {"none": 0, "solar": 1, "solar_marginal": 2, "rtg": 3}
-        if prio.get(body.power_requirement, 0) > prio.get(power_req, 0):
-            power_req = body.power_requirement
-        # If any edge involves aerobraking, we need retractable solar
-        if edge.needs_heat_shield:
-            needs_retractable = True
-
-    # Relay: find lightest antenna meeting the required tier
+    # Relay: lightest antenna meeting the strictest tier across all edges.
+    max_relay = max((edge.relay_tier for edge in profile), default=0)
     if max_relay > 0:
         best_relay: Optional[MiscEquipment] = None
         for tier in range(max_relay, 4):
@@ -1990,23 +2035,11 @@ def _support_equipment_mass(
             mass += best_relay.mass
             parts.append((1, best_relay.name))
 
-    # Power: find lightest power source meeting requirement
-    if power_req == "rtg":
-        if flags.lightest_rtg:
-            mass += flags.lightest_rtg.mass
-            parts.append((1, flags.lightest_rtg.name))
-    elif power_req in ("solar", "solar_marginal"):
-        if needs_retractable:
-            if flags.lightest_solar_retractable:
-                mass += flags.lightest_solar_retractable.mass
-                parts.append((1, flags.lightest_solar_retractable.name))
-            elif flags.lightest_rtg:
-                mass += flags.lightest_rtg.mass
-                parts.append((1, flags.lightest_rtg.name))
-        else:
-            if flags.lightest_solar:
-                mass += flags.lightest_solar.mass
-                parts.append((1, flags.lightest_solar.name))
+    # Power: lightest source adequate for the strictest per-leg requirement.
+    src = _required_power_source(flags, profile, home)
+    if src is not None:
+        mass += src.mass
+        parts.append((1, src.name))
 
     return mass, parts
 

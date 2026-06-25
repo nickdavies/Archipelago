@@ -24,7 +24,8 @@ from worlds.ksp1.locations import EventName
 from worlds.ksp1.capability import (
     BodyAccessProfile, EquipmentFlags,
     _evaluate_profile, _assess_bodies, _assess_one_body,
-    _try_profiles, _required_chute_count, _inject_ladder, _compute_sounding_altitude,
+    _try_profiles, _try_profiles_reason, _required_chute_count, _required_power_source,
+    _inject_ladder, _compute_sounding_altitude,
     _group_edges,
 )
 from worlds.ksp1.parts import PART_DB, Engine, FuelTank, SolidBooster, MultiMount
@@ -1563,6 +1564,100 @@ class TestStructuredBlockingReasons(unittest.TestCase):
                         f"Expected RELAY_TIER_TOO_LOW; got {result.blocking}")
         self.assertGreater(relay_blockings[0].relay_needed, 0)
         self.assertEqual(relay_blockings[0].relay_available, 0)
+
+
+class TestPowerChargeMonotonic(unittest.TestCase):
+    """The support-equipment power charge must be MONOTONE in the kit: owning
+    more equipment can never make a mission infeasible.
+
+    Regression for the bug-092 non-monotonicity in the terminal power charge.
+    A Mun return that lands on a drogue with fixed solar went infeasible when an
+    RTG was added, because ``needs_retractable`` (spuriously set by the home
+    recovery reentry) forced the charge onto the RTG, and that 0.08 t landed on
+    the descent payload past the drogue's terminal-velocity limit.  The charge is
+    now the lightest source adequate for the strictest per-leg requirement, so
+    acquiring an RTG can't raise it.  See scratchpad/repro_unit_level.py.
+    """
+
+    def _mun_return_kit(self, rtg: bool = False) -> EquipmentFlags:
+        f = EquipmentFlags()
+        f.available_engines = [_TERRIER, _SWIVEL, _MAINSAIL]
+        f.available_tanks = [_FL_T400, _FL_T800, _X200_32, _JUMBO_64]
+        f.has_probe_core = True
+        f.lightest_probe = _part("roverBody.v2")
+        f.has_reaction_wheels = True
+        f.staging_tier = 2
+        f.available_decouplers = [_TR18A, _TT38K]
+        f.has_launch_clamp = True
+        hs = _part("HeatShield0")
+        f.has_heat_shield = True
+        f.available_heat_shields = [hs]
+        f.best_heat_shield = hs
+        f.available_landing_legs = [_LT2]
+        f.landing_leg_tier = _LT2.tier
+        drogue = _part("parachuteDrogue")
+        f.has_parachutes = True
+        f.available_parachutes = [drogue]
+        f.best_chute = drogue
+        f.best_inline_chute = drogue
+        f.best_radial_chute = None
+        f.has_solar = True
+        f.lightest_solar = _OX_STAT
+        if rtg:
+            f.has_rtg = True
+            f.lightest_rtg = _RTG
+        return f
+
+    def test_adding_rtg_does_not_break_mun_return(self) -> None:
+        profiles = MISSION_PROFILES.get((BodyName.MUN, MissionType.RETURN), [])
+        ok_base, _ = _try_profiles_reason(
+            profiles, self._mun_return_kit(rtg=False), _normal_diff(),
+            MissionType.RETURN, crewed=None, home=BodyName.KERBIN)
+        self.assertTrue(ok_base, "baseline drogue Mun return should be feasible")
+        ok_rtg, blk = _try_profiles_reason(
+            profiles, self._mun_return_kit(rtg=True), _normal_diff(),
+            MissionType.RETURN, crewed=None, home=BodyName.KERBIN)
+        self.assertTrue(
+            ok_rtg,
+            "adding an RTG must not break Mun return (non-monotonic charge): "
+            f"{[str(b) for b in blk]}")
+
+    def test_required_power_source_monotone_under_rtg(self) -> None:
+        """The charged power source's mass must not increase when an RTG is added."""
+        profile = MISSION_PROFILES.get((BodyName.MUN, MissionType.RETURN), [])[0]
+        base = _required_power_source(self._mun_return_kit(rtg=False), profile,
+                                      BodyName.KERBIN)
+        with_rtg = _required_power_source(self._mun_return_kit(rtg=True), profile,
+                                          BodyName.KERBIN)
+        base_mass = base.mass if base else 0.0
+        rtg_mass = with_rtg.mass if with_rtg else 0.0
+        self.assertLessEqual(rtg_mass, base_mass,
+                             "adding an RTG raised the charged power mass")
+
+    def test_mun_return_charges_fixed_solar_not_rtg(self) -> None:
+        """A Mun return needs only fixed solar (the home recovery reentry must not
+        force retractable/RTG); the charge stays fixed solar even when an RTG is
+        owned."""
+        profile = MISSION_PROFILES.get((BodyName.MUN, MissionType.RETURN), [])[0]
+        src = _required_power_source(self._mun_return_kit(rtg=True), profile,
+                                     BodyName.KERBIN)
+        self.assertEqual(src.name, _OX_STAT.name)
+
+    def test_strictest_leg_forces_rtg(self) -> None:
+        """A leg that genuinely needs an RTG (far-from-sun / post-aero body) forces
+        an RTG even when fixed solar covers the home ends — the requirement is the
+        strictest leg, not the latest (home -> far body -> home)."""
+        profiles = MISSION_PROFILES.get((BodyName.LAYTHE, MissionType.LAND), [])
+        self.assertTrue(profiles, "expected a Laythe LAND profile")
+        f = EquipmentFlags()
+        f.has_solar = True
+        f.lightest_solar = _OX_STAT          # fixed solar covers Kerbin home legs
+        f.has_rtg = True
+        f.lightest_rtg = _RTG                 # rtg needed for the Jool/Laythe legs
+        src = _required_power_source(f, profiles[0], BodyName.KERBIN)
+        self.assertEqual(
+            src.name, _RTG.name,
+            "an rtg-required leg must force an RTG, not the lighter fixed solar")
 
 
 if __name__ == "__main__":
