@@ -2286,6 +2286,14 @@ def _assess_one_body(
     for event in ALL_EVENTS:
         if event.name not in body_events:
             continue
+        # Single chokepoint for banned/unachievable missions (curated edge bans
+        # ∪ dv-infeasible).  Routing it through capability means every
+        # reachability consumer — location access rules, contract feasibility,
+        # goal completion — inherits the ban without its own check.  Must be
+        # BEFORE the empty-profiles branch (which means "trivially achievable").
+        if not mission_builder.is_achievable(body.name, event.mission_type):
+            prof.access[event.name] = False
+            continue
         if event.crewed is True and not flags.has_capsule:
             prof.access[event.name] = False
             continue

@@ -611,11 +611,11 @@ def _set_mission_rules(world: KSP1World, player: int) -> None:
     keeps location reachability aligned with the victory rule
     (``_make_goal_spec_rule``), which routes the same way per body/event.
     """
+    from BaseClasses import LocationProgressType
     from .bodies import ALL_BODIES
     from .locations import get_body_events
 
     infeasible = world.model_infeasible_locations
-    proxy_rule = _make_all_parts_rule(player)
 
     # Migrated-type contracts gate their MATCHING event equal-or-after the
     # contract item, so a player who has the contract does one mission for both
@@ -642,13 +642,22 @@ def _set_mission_rules(world: KSP1World, player: int) -> None:
             item = gate_item.get((body.name, event))
             for loc in event_locations(body.name, event):
                 name = str(loc)
-                base_rule = proxy_rule if name in infeasible else cap_rule
+                ap_loc = world.get_location(name)
+                # Unachievable missions (curated edge-ban ∪ dv-infeasible) are
+                # EXCLUDED: AP fill places only filler there (never progression
+                # or useful), so they can't strand items when capability can't
+                # reach them — replacing the old all-parts proxy, which made a
+                # location holding progression circularly unreachable.  The
+                # capability rule still stands as the access rule (honest: the
+                # location IS unreachable; EXCLUDED just keeps progression out).
+                if name in infeasible:
+                    ap_loc.progress_type = LocationProgressType.EXCLUDED
                 if item is None:
-                    world.get_location(name).access_rule = base_rule
+                    ap_loc.access_rule = cap_rule
                 else:
-                    def rule(state: CollectionState, _base=base_rule, _item=item) -> bool:
+                    def rule(state: CollectionState, _base=cap_rule, _item=item) -> bool:
                         return state.has(_item, player) and _base(state)
-                    world.get_location(name).access_rule = rule
+                    ap_loc.access_rule = rule
 
 
 def _apply_home_system_local_exclusions(world: KSP1World) -> None:
@@ -910,10 +919,6 @@ _PRESET_GOALS: dict[int, GoalSpec] = {
     Goal.option_eeloo_return: GoalSpec(
         display_name="Eeloo Return",
         return_bodies=(BodyName.EELOO,),
-    ),
-    Goal.option_eve_return: GoalSpec(
-        display_name="Eve Return",
-        return_bodies=(BodyName.EVE,),
     ),
     Goal.option_flag_every_body: GoalSpec(
         display_name="Flag Every Body",

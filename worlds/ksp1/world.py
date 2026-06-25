@@ -13,7 +13,7 @@ from .rules import GoalSpec, resolve_goal_spec, goal_spec_location_names
 from .capability import CAPABILITY_ITEMS, RocketCapability
 from .data.feasibility import MODEL_INFEASIBLE_LOCATIONS_BY_DIFFICULTY
 from .bodies import (
-    ALL_BODIES, BodyName, MissionBuilder, MissionType, RandomOrbitParams,
+    ALL_BODIES, BodyName, EdgeType, MissionBuilder, MissionType, RandomOrbitParams,
     generate_random_orbit_params, home_relative_science_values,
 )
 from .items import (
@@ -21,24 +21,25 @@ from .items import (
     PROGRESSIVE_RD_NAME, PROGRESSIVE_RD_COUNT,
 )
 from .locations import (
-    ALL_EVENTS, EventName, KSC_BIOMES, KSC_LOCATION_PREFIX,
-    LOCATION_NAME_TO_ID, LocationBuilder, MAX_TECH_SLOTS,
-    THRESHOLD_LOCATION_NAMES, TechTreeLocation, event_locations,
+    ALL_EVENTS, EVENT_BY_NAME, EventName, KSC_BIOMES, KSC_LOCATION_PREFIX,
+    LOCATION_NAME_TO_ID, LocationBuilder, MAX_TECH_SLOTS, MISSION_LOCATIONS,
+    MissionLocation, THRESHOLD_LOCATION_NAMES, TechTreeLocation, event_locations,
     effective_starting_inv_count, effective_tech_slots_per_node,
 )
 
 # Difficulty index → name, matching ``options.Difficulty.value`` order.
 _DIFFICULTY_NAMES: tuple[str, ...] = ("casual", "normal", "expert", "insane")
 
-# Eve surface return / sample-return locations, excluded by default as a
-# deliberate curation choice (tedious to fly) rather than a feasibility verdict.
-# The per-difficulty feasibility table bans these at casual/normal anyway, but
-# the model considers them flyable at expert/insane — so without this explicit
-# set they'd resurface as goals/contracts there.  ``AllowEveOnExpert`` drops it.
-_EVE_CURATED_BAN_LOCATIONS: frozenset[str] = frozenset(
-    str(loc)
-    for event in (EventName.RETURN, EventName.SAMPLE_RETURN)
-    for loc in event_locations(BodyName.EVE, event)
+# Curated edge bans: graph subsections too tedious to fly, banned by POLICY
+# (independent of the dv feasibility verdict).  Expressed as edges, not
+# locations: a mission is banned iff every one of its profiles must traverse a
+# banned edge (``MissionBuilder.missions_using_edges``).  Eve's atmospheric
+# ascent → Eve return + sample-return are banned (you land, then must ascend to
+# come back); Eve flag/landing/orbit, which don't ascend, stay allowed.
+# ``AllowEveOnExpert`` drops the ban.  To curate another body, add its edge here
+# — the missions, locations (EXCLUDED), contracts, and goals all follow.
+_BANNED_EDGES: frozenset[tuple[BodyName, EdgeType]] = frozenset(
+    {(BodyName.EVE, EdgeType.ATMOSPHERIC_ASCENT)}
 )
 from .options import Goal, GoalContractMode, KSP1Options, STARTING_BODY_POOLS, StartingBody
 from .tech_tree import MAX_TIER, NODES_BY_TIER, TECH_NODES, TIER_TO_BAND
@@ -316,14 +317,33 @@ class KSP1World(World):
         # An empty fallback covers homes not yet in the table (defensive).
         # Layered on top: the Eve curated ban (unless AllowEveOnExpert), so Eve
         # surface returns stay out even at difficulties where they're flyable.
+        # Unachievable missions — the SINGLE source of truth, canonical as
+        # ``(body, mission_type)`` tuples — from two sources unified here:
+        #   1. dv-infeasible: the offline per-difficulty table (capability probed
+        #      at maximal kit), parsed from its location names to missions.
+        #   2. curated edge bans: graph-derived from ``_BANNED_EDGES``.
+        # Set on the MissionBuilder so capability (and everything routing through
+        # it) treats them as access=False; ``model_infeasible_locations`` (names)
+        # is derived from it for the name-keyed consumers (location pass, goal
+        # spec, contracts).  The offline generator uses a RAW builder (empty
+        # ``unachievable``) so the table keeps measuring true maximal capability.
         diff_name = _DIFFICULTY_NAMES[self.options.difficulty.value]
-        infeasible = set(
-            MODEL_INFEASIBLE_LOCATIONS_BY_DIFFICULTY.get(diff_name, {}).get(
-                self.mission_builder.home, frozenset())
-        )
+        _table_names = MODEL_INFEASIBLE_LOCATIONS_BY_DIFFICULTY.get(
+            diff_name, {}).get(self.mission_builder.home, frozenset())
+        unachievable: set[tuple[BodyName, MissionType]] = {
+            (ml.body, EVENT_BY_NAME[ml.event].mission_type)
+            for name in _table_names
+            if (ml := MissionLocation.parse(name)) is not None
+        }
         if not self.options.allow_eve_on_expert.value:
-            infeasible |= _EVE_CURATED_BAN_LOCATIONS
-        self.model_infeasible_locations = frozenset(infeasible)
+            unachievable |= self.mission_builder.missions_using_edges(_BANNED_EDGES)
+        self.unachievable_missions = frozenset(unachievable)
+        self.mission_builder.unachievable = self.unachievable_missions
+        # Name-keyed view derived from the canonical tuple set (one source).
+        self.model_infeasible_locations = frozenset(
+            str(ml) for ml in MISSION_LOCATIONS
+            if (ml.body, EVENT_BY_NAME[ml.event].mission_type) in self.unachievable_missions
+        )
         self.goal_spec = resolve_goal_spec(
             self.options, self.mission_builder.home,
             self.model_infeasible_locations,

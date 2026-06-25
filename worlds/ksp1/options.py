@@ -54,7 +54,6 @@ class Goal(Choice):
     standard_returns       -- Return from 11 bodies (excl. Eve, Tylo, Laythe).
     standard_sample_returns -- Crewed sample return from the same 11 bodies.
     complete_tech_tree     -- Purchase all 62 tech tree nodes with science.
-    eve_return             -- Return a vessel (or crew) from Eve (challenge).
     mun_flag               -- Plant a flag on the Mun.
     mun_sample_return      -- Crewed sample return from the Mun.
     jool_moons_return      -- Return from each Jool moon (Laythe, Vall, Tylo,
@@ -74,11 +73,13 @@ class Goal(Choice):
     option_standard_returns = 3
     option_standard_sample_returns = 4
     option_complete_tech_tree = 5
-    option_eve_return = 6
-    option_mun_flag = 7
-    option_mun_sample_return = 8
-    option_jool_moons_return = 9
-    option_random_contracts = 10
+    # eve_return retired: Eve ascent (~9315 m/s) is model-infeasible — the
+    # capability solver can't verify a winnable rocket, so it was never a sound
+    # goal.  Renumbered (this release is not backward compatible).
+    option_mun_flag = 6
+    option_mun_sample_return = 7
+    option_jool_moons_return = 8
+    option_random_contracts = 9
     option_custom = 99
 
     default = option_duna_return

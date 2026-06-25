@@ -279,26 +279,6 @@ class TestMunFlagGoal(KSP1TestBase):
         )
 
 
-class TestEveReturnGoal(KSP1TestBase):
-    """Eve return uses all-parts proxy."""
-    options = {"goal": "eve_return"}
-
-    def test_victory_reachable_with_all_items(self):
-        self.collect_all_but([])
-        victory = self.multiworld.get_location("Victory", self.player)
-        self.assertTrue(
-            victory.can_reach(self.multiworld.state),
-            "Eve Return victory should be reachable with all items",
-        )
-
-    def test_victory_unreachable_with_no_items(self):
-        victory = self.multiworld.get_location("Victory", self.player)
-        self.assertFalse(
-            victory.can_reach(self.multiworld.state),
-            "Eve Return victory should be unreachable with no items",
-        )
-
-
 class TestDunaReturnGoalSlotData(KSP1TestBase):
     """Verify slot_data for a preset goal."""
     options = {"goal": "duna_return"}

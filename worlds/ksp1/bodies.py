@@ -1041,6 +1041,14 @@ class MissionBuilder:
         self._profiles: MissionProfiles = {}
         self._build_profiles()
         self._validate()
+        # Missions the world has declared unachievable: curated edge-bans (e.g.
+        # Eve ascent) ∪ per-home dv-infeasible (offline table).  Empty by default
+        # — the world sets it at generation time (the offline table generator
+        # keeps it empty so it measures RAW maximal capability).  The capability
+        # assessment treats these as access=False, so contracts / goals / location
+        # rules that route through capability inherit the ban without their own
+        # check.  See ``world.py`` (``_BANNED_EDGES`` / ``unachievable_missions``).
+        self.unachievable: frozenset[tuple[BodyName, MissionType]] = frozenset()
 
     # ------------------------------------------------------------------
     # Public lookup API
@@ -1063,6 +1071,37 @@ class MissionBuilder:
 
     def has_profile(self, body: BodyName, mission_type: MissionType) -> bool:
         return (body, mission_type) in self._profiles
+
+    def is_achievable(self, body: BodyName, mission_type: MissionType) -> bool:
+        """False iff ``(body, mission_type)`` is in the world-declared
+        ``unachievable`` set (curated edge-ban ∪ dv-infeasible).  Capability and
+        every reachability consumer route through this so a ban can't be missed.
+        """
+        return (body, mission_type) not in self.unachievable
+
+    def missions_using_edges(
+        self, banned_edges: "frozenset[tuple[BodyName, EdgeType]]"
+    ) -> frozenset[tuple[BodyName, MissionType]]:
+        """Graph-derive the missions banned by an edge set: a ``(body,
+        mission_type)`` is banned iff it HAS profiles and EVERY profile
+        alternative traverses a banned ``(edge.body, edge.edge_type)``.
+
+        This is the curated-ban expansion: ban one edge (e.g. Eve ascent) and
+        every mission with no clean alternative around it is banned — the
+        ``downstream`` closure, computed from the graph rather than hand-listed.
+        A mission with no profiles is NOT banned (empty profile = trivially
+        achievable, e.g. Kerbin launchpad sample return).
+        """
+        if not banned_edges:
+            return frozenset()
+        banned: set[tuple[BodyName, MissionType]] = set()
+        for (body, mt), profiles in self._profiles.items():
+            if profiles and all(
+                any((e.body, e.edge_type) in banned_edges for e in profile)
+                for profile in profiles
+            ):
+                banned.add((body, mt))
+        return frozenset(banned)
 
     def all_keys(self):
         return self._profiles.keys()
