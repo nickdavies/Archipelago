@@ -99,17 +99,20 @@ class TestTanksByDryMass(unittest.TestCase):
         self.lfo = ranks_for_context()[RankAxisKey.LFO_TANK]
 
     def test_oscar_b_low_jumbo_high(self) -> None:
-        """Lightest LFO tanks (Oscar-B, FL-T100) should land at low ranks —
-        admitted in early spheres — and the giant adapters / S4 tanks at the
-        top.  Matches today's progressive LFO tier ordering by mass."""
+        """LFO is a FUNGIBLE axis, deliberately capped at 2 ranks
+        (``_FUNGIBLE_AXIS_CAP``): the lightest tanks (Oscar-B, FL-T100) gate at
+        rank 1 (the early building block) and the giant S3/S4 tanks at the top
+        rank — there is intentionally no deeper ladder (small tanks just stack
+        to any total; the launch-pad mass cap is the real size limiter)."""
+        top = max_rank_for(RankAxisKey.LFO_TANK)  # 2 for fungible axes
         oscar = "miniFuelTank"
         fl_t100 = "fuelTankSmallFlat"
-        self.assertLessEqual(self.lfo[oscar], 2)
-        self.assertLessEqual(self.lfo[fl_t100], 2)
+        self.assertEqual(self.lfo[oscar], 1)
+        self.assertEqual(self.lfo[fl_t100], 1)
         s3_huge = "Size3LargeTank"        # S3-14400, 72t fuel
         s4_huge = "Size4.Tank.04"          # S4-512, 256t fuel
-        self.assertGreaterEqual(self.lfo[s3_huge], 4)
-        self.assertGreaterEqual(self.lfo[s4_huge], 4)
+        self.assertEqual(self.lfo[s3_huge], top)
+        self.assertEqual(self.lfo[s4_huge], top)
 
 
 class TestSolarHeavyLast(unittest.TestCase):
@@ -125,18 +128,22 @@ class TestSolarHeavyLast(unittest.TestCase):
                          "OX-STAT should be the bottom solar rank (cheapest fixed panel)")
 
 
-class TestCapsuleHeaviestLast(unittest.TestCase):
-    def test_mk1_pod_low_mk1_3_high(self) -> None:
-        """Capsules use effective dry mass (mass - drainable propellant);
-        lighter pods admit early, heavier pods admit late."""
+class TestCapsuleLightestBest(unittest.TestCase):
+    def test_lightest_pods_rank_highest(self) -> None:
+        """Capsules score by effective dry mass (mass - drainable propellant),
+        LOWER_BETTER: the lightest pods are the "best" parts and land at the TOP
+        ranks (admitted late, as a reward), while heavy multi-crew pods sit at
+        low ranks (the forced early bootstrap). This is the same
+        lower-dry-mass-is-better pattern shared with tanks, landing legs, and
+        SAS modules."""
         cap = ranks_for_context()[RankAxisKey.CAPSULE]
         buckets = max_rank_for(RankAxisKey.CAPSULE)
-        # Mk1 Command Pod — small, light, 1 crew.
-        self.assertLessEqual(cap["mk1pod.v2"], 2)
-        # Mk1-3 Command Pod — large, 3 crew.
-        self.assertGreaterEqual(cap["mk1-3pod"], buckets - 1)
-        # MEMLander — featherweight 1-crew lander.
-        self.assertEqual(cap["MEMLander"], 1)
+        # MEMLander — featherweight 1-crew lander — the lightest, so top rank.
+        self.assertEqual(cap["MEMLander"], buckets)
+        # Mk1 Command Pod — small, light, 1 crew — near the top.
+        self.assertGreaterEqual(cap["mk1pod.v2"], buckets - 1)
+        # Mk1-3 Command Pod — large, heavy, 3 crew — low rank (early bootstrap).
+        self.assertLessEqual(cap["mk1-3pod"], 2)
 
 
 class TestProbeCoreBySASLevel(unittest.TestCase):

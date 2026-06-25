@@ -218,6 +218,9 @@ class TestSlotDataRoundTrip(unittest.TestCase):
 class TestContractWorldIntegration(KSP1TestBase):
     """Default options (mine weight 1) generate mine contracts; verify the pool,
     the three-gate access rule, and slot_data emission under a real world."""
+    # The contract access rule gates on has_all(_cheap_contract_reps) — a pre_fill
+    # side effect; without the real ladder it's conservatively unreachable.
+    needs_real_pre_fill = True
 
     def test_contracts_generated(self):
         self.assertTrue(self.world.contract_specs,

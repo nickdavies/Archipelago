@@ -39,20 +39,32 @@ def _bumper(loc: str, seed: int = 42, prior: Signature = Signature.empty()):
 
 class TestRankPrePass(unittest.TestCase):
     def test_empty_admits_only_non_ranked_parts(self) -> None:
-        """An empty Signature ceiling rejects every item that has any
-        rank — only non-ranked items pass.  Ion is the lone non-ranked
-        engine (it's out of logic, so it's off the engine axes; see
-        ``_engine_vac``), so it slips through the rank gate here — but
-        capability's ``_filter_engines_for_ion`` strips it at evaluation
-        time, keeping it out of logic in practice."""
+        """An empty Signature ceiling rejects every item that has any rank —
+        only NON-ranked items pass.  Non-ranked parts (the scorer returned None
+        for them on their axis) carry no rank sig, so they slip through at every
+        ceiling.  Today that's: the ion engine (off the engine axes — see
+        ``_engine_vac``; capability's ``_filter_engines_for_ion`` strips it at
+        evaluation time) and structural adapter "tanks" the tank scorers exclude
+        (e.g. adapterMk3-Mk2).  The invariant: nothing RANKED is admitted."""
+        from worlds.ksp1.ranks import ranks_for_context
         flags = _pre_pass_for_ranks(
             Signature.empty(), DEFAULT_CONTEXT,
             start_with_clamps=True, progressive_launch_pad=False,
             launch_pad_caps=None,
         )
+        tank_axes = (RankAxisKey.LFO_TANK, RankAxisKey.LF_TANK,
+                     RankAxisKey.XENON_TANK, RankAxisKey.MONOPROP_TANK)
+        ranks = ranks_for_context(DEFAULT_CONTEXT)
+        ranked_tanks = set().union(*(ranks.get(ax, {}) for ax in tank_axes))
+        admitted_ranked = [t.name for t in flags.available_tanks
+                           if t.name in ranked_tanks]
+        # Only the ion engine is non-ranked on the engine axes.
         self.assertEqual([e.fuel_type for e in flags.available_engines],
                          ["xenon"] * len(flags.available_engines))
-        self.assertEqual(flags.available_tanks, [])
+        # No RANKED tank may be admitted at the empty ceiling (non-ranked
+        # adapters may slip through, like the ion engine).
+        self.assertEqual(admitted_ranked, [],
+                         f"empty ceiling admitted ranked tanks: {admitted_ranked}")
         self.assertEqual(flags.available_srbs, [])
 
     def test_max_ranks_admits_full_part_db(self) -> None:
@@ -93,12 +105,19 @@ class TestRankBumperFeasibility(unittest.TestCase):
         axes = {rq.axis for rq in r.signature.rank_reqs}
         self.assertIn(RankAxisKey.LANDING_LEG, axes)
 
-    def test_duna_landing_picks_heat_shield(self) -> None:
-        r = _bumper("Duna Landing 1")
+    def test_return_requires_heat_shield(self) -> None:
+        """High-speed reentry (a RETURN to home) requires a heat shield —
+        verifies the heat-shield rank axis is wired into the bumper.
+
+        Note Duna *landing* does NOT require one: it has a propulsive profile
+        (thin atmo, propulsive capture + descent) whose minimal kit the bumper
+        prefers over the aero profile, so it gates on engines/tanks, not a heat
+        shield.  Reentry to home is where the heat shield is unavoidable."""
+        r = _bumper("Mun Return 1")
         self.assertIsNotNone(r)
         axes = {rq.axis for rq in r.signature.rank_reqs}
         self.assertIn(RankAxisKey.HEAT_SHIELD, axes,
-                      "Duna landing must require a heat shield")
+                      "a return-to-home reentry must require a heat shield")
 
 
 class TestRankBumperDeterminism(unittest.TestCase):
