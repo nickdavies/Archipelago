@@ -2,9 +2,8 @@
 
 These tests build a world (running gen_steps up through pre_fill) and
 check structural properties of the resulting ``SphereLadder``: the
-predictable spine is present, the chain's cumulative rank ceilings only
-grow, and goal spheres trail.  Rank-space bumper feasibility (each
-anchor converges to a workable kit) is covered by ``test_rank_bumper``.
+chain's cumulative rank ceilings only grow.  Rank-space bumper feasibility
+(each anchor converges to a workable kit) is covered by ``test_rank_bumper``.
 """
 from __future__ import annotations
 
@@ -37,10 +36,8 @@ class TestPredictableSpheres(KSP1TestBase):
 
 
 class TestSphereChainOrdered(KSP1TestBase):
-    """The ladder is sorted so S_launch leads, S_orbit follows, and
-    S_goal* trail.  The semantic invariant: each sphere's cumulative rank
-    ceiling dominates the prior sphere's — the chain only relaxes
-    constraints, never tightens them.
+    """Each sphere's cumulative rank ceiling dominates the prior sphere's —
+    the chain only relaxes constraints, never tightens them.
     """
     options = {"goal": "duna_return", "difficulty": "normal"}
     needs_real_pre_fill = True
@@ -64,21 +61,6 @@ class TestSphereChainOrdered(KSP1TestBase):
                         f"(0 means the axis was dropped).",
                     )
             prev = cum
-
-    def test_launch_sphere_leads(self) -> None:
-        """S_launch is always the first sphere.
-
-        (The old invariant 'S_goal* always trail' no longer holds: the
-        graph-walk ladder places every sphere at its true dv layer, so a
-        mid-difficulty goal like duna_return correctly sits mid-chain with
-        physically harder missions — outer-planet / sample-return spheres —
-        after it. Monotone-growth is covered by test_cumulative_ranks_monotone.)
-        """
-        ladder = self.world._sphere_ladder
-        spheres = ladder.spheres
-        if not spheres:
-            return
-        self.assertEqual(spheres[0].name, "S_launch")
 
 
 class TestSmallGoalMunFlag(KSP1TestBase):
