@@ -54,12 +54,15 @@ class Goal(Choice):
     standard_returns       -- Return from 11 bodies (excl. Eve, Tylo, Laythe).
     standard_sample_returns -- Crewed sample return from the same 11 bodies.
     complete_tech_tree     -- Purchase all 62 tech tree nodes with science.
-    eve_return             -- Return a vessel (or crew) from Eve (challenge).
     mun_flag               -- Plant a flag on the Mun.
     mun_sample_return      -- Crewed sample return from the Mun.
     jool_moons_return      -- Return from each Jool moon (Laythe, Vall, Tylo,
                               Bop, Pol).  Home is filtered out, so a Laythe
                               start gives a tight 4-target Jool-system goal.
+    random_contracts       -- No destination goal: complete X of your available
+                              contracts, then plant a flag at home to win. Only
+                              valid with goal_contract_mode = count or
+                              progressive_unlock.
     custom                 -- Build a goal from the body-list options below.
     """
     display_name = "Goal"
@@ -70,10 +73,13 @@ class Goal(Choice):
     option_standard_returns = 3
     option_standard_sample_returns = 4
     option_complete_tech_tree = 5
-    option_eve_return = 6
-    option_mun_flag = 7
-    option_mun_sample_return = 8
-    option_jool_moons_return = 9
+    # eve_return retired: Eve ascent (~9315 m/s) is model-infeasible — the
+    # capability solver can't verify a winnable rocket, so it was never a sound
+    # goal.  Renumbered (this release is not backward compatible).
+    option_mun_flag = 6
+    option_mun_sample_return = 7
+    option_jool_moons_return = 8
+    option_random_contracts = 9
     option_custom = 99
 
     default = option_duna_return
@@ -179,14 +185,12 @@ class Difficulty(Choice):
     casual  -- Generous margins; 20 starts, 4 tech slots/node, 50% science.
     normal  -- Default margins;  15 starts, 4 tech slots/node, 70% science.
     expert  -- Tight margins;    10 starts, 3 tech slots/node, 85% science.
-    insane  -- Exact delta-V;     5 starts, 2 tech slots/node, 100% science.
     """
     display_name = "Difficulty"
 
     option_casual = 0
     option_normal = 1
     option_expert = 2
-    option_insane = 3
 
     default = option_normal
 
@@ -204,7 +208,7 @@ class TechSlotsPerNode(NamedRange):
     raise Starting Inventory Count to give the fill algorithm more room.
     Short goals (mun_flag, duna_return) are unaffected.
 
-    auto -- Derived from Difficulty (casual/normal=4, expert=3, insane=2).
+    auto -- Derived from Difficulty (casual/normal=4, expert=3).
     1..4 -- Explicit override.
     """
     display_name = "Tech Slots Per Node"
@@ -231,7 +235,7 @@ class StartingInventoryCount(NamedRange):
     raise Tech Slots Per Node to give the fill algorithm more room.
     Short goals (mun_flag, duna_return) are unaffected.
 
-    auto  -- Derived from Difficulty (20/15/10/5).
+    auto  -- Derived from Difficulty (20/15/10).
     0..20 -- Explicit override.
     """
     display_name = "Starting Inventory Count"
@@ -253,7 +257,7 @@ class ScienceSafetyFactor(NamedRange):
 
     Does NOT affect fill success — only tech tree gating.  Safe to tune.
 
-    auto    -- Derived from Difficulty (casual=50, normal=70, expert=85, insane=100).
+    auto    -- Derived from Difficulty (casual=50, normal=70, expert=85).
     0..100  -- Explicit percentage override.
     """
     display_name = "Science Safety Factor"
@@ -281,11 +285,11 @@ class KSP1ExcludeLocations(ExcludeLocations):
     Locations that are excluded from containing progression items by default.
 
     Empty by default: missions the dv model can't verify from the active
-    home (Eve returns from any home, plus Tylo/Laythe returns from a
-    Kerbin home, etc.) are gated via the "all progression items
-    collected" proxy rule (see ``MODEL_INFEASIBLE_LOCATIONS`` in
-    ``data/feasibility.py``).  That mechanism already prevents fill
-    failures without taking the locations out of the progression pool.
+    home at the seed's difficulty (e.g. Eve surface returns) are gated via
+    the "all progression items collected" proxy rule (see
+    ``MODEL_INFEASIBLE_LOCATIONS_BY_DIFFICULTY`` in ``data/feasibility.py``).
+    That mechanism already prevents fill failures without taking the
+    locations out of the progression pool.
 
     The previous Kerbin-shaped hardcoded default (Eve / Tylo / Laythe
     returns) made non-Kerbin home configs trip over their own goal — a
@@ -366,6 +370,19 @@ class ProgressiveLaunchPad(Toggle):
     default = 1
 
 
+class BuildingsInLogic(Toggle):
+    """
+    Gate curated KSP facilities (VAB/SPH, Tracking Station, Astronaut Complex)
+    as in-logic progression.
+
+    When off (default), all facilities are maxed — today's behavior, no facility
+    gates anything. When on, curated buildings become gated capability effects
+    (wired by the buildings-in-logic work; no on behavior yet).
+    """
+    display_name = "Buildings In Logic"
+    default = 0
+
+
 class ContractTypeWeights(OptionDict):
     """
     Relative weight of each contract mission type in the non-goal contract pool.
@@ -382,19 +399,60 @@ class ContractTypeWeights(OptionDict):
     default = {str(ct): 1 for ct in NON_GOAL_TYPES}
 
 
-class NonGoalContractCount(NamedRange):
+class ContractsAvailable(NamedRange):
     """
-    Total number of non-goal contracts placed into the seed.
+    Total number of ordinary (non-goal) contracts placed into the seed (Y).
+    Independent of the goal; goal contracts are separate.
 
     auto  -- Derived from Difficulty (12/10/8/6).
     0..40 -- Explicit override. Capped at the number of ever-achievable
              (enabled-type, body) combinations available in the seed.
     """
-    display_name = "Non-Goal Contract Count"
+    display_name = "Contracts Available"
     range_start = 0
     range_end = 40
     default = -1
     special_range_names = {"auto": -1}
+
+
+class ContractsRequiredForGoal(NamedRange):
+    """
+    Completed non-goal contracts (X) required before the goal contract item(s)
+    are awarded. Read only by goal_contract_mode = count / progressive_unlock;
+    ignored by findable / starting.
+
+    auto  -- ceil(0.8 * contracts actually generated).
+    0..40 -- Explicit. Must not exceed Contracts Available; clamped down to the
+             number of contracts actually generated this seed.
+    """
+    display_name = "Contracts Required For Goal"
+    range_start = 0
+    range_end = 40
+    default = -1
+    special_range_names = {"auto": -1}
+
+
+class GoalContractMode(Choice):
+    """
+    How the goal contract item(s) reach the player.
+
+    findable           -- (default) goal contract item is in the multiworld
+                          item pool, found like any other item (today's behavior).
+    starting           -- goal contract item(s) are precollected as EXTRA
+                          starting items; you are limited only by physics, parts,
+                          and buildings.
+    count              -- complete X of your Y available contracts; on hitting X
+                          all goal contract items are awarded at once.
+    progressive_unlock -- complete contracts to unlock the goal contract items
+                          one at a time (easiest goal mission first), the last
+                          at X.
+    """
+    display_name = "Goal Contract Mode"
+    option_findable = 0
+    option_starting = 1
+    option_count = 2
+    option_progressive_unlock = 3
+    default = option_findable
 
 
 class AllowMissionsHarderThanGoal(Toggle):
@@ -414,6 +472,56 @@ class AllowMissionsHarderThanGoal(Toggle):
     default = 0
 
 
+class AllowEveOnExpert(Toggle):
+    """
+    Allow Eve surface return / sample-return missions as goals and contracts on
+    difficulties where the model considers them flyable (expert).
+
+    Off (default): Eve return and sample-return are excluded everywhere as a
+    deliberate curation choice — they're physically achievable on the harder
+    difficulties but tedious to fly, so they never become a goal target or a
+    contract. On: they become available wherever the per-difficulty feasibility
+    model says they're achievable (in practice, expert). At casual/normal
+    Eve is infeasible regardless, so this option only bites on expert.
+    """
+    display_name = "Allow Eve On Expert"
+    default = 0
+
+
+class ContractRepeats(NamedRange):
+    """
+    Extra reward slots each non-goal contract yields beyond the base 2, as
+    buffer-fill across spheres. 0 = today's behavior. (Client offering a
+    contract multiple times is a fast-follow.)
+    """
+    display_name = "Contract Repeats"
+    range_start = 0
+    range_end = 8
+    default = 0
+
+
+class HomeContractFloor(Range):
+    """
+    Minimum number of home-body contracts guaranteed in the seed, regardless of
+    the ordinary contract selection.
+
+    Home-body contracts are the earliest-reachable locations in a run, so this
+    floor guarantees the item fill always has enough early slots to assemble a
+    deep goal's kit. Without it, far-home / broad-goal seeds can rarely run out
+    of reachable early slots and strand a progression item (an unsolvable seed).
+    The floor draws from whatever home-safe contract types are available — so it
+    stays generic as new contract types are added — and picks them randomly each
+    seed, so it adds slack without making starts samey.
+
+    0 = off (no guarantee). Counts toward the contract pool; does not raise the
+    per-contract reward-slot count.
+    """
+    display_name = "Home Contract Floor"
+    range_start = 0
+    range_end = 20
+    default = 5
+
+
 @dataclass
 class KSP1Options(PerGameCommonOptions):
     goal: Goal
@@ -428,9 +536,15 @@ class KSP1Options(PerGameCommonOptions):
     exclude_locations: KSP1ExcludeLocations
     exclude_late_tech_tree: ExcludeLateTechTree
     progressive_launch_pad: ProgressiveLaunchPad
+    buildings_in_logic: BuildingsInLogic
     contract_type_weights: ContractTypeWeights
-    non_goal_contract_count: NonGoalContractCount
+    contracts_available: ContractsAvailable
+    contracts_required_for_goal: ContractsRequiredForGoal
+    goal_contract_mode: GoalContractMode
     allow_missions_harder_than_goal: AllowMissionsHarderThanGoal
+    allow_eve_on_expert: AllowEveOnExpert
+    contract_repeats: ContractRepeats
+    home_contract_floor: HomeContractFloor
     flag_bodies: FlagBodies
     return_bodies: ReturnBodies
     sample_return_bodies: SampleReturnBodies

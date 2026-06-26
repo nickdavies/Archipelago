@@ -119,7 +119,7 @@ won't contain items required for progression.
 ## Key options
 
 - **Difficulty** — Controls delta-V margins, starting location count, and tech tree density. Casual is forgiving;
-  Insane requires exact delta-V piloting. **Only Normal has been thoroughly tested so far.**
+  Expert assumes near-optimal delta-V piloting. **Only Normal has been thoroughly tested so far.**
 - **Item Pacing** — Prevents powerful items from appearing too early. Gentle (default) keeps tier-2 items out of
   starting slots; Strict extends this restriction further.
 - **Exclude Late Tech Tree** — Prevents progression items from being placed in tier-8 tech nodes, avoiding a

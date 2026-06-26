@@ -217,6 +217,7 @@ class TestScienceBudgetDrift(unittest.TestCase):
                 home_body,
                 has_thermometer=True, has_barometer=True,
                 has_capsule=True, can_land_crewed=home_body.can_land,
+                can_land_uncrewed=home_body.can_land,
                 home=home, psi_tier=3,
             )
             self.assertGreater(yield_, 0.0)

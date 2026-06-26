@@ -32,7 +32,6 @@ from .parts import (
     Parachute, LandingLeg, Decoupler, MiscEquipment,
     MultiMount, MULTI_MOUNT_TABLE,
     PART_TO_CONTRACT_CATEGORIES,
-    PROGRESSIVE_PART_TIERS, PROGRESSIVE_PART_NAMES, PROGRESSIVE_PART_COUNTS,
     usable_fuel_mass,
 )
 from .capability_reasons import BlockingInfo, BlockingReason
@@ -71,13 +70,20 @@ CAPABILITY_ITEMS: frozenset[str] = frozenset(
         )
         for p in parts
     )
-) | frozenset(PROGRESSIVE_PART_COUNTS.keys()) | {
-    # Non-part progressives that still affect capability. Without these
-    # the L2 fingerprint collapses different counts onto the same cache
-    # key — e.g. Pad=0 vs Pad=3 both fingerprint identically, so the
-    # first computed mass cap (100t base) is returned for everyone.
+) | {
+    # Counted progressives that still affect capability — counts must
+    # appear in the L2 fingerprint to distinguish e.g. Pad=0 vs Pad=3.
     "Progressive Launch Pad",
     "Progressive R&D",
+    "Progressive Science Instrument",
+    # Curated-building progressives (buildings_in_logic).  When the option is
+    # OFF these items are never in the pool, so their count is always 0 and
+    # they never enter the fingerprint — a no-op.  When ON, their counts must
+    # be tracked so the cache distinguishes e.g. VAB=0 vs VAB=2.  (Tracking
+    # Station is included for completeness even though its effect is deferred.)
+    "Progressive VAB",
+    "Progressive Tracking Station",
+    "Progressive Astronaut Complex",
 }
 
 # Terminal velocity threshold for parachute adequacy (m/s)
@@ -86,6 +92,20 @@ _MAX_SAFE_LANDING_SPEED: float = 6.0
 # Ship cross-section assumed for parachute calc: π*(1.25/2)² ≈ 1.23 m²
 # (conservative: assume a 1.25m diameter capsule/probe)
 _SHIP_CROSS_SECTION: float = math.pi * (1.25 / 2) ** 2
+
+# How many of each chute kind the physics check may assume on one craft.
+# Radial chutes surface-mount around the body in symmetry groups; a group's
+# effective drag area scales SUPER-linearly (group^1.5, a KSP quirk — see
+# ``_radial_drag_multiplier``), so a realistic count lands a heavy craft.  The
+# cap is 7 neat groups of ``_RADIAL_SYMMETRY_GROUP`` (7×8=56) — a generous
+# attach-geometry bound.  An inline (stack) chute occupies the craft's top node:
+# a returning craft reliably has exactly ONE, and the exceptions (multi-stack-top
+# clusters, radial-booster nose mounts, a strut-cube adapter) are geometry we
+# deliberately don't model and can't detect — so the conservative assumption
+# (Golden Rule) is one inline chute, scaling linearly.
+_RADIAL_SYMMETRY_GROUP: int = 8   # KSP's max radial symmetry; bigger = more rings
+_MAX_RADIAL_CHUTES: int = 56      # 7 groups of 8
+_MAX_INLINE_CHUTES: int = 1
 
 # Precomputed once: the part name + mass that provides FUEL_LINE (the
 # asparagus crossfeed enabler).  The real parallel-stage builder needs the
@@ -104,6 +124,16 @@ del _nm, _parts
 # Minimum jetpack TWR for ladder-free sample return
 _MIN_EVA_JETPACK_TWR: float = 1.05
 
+# Mission types that inherently require a Kerbal EVA (walk out of the craft):
+# planting a flag and taking a surface sample both need a kerbal outside.  This
+# drives the curated Astronaut-Complex ``can_eva`` gate (buildings_in_logic).
+# EVA-in-orbit shares the ORBIT mission_type, so it can't be inferred from the
+# type alone — its caller passes ``requires_eva=True`` explicitly.
+MISSION_TYPES_REQUIRING_EVA: frozenset[MissionType] = frozenset({
+    MissionType.FLAG_PLANT,
+    MissionType.SAMPLE_RETURN,
+})
+
 
 # Sounding rocket parameters
 _SOUNDING_MIN_TWR: float = 1.1   # minimum sea-level TWR to count as a viable rocket
@@ -111,15 +141,11 @@ _SOUNDING_MIN_TWR: float = 1.1   # minimum sea-level TWR to count as a viable ro
 
 
 # ---------------------------------------------------------------------------
-# Parts that nominally provide the ``capsule`` flag but cannot serve as
-# the terminal payload for real missions (no thermal protection, no
-# pressurized cabin, can't survive interplanetary or atmospheric reentry).
-# Excluded from ``lightest_capsule`` selection in _pre_pass.
+# Capsule eligibility is data-driven: ``parts.py:_capsule_spec_from_cfg``
+# returns ``None`` for srf-only crew positions (chair-style), and that
+# strips the ``capsule`` provides flag at MiscEquipment construction.
+# No hand-curated exclusion list needed here.
 # ---------------------------------------------------------------------------
-
-_CAPSULE_EXCLUSIONS: frozenset[str] = frozenset({
-    "seatExternalCmd",   # external chair
-})
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +176,6 @@ class EquipmentFlags:
     has_wheel: bool = False
     has_throttleable_engine: bool = False
     has_aero_control_surface: bool = False
-    _has_inline_chute: bool = False     # internal: cap inline chutes at 1
 
     # Progressive-item binary gates (set by _pre_pass from progressive counts)
     has_launch_engine: bool = False     # Progressive Launch Engine ≥1
@@ -166,8 +191,6 @@ class EquipmentFlags:
     # Part references — None means not available.
     # Each stores the selected part so both .mass and .name are accessible.
     best_heat_shield: Optional[HeatShield] = None
-    total_chute_drag_area: float = 0.0             # sum of non-drogue drag areas
-    parachute_count: int = 0
     lightest_capsule: Optional[MiscEquipment] = None
     lightest_probe: Optional[MiscEquipment] = None
 
@@ -208,17 +231,30 @@ class EquipmentFlags:
     # launch mass exceeds this are infeasible.
     launch_pad_mass_cap: float = float("inf")
 
+    # --- Curated-building effects (buildings_in_logic) ---------------------
+    # Each defaults to the MAXED value so that when buildings are NOT in logic
+    # ``_evaluate_profile`` behaves exactly as it did before this feature:
+    #   * ``can_eva=True``  -> no EVA mission is ever gated on the building
+    #   * ``vessel_mass_limit=inf`` -> no mission is gated on total vessel mass
+    # When buildings_in_logic is on, ``_pre_pass`` overrides these from the
+    # collected building-progressive counts via the effects translation layer.
+    can_eva: bool = True
+    vessel_mass_limit: float = float("inf")
+
     # Available part lists (populated by pre-pass)
     available_engines: list[Engine] = field(default_factory=list)
     available_srbs: list[SolidBooster] = field(default_factory=list)
     available_tanks: list[FuelTank] = field(default_factory=list)
     available_heat_shields: list[HeatShield] = field(default_factory=list)
     available_parachutes: list[Parachute] = field(default_factory=list)
-    # Asymptote-best non-drogue parachute (lowest mass-per-drag-area)
-    # picked once at ``_pre_pass`` time so ``_required_chute_count``
-    # doesn't ``min(...)`` per call.  ``None`` when the player has no
-    # non-drogue chutes.
+    # Best (lowest mass-per-drag-area) chute, picked once at ``_pre_pass`` time
+    # so the per-call landing solver never ``min(...)``s.  ``best_chute`` is the
+    # overall best (display/kit); ``best_radial_chute`` / ``best_inline_chute``
+    # are the best of each kind for ``_landing_chute_solution`` (radial chutes
+    # scale, inline are capped).  ``None`` when no chute of that kind is held.
     best_chute: Optional[Parachute] = None
+    best_radial_chute: Optional[Parachute] = None
+    best_inline_chute: Optional[Parachute] = None
     available_landing_legs: list[LandingLeg] = field(default_factory=list)
 
     # Multi-mount adapters/plates available to the player
@@ -311,27 +347,31 @@ class RocketCapability:
 def _capability_fingerprint(state: CollectionState, player: int) -> frozenset[tuple[str, int]]:
     """Return the set of (name, count) for capability-affecting items.
 
-    For progressive items, the count matters (unlocks different tiers).
-    For individual items, count is capped at 1 (presence/absence).
+    Phase 2: counts matter for the surviving counted progressives
+    (Pad / R&D / PSI); every other item is a binary presence/absence.
     """
     from .items import (
         PROGRESSIVE_LAUNCH_PAD_NAME, PROGRESSIVE_LAUNCH_PAD_COUNT,
         PROGRESSIVE_RD_NAME, PROGRESSIVE_RD_COUNT,
+        PROGRESSIVE_SCIENCE_INSTRUMENT_NAME, PROGRESSIVE_PSI_COUNT,
+        PROGRESSIVE_VAB_NAME, PROGRESSIVE_VAB_COUNT,
+        PROGRESSIVE_TRACKING_STATION_NAME, PROGRESSIVE_TRACKING_STATION_COUNT,
+        PROGRESSIVE_ASTRONAUT_COMPLEX_NAME, PROGRESSIVE_ASTRONAUT_COMPLEX_COUNT,
     )
-    _NON_PART_PROGRESSIVE_COUNTS = {
+    _COUNTED = {
         PROGRESSIVE_LAUNCH_PAD_NAME: PROGRESSIVE_LAUNCH_PAD_COUNT,
         PROGRESSIVE_RD_NAME: PROGRESSIVE_RD_COUNT,
+        PROGRESSIVE_SCIENCE_INSTRUMENT_NAME: PROGRESSIVE_PSI_COUNT,
+        PROGRESSIVE_VAB_NAME: PROGRESSIVE_VAB_COUNT,
+        PROGRESSIVE_TRACKING_STATION_NAME: PROGRESSIVE_TRACKING_STATION_COUNT,
+        PROGRESSIVE_ASTRONAUT_COMPLEX_NAME: PROGRESSIVE_ASTRONAUT_COMPLEX_COUNT,
     }
     result: list[tuple[str, int]] = []
     for name in CAPABILITY_ITEMS:
         c = state.count(name, player)
         if c > 0:
-            if name in PROGRESSIVE_PART_COUNTS:
-                result.append((name, min(c, PROGRESSIVE_PART_COUNTS[name])))
-            elif name in _NON_PART_PROGRESSIVE_COUNTS:
-                result.append((name, min(c, _NON_PART_PROGRESSIVE_COUNTS[name])))
-            else:
-                result.append((name, 1))
+            cap = _COUNTED.get(name)
+            result.append((name, min(c, cap) if cap is not None else 1))
     return frozenset(result)
 
 
@@ -391,89 +431,104 @@ def explain_body_unreachable(state: CollectionState, player: int, body_name: str
 
 def _pre_pass(item_count_fn: Callable[[str], int],
               start_with_clamps: bool,
-              rep_names: frozenset[str] = frozenset(),
               progressive_launch_pad: bool = False,
-              launch_pad_caps: tuple[float, ...] | None = None) -> EquipmentFlags:
+              launch_pad_caps: tuple[float, ...] | None = None,
+              buildings_in_logic: bool = False,
+              home: BodyName | None = None) -> EquipmentFlags:
     """
-    Iterate every item the player has collected and build EquipmentFlags.
+    Iterate every PART_DB item the player has and build EquipmentFlags.
 
-    Progressive items are expanded first: for each progressive item the player
-    has N copies of, unlock the parts from tiers 1..N.  Then individual items
-    (non-absorbed) are processed as before.
+    Phase 2: parts are individual AP items — there is no progressive-tier
+    expansion.  ``item_count_fn(item_name)`` returns 1 if the player has
+    received that part and 0 otherwise.  The ``Progressive Launch Pad``
+    counted progressive is the only non-binary count consulted (drives
+    ``launch_pad_mass_cap``).
+
+    ``buildings_in_logic`` (default off) gates curated facility effects on the
+    collected building-progressive counts.  When OFF (the default), the
+    building effect fields keep their maxed ``EquipmentFlags`` defaults
+    (``can_eva=True``, ``vessel_mass_limit=inf``), so evaluation is identical
+    to before this feature existed — a strict no-op.  ``home`` only matters
+    when the option is on (none of the curated building effects are home-scaled
+    today, but the translation layer signature requires it).
     """
     flags = EquipmentFlags()
 
-    # Grant launch clamps if the option is enabled
     if start_with_clamps:
         flags.has_launch_clamp = True
 
-    # Build the set of part names unlocked by progressive items
-    progressive_unlocked: set[str] = set()
-    for prog_name, tiers in PROGRESSIVE_PART_TIERS.items():
-        count = item_count_fn(prog_name)
-        if count <= 0:
-            continue
-        max_tier = max(tiers.keys())
-        for t in range(1, min(count, max_tier) + 1):
-            progressive_unlocked.update(tiers[t])
-
-    # Set progressive binary gate flags
-    flags.has_launch_engine = item_count_fn("Progressive Launch Engine") > 0
-    flags.has_vacuum_engine = item_count_fn("Progressive Vacuum Engine") > 0
-    flags.has_lfo_fuel = item_count_fn("Progressive LFO Tank") > 0
-    flags.has_srb_fuel = item_count_fn("Progressive SRB") > 0
-
-    # Launch-pad mass cap: indexed by collected count of
-    # "Progressive Launch Pad". 0 copies → starting cap; each additional
-    # copy raises the cap. Only active when the option is enabled
-    # (otherwise the default inf applies).
+    # Launch-pad mass cap: index by collected count of "Progressive Launch Pad".
+    # Routed through the effects translation layer (the pad cap is the only
+    # capability effect consumed today); ``pad_mass_limit_from_caps`` produces
+    # the identical value the old inline derivation did.
     if progressive_launch_pad:
         from .items import PROGRESSIVE_LAUNCH_PAD_NAME, PROGRESSIVE_LAUNCH_PAD_CAPS_KERBIN
+        from .effects import pad_mass_limit_from_caps
         caps = launch_pad_caps or PROGRESSIVE_LAUNCH_PAD_CAPS_KERBIN
         pad_count = item_count_fn(PROGRESSIVE_LAUNCH_PAD_NAME)
-        idx = min(pad_count, len(caps) - 1)
-        flags.launch_pad_mass_cap = caps[idx]
+        flags.launch_pad_mass_cap = pad_mass_limit_from_caps(caps, pad_count)
 
-    # Process parts: both progressive-unlocked and individual non-absorbed items
+    # Curated-building effects (buildings_in_logic). OFF -> the maxed defaults
+    # stand untouched (strict no-op). ON -> override from the collected counts
+    # of each building progressive, routed through the effects layer.
+    if buildings_in_logic:
+        from .items import (
+            PROGRESSIVE_VAB_NAME, PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
+        )
+        from .effects import Building, Effect, building_effects
+        eva_home = home or BodyName.KERBIN
+        vab_level = item_count_fn(PROGRESSIVE_VAB_NAME)
+        ac_level = item_count_fn(PROGRESSIVE_ASTRONAUT_COMPLEX_NAME)
+        vab_eff = building_effects(Building.VAB, vab_level, home=eva_home)
+        ac_eff = building_effects(Building.ASTRONAUT_COMPLEX, ac_level, home=eva_home)
+        flags.vessel_mass_limit = vab_eff[Effect.VESSEL_MASS_LIMIT]
+        flags.can_eva = ac_eff[Effect.CAN_EVA]
+        # Tracking Station / DSN_POWER is a DEFERRED seam (relay_tier already
+        # gates comms); the item exists for pacing but is not read here.
+
+    # Process every PART_DB item.
     for item_name, parts in PART_DB.items():
-        if item_name in PROGRESSIVE_PART_NAMES:
-            # Absorbed part: only available if unlocked by progressive tier
-            if item_name not in progressive_unlocked:
-                continue
-            if item_name in rep_names:
-                count = 1  # rep: auto-granted by the progressive tier unlock
-            else:
-                # Non-rep: only available if the individual item was received
-                count = item_count_fn(item_name)
-                if count == 0:
-                    continue
-        else:
-            count = item_count_fn(item_name)
-            if count == 0:
-                continue
-
+        count = item_count_fn(item_name)
+        if count == 0:
+            continue
         for part in parts:
             _add_part_to_flags(flags, part, count)
+
+    # Binary gate flags are derived from concrete parts (no more progressive
+    # binary checks).
+    flags.has_launch_engine = any(e.atm_thrust > 0 for e in flags.available_engines)
+    flags.has_vacuum_engine = any(e.vac_thrust > 0 for e in flags.available_engines)
+    flags.has_lfo_fuel = any(t.fuel_type == "lfo" for t in flags.available_tanks)
+    flags.has_srb_fuel = bool(flags.available_srbs)
 
     # Docking ports don't affect staging_tier — they can't be used for
     # practical stage separation (can't attach below engines, no automatic
     # staging). They set has_docking_port for future orbital assembly support.
 
     # Parallel staging mode (determined per-stage in _evaluate_profile):
-    #   staging_tier >= 2 + fuel lines → asparagus (50% dry mass factor)
-    #   staging_tier >= 2, no fuel lines → onion (75% dry mass factor)
+    #   staging_tier >= 2 + fuel lines → asparagus (real radial crossfeed build)
+    #   staging_tier >= 2, no fuel lines → onion (radial ring drop)
     #   staging_tier < 2 → none (no parallel staging)
 
     # Derive relay tier from available relays
     flags.relay_tier = _compute_relay_tier(flags)
 
-    # Pick the asymptote-best non-drogue parachute once.  Lowest
-    # mass-per-drag-area wins (see ``_required_chute_count`` doc).
-    # ``None`` if the player has none — landing checks handle that.
-    non_drogue = [p for p in flags.available_parachutes if not p.is_drogue]
-    if non_drogue:
-        flags.best_chute = min(non_drogue,
-                                key=lambda p: p.mass / max(p.drag_area, 1e-3))
+    # Pick the asymptote-best parachute once.  Lowest mass-per-drag-area
+    # wins (see ``_required_chute_count`` doc).  Drogues are included —
+    # the physics-accurate landing check (``_required_chute_count``)
+    # already handles "drag insufficient even with all chutes" by
+    # returning -1; the boolean ``has_parachutes`` was a redundant
+    # shortcut that surprised the bumper into picking a non-drogue rep
+    # at higher ranks when a drogue-only kit could land with enough copies.
+    if flags.available_parachutes:
+        _chute_key = lambda p: p.mass / max(p.drag_area, 1e-3)
+        flags.best_chute = min(flags.available_parachutes, key=_chute_key)
+        # Best of each kind, picked once here so the per-call landing solver is
+        # just two early-exit loops (no list-comp / min in the hot path).
+        _radial = [c for c in flags.available_parachutes if c.is_radial]
+        _inline = [c for c in flags.available_parachutes if not c.is_radial]
+        flags.best_radial_chute = min(_radial, key=_chute_key) if _radial else None
+        flags.best_inline_chute = min(_inline, key=_chute_key) if _inline else None
 
     # (lightest_probe=None when no probe found — gate blocks before use)
 
@@ -569,18 +624,15 @@ def _add_part_to_flags(flags: EquipmentFlags, part, count: int) -> None:
             flags.best_heat_shield = part
 
     elif isinstance(part, Parachute):
-        if not part.is_drogue:  # drogue chutes excluded from all logic
-            if part.is_radial:
-                flags.has_parachutes = True
-                flags.total_chute_drag_area += part.drag_area * count
-                flags.parachute_count += count
-                flags.available_parachutes.extend([part] * count)
-            elif not flags._has_inline_chute:
-                flags._has_inline_chute = True
-                flags.has_parachutes = True
-                flags.total_chute_drag_area += part.drag_area
-                flags.parachute_count += 1
-                flags.available_parachutes.append(part)
+        # Record every collected chute; the landing check (``_required_chute_count``
+        # → ``_landing_chute_solution``) picks the best part per kind and applies
+        # the radial-vs-inline attach-point caps.  The old code kept only the
+        # FIRST inline chute in PART_DB order (``parachuteDrogue``), which
+        # shadowed a strictly-better inline chute (``parachuteSingle``) — owning a
+        # drogue then made thin-atmo (Duna) landings spuriously fail with a usable
+        # chute in hand.
+        flags.has_parachutes = True
+        flags.available_parachutes.extend([part] * count)
 
     elif isinstance(part, LandingLeg):
         if part.tier > flags.landing_leg_tier:
@@ -637,12 +689,6 @@ def _apply_misc(flags: EquipmentFlags, part: MiscEquipment, count: int) -> None:
             if flags.lightest_probe is None or part.mass < flags.lightest_probe.mass:
                 flags.lightest_probe = part
         elif flag == CF.CAPSULE:
-            # The external command seat (an exposed kerbal chair) provides
-            # the ``capsule`` flag but cannot survive interplanetary travel
-            # or atmospheric reentry — exclude it from terminal-payload
-            # consideration.
-            if part.name in _CAPSULE_EXCLUSIONS:
-                continue
             flags.has_capsule = True
             if flags.lightest_capsule is None or part.mass < flags.lightest_capsule.mass:
                 flags.lightest_capsule = part
@@ -720,22 +766,277 @@ def _apply_misc(flags: EquipmentFlags, part: MiscEquipment, count: int) -> None:
 # ---------------------------------------------------------------------------
 
 @dataclass
+class KitUsed:
+    """Complete set of parts the capability evaluator depended on to
+    reach feasibility.  Populated only on ``ProfileResult.feasible``.
+
+    Distinguishes three categories of part:
+
+    1. **Explicit picks**: the engines, tanks, and per-stage equipment
+       the optimizer selected (recorded per stage).
+    2. **Implicit picks**: the ``lightest_*`` / ``best_*`` parts
+       capability pulled in for terminal payload (capsule, probe),
+       reentry (heat shield, parachute), landing (legs), support
+       (relay antennas, power source), and attitude control
+       (reaction wheel, RCS thruster + tank).
+    3. **Presence-only representatives**: parts whose mere availability
+       enabled a boolean / tier flag the optimizer relied on but didn't
+       directly consume — e.g. a radial decoupler enables the radial
+       asparagus/onion build, a
+       ``fuelLine`` enables ``has_fuel_lines`` (asparagus mode), an SRB
+       enables ``has_srb_fuel`` even when the optimal stage was
+       liquid-only.  These flags affect the search bounds; without
+       them in the rep set, the re-evaluation can't reproduce the same
+       optimal kit.
+
+    ``all_parts()`` returns the union — feed that into
+    ``_pre_pass_for_ranks(..., reps_only=...)`` and the resulting flags
+    object will be functionally equivalent to the one this kit was
+    extracted from, so the feasibility claim is reproducible.
+    """
+    # 1. Explicit
+    stage_engines: list[str] = field(default_factory=list)
+    stage_tanks: list[str] = field(default_factory=list)
+    stage_equipment: list[str] = field(default_factory=list)
+    # 2. Implicit
+    capsule: Optional[str] = None
+    probe_core: Optional[str] = None
+    parachute: Optional[str] = None
+    heat_shields: list[str] = field(default_factory=list)
+    landing_legs: list[str] = field(default_factory=list)
+    relays: list[str] = field(default_factory=list)
+    rtg: Optional[str] = None
+    solar: Optional[str] = None
+    solar_retractable: Optional[str] = None
+    monoprop_tank: Optional[str] = None
+    rcs_thruster: Optional[str] = None
+    reaction_wheel: Optional[str] = None
+    aero_control: Optional[str] = None
+    ladder: Optional[str] = None
+    # 3. Presence-only representatives
+    stack_decoupler: Optional[str] = None
+    radial_decoupler: Optional[str] = None
+    fuel_line: Optional[str] = None
+    srb: Optional[str] = None
+    # Large-power enabler for ION (xenon) engines — see
+    # _filter_engines_for_ion.  Without it in the rep set, a re-eval
+    # filters the ion engine out (NO_VIABLE_STAGE).
+    ion_power: Optional[str] = None
+
+    # Per-role viable substitutes for the chosen pick.  Keyed by the
+    # KitUsed field name (e.g. "capsule", "radial_decoupler"); values are
+    # the set of part names that satisfy the same physical role at a
+    # similar quality level.  Derived from the rank model (same axis-rank)
+    # for ranked parts; from capability-flag membership for presence-only
+    # roles.  Bumper / chain code can ``rng.choice`` among the union of
+    # ``{chosen} ∪ alternates`` to vary per-seed picks while staying
+    # within feasibility (verification is the caller's responsibility —
+    # rank-equivalence is necessary but not sufficient for cascading
+    # mission profiles).
+    alternates: dict[str, frozenset[str]] = field(default_factory=dict)
+
+    # Per-stage propulsion alternates: list aligned with stage_engines /
+    # stage_tanks.  Each element is the set of viable substitutes for
+    # that stage's pick.
+    stage_engine_alternates: list[frozenset[str]] = field(default_factory=list)
+    stage_tank_alternates: list[frozenset[str]] = field(default_factory=list)
+
+    def all_parts(self) -> frozenset[str]:
+        out: set[str] = set()
+        out.update(self.stage_engines)
+        out.update(self.stage_tanks)
+        out.update(self.stage_equipment)
+        out.update(self.landing_legs)
+        out.update(self.heat_shields)
+        out.update(self.relays)
+        for v in (self.capsule, self.probe_core, self.parachute,
+                  self.rtg, self.solar,
+                  self.solar_retractable, self.monoprop_tank,
+                  self.rcs_thruster, self.reaction_wheel,
+                  self.aero_control, self.ladder,
+                  self.stack_decoupler, self.radial_decoupler,
+                  self.fuel_line, self.srb, self.ion_power):
+            if v:
+                out.add(v)
+        return frozenset(out)
+
+
+@dataclass
 class ProfileResult:
     feasible: bool
     launch_mass: float = 0.0          # total wet mass at kerbin_surface
     stage_results: list[StageResult] = field(default_factory=list)
     edge_groups: list[list[MissionEdge]] = field(default_factory=list)
+    # Index into ``edge_groups`` for each entry of ``stage_results`` (same
+    # order).  Usually 1:1, but a multi-stage ascent group expands into K
+    # stages that all map back to the single ascent group — so the formatter
+    # must use this rather than zipping ``stage_results``/``edge_groups`` by
+    # position (which silently misaligns every stage above the ascent).
+    stage_group_indices: list[int] = field(default_factory=list)
     # Structured blocking info; ``failure_reasons`` is the legacy string
     # view derived from ``blocking``. Producers populate ``blocking``;
     # downstream consumers can read either.
     blocking: list[BlockingInfo] = field(default_factory=list)
     # Command module + support equipment for the terminal stage: [(count, part_id), ...]
     terminal_parts: list[tuple[int, str]] = field(default_factory=list)
+    # Complete structured kit (populated on feasible results, see KitUsed).
+    kit_used: Optional[KitUsed] = None
+    # Best-effort partial rocket captured when the result is INFEASIBLE:
+    # the stages that did build (terminal -> as far up the ascent as the
+    # optimizer got) before the binding stage failed.  Lets the bumper /
+    # analysis layer examine the near-miss architecture (e.g. a heavy
+    # terminal stage driving a mass cascade) instead of only seeing the
+    # single failing-stage diagnostic.  Empty on feasible results.
+    partial_stages: list[StageResult] = field(default_factory=list)
 
     @property
     def failure_reasons(self) -> list[str]:
         """Back-compat string view of ``blocking``."""
         return [str(b) for b in self.blocking]
+
+
+# Precomputed once: the part name that provides FUEL_LINE (asparagus
+# enabler).  Scanning PART_DB inside _build_kit_used per call was a hot-
+# loop regression (called for every feasible eval).
+_FUEL_LINE_PART: Optional[str] = None
+_FUEL_LINE_MASS: float = 0.0
+for _nm, _parts in PART_DB.items():
+    _fl = next((_p for _p in _parts if isinstance(_p, MiscEquipment)
+                and CapabilityFlag.FUEL_LINE in _p.provides), None)
+    if _fl is not None:
+        _FUEL_LINE_PART = _nm
+        _FUEL_LINE_MASS = _fl.mass
+        break
+del _nm, _parts
+
+
+def _lightest_part_providing(flag: "CapabilityFlag") -> Optional[str]:
+    """Lightest PART_DB item that provides *flag*, by part mass.  Used to
+    capture presence-only enablers (large battery / solar array) in the
+    kit so a re-eval can reproduce the flag state."""
+    best: Optional[tuple[str, float]] = None
+    for nm, parts in PART_DB.items():
+        for p in parts:
+            if flag in getattr(p, "provides", ()):  # type: ignore[arg-type]
+                if best is None or p.mass < best[1]:
+                    best = (nm, p.mass)
+                break
+    return best[0] if best else None
+
+
+# Precomputed once: lightest parts that enable ION (xenon) engines via the
+# large-power gate in ``_filter_engines_for_ion``.  Battery is preferred —
+# it carries no rank axis, so adding it to a kit doesn't inflate any rank
+# ceiling (the large solar panel sits at SOLAR rank 3).
+_BATTERY_LARGE_PART: Optional[str] = _lightest_part_providing(CapabilityFlag.BATTERY_LARGE)
+_SOLAR_LARGE_PART: Optional[str] = _lightest_part_providing(CapabilityFlag.SOLAR_ARRAY_LARGE)
+
+
+def _build_kit_used(flags: EquipmentFlags,
+                    stage_results: list[StageResult],
+                    terminal_parts: list[tuple[int, str]]) -> KitUsed:
+    """Assemble the full structured kit the optimizer relied on.
+
+    See ``KitUsed`` for the categorization.  Called only at the two
+    sites that consume a kit — the per-mission ceiling computation
+    (sphere_ladder loop 1) and the capability-guided rescue — NOT on
+    every feasible eval.  Building it for the bumper's ~60k feasibility
+    probes per seed was pure overhead.
+    """
+    kit = KitUsed()
+    # 1. Explicit per-stage parts
+    for sr in stage_results:
+        if sr.engine_name and sr.engine_name != "none":
+            kit.stage_engines.append(sr.engine_name)
+        for _, tname in sr.tank_manifest:
+            if tname and tname != "none":
+                kit.stage_tanks.append(tname)
+        for _, p in sr.equipment:
+            if p:
+                kit.stage_equipment.append(p)
+    # 2. Implicit lightest_/best_ picks
+    if flags.lightest_capsule:
+        kit.capsule = flags.lightest_capsule.name
+    if flags.lightest_probe:
+        kit.probe_core = flags.lightest_probe.name
+    if flags.best_chute:
+        kit.parachute = flags.best_chute.name
+    # Heat shields: capture the exact shield each stage charged (lightest
+    # covering that stage's engine) — NOT the global biggest — so a re-eval
+    # has the same shield options and reproduces the optimizer's choice.
+    _seen_hs: set[str] = set()
+    for sr in stage_results:
+        if sr.heat_shield_name and sr.heat_shield_name not in _seen_hs:
+            _seen_hs.add(sr.heat_shield_name)
+            kit.heat_shields.append(sr.heat_shield_name)
+    if flags.lightest_rtg:
+        kit.rtg = flags.lightest_rtg.name
+    if flags.lightest_solar:
+        kit.solar = flags.lightest_solar.name
+    if flags.lightest_solar_retractable:
+        kit.solar_retractable = flags.lightest_solar_retractable.name
+    if flags.lightest_monoprop_tank:
+        kit.monoprop_tank = flags.lightest_monoprop_tank.name
+    if flags.lightest_rcs_thruster:
+        kit.rcs_thruster = flags.lightest_rcs_thruster.name
+    if flags.lightest_reaction_wheel:
+        kit.reaction_wheel = flags.lightest_reaction_wheel.name
+    if flags.lightest_aero_control:
+        kit.aero_control = flags.lightest_aero_control.name
+    if flags.lightest_ladder:
+        kit.ladder = flags.lightest_ladder.name
+    # Relays: keep every tier the mission needed (terminal_parts captured
+    # only the lightest, but we want each tier represented so the chain
+    # can attribute them correctly on the relay rank axis).
+    for tier, part in flags.lightest_relay.items():
+        if part:
+            kit.relays.append(part.name)
+    # All admitted landing legs — the optimizer picks per body, and the
+    # bumper's rank axis stretches across the tier ladder, so include
+    # every option capability had.
+    for leg in flags.available_landing_legs:
+        kit.landing_legs.append(leg.name)
+    # 3. Presence-only representatives.  Pick the lightest matching part
+    # for each True flag that affects stage optimization — without these
+    # in the rep set, re-eval can't reproduce the same flag-state and
+    # the optimizer's choices fall apart (e.g. dropping the radial decoupler
+    # + fuel line would disable the asparagus build the optimizer chose).
+    if flags.staging_tier >= 1:
+        stack = [d for d in flags.available_decouplers if d.kind == "stack"]
+        if stack:
+            kit.stack_decoupler = min(stack, key=lambda d: d.mass).name
+    if flags.staging_tier >= 2:
+        radial = [d for d in flags.available_decouplers if d.kind == "radial"]
+        if radial:
+            kit.radial_decoupler = min(radial, key=lambda d: d.mass).name
+    if flags.has_fuel_lines and _FUEL_LINE_PART is not None:
+        kit.fuel_line = _FUEL_LINE_PART
+    if flags.has_srb_fuel and flags.available_srbs:
+        kit.srb = min(flags.available_srbs,
+                      key=lambda s: s.dry_mass + s.fuel_mass).name
+    # ION power gate: if the optimizer used a xenon engine in any stage,
+    # the kit must carry the large-power enabler it relied on, else a
+    # re-eval filters the ion engine out (NO_VIABLE_STAGE).
+    _xenon_names = {e.name for e in flags.available_engines
+                    if e.fuel_type == "xenon"}
+    if _xenon_names and any(se in _xenon_names for se in kit.stage_engines):
+        if flags.has_battery_large and _BATTERY_LARGE_PART is not None:
+            kit.ion_power = _BATTERY_LARGE_PART
+        elif flags.has_solar_array_large and _SOLAR_LARGE_PART is not None:
+            kit.ion_power = _SOLAR_LARGE_PART
+    return kit
+
+
+def build_kit_for_result(flags: EquipmentFlags,
+                         result: "ProfileResult") -> Optional[KitUsed]:
+    """Build the structured KitUsed from a feasible ProfileResult + the
+    flags it was evaluated against.  Returns ``None`` if the result is
+    infeasible.  This is the explicit entry point for the two consumers
+    (per-mission ceiling, rescue) now that ``_evaluate_profile`` no
+    longer builds the kit eagerly."""
+    if not result.feasible:
+        return None
+    return _build_kit_used(flags, result.stage_results, result.terminal_parts)
 
 
 def _has_attitude_control(flags: EquipmentFlags) -> bool:
@@ -899,6 +1200,7 @@ def _evaluate_profile(
     home: BodyName,
     extra_payload_parts: tuple[MiscEquipment, ...] = (),
     run_parallel: bool = True,
+    requires_eva: bool = False,
 ) -> ProfileResult:
     """
     Run the two-pass evaluation on a single mission profile alternative.
@@ -960,6 +1262,14 @@ def _evaluate_profile(
     # Ladder
     if needs_ladder and not flags.has_ladder:
         blocking.append(BlockingInfo(reason=BlockingReason.NO_LADDER))
+
+    # EVA (Astronaut Complex, buildings_in_logic).  ``flags.can_eva`` defaults
+    # True, so when buildings aren't in logic this never fires.  Home-surface
+    # EVA (empty profile = Kerbal walks off the pad: Kerbin flag/sample) is
+    # allowed at AC level 0 in stock KSP, so we only gate EVA missions that
+    # require travel (a non-empty profile).
+    if requires_eva and profile and not flags.can_eva:
+        blocking.append(BlockingInfo(reason=BlockingReason.CANNOT_EVA))
 
     # Heat shield
     if has_aero_edge and not flags.has_heat_shield:
@@ -1135,6 +1445,10 @@ def _evaluate_profile(
                 global_attitude_force_gimbal = True
 
     stage_results_list: list[StageResult] = []
+    # Edge-group index for each appended stage (parallel to
+    # ``stage_results_list``).  A multi-stage ascent appends K stages for one
+    # group, so this is the only reliable stage→group map for the formatter.
+    stage_group_list: list[int] = []
 
     # ``reversed(groups)`` iterates terminal → ascent; track the matching
     # flight-order index so we can hook stage-specific behaviour.
@@ -1193,6 +1507,13 @@ def _evaluate_profile(
             equip_mass += leg_mass
             if leg_id:
                 stage_equipment.append((_LANDING_LEG_COUNT, leg_id))
+        # Heat-shield options the optimizer may charge (per-engine lightest
+        # covering shield).  Empty when this stage needs no shield.
+        heat_shields_arg: tuple[tuple[float, float, str], ...] = ()
+        if needs_hs and flags.available_heat_shields:
+            heat_shields_arg = tuple(sorted(
+                (hs.size_class, hs.mass, hs.name) for hs in flags.available_heat_shields
+            ))
 
         # Heat-shield options the optimizer may charge (per-engine lightest
         # covering shield).  Empty when this stage needs no shield.
@@ -1301,6 +1622,7 @@ def _evaluate_profile(
                 equipment=stage_equipment,
                 heat_shield_name=passive_shield[2] if passive_shield else None,
             ))
+            stage_group_list.append(flight_idx)
             payload = passive_mass
             continue
 
@@ -1360,6 +1682,8 @@ def _evaluate_profile(
             for e in group
         )
         if is_ascent_group:
+            ms_diag_out: list = []
+            ms_partial_out: list = []
             multistage = find_optimal_multistage_ascent(
                 required_dv=req_dv,
                 payload_mass=stage_payload,
@@ -1398,11 +1722,17 @@ def _evaluate_profile(
                 run_parallel=run_parallel,
             )
             if multistage is None:
+                stage_diag = ms_diag_out[0] if ms_diag_out else None
+                # Whole near-miss rocket: stages already built downstream
+                # (terminal -> this group) + the partial ascent that got
+                # furthest before the binding stage failed.
+                partial = list(stage_results_list) + ms_partial_out
                 return ProfileResult(False, launch_mass=payload, blocking=[BlockingInfo(
                     reason=BlockingReason.NO_VIABLE_STAGE,
                     body=body.name,
                     dv_needed=req_dv,
-                )])
+                    stage_diag=stage_diag,
+                )], partial_stages=partial)
             # Bottom stage carries the group-level equipment (aero surfaces,
             # ladder, etc.) for the multi-stage ascent.
             multistage[0].equipment = stage_equipment + multistage[0].equipment
@@ -1411,6 +1741,7 @@ def _evaluate_profile(
             # reversal at the ProfileResult assembly.
             for sr in reversed(multistage):
                 stage_results_list.append(sr)
+                stage_group_list.append(flight_idx)
             # The bottom stage's wet mass is the launch mass (running total
             # for the outer loop's next-back-up iteration).
             payload = multistage[0].stage_mass_wet
@@ -1431,7 +1762,7 @@ def _evaluate_profile(
                 body=body.name,
                 dv_needed=req_dv,
                 stage_diag=stage_diag,
-            )])
+            )], partial_stages=list(stage_results_list))
 
         # Chutes for aero-landing edges in mixed groups
         if aero_land_edges:
@@ -1447,8 +1778,12 @@ def _evaluate_profile(
         if any(e.needs_ladder for e in group) and flags.lightest_ladder:
             stage_equipment.append((1, flags.lightest_ladder.name))
 
-        result.equipment = stage_equipment
+        # Prepend group equipment; KEEP what the optimizer already attached
+        # (a parallel build's radial decouplers + fuel lines), else they're
+        # lost from both the displayed build and the kit/gating.
+        result.equipment = stage_equipment + result.equipment
         stage_results_list.append(result)
+        stage_group_list.append(flight_idx)
         # The stage's wet mass becomes the payload for the next stage back
         payload = result.stage_mass_wet
 
@@ -1483,12 +1818,30 @@ def _evaluate_profile(
                 mass_cap=flags.launch_pad_mass_cap,
             )],
         )
+    # VAB/SPH buildable-mass cap (buildings_in_logic).  ``vessel_mass_limit``
+    # defaults to inf, so when buildings aren't in logic this never fires.  The
+    # total launch (vessel) mass is the relevant quantity — same metric KSP's
+    # VAB cap applies to.
+    if payload > flags.vessel_mass_limit:
+        return ProfileResult(
+            feasible=False,
+            launch_mass=payload,
+            blocking=[BlockingInfo(
+                reason=BlockingReason.VESSEL_MASS_EXCEEDED,
+                mass_actual=payload,
+                mass_cap=flags.vessel_mass_limit,
+            )],
+        )
+    reversed_stages = list(reversed(stage_results_list))
     return ProfileResult(
         feasible=True,
         launch_mass=payload,
-        stage_results=list(reversed(stage_results_list)),
+        stage_results=reversed_stages,
         edge_groups=groups,
+        stage_group_indices=list(reversed(stage_group_list)),
         terminal_parts=terminal_parts,
+        # kit_used is NOT built here — it's expensive and only two call
+        # sites consume it.  They call ``build_kit_for_result`` explicitly.
     )
 
 
@@ -1596,37 +1949,82 @@ def _group_edges(profile: list[MissionEdge], staging_tier: int) -> list[list[Mis
     return groups
 
 
+def _required_power_source(
+    flags: EquipmentFlags, profile: list[MissionEdge], home: BodyName,
+) -> Optional[MiscEquipment]:
+    """Lightest power source adequate for the strictest per-leg power requirement
+    of ``profile``, or ``None`` when no leg needs power.
+
+    The per-leg ``after_aero`` walk (fixed solar is destroyed by a non-recovery
+    aero edge; the home parachute recovery is exempt because no leg flies after
+    it) is the SAME determination the forward power gate
+    (``_check_power_for_body`` via ``body_aero_destroyed``) makes — so the source
+    whose mass is charged is exactly the one the feasibility verdict required.
+    The gate runs first and blocks the profile when no adequate source exists,
+    so an adequate source is guaranteed here whenever a requirement is present.
+
+    Returning the *lightest* adequate source makes the charge MONOTONE in the
+    kit: owning extra equipment (e.g. an RTG on top of fixed solar) can only
+    lower the chosen mass, never raise it.  The previous code charged ``rtg``
+    whenever ``needs_retractable`` was set and one was owned, so acquiring an RTG
+    inflated the terminal payload and could push it past the parachute limit —
+    a strictly larger kit losing a mission (the bug-092 non-monotonicity).
+    """
+    home_surface = f"{home.value.lower()}_surface"
+    post_aero = False
+    needs_rtg = needs_retractable = needs_solar = False
+    for edge in profile:
+        # Mirror the forward gate: a heat-shield edge that is NOT the home
+        # parachute recovery destroys fixed solar for every later leg.
+        if edge.needs_heat_shield and not (
+                edge.edge_type == EdgeType.ATMO_LANDING_AERO
+                and edge.destination == home_surface):
+            post_aero = True
+        body = BODY_BY_NAME.get(edge.body)
+        if body is None:
+            continue
+        req = body.power_requirement
+        if req == "rtg":
+            needs_rtg = True
+        elif req in ("solar", "solar_marginal"):
+            if post_aero:
+                needs_retractable = True
+            else:
+                needs_solar = True
+    # Strictest first: rtg-only ⊂ retractable-or-rtg ⊂ any-solar-or-rtg.
+    if needs_rtg:
+        return flags.lightest_rtg
+    if needs_retractable:
+        cands = [c for c in (flags.lightest_solar_retractable, flags.lightest_rtg)
+                 if c is not None]
+        return min(cands, key=lambda p: p.mass) if cands else None
+    if needs_solar:
+        cands = [c for c in (flags.lightest_solar, flags.lightest_rtg)
+                 if c is not None]
+        return min(cands, key=lambda p: p.mass) if cands else None
+    return None
+
+
 def _support_equipment_mass(
     flags: EquipmentFlags, profile: list[MissionEdge],
     home: BodyName,
 ) -> tuple[float, list[tuple[int, str]]]:
     """
-    Return (mass, parts) for required support equipment (antenna, power)
-    based on the most demanding body in the mission profile.
+    Return (mass, parts) for required support equipment (antenna, power).
     Each part entry is (count, part_id).
+
+    Power is the lightest source adequate for the strictest per-leg requirement
+    (:func:`_required_power_source`) — the SAME requirement the forward power
+    gate enforces, charged as the lightest adequate part so the charge can't
+    exceed what a smaller kit pays (monotone) and can't diverge from the
+    feasibility verdict.  Relay is the lightest antenna meeting the strictest
+    tier across all edges.
     """
     mass = 0.0
     parts: list[tuple[int, str]] = []
 
-    # Find the most demanding relay tier and power requirement across all edges
-    max_relay = 0
-    power_req = "none"
-    needs_retractable = False
-    for edge in profile:
-        body = BODY_BY_NAME.get(edge.body)
-        if body is None:
-            continue
-        if edge.relay_tier > max_relay:
-            max_relay = edge.relay_tier
-        # Power: rtg > solar_marginal > solar > none
-        prio = {"none": 0, "solar": 1, "solar_marginal": 2, "rtg": 3}
-        if prio.get(body.power_requirement, 0) > prio.get(power_req, 0):
-            power_req = body.power_requirement
-        # If any edge involves aerobraking, we need retractable solar
-        if edge.needs_heat_shield:
-            needs_retractable = True
-
-    # Relay: find lightest antenna meeting the required tier
+    # Relay: lightest antenna meeting the strictest tier across all edges.
+    max_relay = max((edge.relay_tier for edge in profile), default=0)
     if max_relay > 0:
         best_relay: Optional[MiscEquipment] = None
         for tier in range(max_relay, 4):
@@ -1637,23 +2035,11 @@ def _support_equipment_mass(
             mass += best_relay.mass
             parts.append((1, best_relay.name))
 
-    # Power: find lightest power source meeting requirement
-    if power_req == "rtg":
-        if flags.lightest_rtg:
-            mass += flags.lightest_rtg.mass
-            parts.append((1, flags.lightest_rtg.name))
-    elif power_req in ("solar", "solar_marginal"):
-        if needs_retractable:
-            if flags.lightest_solar_retractable:
-                mass += flags.lightest_solar_retractable.mass
-                parts.append((1, flags.lightest_solar_retractable.name))
-            elif flags.lightest_rtg:
-                mass += flags.lightest_rtg.mass
-                parts.append((1, flags.lightest_rtg.name))
-        else:
-            if flags.lightest_solar:
-                mass += flags.lightest_solar.mass
-                parts.append((1, flags.lightest_solar.name))
+    # Power: lightest source adequate for the strictest per-leg requirement.
+    src = _required_power_source(flags, profile, home)
+    if src is not None:
+        mass += src.mass
+        parts.append((1, src.name))
 
     return mass, parts
 
@@ -1709,54 +2095,84 @@ def _required_chute_count(
     flags: EquipmentFlags,
     diff: DifficultyProfile,
 ) -> int:
-    """Return the number of parachutes (of ``flags.best_chute``) needed
-    to achieve terminal velocity ≤ ``_MAX_SAFE_LANDING_SPEED``.
+    """Number of parachutes needed to land ``landing_mass`` at terminal
+    velocity ≤ ``_MAX_SAFE_LANDING_SPEED``, or ``-1`` if no available chute set
+    can.  0 on vacuum bodies (no chutes needed).
 
-    ``flags.best_chute`` is precomputed in ``_pre_pass`` to be the
-    asymptote-best non-drogue chute (lowest mass-per-drag-area).  Two
-    chutes with identical drag but different masses
-    (``parachuteLarge``=0.3t vs ``parachuteRadial``=0.1t, both 500 m²)
-    give very different terminal-velocity asymptotes: the heavier
-    chute carries too much of its own weight and stalls above 6 m/s
-    on Duna no matter how many you stack, so the lighter one is the
-    only chute that can ever beat the safety threshold there.
+    Delegates to :func:`_landing_chute_solution`, which tries the best radial
+    chute (drag area ∝ n^1.5, symmetric placement — scales heavily, capped at
+    ``_MAX_RADIAL_CHUTES``) and the best inline chute (drag ∝ n, capped at
+    ``_MAX_INLINE_CHUTES`` = 1 stack node), and takes whichever lands the craft
+    in the fewest chutes.  A thin-atmo landing (e.g. Duna) is therefore
+    radial-driven: one inline chute can't slow a heavy craft, but a realistic
+    number of symmetric radial chutes can.
 
-    Workaround for the structural limitation that aero landings are
-    modelled as parachute-only OR engine-only — the real fix is a
-    mixed-strategy landing edge.  See
-    ``bugs/084-no-mixed-parachute-and-engine-landing.md``.
+    Aero landings are modelled as parachute-only here; the propulsive
+    alternative (``ATMO_LANDING_PROPULSIVE``) is a separate profile scheme.
+    See ``bugs/084-no-mixed-parachute-and-engine-landing.md``.
+    """
+    return _landing_chute_solution(landing_mass, body, flags, diff)[0]
 
-    Uses pessimistic mass estimate (landing_mass + all chutes) to
-    avoid under-counting (golden rule).  Returns ``-1`` if no count
-    of the chosen chute beats the threshold.
+
+def _radial_drag_multiplier(n: int) -> float:
+    """Effective drag-area multiplier (in single-chute units) for ``n`` radial
+    chutes.  KSP scales a radial chute group placed IN SYMMETRY super-linearly
+    (``group^1.5`` — symmetric chutes are more efficient than independent ones),
+    but symmetry tops out at ``_RADIAL_SYMMETRY_GROUP``; past that you add more
+    rings, which stack linearly.  Closed form (no search): every full ring of
+    ``g`` contributes ``g^1.5``, plus one partial ring of the remainder.
+
+    This super-linear scaling is a non-obvious KSP engine quirk: the terminal
+    velocity of a craft under ``n`` symmetric radial chutes is
+    ``v = sqrt(m·B / n^α)`` with ``α = 1.5`` for radial-in-symmetry (``α = 1``
+    for stack chutes or radial chutes placed independently).  Without it the
+    model over-estimates radial chutes ~4×, spuriously banning real missions.
+    Derivation + measured per-chute constants:
+    https://forum.kerbalspaceprogram.com/topic/156287-boring-maths-on-parachutes-in-12/
+    """
+    g = _RADIAL_SYMMETRY_GROUP
+    full, rem = divmod(n, g)
+    return full * (g ** 1.5) + rem ** 1.5
+
+
+def _landing_chute_solution(
+    landing_mass: float, body: Body, flags: EquipmentFlags,
+    diff: DifficultyProfile,
+) -> tuple[int, Optional[Parachute]]:
+    """Return ``(count, chute)`` for the cheapest chute set that lands
+    ``landing_mass`` at a safe speed, or ``(-1, None)`` if none can; ``(0, None)``
+    on vacuum bodies.
+
+    Radial chutes scale super-linearly (``_radial_drag_multiplier``, symmetric
+    groups) up to ``_MAX_RADIAL_CHUTES``; inline (stack-node) chutes add linearly
+    and are limited to ``_MAX_INLINE_CHUTES`` attach points.  The best part of
+    each kind is precomputed in ``_pre_pass`` (``best_radial_chute`` /
+    ``best_inline_chute``) so this hot-path solver only runs the two early-exit
+    loops; the kind that lands the craft in the fewest chutes wins.  Pessimistic:
+    the chutes' own mass is added to the landing mass (golden rule).
     """
     if not body.has_atmosphere or body.atm_density_kg_m3 <= 0:
-        return 0  # vacuum body — no chutes needed
+        return 0, None  # vacuum body — no chutes needed
 
-    # Pessimistic upper bound: add mass of all available chutes
-    if not flags.available_parachutes:
-        return -1
-
-    chute = flags.best_chute
-    if chute is None:
-        return -1
-    # The AP item represents the parachute *type* being unlocked, not a single
-    # physical part.  Once unlocked, the player can attach as many as needed.
-    # Use a generous per-mission budget (50) so the physics check can succeed.
-    max_chutes = flags.parachute_count * 50
-
-    for n in range(1, max_chutes + 1):
-        total_mass = landing_mass + chute.mass * n
-        drag_area = chute.drag_area * n
-        v_term = terminal_velocity(
-            total_mass, body.surface_gravity,
-            body.atm_density_kg_m3,
-            diff.ship_cd, _SHIP_CROSS_SECTION, drag_area,
-        )
-        if v_term <= _MAX_SAFE_LANDING_SPEED:
-            return n
-
-    return -1  # even all chutes aren't enough
+    best_n, best_chute = -1, None
+    for chute, cap, is_radial in (
+        (flags.best_radial_chute, _MAX_RADIAL_CHUTES, True),
+        (flags.best_inline_chute, _MAX_INLINE_CHUTES, False),
+    ):
+        if chute is None:
+            continue
+        for n in range(1, cap + 1):
+            total_mass = landing_mass + chute.mass * n
+            drag_area = chute.drag_area * (_radial_drag_multiplier(n) if is_radial else n)
+            v_term = terminal_velocity(
+                total_mass, body.surface_gravity, body.atm_density_kg_m3,
+                diff.ship_cd, _SHIP_CROSS_SECTION, drag_area,
+            )
+            if v_term <= _MAX_SAFE_LANDING_SPEED:
+                if best_n < 0 or n < best_n:
+                    best_n, best_chute = n, chute
+                break
+    return best_n, best_chute
 
 
 def _best_chute_for_body(
@@ -1764,11 +2180,10 @@ def _best_chute_for_body(
     diff: DifficultyProfile,
 ) -> tuple[int, str]:
     """Return (count, part_id) for the chute used in aero landing, or (0, "")."""
-    chute = flags.best_chute
-    if chute is None:
+    count, chute = _landing_chute_solution(landing_mass, body, flags, diff)
+    if count <= 0 or chute is None:
         return 0, ""
-    count = _required_chute_count(landing_mass, body, flags, diff)
-    return (max(1, count), chute.name) if count != 0 else (0, "")
+    return max(1, count), chute.name
 
 
 # ---------------------------------------------------------------------------
@@ -1904,6 +2319,14 @@ def _assess_one_body(
     for event in ALL_EVENTS:
         if event.name not in body_events:
             continue
+        # Single chokepoint for banned/unachievable missions (curated edge bans
+        # ∪ dv-infeasible).  Routing it through capability means every
+        # reachability consumer — location access rules, contract feasibility,
+        # goal completion — inherits the ban without its own check.  Must be
+        # BEFORE the empty-profiles branch (which means "trivially achievable").
+        if not mission_builder.is_achievable(body.name, event.mission_type):
+            prof.access[event.name] = False
+            continue
         if event.crewed is True and not flags.has_capsule:
             prof.access[event.name] = False
             continue
@@ -1922,6 +2345,7 @@ def _assess_one_body(
         ok, sub_blocking = _try_profiles_reason(
             profiles, flags, diff, event.mission_type,
             crewed=event.crewed, home=mission_builder.home,
+            requires_eva=event.requires_eva,
         )
         prof.access[event.name] = ok
         if not ok and not prof.blocking:
@@ -1980,6 +2404,7 @@ def _try_profiles(
     crewed: bool | None,
     home: BodyName,
     extra_payload_parts: tuple[MiscEquipment, ...] = (),
+    requires_eva: bool = False,
 ) -> bool:
     """Return True if any profile alternative is feasible.
 
@@ -1998,7 +2423,8 @@ def _try_profiles(
                 result = _evaluate_profile(profile, flags, diff, mission_type,
                                            is_crewed=is_crewed, home=home,
                                            extra_payload_parts=extra_payload_parts,
-                                           run_parallel=run_par)
+                                           run_parallel=run_par,
+                                           requires_eva=requires_eva)
                 if result.feasible:
                     return True
     return False
@@ -2012,6 +2438,7 @@ def _try_profiles_reason(
     crewed: bool | None,
     home: BodyName,
     extra_payload_parts: tuple[MiscEquipment, ...] = (),
+    requires_eva: bool = False,
 ) -> tuple[bool, list[BlockingInfo]]:
     """
     Like _try_profiles but also returns deduplicated blocking entries
@@ -2035,7 +2462,8 @@ def _try_profiles_reason(
                 result = _evaluate_profile(profile, flags, diff, mission_type,
                                            is_crewed=is_crewed, home=home,
                                            extra_payload_parts=extra_payload_parts,
-                                           run_parallel=run_par)
+                                           run_parallel=run_par,
+                                           requires_eva=requires_eva)
                 if result.feasible:
                     return True, []
                 for b in result.blocking:
@@ -2056,6 +2484,8 @@ def evaluate_mission_detailed(
     threshold_km: float | None = None,
     extra_payload_parts: tuple[MiscEquipment, ...] = (),
     mission_transform: Optional[Callable[[list], list]] = None,
+    requires_eva: bool | None = None,
+    run_parallel: bool = True,
 ) -> ProfileResult:
     """
     Evaluate a specific mission and return the winning ProfileResult
@@ -2063,6 +2493,13 @@ def evaluate_mission_detailed(
     ProfileResult if no profile alternative succeeds.
 
     crewed: True = crewed only, False = unmanned only, None = try both.
+
+    ``requires_eva`` overrides the EVA requirement (buildings_in_logic gate).
+    ``None`` (the default) derives it from ``mission_type`` via
+    ``MISSION_TYPES_REQUIRING_EVA`` — FLAG_PLANT/SAMPLE_RETURN always need EVA.
+    EVA-in-orbit shares the ORBIT type, so its caller passes ``True`` here.
+    When ``flags.can_eva`` is True (the default / option off) this has no
+    effect.
 
     For ``mission_type="sounding"``, evaluates sounding rocket altitude
     against ``threshold_km``.  Other Kerbin-specific types (first_launch,
@@ -2182,6 +2619,18 @@ def evaluate_mission_detailed(
     if mission_transform is not None:
         profiles = [mission_transform(p) for p in profiles]
 
+    # EVA requirement: explicit override (EVA-in-orbit), else derived from type.
+    eva_required = (mission_type in MISSION_TYPES_REQUIRING_EVA
+                    if requires_eva is None else requires_eva)
+
+    # ``run_parallel`` controls whether the exact asparagus (parallel-staged)
+    # build is searched.  The bumper's GUIDANCE trials pass run_parallel=False:
+    # serial mass is a fine ranking proxy (asparagus only makes a build lighter,
+    # so the serial dv/mass ordering tracks the parallel one) and avoids the
+    # 42-config parallel-stage search on the bumper's many infeasible trials —
+    # the dominant cost.  The main-loop feasibility decision and the rescue keep
+    # run_parallel=True so the committed kit (and asparagus-only missions) are
+    # judged exactly.
     all_blocking: list[BlockingInfo] = []
     seen: set[str] = set()
     for is_crewed in _crewed_options(crewed, flags):
@@ -2189,7 +2638,9 @@ def evaluate_mission_detailed(
             result = _evaluate_profile(profile, flags, diff, mission_type,
                                        is_crewed=is_crewed,
                                        home=mission_builder.home,
-                                       extra_payload_parts=extra_payload_parts)
+                                       extra_payload_parts=extra_payload_parts,
+                                       run_parallel=run_parallel,
+                                       requires_eva=eva_required)
             if result.feasible:
                 return result
             for b in result.blocking:
@@ -2329,19 +2780,26 @@ def compute_capability_from_items(
     difficulty_name: str,
     start_with_clamps: bool,
     mission_builder: MissionBuilder,
-    rep_names: frozenset[str] = frozenset(),
     progressive_launch_pad: bool = False,
     contract_specs: tuple = (),
+    buildings_in_logic: bool = False,
 ) -> tuple[RocketCapability, EquipmentFlags]:
     """Compute capability without a CollectionState. For CLI/external tools.
 
     ``contract_specs`` (a tuple of ContractSpec) makes this also compute
     per-contract feasibility into ``cap.contract_access``. Empty = no contracts.
+
+    ``buildings_in_logic`` (default off) gates curated facility effects; OFF is
+    a strict no-op (see ``_pre_pass``).
     """
     diff = DIFFICULTY_PROFILES[difficulty_name]
-    flags = _pre_pass(item_count_fn, start_with_clamps, rep_names,
+    flags = _pre_pass(item_count_fn, start_with_clamps,
                       progressive_launch_pad,
-                      launch_pad_caps=mission_builder.launch_pad_caps)
+                      launch_pad_caps=mission_builder.launch_pad_caps,
+                      buildings_in_logic=buildings_in_logic,
+                      home=mission_builder.home)
+    # Lazy: bodies are assessed on first query (AP fill rules touch only
+    # a few bodies per state; eager _assess_bodies evaluated all 17).
     body_profiles = _LazyBodyProfiles(flags, diff, mission_builder)
     sounding_km = _compute_sounding_altitude(flags, mission_builder.home_body)
 
@@ -2392,22 +2850,39 @@ def _compute_capability(state: CollectionState, player: int) -> RocketCapability
     """Full capability computation from the current collection state."""
     world = state.multiworld.worlds[player]
     options = world.options
-    difficulty_name = ["casual", "normal", "expert", "insane"][options.difficulty.value]
+    difficulty_name = ["casual", "normal", "expert"][options.difficulty.value]
     start_with_clamps = bool(options.start_with_launch_clamps.value)
-    rep_names = frozenset(
-        rep
-        for tiers in world.progressive_representatives.values()
-        for rep in tiers.values()
-    )
     cap, _ = compute_capability_from_items(
         lambda name: state.count(name, player),
         difficulty_name, start_with_clamps, world.mission_builder,
-        rep_names=rep_names,
         progressive_launch_pad=bool(options.progressive_launch_pad.value),
         contract_specs=(*getattr(world, "contract_specs", ()),
                         *getattr(world, "goal_contract_specs", ())),
+        buildings_in_logic=bool(options.buildings_in_logic.value),
     )
     return cap
+
+
+def cheap_flags(state: CollectionState, player: int) -> EquipmentFlags:
+    """The cheap half of capability: the equipment flags from the pre-pass,
+    WITHOUT the per-body mission evaluation (the rocket optimizer).
+
+    ``compute_capability_from_items`` assesses bodies lazily, so building the
+    flags is cheap — only touching ``cap.bodies[...].access`` runs the
+    optimizer.  Rules that read ONLY instrument / relay / capsule / power flags
+    (KSC science, the science-budget instrument inputs) use this to stay off the
+    expensive ``get_capability`` path during fill.
+    """
+    world = state.multiworld.worlds[player]
+    options = world.options
+    return _pre_pass(
+        lambda name: state.count(name, player),
+        bool(options.start_with_launch_clamps.value),
+        bool(options.progressive_launch_pad.value),
+        launch_pad_caps=world.mission_builder.launch_pad_caps,
+        buildings_in_logic=bool(options.buildings_in_logic.value),
+        home=world.mission_builder.home,
+    )
 
 
 # ---------------------------------------------------------------------------

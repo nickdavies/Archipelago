@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Callable, Optional, Union
 
+from .part_geometry import PartRole, derive_roles
+
 
 # ---------------------------------------------------------------------------
 # Capability flags — single source of truth for MiscEquipment.provides values
@@ -78,7 +80,11 @@ class FuelTank:
     fuel_type: str          # "lfo" | "lf" | "xenon" | "monoprop" (derived tag)
     size_class: float       # metres
     max_count: int = 0      # 0 = unlimited; >0 caps optimizer tank count (adapters)
-    is_radial: bool = False # srf-only side tank; can't be a stage's central spine
+    # Structural roles derived from attach-node geometry (see part_geometry).
+    # SPINE = can be a stage's central stackable column; RADIAL_MOUNT = side/drop
+    # booster only.  Replaces the old bulkhead-only is_radial, which mis-modelled
+    # single-node/slanted/coupler tanks (FL-C1000, slant adapters) as spines.
+    roles: frozenset[PartRole] = field(default_factory=frozenset)
     # Per-propellant mass at 100% fill (tonnes), e.g. {"LiquidFuel": 0.5,
     # "Oxidizer": 0.5} for an LFO tank. Lets an engine that needs only a
     # subset of the carried propellants drain the rest — except MonoPropellant,
@@ -132,6 +138,49 @@ class Decoupler:
     size_class: float
 
 
+# Typed sub-specs for MiscEquipment parts that participate in rank axes.
+# These default to None on MiscEquipment; the loader populates them from
+# parts.json fields produced by scripts/extract_parts.py.
+
+@dataclass(frozen=True)
+class SolarSpec:
+    """Solar panel data sourced from ModuleDeployableSolarPanel."""
+    charge_rate: float       # EC/sec at 1 AU sun distance
+    tracking: bool           # True = deployable/sun-tracking; False = fixed (OX-STAT)
+
+
+@dataclass(frozen=True)
+class AntennaSpec:
+    """Antenna data sourced from ModuleDataTransmitter.
+
+    Only ``DIRECT`` and ``RELAY`` antennas count for the RELAY rank axis;
+    ``INTERNAL`` (the 5kW transmitter built into pods/probes) is excluded.
+    """
+    power: float             # raw antennaPower (large numbers — log/quantize at scoring time)
+    combinable: bool
+    antenna_type: str        # "DIRECT" | "RELAY" | "INTERNAL"
+
+
+@dataclass(frozen=True)
+class CapsuleSpec:
+    """Crew-pod data sourced from top-level ``CrewCapacity`` + drainable
+    resource mass.  ``effective_dry_mass = part.mass - drainable_propellant``
+    is the rank ordering quantity; capsule pods carry MonoPropellant /
+    LiquidFuel / Oxidizer that can be drained pre-launch."""
+    crew_capacity: int
+    drainable_mass: float    # tonnes of removable propellant at 100% fill
+
+
+@dataclass(frozen=True)
+class ProbeCoreSpec:
+    """Probe-core SAS service level from ``ModuleSAS.SASServiceLevel`` (0..3).
+
+    Pods carry ModuleSAS too but their primary rank axis is CAPSULE; this
+    spec is only attached when ``provides`` contains :py:attr:`CapabilityFlag.PROBE_CORE`.
+    """
+    sas_level: int
+
+
 @dataclass(frozen=True)
 class MiscEquipment:
     name: str
@@ -142,6 +191,10 @@ class MiscEquipment:
     # shield to the capsule it protects — a 1.25m pod needs a 1.25m shield, not
     # the lightest available.  0.0 when the part has no meaningful diameter.
     size_class: float = 0.0
+    solar: Optional[SolarSpec] = None
+    antenna: Optional[AntennaSpec] = None
+    capsule: Optional[CapsuleSpec] = None
+    probe_core: Optional[ProbeCoreSpec] = None
 
 
 # ---------------------------------------------------------------------------
@@ -1046,6 +1099,67 @@ def _fuel_mass_from_resources(resources: dict[str, float]) -> float:
     return total
 
 
+# Resources that capsule pods carry as drainable propellant.  ElectricCharge
+# isn't a propellant; Ablator is structural (removing it removes reentry heat
+# shielding).  All others (MonoPropellant, LiquidFuel, Oxidizer, XenonGas) are
+# drainable pre-launch and reduce the capsule's effective dry mass for the
+# CAPSULE rank ordering.
+_DRAINABLE_RESOURCES: frozenset[str] = frozenset({
+    "MonoPropellant", "LiquidFuel", "Oxidizer", "XenonGas",
+})
+
+
+def _solar_spec_from_cfg(cfg: dict) -> Optional["SolarSpec"]:
+    s = cfg.get("solar")
+    if not s:
+        return None
+    return SolarSpec(charge_rate=float(s["charge_rate"]), tracking=bool(s["tracking"]))
+
+
+def _antenna_spec_from_cfg(cfg: dict) -> Optional["AntennaSpec"]:
+    a = cfg.get("antenna")
+    if not a:
+        return None
+    return AntennaSpec(
+        power=float(a["power"]),
+        combinable=bool(a["combinable"]),
+        antenna_type=str(a.get("type", "")),
+    )
+
+
+def _capsule_spec_from_cfg(cfg: dict) -> Optional["CapsuleSpec"]:
+    crew = int(cfg.get("crew_capacity", 0))
+    if crew <= 0:
+        return None
+    # Data-driven exclusion of non-sealed crew positions (e.g. the
+    # External Command Seat).  A "real" capsule has at least one stack
+    # bulkhead so it can serve as a terminal payload mounted on top of
+    # a rocket; an srf-only part is a chair clipped to the hull and
+    # cannot survive reentry or pressurization missions.  Replaces the
+    # legacy hand-curated ``_CAPSULE_EXCLUSIONS`` list.
+    bulkheads = cfg.get("bulkhead_profiles", [])
+    if all(b == "srf" for b in bulkheads):
+        return None
+    resources = cfg.get("resources", {})
+    drainable = 0.0
+    for res_name, amount in resources.items():
+        if res_name not in _DRAINABLE_RESOURCES:
+            continue
+        density = _RESOURCE_DENSITY.get(res_name)
+        if density is None:
+            continue
+        drainable += float(amount) * density
+    return CapsuleSpec(crew_capacity=crew, drainable_mass=drainable)
+
+
+def _probe_core_spec_from_cfg(cfg: dict, provides: frozenset) -> Optional["ProbeCoreSpec"]:
+    if CapabilityFlag.PROBE_CORE not in provides:
+        return None
+    # Stayputnik has no ModuleSAS in cfg — SAS level defaults to 0.
+    sas = int(cfg.get("sas_level", 0))
+    return ProbeCoreSpec(sas_level=sas)
+
+
 def _build_part(part_type: type, cfg: dict, overrides: dict, name: str) -> AnyPart:
     """Construct a frozen part dataclass from cfg JSON data + manual overrides."""
     cfg_name = name
@@ -1101,7 +1215,7 @@ def _build_part(part_type: type, cfg: dict, overrides: dict, name: str) -> AnyPa
             fuel_type=_fuel_type_from_resources(resources),
             size_class=size,
             max_count=overrides.get("max_count", 0),
-            is_radial=is_radial_only,
+            roles=derive_roles(cfg),
             fuel_masses=fuel_masses,
         )
 
@@ -1151,12 +1265,25 @@ def _build_part(part_type: type, cfg: dict, overrides: dict, name: str) -> AnyPa
         return Decoupler(name=cfg_name, mass=mass, kind=kind, size_class=size)
 
     if part_type is MiscEquipment:
+        provides = overrides.get("provides", frozenset())
+        capsule_spec = _capsule_spec_from_cfg(cfg)
+        # Honor the data-driven capsule rejection (e.g. srf-only chair):
+        # if the part-name's PartMapping says it provides ``capsule`` but
+        # the cfg says it isn't a sealed pod, strip ``capsule`` from
+        # ``provides`` so capability code (has_capsule, available_capsules)
+        # never sees it.
+        if "capsule" in provides and capsule_spec is None:
+            provides = provides - frozenset({"capsule"})
         return MiscEquipment(
             name=cfg_name,
             mass=mass,
-            provides=overrides.get("provides", frozenset()),
+            provides=provides,
             crew_capacity=int(cfg.get("crew_capacity", 0) or 0),
             size_class=size,
+            solar=_solar_spec_from_cfg(cfg),
+            antenna=_antenna_spec_from_cfg(cfg),
+            capsule=capsule_spec,
+            probe_core=_probe_core_spec_from_cfg(cfg, provides),
         )
 
     raise TypeError(f"Unknown part type: {part_type}")
@@ -1333,454 +1460,3 @@ def _invert_category_members() -> dict[str, tuple[str, ...]]:
 # Lets the capability pre-pass set lightest-per-category in O(1) per part without
 # scanning every category.
 PART_TO_CONTRACT_CATEGORIES: dict[str, tuple[str, ...]] = _invert_category_members()
-
-
-# ---------------------------------------------------------------------------
-# Progressive part tier definitions
-# ---------------------------------------------------------------------------
-# Maps progressive item name → {tier: [ksp_names]}
-# Tier numbers are 1-based; receiving N copies unlocks tiers 1..N.
-
-PROGRESSIVE_PART_TIERS: dict[str, dict[int, list[str]]] = {
-    # --- Launch Engines (atmosphere-capable, by thrust class) ---
-    "Progressive Launch Engine": {
-        1: [
-            "liquidEngine.v2",           # LV-T30 Reliant (240kN)
-            "liquidEngine2.v2",          # LV-T45 Swivel (215kN)
-            "LiquidEngineRV-1",          # RV-1 Cub (32kN, MH)
-            "toroidalAerospike",         # T-1 Dart (180kN, 290s atm Isp; 0.625m stack)
-        ],
-        2: [
-            # Mainstream stack ascent engines only — radial engines split
-            # into Progressive Radial Engine to avoid weak rep selection.
-            "engineLargeSkipper.v2",     # RE-I5 Skipper (650kN)
-            "LiquidEngineLV-TX87",       # LV-TX87 Bobcat (400kN, MH)
-            "LiquidEngineRK-7",          # RK-7 Kodiak (260kN, MH)
-            "LiquidEngineRE-I2",         # RE-I2 Skiff (300kN, MH)
-        ],
-        3: [
-            "liquidEngineMainsail.v2",   # RE-M3 Mainsail (1500kN)
-            "Size2LFB.v2",              # LFB KR-1x2 Twin-Boar (2000kN)
-            "SSME",                      # S3 KS-25 Vector (1000kN)
-            "LiquidEngineKE-1",          # KE-1 Mastodon (1350kN, MH)
-            "Size3EngineCluster",        # S3 KS-25x4 Mammoth (4000kN)
-        ],
-    },
-    # --- Vacuum Engines (high-ISP transfer + specialty fuel) ---
-    "Progressive Vacuum Engine": {
-        1: [
-            # Stack vacuum engines only — Spider (radial) split into
-            # Progressive Radial Engine for power-level homogeneity.
-            "liquidEngine3.v2",          # LV-909 Terrier (60kN, 345s vac)
-            "liquidEngineMini.v2",       # 48-7S Spark (20kN, 320s vac)
-            "microEngine.v2",            # LV-1 Ant (2kN, 315s vac)
-        ],
-        2: [
-            "liquidEngine2-2.v2",        # RE-L10 Poodle (250kN, 350s vac)
-            "LiquidEngineLV-T91",        # LV-T91 Cheetah (125kN, 355s vac, MH)
-            "LiquidEngineRE-J10",        # RE-J10 Wolfhound (375kN, 380s vac, MH)
-        ],
-        3: [
-            # Heavy LFO vacuum workhorse. Single candidate so the rep is
-            # deterministic. Rhino has poor atmospheric ISP (205s) which made
-            # it a 15% killer rep when it lived in Launch Engine tier 3; here
-            # it's used for its actual role (heavy upper-stage / interplanetary).
-            "Size3AdvancedEngine",       # KR-2L+ Rhino (2000kN, 340s vac, 9t)
-        ],
-        4: [
-            # Specialty propulsion is split across T4 and T5: every seed
-            # gets BOTH nuclearEngine and ionEngine.  The default
-            # assignment is T4=Nerv, T5=Dawn but items.py applies a
-            # 50/50 random swap per seed so the unlock order varies.
-            # This closes the Moho-failing pattern where the T4 coin
-            # flip used to leave some seeds with nuclear-only and the
-            # transfer-stage Δv requirement exceeded what nuclear alone
-            # could provide on a Moho mission stack.
-            "nuclearEngine",             # LV-N Nerv (60kN, 800s vac, uses LF)
-        ],
-        5: [
-            "ionEngine",                 # IX-6315 Dawn (2kN, 4200s vac, uses xenon)
-        ],
-    },
-    # --- Radial Engines (asparagus boosters / specialty radial-mount) ---
-    # Split out from Progressive Launch/Vacuum Engine to keep those tiers
-    # mainstream-engine-only. Radial engines have wildly different power
-    # levels from stack ascent engines and can land as weak reps otherwise.
-    "Progressive Radial Engine": {
-        1: [  # Small radials
-            "smallRadialEngine.v2",      # 24-77 Twitch (16kN)
-            "radialEngineMini.v2",       # LV-1R Spider (2kN vac)
-        ],
-        2: [  # Mid radial
-            "radialLiquidEngine1-2",     # Mk-55 Thud (120kN)
-        ],
-    },
-    # --- Solid Rocket Boosters (by thrust/total impulse class) ---
-    "Progressive SRB": {
-        1: [
-            "Mite",                      # FM1 Mite (12kN)
-            "Shrimp",                    # F3S0 Shrimp (30kN)
-            "solidBooster.sm.v2",        # RT-5 Flea (192kN)
-        ],
-        2: [
-            "solidBooster.v2",           # RT-10 Hammer (227kN)
-            "solidBooster1-1",           # BACC Thumper (300kN)
-            "Pollux",                    # THK Pollux (1300kN, MH)
-        ],
-        3: [
-            "MassiveBooster",            # S1 SRB-KD25k Kickback (670kN)
-            "Thoroughbred",              # S2-17 Thoroughbred (1700kN)
-            "Clydesdale",                # S2-33 Clydesdale (3300kN)
-        ],
-    },
-    # --- LFO Tanks (by fuel mass, not size class) ---
-    "Progressive LFO Tank": {
-        1: [  # Tiny (< 1.0t fuel)
-            "miniFuelTank",              # Oscar-B (0.2t)
-            "fuelTankSmallFlat",         # FL-T100 (0.5t)
-        ],
-        2: [  # Small (1.0 - 4.5t fuel)
-            "fuelTankSmall",             # FL-T200 (1.0t)
-            "Size1p5.Tank.01",           # FL-TX220 (1.1t, MH)
-            "fuelTank",                  # FL-T400 (2.0t)
-            "Size1p5.Tank.02",           # FL-TX440 (2.2t, MH)
-            "fuelTank.long",             # FL-T800 (4.0t)
-            "Rockomax8BW",              # X200-8 (4.0t)
-            "Size1p5.Tank.03",           # FL-TX900 (4.5t, MH)
-        ],
-        3: [  # Medium (5.0 - 32.0t fuel)
-            "Size1p5.Tank.05",           # FL-C1000 (6.03t, MH)
-            "Size1p5.Size2.Adapter.01",  # FL-A215 (6.0t, MH)
-            "Rockomax16.BW",            # X200-16 (8.0t)
-            "Size1p5.Tank.04",           # FL-TX1800 (9.0t, MH)
-            "Rockomax32.BW",            # X200-32 (16.0t)
-            "Size3SmallTank",            # S3-3600 (18.0t)
-            # Rockomax64.BW (Jumbo-64, 32t) sits at the top of T3 by
-            # size_class (2.5m).  Demoted from T4 because rep-analysis
-            # showed it as the universal underperformer there (78-89%
-            # Jool-moon feasibility vs 100% for all size-3+ T4 tanks).
-            "Rockomax64.BW",            # Jumbo-64 (32.0t)
-        ],
-        4: [  # Large (>= 32.0t fuel, size_class 3+)
-            "Size3MediumTank",           # S3-7200 (36.0t)
-            "Size3LargeTank",            # S3-14400 (72.0t)
-            "Size3.Size4.Adapter.01",    # S3-S4 Adapter (32.0t, MH)
-            "Size4.Tank.01",             # S4-64 (32.0t, MH)
-            "Size4.Tank.02",             # S4-128 (64.0t, MH)
-            "Size4.Tank.03",             # S4-256 (128.0t, MH)
-            "Size4.Tank.04",             # S4-512 (256.0t, MH)
-        ],
-    },
-    # --- Heat Shields (by size class) ---
-    "Progressive Heat Shield": {
-        1: [
-            "HeatShield0",              # 0.625m
-            "HeatShield1",              # 1.25m
-            "HeatShield1p5",            # 1.875m (MH)
-        ],
-        2: [
-            "HeatShield2",              # 2.5m
-            "HeatShield3",              # 3.75m
-            "InflatableHeatShield",      # 10m inflatable
-        ],
-    },
-    # --- Stack Decouplers (serial staging) ---
-    # Docking ports are folded in at tier+1 of their natural size — guarantees
-    # the player always has a non-docking-port separator at their current tier.
-    "Progressive Stack Decoupler": {
-        1: [  # Small/medium decouplers — no docking ports here.
-            "Decoupler.0",              # TD-06
-            "Decoupler.1",              # TD-12
-            "Decoupler.1p5",            # TD-18 (MH)
-            "Separator.0",              # TS-06
-            "Separator.1",              # TS-12
-            "Separator.1p5",            # TS-18 (MH)
-            "Size1p5.Strut.Decoupler",  # Size 1.5 Decoupler (MH)
-        ],
-        2: [  # Large decouplers + size 0/1 docking ports (natural tier 1, bumped here).
-            "Decoupler.2",              # TD-25
-            "Decoupler.3",              # TD-37
-            "Decoupler.4",              # TD-50 (MH)
-            "Separator.2",              # TS-25
-            "Separator.3",              # TS-37
-            "Separator.4",              # TS-50 (MH)
-            "dockingPort1",              # Clamp-O-Tron Shielded (size1)
-            "dockingPort2",              # Clamp-O-Tron (size1)
-            "dockingPort3",              # Clamp-O-Tron Jr. (size0)
-            "mk2DockingPort",            # Mk2 Clamp-O-Tron (size1+mk2)
-        ],
-        3: [  # Size 2+ docking ports (natural tier 2, bumped here).
-            "dockingPortLarge",          # Clamp-O-Tron Sr. (size2)
-        ],
-    },
-    # --- Radial Decouplers (parallel/asparagus staging) ---
-    # Tier 3 = fuelLine: gates asparagus staging behind 3 progressive copies.
-    "Progressive Radial Decoupler": {
-        1: [
-            "radialDecoupler",           # TT-38K
-            "radialDecoupler1-2",        # Hydraulic Detachment Manifold
-        ],
-        2: [
-            "radialDecoupler2",          # TT-70
-        ],
-        3: [
-            "fuelLine",                  # FTX-2 External Fuel Duct
-        ],
-    },
-    # --- Multi-mount adapters: 2-way -> 3/4-way -> Engine Plates ---
-    # Tri/quad couplers are notably better than bi; engine plates are the best.
-    "Progressive Engine Plate": {
-        1: [  # 2-way couplers/adapters (basic)
-            "stackBiCoupler.v2",         # TVR-200 Stack Bi-Coupler
-            "adapterLargeSmallBi",        # Rockomax Brand Adapter (bi)
-            "mk2.1m.Bicoupler",          # Mk2 Bicoupler
-        ],
-        2: [  # 3-way / 4-way couplers/adapters
-            "stackTriCoupler.v2",        # TVR-300 Stack Tri-Coupler
-            "stackQuadCoupler",           # TVR-400L Stack Quad-Coupler
-            "adapterLargeSmallTri",       # Rockomax Brand Adapter (tri)
-            "adapterLargeSmallQuad",      # Rockomax Brand Adapter (quad)
-        ],
-        3: [  # Small Engine Plates (0.625m / 1.25m output)
-            "EnginePlate5",              # EP-12
-            "EnginePlate1p5",            # EP-18
-            "EnginePlate2",              # EP-25
-        ],
-        4: [  # Medium Engine Plates (1.875m / 2.5m output)
-            "EnginePlate3",              # EP-37
-            "EnginePlate4",              # EP-50
-        ],
-        5: [  # Large (3.75m output stack)
-            "Size4.EngineAdapter.01",    # Kerbodyne Engine Cluster Adapter
-        ],
-    },
-    # --- Parachutes (basic stack chutes -> radial) ---
-    "Progressive Parachute": {
-        1: [  # Basic stack chutes
-            "parachuteSingle",           # Mk16 Parachute
-            "parachuteLarge",            # Mk25 Parachute
-        ],
-        2: [  # Radial chutes (for spaceplanes / spacecraft)
-            "parachuteRadial",           # Mk2-R Radial-Mount Parachute
-        ],
-    },
-    # --- Ladders (basic telescopic -> housed bay) ---
-    "Progressive Ladder": {
-        1: [
-            "telescopicLadder",          # Telescopic Ladder
-        ],
-        2: [
-            "telescopicLadderBay",       # Telescopic Ladder Bay
-        ],
-    },
-    # --- Landing Legs (heavy first, then variety in lighter options) ---
-    "Progressive Landing Leg": {
-        1: [
-            "landingLeg1-2",             # LT-2 Landing Strut (heavy)
-        ],
-        2: [
-            "landingLeg1",               # LT-1 Landing Struts
-            "miniLandingLeg",            # LT-05 Micro Landing Strut
-        ],
-    },
-    # --- Science Instruments (basic -> advanced) ---
-    # Note: sensorThermometer is precollected; not in this group.
-    "Progressive Science Instrument": {
-        1: [  # Basic atmospheric/biomes science
-            "GooExperiment",             # Mystery Goo Containment Unit
-            "sensorBarometer",           # PresMat Barometer
-        ],
-        2: [  # Mid-tier
-            "science.module",            # SC-9001 Science Jr.
-            "sensorAtmosphere",          # Atmospheric Fluid Spectro-Variometer
-        ],
-        3: [  # Advanced specialized sensors
-            "sensorAccelerometer",       # Double-C Seismic Accelerometer
-            "sensorGravimeter",          # GRAVMAX Negative Gravioli Detector
-        ],
-    },
-    # --- Capsules (crewed command pods) ---
-    # Tiers ranked by *effective dry mass* (listed mass minus removable
-    # propellant: MonoPropellant / LiquidFuel / Oxidizer; Ablator counted
-    # as structural since removing it removes reentry heat shielding).
-    # Tier 1 = heaviest band; each subsequent tier adds LIGHTER alternatives.
-    # The optimizer picks the lightest unlocked pod that satisfies the
-    # mission's crew requirement, so bumping Capsule shrinks rockets.
-    #
-    # Passenger-only modules (no `resources` block in parts.json — they
-    # cannot serve as command modules) are removed entirely from the chain:
-    # MK1CrewCabin, mk2CrewCabin, mk3CrewCabin (Mk3 Passenger Module),
-    # crewCabin (Hitchhiker), Large.Crewed.Lab.  Their `provides` no longer
-    # includes `capsule` so the capability system doesn't treat them as
-    # flyable command modules.
-    "Progressive Capsule": {
-        1: [  # >2.4t effective dry.  Both reps wheeled.
-            "mk3Cockpit.Shuttle",        # 3.10t, wheels, 4-crew
-            "mk1-3pod",                  # 2.48t, wheels, 3-crew
-        ],
-        2: [  # 1.8t-2.4t.
-            "kv3Pod",                    # 2.25t, 3-crew
-            "mk2Cockpit.Standard",       # 1.94t, 1-crew
-            "mk2Cockpit.Inline",         # 1.90t, 2-crew
-        ],
-        3: [  # 1.0t-1.8t.  Mk2Pod brings the second wheeled rep.
-            "Mk2Pod",                    # 1.56t, wheels, 2-crew
-            "kv2Pod",                    # 1.50t, 2-crew
-            "Mark1Cockpit",              # 1.22t, 1-crew
-            "mk2LanderCabin.v2",         # 1.20t, 2-crew
-        ],
-        4: [  # <1.0t.  mk1pod.v2 is the essential lightweight workhorse.
-            "Mark2Cockpit",              # 0.97t, 1-crew
-            "cupola",                    # 0.90t, 1-crew
-            "mk1pod.v2",                 # 0.76t, wheels, 1-crew
-            "kv1Pod",                    # 0.75t, 1-crew
-            "MEMLander",                 # 0.64t, 1-crew
-            "landerCabinSmall",          # 0.54t, 1-crew
-        ],
-    },
-    # --- Probe Cores (by SAS level) ---
-    "Progressive Probe Core": {
-        1: [  # SAS 0-1, no reaction wheel
-            "probeCoreSphere.v2",        # Stayputnik (SAS 0)
-            "probeCoreOcto.v2",          # OKTO (SAS 1)
-            "probeCoreOcto2.v2",         # OKTO2 (SAS 1)
-            "probeCoreCube",             # QBE (SAS 1)
-            "roverBody.v2",              # RoveMate (SAS 1)
-        ],
-        2: [  # SAS 2+
-            "probeCoreHex.v2",           # HECS (SAS 2, has reaction_wheel)
-            "probeStackSmall",           # RC-001S (SAS 2, has reaction_wheel)
-            "MpoProbe",                  # MPO Probe (MH)
-            "MtmStage",                  # MTM Stage (MH)
-        ],
-        3: [  # SAS 3, all have reaction_wheel
-            "HECS2.ProbeCore",           # HECS2 (SAS 3)
-            "probeStackLarge",           # RC-L01 (SAS 3)
-            "mk2DroneCore",              # Mk2 Drone Core (SAS 3)
-        ],
-    },
-    # --- Solar Panels (fixed < retractable < giant) ---
-    "Progressive Solar Panel": {
-        1: [  # Fixed panels
-            "solarPanels5",              # OX-STAT
-            "LgRadialSolarPanel",        # OX-STAT-XL
-            "solarPanelOX10C",           # OX-10C
-            "solarPanelSP10C",           # SP-10C
-        ],
-        2: [  # Retractable panels
-            "solarPanels3",              # OX-4W
-            "solarPanels4",              # OX-4L
-            "solarPanels1",              # SP-W
-            "solarPanels2",              # SP-L
-            "solarPanelOX10L",           # OX-10L
-            "solarPanelSP10L",           # SP-10L
-        ],
-        3: [  # Giant array
-            "largeSolarPanel",           # Gigantor XL Solar Array
-        ],
-    },
-    # --- Relay Antennas (by comm range) ---
-    "Progressive Relay": {
-        1: [
-            "longAntenna",               # Communotron 16
-            "SurfAntenna",               # Communotron 16-S
-            "HighGainAntenna5.v2",       # HG-5
-        ],
-        2: [
-            "RelayAntenna5",             # RA-2
-            "mediumDishAntenna",          # Communotron DTS-M1
-        ],
-        3: [
-            "HighGainAntenna",           # Communotron HG-55
-            "RelayAntenna50",            # RA-15
-        ],
-        4: [
-            "commDish",                  # Communotron 88-88
-            "RelayAntenna100",           # RA-100
-        ],
-    },
-    # --- SAS / Reaction Wheels (attitude control) ---
-    # Standalone reaction-wheel modules.  Each tier provides reaction wheels
-    # at increasing torque/mass.  Bumping this chain is the cheap fix for
-    # ``no_attitude_control`` blockers when probe-core/capsule reaction
-    # wheels are absent or insufficient.
-    "Progressive SAS": {
-        1: [
-            "sasModule",                 # Stock SAS Module (0.05t)
-        ],
-        2: [
-            "advSasModule",              # Advanced Inline Stabilizer (0.1t)
-        ],
-        3: [
-            "asasmodule1-2",             # Large Reaction Wheel Module (0.2t)
-        ],
-    },
-    # --- Xenon Tanks ---
-    # Three stock xenon containers — all tiny. Single tier; any copy unlocks
-    # the rep, granting xenon fuel storage so an ion-engine vacuum-engine
-    # rep is actually usable.
-    "Progressive Xenon Tank": {
-        1: [
-            "xenonTankRadial",           # PB-X50R (0.04t fuel, 0.625m radial)
-            "xenonTank",                 # PB-X150 (0.07t fuel, 0.625m)
-            "xenonTankLarge",            # PB-X750 (0.57t fuel, 1.25m)
-        ],
-    },
-    # --- LF Tanks (pure-LF fuselages for nuclear engine) ---
-    # nuclearEngine consumes only LF; it can use LFO tanks via the LFO→LF
-    # synthetic view (oxidizer emptied, half fuel mass) but pure-LF tanks
-    # have ~2× the fuel-to-dry ratio, giving ~10% lighter Nerv stages.
-    # Single tier with mixed pool — matches the Progressive Xenon Tank
-    # pattern: ONE item per seed, picks a rep from any size class.  The
-    # synthetic LFO-as-LF fallback covers cases where the rep happens to
-    # be small.  Single-item count keeps AP fill pressure low (multi-tier
-    # was observed to push other progression items into unreachable
-    # spheres on some seeds).  Gated in the bumper by
-    # ``"nuclearEngine" in rep_names`` — ion-only seeds never bump it.
-    "Progressive LF Tank": {
-        1: [
-            "miniFuselage",              # 0.25t fuel, 0.025t dry, 0.625m
-            "noseConeAdapter",           # 0.4t fuel, 0.1t dry, 0.625m
-            "MK1Fuselage",               # 2.0t fuel, 0.25t dry, 1.25m
-            "mk2FuselageShortLiquid",    # 2.0t fuel, 0.29t dry, 2.5m
-            "mk2Fuselage",               # 4.0t fuel, 0.57t dry, 2.5m
-            "mk3FuselageLF.25",          # 12.5t fuel, 1.79t dry, 3.75m
-            "mk3FuselageLF.50",          # 25.0t fuel, 3.57t dry, 3.75m
-            "mk3FuselageLF.100",         # 50.0t fuel, 7.14t dry, 3.75m
-        ],
-    },
-}
-
-# Max tier count per progressive item (number of copies in the AP pool)
-PROGRESSIVE_PART_COUNTS: dict[str, int] = {
-    name: max(tiers.keys()) for name, tiers in PROGRESSIVE_PART_TIERS.items()
-}
-
-# All ksp_names that belong to progressive chains. During generation, one per
-# tier is selected as the representative (removed from pool); the rest stay
-# as gated useful items. This set is used to identify absorbed parts.
-PROGRESSIVE_PART_NAMES: frozenset[str] = frozenset(
-    ksp_name
-    for tiers in PROGRESSIVE_PART_TIERS.values()
-    for tier_parts in tiers.values()
-    for ksp_name in tier_parts
-)
-
-# Validation: no part in multiple progressive categories
-def _validate_progressive_tiers() -> None:
-    seen: dict[str, str] = {}  # ksp_name → category
-    for category, tiers in PROGRESSIVE_PART_TIERS.items():
-        for tier, names in tiers.items():
-            for name in names:
-                if name in seen:
-                    raise ValueError(
-                        f"Part {name!r} in both {seen[name]!r} and {category!r}"
-                    )
-                seen[name] = category
-                if name not in PART_DB:
-                    raise ValueError(
-                        f"Progressive tier part {name!r} ({category} T{tier}) "
-                        f"not found in PART_DB"
-                    )
-
-_validate_progressive_tiers()

@@ -32,9 +32,10 @@ from .parts import (
     PART_DB, PART_REGISTRY, CapabilityFlag,
     Engine, FuelTank, SolidBooster, HeatShield, Parachute,
     LandingLeg, Decoupler, MiscEquipment,
-    PROGRESSIVE_PART_NAMES, PROGRESSIVE_PART_COUNTS, PROGRESSIVE_PART_TIERS,
 )
 from .contracts import all_possible_contract_specs
+from .ranks import RankContext, rank_sig_for
+from .options import GoalContractMode
 
 if TYPE_CHECKING:
     from .world import KSP1World
@@ -80,104 +81,29 @@ _USEFUL_PROVIDES: frozenset[CapabilityFlag] = frozenset({
 # These are niche items that don't gate meaningful missions individually:
 # monoprop engine, monoprop tanks, Mk2/Mk3 aircraft tanks, external tanks,
 # adapter fuel tanks, Sepratron, Launch Escape System.
-_RECLASSIFY_USEFUL: frozenset[str] = frozenset({
-    # Monoprop engine (niche)
-    "omsEngine",
-    # Monoprop tanks (all)
-    "RCSFuelTank", "RCSTank1-2", "Size1p5.Monoprop",
-    "mk2FuselageShortMono", "mk3FuselageMONO",
-    "monopropMiniSphere", "radialRCSTank", "rcsTankMini", "rcsTankRadialLong",
-    # Mk2/Mk3 aircraft LFO tanks
-    "mk2FuselageShortLFO", "mk2FuselageLongLFO",
-    "mk2SpacePlaneAdapter", "mk2.1m.AdapterLong",
-    "mk3FuselageLFO.25", "mk3FuselageLFO.50", "mk3FuselageLFO.100",
-    # Mk2/Mk3 aircraft LF-only tanks
-    "mk2Fuselage", "mk2FuselageShortLiquid",
-    "mk3FuselageLF.25", "mk3FuselageLF.50", "mk3FuselageLF.100",
-    # External tanks (Baguette, Dumpling, Doughnut)
-    "externalTankCapsule", "externalTankRound", "externalTankToroid",
-    # Adapter fuel tanks (structural role)
-    "adapterSize2-Size1", "adapterSize2-Size1Slant",
-    "adapterSize2-Mk2", "adapterMk3-Mk2",
-    "adapterMk3-Size2", "adapterMk3-Size2Slant",
-    "adapterSize3-Mk3", "Size3To2Adapter.v2",
-    "noseConeAdapter",
-    # MH size adapter tanks
-    "Size1p5.Size0.Adapter.01", "Size1p5.Size1.Adapter.01",
-    "Size1p5.Size1.Adapter.02",
-    # Sepratron and Launch Escape System (not real boosters)
-    "sepMotor1", "LaunchEscapeSystem",
-    # Inline radial docking port (not a stack separator; convenience-only)
-    "dockingPortLateral",
-    # Drogue chutes (slowing-only, not landing-capable)
-    "parachuteDrogue", "radialDrogue",
-    # Basic ladder (Progressive Ladder uses telescopic variants)
-    "ladder1",
-    # External Command Seat: open 1-crew seat, not a sealed capsule.
-    # Moved out of Progressive Capsule tier 1 (its capability is too
-    # different from real pods to share the rep slot).
-    "seatExternalCmd",
-})
+# Phase 2: deleted `_RECLASSIFY_USEFUL` and `_RECLASSIFY_FILLER`.  Those
+# hand-curated lists existed to relieve fill-pressure under the legacy
+# progressive system, where the progressive item was the gate and
+# individual parts were redundant alternates.  In rank-space, the
+# bumper decides which specific parts are reps — its picks become
+# PROGRESSION via the promote-reps step in apply_sphere_ladder, and
+# every non-rep gets demoted to USEFUL by the same pass.  No hand
+# tuning required; the data-driven default (PROGRESSION for any part
+# that's an engine/tank/etc., USEFUL for ``_USEFUL_PROVIDES`` misc,
+# FILLER for everything else) is sufficient.
 
-# Note: ionEngine + xenon tanks (xenonTank/Large/Radial) and the LF-only
-# fuselages (miniFuselage, MK1Fuselage) were displaced from Progressive
-# Vacuum Engine tier 3 to keep that tier engine-only. They are intentionally
-# left as PROGRESSION items (default class for FuelTank/Engine) so that fill
-# places them at reachable locations — ion engine + xenon must be findable
-# together, otherwise ion provides zero thrust.
-
-# Parts forced to FILLER classification regardless of progressive group
-# membership or capability flags.  These are non-bootstrap-critical items
-# whose presence in the useful pool inflates remaining_fill pressure
-# without adding meaningful capability.
-_RECLASSIFY_FILLER: frozenset[str] = frozenset({
-    # Launch Escape System: emergency-only solid booster, no real capability.
-    "LaunchEscapeSystem",
-    # MEMLander: 2-crew lander cabin in Progressive Capsule t2; alternates exist.
-    "MEMLander",
-    # MiniISRU: small ISRU; capability granted by full ISRU at higher tiers.
-    "MiniISRU",
-})
-
-# Progressive chains whose non-rep parts are filler-classified instead of
-# useful.  Rep-impact analysis (worlds/ksp1/test/_rep_analysis.py) showed
-# these chains have <3% reachability spread across rep choices, i.e. the
-# alternative parts at each tier don't materially improve solvability —
-# the rep alone is sufficient.  Marking the non-reps as filler reduces
-# useful-pool pressure without hurting capability variance.
-_FILLER_CLASS_CHAINS: frozenset[str] = frozenset({
-    "Progressive Solar Panel",
-    "Progressive Stack Decoupler",
-    "Progressive Radial Decoupler",
-    "Progressive Capsule",
-    "Progressive Probe Core",
-})
-
-_FILLER_CLASS_CHAIN_PARTS: frozenset[str] = frozenset(
-    part_name
-    for chain in _FILLER_CLASS_CHAINS
-    for tier_parts in PROGRESSIVE_PART_TIERS[chain].values()
-    for part_name in tier_parts
-)
 
 
 def _classify_part_item(item_name: str) -> ItemClassification:
-    """
-    Return the AP classification for a part item based on its part list.
+    """Initial classification for a part item, derived purely from the
+    part's dataclass type and ``MiscEquipment.provides`` flags.
 
-    Parts in progressive chains are classified as useful — the progressive
-    item is the progression gate, and the representative (removed from pool
-    during generation) IS the progressive item.  Parts in _RECLASSIFY_USEFUL
-    are also downgraded from progression to useful. Parts in
-    _RECLASSIFY_FILLER are forced to filler regardless of any other rule.
+    Phase 2: every part with a structural or capability role starts as
+    PROGRESSION; the sphere-ladder pass then promotes the bumper's
+    selected reps (which are already PROGRESSION by default) and
+    demotes everything else to USEFUL.  Parts with no provides flags
+    (decorative wings, lights, fairings) start as FILLER.
     """
-    if item_name in _RECLASSIFY_FILLER:
-        return ItemClassification.filler
-    if item_name in _FILLER_CLASS_CHAIN_PARTS:
-        return ItemClassification.filler
-    if item_name in PROGRESSIVE_PART_NAMES or item_name in _RECLASSIFY_USEFUL:
-        return ItemClassification.useful
-
     parts = PART_DB.get(item_name, [])
     if not parts:
         return ItemClassification.filler
@@ -223,38 +149,63 @@ _VICTORY_ITEM: dict[str, tuple[int, ItemClassification]] = {
     "Victory": (0, ItemClassification.progression),
 }
 
-# Progressive item names (single source of truth — used in pool registration,
-# capability lookups, precollect logic, and tests).
+# Progressive item names — the few that survived Phase 2.  Part-category
+# progressives have been retired in favor of rank-axis gating.  These
+# three remain because they're not rocket-part gates:
+#   - R&D: tech-tree band advancement
+#   - Launch Pad: mass-cap progression (optional)
+#   - Science Instrument: feeds psi_tier into the science budget formula
 PROGRESSIVE_RD_NAME: str = "Progressive R&D"
-PROGRESSIVE_LAUNCH_ENGINE_NAME: str = "Progressive Launch Engine"
-PROGRESSIVE_VACUUM_ENGINE_NAME: str = "Progressive Vacuum Engine"
-PROGRESSIVE_SRB_NAME: str = "Progressive SRB"
-PROGRESSIVE_LFO_TANK_NAME: str = "Progressive LFO Tank"
-PROGRESSIVE_HEAT_SHIELD_NAME: str = "Progressive Heat Shield"
-PROGRESSIVE_STACK_DECOUPLER_NAME: str = "Progressive Stack Decoupler"
-PROGRESSIVE_RADIAL_DECOUPLER_NAME: str = "Progressive Radial Decoupler"
-PROGRESSIVE_CAPSULE_NAME: str = "Progressive Capsule"
-PROGRESSIVE_PROBE_CORE_NAME: str = "Progressive Probe Core"
-PROGRESSIVE_SOLAR_PANEL_NAME: str = "Progressive Solar Panel"
-PROGRESSIVE_RELAY_NAME: str = "Progressive Relay"
-PROGRESSIVE_ENGINE_PLATE_NAME: str = "Progressive Engine Plate"
-PROGRESSIVE_PARACHUTE_NAME: str = "Progressive Parachute"
-PROGRESSIVE_LADDER_NAME: str = "Progressive Ladder"
-PROGRESSIVE_LANDING_LEG_NAME: str = "Progressive Landing Leg"
-PROGRESSIVE_SCIENCE_INSTRUMENT_NAME: str = "Progressive Science Instrument"
-PROGRESSIVE_RADIAL_ENGINE_NAME: str = "Progressive Radial Engine"
 PROGRESSIVE_LAUNCH_PAD_NAME: str = "Progressive Launch Pad"
-PROGRESSIVE_SAS_NAME: str = "Progressive SAS"
-PROGRESSIVE_XENON_TANK_NAME: str = "Progressive Xenon Tank"
-PROGRESSIVE_LF_TANK_NAME: str = "Progressive LF Tank"
+PROGRESSIVE_SCIENCE_INSTRUMENT_NAME: str = "Progressive Science Instrument"
+
+# Curated-building progressives (buildings_in_logic). Only added to the pool
+# when the option is on; otherwise these names are never created and the world
+# is byte-for-byte unchanged.  Each maps to a curated capability effect via
+# ``effects.building_effects``:
+#   * VAB              -> vessel buildable-mass cap (Effect.VESSEL_MASS_LIMIT)
+#   * Astronaut Complex-> free EVA               (Effect.CAN_EVA)
+#   * Tracking Station -> DSN power (DEFERRED seam — relay_tier already gates
+#                          comms, so this item is NOT wired into capability yet)
+# Stock KSP has 2 upgrade levels per facility (base 0 -> 1 -> 2), so each gets
+# 2 copies (levels 1 and 2 on top of base level 0).
+PROGRESSIVE_VAB_NAME: str = "Progressive VAB"
+PROGRESSIVE_TRACKING_STATION_NAME: str = "Progressive Tracking Station"
+PROGRESSIVE_ASTRONAUT_COMPLEX_NAME: str = "Progressive Astronaut Complex"
+
+# Number of pooled copies per building (stock = 2 upgrade levels).
+PROGRESSIVE_VAB_COUNT: int = 2
+PROGRESSIVE_TRACKING_STATION_COUNT: int = 2
+PROGRESSIVE_ASTRONAUT_COMPLEX_COUNT: int = 2
+
+# Bridge: which AP progressive item supplies each curated ``Building``.  The
+# effects layer (``effects.min_building_level_for``) returns a ``Building`` +
+# level; this map turns that into the ``Counted`` requirement's kind (the item
+# name) so the sphere ladder threads the right item into the chain.  Defined
+# here (items.py owns item names) rather than in effects.py to keep effects.py
+# free of item-pool concerns / import cycles.  Imported lazily by capability /
+# sphere_ladder.
+def _building_to_item_name() -> dict:
+    from .effects import Building
+    return {
+        Building.VAB: PROGRESSIVE_VAB_NAME,
+        Building.SPH: PROGRESSIVE_VAB_NAME,  # SPH folds into VAB (vessel limits)
+        Building.TRACKING_STATION: PROGRESSIVE_TRACKING_STATION_NAME,
+        Building.ASTRONAUT_COMPLEX: PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
+        Building.LAUNCH_PAD: PROGRESSIVE_LAUNCH_PAD_NAME,
+    }
 
 # Kerbin baseline tonnage caps by collected count (index = number of copies
 # received).  Index 0 = no copies = starting cap.  Starting at 100t lets
-# sphere-0 do basic Kerbin / Mun / Minmus orbit + landing without any
-# Launch Pad item, which breaks the bootstrap deadlock when the item is
-# banned from the early bucket.  Non-Kerbin homes scale these by their
-# surface→low-orbit dv ratio (see ``progressive_launch_pad_caps_for``).
-PROGRESSIVE_LAUNCH_PAD_CAPS_KERBIN: tuple[float, ...] = (100.0, 200.0, 500.0, float("inf"))
+# sphere-0 do basic Kerbin / Mun / Minmus orbit + landing without any Launch
+# Pad item, which breaks the bootstrap deadlock when the item is banned from
+# the early bucket.  (A lower, more binding base is desirable but makes the
+# pad load-bearing in the bootstrap band -- the chain-ordered copies then
+# strand in the restrictive fill; that needs milestone-based pad placement,
+# tracked separately.)  Non-Kerbin homes scale these by their surface→low-
+# orbit dv ratio (see ``progressive_launch_pad_caps_for``).
+PROGRESSIVE_LAUNCH_PAD_CAPS_KERBIN: tuple[float, ...] = (
+    20.0, 100.0, 400.0, float("inf"))
 
 # Count of copies in the item pool — fixed regardless of home.  Only the
 # tonnage caps scale; the player always collects the same number of items.
@@ -269,42 +220,22 @@ PROGRESSIVE_LAUNCH_PAD_CAPS: tuple[float, ...] = PROGRESSIVE_LAUNCH_PAD_CAPS_KER
 # function.  Kept defined there to keep items.py free of body-dynamics
 # math; this module just owns the Kerbin baseline tuple.
 
-# Progressive items: offsets 50–99 (special range, not physical parts)
+# Progressive items: offsets 50–99 (special range, not physical parts).
+# Only the three non-part progressives remain after Phase 2.
 _PROGRESSIVE_ITEMS: dict[str, tuple[int, ItemClassification]] = {
     PROGRESSIVE_RD_NAME:                (50, ItemClassification.progression),
-    PROGRESSIVE_LAUNCH_ENGINE_NAME:     (51, ItemClassification.progression),
-    PROGRESSIVE_VACUUM_ENGINE_NAME:     (52, ItemClassification.progression),
-    PROGRESSIVE_SRB_NAME:               (53, ItemClassification.progression),
-    PROGRESSIVE_LFO_TANK_NAME:          (54, ItemClassification.progression),
-    PROGRESSIVE_HEAT_SHIELD_NAME:       (55, ItemClassification.progression),
-    PROGRESSIVE_STACK_DECOUPLER_NAME:   (56, ItemClassification.progression),
-    PROGRESSIVE_RADIAL_DECOUPLER_NAME:  (57, ItemClassification.progression),
-    PROGRESSIVE_CAPSULE_NAME:           (58, ItemClassification.progression),
-    PROGRESSIVE_PROBE_CORE_NAME:        (59, ItemClassification.progression),
-    PROGRESSIVE_SOLAR_PANEL_NAME:       (60, ItemClassification.progression),
-    PROGRESSIVE_RELAY_NAME:             (61, ItemClassification.progression),
-    PROGRESSIVE_ENGINE_PLATE_NAME:      (62, ItemClassification.progression),
-    PROGRESSIVE_PARACHUTE_NAME:         (63, ItemClassification.progression),
-    PROGRESSIVE_LADDER_NAME:            (64, ItemClassification.progression),
-    PROGRESSIVE_LANDING_LEG_NAME:       (65, ItemClassification.progression),
-    # Science instruments scale the science_budget formula (tier 1: Goo;
-    # tier 2: Atmospheric Spec; tier 3: Accelerometer + Gravimeter — Sci Jr
-    # excluded for payload-mass reasons).  Chain-tracked via injection at
-    # complete_tech_tree's tier-anchor sphere.
     PROGRESSIVE_SCIENCE_INSTRUMENT_NAME: (66, ItemClassification.progression),
-    PROGRESSIVE_RADIAL_ENGINE_NAME:     (67, ItemClassification.progression),
     PROGRESSIVE_LAUNCH_PAD_NAME:        (68, ItemClassification.progression),
-    PROGRESSIVE_SAS_NAME:               (69, ItemClassification.progression),
-    PROGRESSIVE_XENON_TANK_NAME:        (70, ItemClassification.progression),
-    PROGRESSIVE_LF_TANK_NAME:           (71, ItemClassification.progression),
+    # Curated-building progressives (buildings_in_logic) — ids are always
+    # registered (so create_item resolves the name), but the items are only
+    # POOLED when the option is on.  When off, none are ever created.
+    PROGRESSIVE_VAB_NAME:               (70, ItemClassification.progression),
+    PROGRESSIVE_TRACKING_STATION_NAME:  (71, ItemClassification.progression),
+    PROGRESSIVE_ASTRONAUT_COMPLEX_NAME: (72, ItemClassification.progression),
 }
 
 PROGRESSIVE_RD_COUNT: int = 3
-
-# All progressive part item names (excluding Progressive R&D)
-PROGRESSIVE_PART_ITEM_NAMES: frozenset[str] = frozenset(
-    name for name in _PROGRESSIVE_ITEMS if name != PROGRESSIVE_RD_NAME
-)
+PROGRESSIVE_PSI_COUNT: int = 3
 
 # Contract items: a large dedicated block at offset 10_000+ (well clear of the
 # cramped legacy ranges). One stable id per possible (type, body) — the universe
@@ -337,6 +268,11 @@ ITEM_NAME_TO_ID: dict[str, int] = {
 #: Always precollected — structural necessity in every seed.
 ALWAYS_PRECOLLECTED: tuple[str, ...] = ("strutConnector",)
 
+#: Precollected only for the complete_tech_tree goal, whose science funding
+#: assumes basic temperature science on every body.  Scoped to that goal so
+#: it doesn't perturb the item pool / fill of goals that don't need it.
+TECH_TREE_PRECOLLECTED: tuple[str, ...] = ("sensorThermometer",)
+
 #: Precollected when start_with_launch_clamps option is enabled.
 CLAMP_PRECOLLECTED: tuple[str, ...] = ("launchClamp1",)
 
@@ -363,7 +299,19 @@ def create_item(world: KSP1World, name: str) -> KSP1Item:
         offset, classification = _CONTRACT_ITEMS[name]
     else:
         raise KeyError(f"Unknown KSP1 item: {name!r}")
-    return KSP1Item(name, classification, KSP1_BASE_ID + offset, world.player)
+    item = KSP1Item(name, classification, KSP1_BASE_ID + offset, world.player)
+    # Phase 2: every item carries its per-axis rank signature so the
+    # sphere-ladder item_rule can gate placement uniformly.  Items not
+    # on any rank axis (filler, R&D, Pad, PSI) have an empty sig and
+    # are unaffected by rank ceilings.
+    ctx = getattr(world, "_rank_context", None)
+    if ctx is None:
+        # Generated outside a world build (test fixture, tool).  Use
+        # the module default so the attribute is always present.
+        from .ranks import DEFAULT_CONTEXT
+        ctx = DEFAULT_CONTEXT
+    item.rank_sig = rank_sig_for(name, ctx)
+    return item
 
 
 SCIENCE_PACK_NAMES: frozenset[str] = frozenset(_FILLER_ITEMS)
@@ -383,87 +331,54 @@ def get_filler_item_name(world: KSP1World) -> str:
     return world.random.choice(_FILLER_NAMES_WEIGHTED)
 
 
-def select_progressive_representatives(world: KSP1World) -> None:
-    """
-    Pick one part per progressive tier as that tier's "representative" — the
-    real item the AP progressive item resolves to.  Deterministic via
-    ``world.random``; UT regen restores the prior pick from slot_data.
-
-    Must run in ``generate_early`` because other worlds' ``create_regions``
-    can evaluate KSP1 entrance rules via cross-player reachability sweeps
-    (e.g. pokemon_rb door_shuffle) before any world's ``create_items`` runs.
-    """
-    ut_reps = getattr(world, "_ut_progressive_representatives", None)
-    representatives: dict[str, dict[int, str]] = {}
-    for prog_name, tiers in PROGRESSIVE_PART_TIERS.items():
-        representatives[prog_name] = {}
-        for tier_num, parts in sorted(tiers.items()):
-            if ut_reps and prog_name in ut_reps and tier_num in ut_reps[prog_name]:
-                rep = ut_reps[prog_name][tier_num]
-            else:
-                rep = world.random.choice(parts)
-            representatives[prog_name][tier_num] = rep
-
-    # Progressive Vacuum Engine T4/T5 pair: every seed gets BOTH
-    # nuclearEngine and ionEngine, but the unlock order is randomised
-    # 50/50.  Default assignment (from PROGRESSIVE_PART_TIERS) is
-    # T4=Nerv, T5=Dawn; a coin flip here swaps that half the time.
-    # The final reps land in world.progressive_representatives below,
-    # so UT regen reads the post-swap state directly — no additional
-    # randomisation on regen.
-    PVE = "Progressive Vacuum Engine"
-    if (ut_reps is None
-            and PVE in representatives
-            and 4 in representatives[PVE]
-            and 5 in representatives[PVE]):
-        if world.random.random() < 0.5:
-            representatives[PVE][4], representatives[PVE][5] = (
-                representatives[PVE][5], representatives[PVE][4]
-            )
-
-    world.progressive_representatives = representatives
-
-
 def create_all_items(world: KSP1World) -> None:
     """
     Add part items and progressive items to the multiworld item pool.
 
-    Representatives are picked earlier in ``generate_early`` (see
-    ``select_progressive_representatives``); this consumes them.
+    Phase 2: every part in ``PART_DB`` is added as an *individual* AP
+    item.  The three surviving progressives (R&D, PSI, Launch Pad) are
+    counted into the pool with ``_sphere_tier`` set per copy.
     """
     precollected: set[str] = set(ALWAYS_PRECOLLECTED)
     if world.options.start_with_launch_clamps:
         precollected.update(CLAMP_PRECOLLECTED)
+    if world.goal_spec.complete_tech_tree:
+        precollected.update(TECH_TREE_PRECOLLECTED)
 
     for name in precollected:
         world.multiworld.push_precollected(create_item(world, name))
 
-    all_representatives: set[str] = {
-        rep
-        for tiers in world.progressive_representatives.values()
-        for rep in tiers.values()
-    }
-
-    # Build pool: skip precollected and representatives (they ARE the progressive items).
+    # Pool: every PART_DB entry as an individual item, skipping precollected.
     pool: list[KSP1Item] = [
         create_item(world, name)
         for name in _SORTED_PART_NAMES
-        if name not in precollected and name not in all_representatives
+        if name not in precollected
     ]
 
-    # Progressive part items (progression gates for part tiers).
-    # Tag each copy with `_sphere_tier` (1-based copy index) so the
-    # sphere-ladder Rule B can ban individual copies from harder
-    # locations while leaving later copies free.  See
-    # ``worlds/ksp1/sphere_ladder.py``.
-    for prog_name, count in PROGRESSIVE_PART_COUNTS.items():
-        for tier in range(1, count + 1):
-            item = create_item(world, prog_name)
-            item._sphere_tier = tier
-            pool.append(item)
+    # Progressive Science Instrument copies (one per psi_tier level).
+    for tier in range(1, PROGRESSIVE_PSI_COUNT + 1):
+        item = create_item(world, PROGRESSIVE_SCIENCE_INSTRUMENT_NAME)
+        item._sphere_tier = tier
+        pool.append(item)
 
-    # Progressive R&D items (gates higher tech tree bands).
-    for tier in range(1, PROGRESSIVE_RD_COUNT + 1):
+    # Progressive R&D items (gates higher tech tree bands). For the tech-tree
+    # goal these double as the goal items in non-findable modes: starting
+    # precollects all copies; count/progressive_unlock lock some/all on threshold
+    # locations (_resolve_goal_contract_mode), so only the still-pooled copies are
+    # added here. Non-tech goals always pool every copy regardless of mode.
+    mode = world.options.goal_contract_mode.value
+    is_tech = world.goal_spec.complete_tech_tree
+    rd_locked = sum(
+        1 for _loc, _cnt, item_name in world.contract_threshold_defs
+        if item_name == PROGRESSIVE_RD_NAME
+    )
+    if is_tech and mode == GoalContractMode.option_starting:
+        for _ in range(PROGRESSIVE_RD_COUNT):
+            world.multiworld.push_precollected(create_item(world, PROGRESSIVE_RD_NAME))
+        rd_in_pool = 0
+    else:
+        rd_in_pool = PROGRESSIVE_RD_COUNT - rd_locked
+    for tier in range(1, rd_in_pool + 1):
         item = create_item(world, PROGRESSIVE_RD_NAME)
         item._sphere_tier = tier
         pool.append(item)
@@ -475,19 +390,54 @@ def create_all_items(world: KSP1World) -> None:
             item._sphere_tier = tier
             pool.append(item)
 
-    # Contract items (one per generated contract; goal contracts are phase 3).
-    # Each is progression and net-neutral on the pool (it adds a matching
-    # contract completion location too).
-    for spec in (*world.contract_specs, *world.goal_contract_specs):
-        pool.append(create_item(world, spec.item_name))
+    # Curated-building progressives (buildings_in_logic — only when enabled).
+    # Each copy carries ``_sphere_tier`` exactly like the Pad/R&D counted
+    # progressives so the placement window (``_item_min_sphere``) gates the Nth
+    # copy at the sphere that first needs building level N.
+    if world.options.buildings_in_logic:
+        for name, count in (
+            (PROGRESSIVE_VAB_NAME, PROGRESSIVE_VAB_COUNT),
+            (PROGRESSIVE_TRACKING_STATION_NAME,
+             PROGRESSIVE_TRACKING_STATION_COUNT),
+            (PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
+             PROGRESSIVE_ASTRONAUT_COMPLEX_COUNT),
+        ):
+            for tier in range(1, count + 1):
+                item = create_item(world, name)
+                item._sphere_tier = tier
+                pool.append(item)
 
-    # Pad the pool with filler items so item count == location count.
-    # create_regions() runs before create_items(), so all locations exist.
-    real_location_count = sum(
+    # Contract gate items. Non-goal contracts are always pooled. Goal contract
+    # items depend on the goal contract mode:
+    #   findable           -> pool (found like any other item; today's behavior)
+    #   starting           -> precollected (extra starting items)
+    #   count / progressive -> locked on a threshold location (not pooled; the
+    #                          player receives them by completing X contracts)
+    for spec in world.contract_specs:
+        pool.append(create_item(world, spec.item_name))
+    for spec in world.goal_contract_specs:
+        if mode == GoalContractMode.option_starting:
+            world.multiworld.push_precollected(create_item(world, spec.item_name))
+        elif mode == GoalContractMode.option_findable:
+            pool.append(create_item(world, spec.item_name))
+        # count / progressive_unlock: locked on a threshold location instead.
+
+    # Pad the pool with filler items so item count == count of locations that
+    # still need filling. create_regions() runs before create_items(), so all
+    # locations exist. Pre-filled locations (goal-mode threshold locations carry
+    # a locked goal/R&D item) are excluded — their item isn't in the pool, so
+    # counting them would over-pad and break the items==locations balance.
+    unfilled_location_count = sum(
         1 for loc in world.multiworld.get_locations(world.player)
-        if loc.address is not None
+        if loc.address is not None and loc.item is None
     )
-    filler_count = real_location_count - len(pool)
+    filler_count = unfilled_location_count - len(pool)
+    if filler_count < 0:
+        raise AssertionError(
+            f"KSP1 item pool overflow: pool={len(pool)} > locations="
+            f"{unfilled_location_count}.  Phase 2 should keep this in balance"
+            f" but a check failed — investigate before generating."
+        )
     for _ in range(filler_count):
         pool.append(create_item(world, get_filler_item_name(world)))
 

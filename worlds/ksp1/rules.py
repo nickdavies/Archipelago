@@ -17,7 +17,7 @@ Golden rule: when in doubt, say something is NOT achievable.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Callable
 
 from BaseClasses import CollectionState, ItemClassification
@@ -26,8 +26,8 @@ from .bodies import (
     ALL_BODIES, BODY_BY_NAME, BodyName, MissionType,
     home_system_bodies, relay_tier_table_for, science_budget,
 )
-from .capability import get_capability
-from .items import ITEM_TABLE, PROGRESSIVE_RD_NAME, PROGRESSIVE_PART_ITEM_NAMES, SCIENCE_PACK_NAMES
+from .capability import get_capability, cheap_flags, _compute_sounding_altitude
+from .items import ITEM_TABLE, PROGRESSIVE_RD_NAME, SCIENCE_PACK_NAMES
 from .locations import (
     EVENT_BY_NAME,
     EventName,
@@ -41,8 +41,9 @@ from .locations import (
     effective_tech_slots_per_node,
     event_locations,
 )
-from .options import Difficulty, Goal, ItemPacing
+from .options import Difficulty, Goal, GoalContractMode, ItemPacing
 from .tech_tree import MAX_TIER, MAX_RD_BAND, cumulative_tier_cost, TECH_NODES, LEAF_TECH_NODES
+from .gates import AccumulationGate, Resource
 
 if TYPE_CHECKING:
     from .world import KSP1World
@@ -55,7 +56,6 @@ _SCIENCE_SAFETY: dict[int, float] = {
     Difficulty.option_casual: 0.50,
     Difficulty.option_normal: 0.70,
     Difficulty.option_expert: 0.85,
-    Difficulty.option_insane: 1.00,
 }
 
 
@@ -75,14 +75,15 @@ _TRANSMIT_ONLY_DISCOUNT: float = 0.75
 # Science needed to declare the tech tree complete (buy all 62 nodes)
 _TECH_TREE_COMPLETE_SCIENCE = cumulative_tier_cost(MAX_TIER)
 
-# All progression-classified items (individual parts + progressive part items).
-# Eve Return/Sample Return require these — the capability system can't compute
-# Eve ascent so we use this as a proxy for "you have everything needed."
-# Progressive R&D is excluded (separate tech tree gate, not rocket capability).
-_ALL_PROGRESSION_ITEMS: frozenset[str] = frozenset(
-    name for name, (_, cls) in ITEM_TABLE.items()
-    if cls == ItemClassification.progression
-) | PROGRESSIVE_PART_ITEM_NAMES
+# Phase 2: every part item (no longer wrapped behind progressives).
+# Eve / Tylo / Laythe Return + Sample Return use this as a proxy for "you
+# have everything the capability solver can't model from physics."  Per
+# the design, these missions are hard-banned outside their target homes,
+# so the strictness of "every part" is academic in practice.  Progressive
+# R&D is excluded (separate tech-tree gate, not rocket capability); the
+# remaining kept progressives (Pad, PSI) are also excluded because they
+# don't represent rocket parts.
+_ALL_PROGRESSION_ITEMS: frozenset[str] = frozenset(ITEM_TABLE.keys())
 
 
 def _make_all_parts_rule(player: int) -> Callable[[CollectionState], bool]:
@@ -92,10 +93,74 @@ def _make_all_parts_rule(player: int) -> Callable[[CollectionState], bool]:
 
 
 # ---------------------------------------------------------------------------
+# Gate chokepoint — the ONLY sanctioned way to gate a location on held items
+# ---------------------------------------------------------------------------
+#
+# Building the has-closure and recording the item dependency in ONE call makes
+# it structurally impossible to gate a location on an item without marking that
+# item logic-required.  The sphere-ladder classification pass keeps every
+# logic-required pooled item PROGRESSION; ``_assert_gate_items_progression``
+# fails generation if one slips through.  Together they turn the recurring "a
+# needed item got demoted to USEFUL, stranding whatever was placed behind it"
+# bug into a construction-time error instead of a rare unsolvable seed.
+
+def require_items(world: "KSP1World",
+                  item_names) -> Callable[[CollectionState], bool]:
+    """Return a ``has_all(item_names)`` rule and record those names as
+    logic-required on ``world``.  Use whenever a location's reachability
+    depends on holding a set of specific items."""
+    names = tuple(item_names)
+    player = world.player
+    world.logic_required_items.update(names)
+    return lambda state: state.has_all(names, player)
+
+
+def require_item(world: "KSP1World", name: str,
+                 count: int = 1) -> Callable[[CollectionState], bool]:
+    """Return a ``has(name[, count])`` rule and record ``name`` as
+    logic-required on ``world``.  The single-item form of ``require_items``."""
+    player = world.player
+    world.logic_required_items.add(name)
+    if count == 1:
+        return lambda state: state.has(name, player)
+    return lambda state: state.has(name, player, count)
+
+
+def _make_goal_event_rule(
+    player: int, bodies, event: EventName,
+) -> Callable[[CollectionState], bool]:
+    """Goal sub-rule: every ``body`` is reachable for ``event`` under the cheap
+    ladder oracle — the SAME ``has_all(bracket reps)`` the event's location rule
+    uses (``world._cheap_mission_reps``).  Keeps the victory condition on the
+    cheap system instead of a live ``get_capability`` per goal body/event.
+
+    A body/event with no bracket entry (e.g. model-infeasible) falls back to the
+    all-parts proxy — conservative, matching the proxy access rule.
+    """
+    bt = tuple(bodies)
+    ev = event.value
+
+    def rule(state: CollectionState) -> bool:
+        world = state.multiworld.worlds[player]
+        reps_map = getattr(world, "_cheap_mission_reps", None)
+        if reps_map is None:
+            return False  # pre-ladder: conservatively unreachable (Golden Rule)
+        for b in bt:
+            reps = reps_map.get((b.value, ev))
+            need = reps if reps is not None else _ALL_PROGRESSION_ITEMS
+            if not state.has_all(need, player):
+                return False
+        return True
+
+    return rule
+
+
+# ---------------------------------------------------------------------------
 # Science heuristic helpers
 # ---------------------------------------------------------------------------
 
-def bankable_science(cap, psi_tier: int, home: BodyName) -> float:
+def bankable_science(cap, psi_tier: int, home: BodyName,
+                     access=None) -> float:
     """Per-body science contributions, gated on the player's ability to
     actually extract science from each body.
 
@@ -109,22 +174,80 @@ def bankable_science(cap, psi_tier: int, home: BodyName) -> float:
     per-sphere tier-funding pass MUST use it — duplicating the loop with
     a different gate produces a silent mismatch where the ladder thinks
     the seed is solvable but the rule disagrees at fill time.
+
+    ``access`` optionally supplies per-body ORBIT/RETURN/CREWED_LANDING
+    reachability as ``{body_name: {EventName: bool}}``.  When given, the
+    per-body access is read from it instead of ``cap.bodies[*].access`` —
+    the funding pass uses this to feed cached, monotonically-accumulated
+    access so it need not re-run the (expensive) per-body optimizer for
+    bodies already proven reachable at an earlier sphere.  Instrument and
+    relay flags still come from ``cap`` (cheap, flag-level).
     """
     relay_table = relay_tier_table_for(home)
     total = 0.0
     for body in ALL_BODIES:
-        body_cap = cap.bodies[body.name]
-        if not body_cap.access[EventName.ORBIT]:
+        if access is not None:
+            acc = access[body.name]
+            a_orbit = acc[EventName.ORBIT]
+            a_return = acc[EventName.RETURN]
+            a_land = acc[EventName.LANDING]
+            a_crewed = acc[EventName.CREWED_LANDING]
+        else:
+            body_cap = cap.bodies[body.name]
+            a_orbit = body_cap.access[EventName.ORBIT]
+            a_return = body_cap.access[EventName.RETURN]
+            a_land = body_cap.access[EventName.LANDING]
+            a_crewed = body_cap.access[EventName.CREWED_LANDING]
+        if not a_orbit:
             continue
-        can_recover = body_cap.access[EventName.RETURN]
+        can_recover = a_return
         can_transmit = cap.relay_tier >= relay_table[body.name]
         if not (can_recover or can_transmit):
             continue
         contribution = science_budget(
             body, cap.has_thermometer, cap.has_barometer,
-            cap.has_capsule, body_cap.access[EventName.CREWED_LANDING],
+            cap.has_capsule, a_crewed,
             home=home, psi_tier=psi_tier,
+            can_land_uncrewed=a_land,
         )
+        if not can_recover:
+            contribution *= _TRANSMIT_ONLY_DISCOUNT
+        total += contribution
+    return total
+
+
+def _cheap_bankable_science(
+    state: CollectionState, player: int, world, home: BodyName,
+) -> float:
+    """``bankable_science`` with per-body access from the ladder's precomputed
+    science brackets (``world._science_body_event_reps``) instead of a live
+    ``get_capability``.  Per-body access ``has_all(bracket reps)`` is conservative
+    (⟹ the kit really flies it) and consistent with the funding placement that
+    derived the brackets, so the science gate stays on the cheap ladder oracle.
+    Instrument/relay inputs come from the cheap pre-pass + ``state.count``.
+    """
+    reps_map = world._science_body_event_reps
+    flags = cheap_flags(state, player)
+    psi_tier = state.count("Progressive Science Instrument", player)
+    relay_table = relay_tier_table_for(home)
+    total = 0.0
+    for body in ALL_BODIES:
+        orbit = reps_map.get((body.name, EventName.ORBIT))
+        if orbit is None or not state.has_all(orbit, player):
+            continue
+        ret = reps_map.get((body.name, EventName.RETURN))
+        can_recover = ret is not None and state.has_all(ret, player)
+        can_transmit = flags.relay_tier >= relay_table[body.name]
+        if not (can_recover or can_transmit):
+            continue
+        cl = reps_map.get((body.name, EventName.CREWED_LANDING))
+        crewed = cl is not None and state.has_all(cl, player)
+        lnd = reps_map.get((body.name, EventName.LANDING))
+        can_land = lnd is not None and state.has_all(lnd, player)
+        contribution = science_budget(
+            body, flags.has_thermometer, flags.has_barometer,
+            flags.has_capsule, crewed, home=home, psi_tier=psi_tier,
+            can_land_uncrewed=can_land)
         if not can_recover:
             contribution *= _TRANSMIT_ONLY_DISCOUNT
         total += contribution
@@ -138,11 +261,15 @@ def _accessible_science(
     Estimate the total science the player can earn from all bodies they can
     currently reach, given their current instrument and crew equipment.
 
-    Multiplied by the safety factor before returning.
+    Multiplied by the safety factor before returning.  Uses the cheap ladder
+    science brackets (built in pre_fill).  Rules only evaluate after pre_fill, so
+    if the brackets are absent the ladder isn't built yet — conservatively report
+    no accessible science (Golden Rule) rather than fall back to capability.
     """
-    cap = get_capability(state, player)
-    psi_tier = state.count("Progressive Science Instrument", player)
-    return bankable_science(cap, psi_tier, home) * safety
+    world = state.multiworld.worlds[player]
+    if getattr(world, "_science_body_event_reps", None) is None:
+        return 0.0
+    return _cheap_bankable_science(state, player, world, home) * safety
 
 
 def _can_afford_tier(
@@ -159,12 +286,11 @@ def _can_afford_tier(
 def _make_science_threshold_rule(
     player: int, threshold: float, safety: float, home: BodyName,
 ) -> Callable[[CollectionState], bool]:
-    """Return a rule that passes when accessible science * safety >= threshold."""
-    def rule(state: CollectionState) -> bool:
-        cap = get_capability(state, player)
-        psi_tier = state.count("Progressive Science Instrument", player)
-        return bankable_science(cap, psi_tier, home) * safety >= threshold
-    return rule
+    """Return a rule that passes when accessible science * safety >= threshold.
+    Expressed as a SCIENCE :class:`~.gates.AccumulationGate`."""
+    def measure(state: CollectionState) -> float:
+        return _accessible_science(state, player, safety, home)
+    return AccumulationGate(Resource.SCIENCE, threshold).runtime_rule(measure)
 
 
 # ---------------------------------------------------------------------------
@@ -179,6 +305,7 @@ def set_all_rules(world: KSP1World) -> None:
     _set_home_rules(world, player)
     _set_mission_rules(world, player)
     _set_contract_rules(world, player)
+    _set_threshold_rules(world, player)
     _apply_home_system_local_exclusions(world)
     # Tech tree rules are now region entrance rules (see regions.py).
     _set_item_pacing_rules(world, player, difficulty)
@@ -224,13 +351,17 @@ def _can_do_ksc_science(state: CollectionState, player: int) -> bool:
 
     Path 1: Crewed EVA (EVA report / surface sample) — just needs a capsule.
     Path 2: Rover with science instruments — probe + wheels + power + instrument.
+
+    Reads only equipment flags (no per-body mission access), so it uses the
+    cheap pre-pass instead of the full ``get_capability`` — KSC science never
+    needs the rocket optimizer.
     """
-    cap = get_capability(state, player)
-    if cap.has_capsule:
+    flags = cheap_flags(state, player)
+    if flags.has_capsule:
         return True
-    if (cap.has_probe_core and cap.has_wheel
-            and cap.power_profile != "none"
-            and (cap.has_thermometer or cap.has_barometer)):
+    if (flags.has_probe_core and flags.has_wheel
+            and (flags.has_rtg or flags.has_solar)
+            and (flags.has_thermometer or flags.has_barometer)):
         return True
     return False
 
@@ -252,33 +383,42 @@ def _set_ksc_biome_rules(world: KSP1World, player: int) -> None:
 # access rule.
 # ---------------------------------------------------------------------------
 
+# These home-body rules read only equipment flags + the sounding-rocket sizing,
+# so they use the cheap pre-pass instead of the full ``get_capability`` (no
+# per-body mission optimizer).  ``_compute_sounding_altitude(flags, home_body)``
+# is exactly what ``cap.sounding_altitude_km`` is computed from.
 def _make_altitude_rule(player: int, threshold_km: float) -> Callable[[CollectionState], bool]:
     def rule(state: CollectionState) -> bool:
-        return get_capability(state, player).sounding_altitude_km >= threshold_km
+        flags = cheap_flags(state, player)
+        home_body = state.multiworld.worlds[player].mission_builder.home_body
+        return _compute_sounding_altitude(flags, home_body) >= threshold_km
     return rule
 
 
 def _make_first_launch_rule(player: int) -> Callable[[CollectionState], bool]:
     """Any propulsion OR capsule (kerbal EVA counts as launch)."""
     def rule(state: CollectionState) -> bool:
-        cap = get_capability(state, player)
-        return cap.sounding_altitude_km > 0 or cap.has_capsule
+        flags = cheap_flags(state, player)
+        home_body = state.multiworld.worlds[player].mission_builder.home_body
+        return _compute_sounding_altitude(flags, home_body) > 0 or flags.has_capsule
     return rule
 
 
 def _make_first_landing_rule(player: int) -> Callable[[CollectionState], bool]:
     """Propulsion + safe descent OR capsule (EVA landing)."""
     def rule(state: CollectionState) -> bool:
-        cap = get_capability(state, player)
-        if cap.sounding_altitude_km > 0 and (cap.has_parachutes or cap.has_throttleable_engine):
+        flags = cheap_flags(state, player)
+        home_body = state.multiworld.worlds[player].mission_builder.home_body
+        if (_compute_sounding_altitude(flags, home_body) > 0
+                and (flags.has_parachutes or flags.has_throttleable_engine)):
             return True
-        return cap.has_capsule
+        return flags.has_capsule
     return rule
 
 
 def _make_staging_rule(player: int) -> Callable[[CollectionState], bool]:
     def rule(state: CollectionState) -> bool:
-        return get_capability(state, player).staging_tier >= 1
+        return cheap_flags(state, player).staging_tier >= 1
     return rule
 
 
@@ -303,16 +443,22 @@ def _make_splashdown_rule(
     )
 
     def rule(state: CollectionState) -> bool:
-        cap = get_capability(state, player)
+        # Home-ocean path uses only cheap flags + the sounding-rocket sizing.
+        flags = cheap_flags(state, player)
         if home_has_ocean:
-            if (cap.sounding_altitude_km >= threshold_km
-                    and (cap.has_parachutes or cap.has_throttleable_engine)):
+            if (_compute_sounding_altitude(flags, home_body) >= threshold_km
+                    and (flags.has_parachutes or flags.has_throttleable_engine)):
                 return True
-        for body_name in other_ocean_bodies:
-            bp = cap.bodies.get(body_name)
-            if bp is not None and bp.access[EventName.LANDING]:
-                return True
-        return False
+        # Other-ocean-body LANDING uses the cheap ladder brackets (the same
+        # has_all(reps) the Landing locations gate on), not a live capability.
+        world = state.multiworld.worlds[player]
+        reps_map = getattr(world, "_cheap_mission_reps", None)
+        if reps_map is not None:
+            for body_name in other_ocean_bodies:
+                reps = reps_map.get((body_name.value, EventName.LANDING.value))
+                if reps is not None and state.has_all(reps, player):
+                    return True
+        return False  # pre-ladder or no ocean-body landing reachable (conservative)
     return rule
 
 
@@ -400,8 +546,23 @@ def _set_contract_rules(world: KSP1World, player: int) -> None:
     # /explain reads this set (world._contract_uses_proxy) rather than re-deriving
     # the predicate, so the reported gate can't drift from the rule actually set.
     world._proxy_contract_ids = set()
+    # Single record of which locations carry a contract rule (completion slots,
+    # completion events, and goal-contract mission events).  The sphere-ladder
+    # rule installer reads this to LEAVE these rules in place during fill instead
+    # of overriding them with the generic bracket rule: the contract rule is
+    # already cheap (no get_capability), so overriding it gains no speed but
+    # diverges the fill-time rule from the post_fill rule (different rep set, and
+    # the bracket rule omits the award gate on goal-contract events) — which
+    # stranded items and forced the expensive strict_ladder fallback re-fill.
+    world._contract_ruled_locations = set()
+    # In count / progressive_unlock each non-goal contract has a completion-event
+    # location; it shares the contract's rule so has("Contract Completed", X)
+    # counts contracts completable in logic.
+    counts_contracts = world.options.goal_contract_mode.value in (
+        GoalContractMode.option_count,
+        GoalContractMode.option_progressive_unlock,
+    )
     for spec in (*world.contract_specs, *world.goal_contract_specs):
-        loc = world.get_location(spec.location_name)
         ev = event_of.get(spec.contract_type)
         # A goal contract on a model-infeasible achievement (e.g. Eve/Laythe
         # return from a far home, which the dv model can't verify) routes to the
@@ -412,17 +573,45 @@ def _set_contract_rules(world: KSP1World, player: int) -> None:
         # never land on a model-infeasible body and keep the capability gate.
         uses_proxy = (spec.is_goal and ev is not None
                       and _all_locations_infeasible(spec.body, ev, infeasible))
+        # The contract's gate item, routed through the chokepoint so it's
+        # recorded logic-required (kept PROGRESSION) — you can't complete a
+        # contract without first finding its item, and a demoted gate item
+        # strands whatever progression fill placed on the contract location.
+        gate = require_item(world, spec.item_name)
         if uses_proxy:
             world._proxy_contract_ids.add(spec.contract_id)
-            def rule(state: CollectionState, item=spec.item_name,
+            def rule(state: CollectionState, _gate=gate,
                      _proxy=proxy_rule) -> bool:
-                return state.has(item, player) and _proxy(state)
+                return _gate(state) and _proxy(state)
         else:
             def rule(state: CollectionState, cid=spec.contract_id,
-                     item=spec.item_name) -> bool:
-                return (state.has(item, player)
-                        and get_capability(state, player).contract_access.get(cid, False))
-        loc.access_rule = rule
+                     _gate=gate) -> bool:
+                if not _gate(state):
+                    return False
+                world = state.multiworld.worlds[player]
+                creps = getattr(world, "_cheap_contract_reps", None)
+                if creps is None:
+                    return False  # pre-ladder: conservatively not completable
+                # Cheap delivery gate: the contract's bracket reps (has_all ⟹ the
+                # kit delivers, conservative).  An unbracketed non-proxy contract
+                # falls back to the all-parts proxy.
+                reps = creps.get(cid)
+                return state.has_all(
+                    reps if reps is not None else _ALL_PROGRESSION_ITEMS, player)
+        # Every non-goal reward slot (base 2 + Contract Repeats) shares the one
+        # gate+capability rule, so the extra slots land at the contract's own
+        # sphere as buffer-fill.
+        for loc_name in spec.location_names(world.non_goal_slot_count):
+            world.get_location(loc_name).access_rule = rule
+            world._contract_ruled_locations.add(loc_name)
+
+        # Non-goal completion event shares the rule (count / progressive_unlock):
+        # reachable iff the contract is completable, so it contributes one to the
+        # "Contract Completed" count exactly when the contract is done in logic.
+        if counts_contracts and not spec.is_goal:
+            ev_name = spec.display_name.replace("Contract: ", "Contract Complete: ", 1)
+            world.get_location(ev_name).access_rule = rule
+            world._contract_ruled_locations.add(ev_name)
 
         # A goal contract's matching mission event(s) share its EXACT rule, so
         # the (now ordinary) event is reachable iff the goal contract is
@@ -432,6 +621,21 @@ def _set_contract_rules(world: KSP1World, player: int) -> None:
         if spec.is_goal and ev is not None:
             for ev_loc in event_locations(spec.body, ev):
                 world.get_location(str(ev_loc)).access_rule = rule
+                world._contract_ruled_locations.add(str(ev_loc))
+
+
+def _set_threshold_rules(world: KSP1World, player: int) -> None:
+    """Gate each goal-mode threshold location on the completed-contract count:
+    ``state.has("Contract Completed", required_count)``. The event items are
+    swept in as their (contract-gated) event locations become reachable, so a
+    threshold unlocks exactly when ``required_count`` contracts are completable
+    in logic, releasing its locked goal item. No-op in findable / starting."""
+    from .contracts import CONTRACT_COMPLETED_EVENT
+    def measure(state: CollectionState) -> float:
+        return state.count(CONTRACT_COMPLETED_EVENT, player)
+    for loc_name, count, _item in world.contract_threshold_defs:
+        gate = AccumulationGate(Resource.CONTRACT_COMPLETION, count)
+        world.get_location(loc_name).access_rule = gate.runtime_rule(measure)
 
 
 def _set_mission_rules(world: KSP1World, player: int) -> None:
@@ -445,11 +649,11 @@ def _set_mission_rules(world: KSP1World, player: int) -> None:
     keeps location reachability aligned with the victory rule
     (``_make_goal_spec_rule``), which routes the same way per body/event.
     """
+    from BaseClasses import LocationProgressType
     from .bodies import ALL_BODIES
     from .locations import get_body_events
 
     infeasible = world.model_infeasible_locations
-    proxy_rule = _make_all_parts_rule(player)
 
     # Migrated-type contracts gate their MATCHING event equal-or-after the
     # contract item, so a player who has the contract does one mission for both
@@ -458,11 +662,14 @@ def _set_mission_rules(world: KSP1World, player: int) -> None:
     # contract whose base mission merely happens to be LAND).
     _migrated_event = _migrated_event_map()
     gate_item: dict[tuple[str, str], str] = {}
-    # Both non-goal and goal contracts gate their matching event: you can't clear
-    # the event before holding the contract item, so by the time the goal mission
-    # is done the goal-contract item is in hand (keeps client events and the
-    # server victory condition aligned).
-    for spec in (*world.contract_specs, *world.goal_contract_specs):
+    # Only GOAL contracts gate their matching event: you can't clear the goal
+    # mission event before holding the goal-contract item (keeps client events and
+    # the server victory condition aligned). Non-goal (pacing) contracts must NOT
+    # gate their event — doing so makes ordinary mission locations (e.g. Kerbin
+    # Orbit 1) reachable only via a pacing-contract item, a gate the cheap
+    # sphere-bracket fill rules don't model, which strands the goal path and makes
+    # otherwise-trivial seeds unsolvable.
+    for spec in world.goal_contract_specs:
         ev = _migrated_event.get(spec.contract_type)
         if ev is not None:
             gate_item[(spec.body, ev)] = spec.item_name
@@ -473,13 +680,26 @@ def _set_mission_rules(world: KSP1World, player: int) -> None:
             item = gate_item.get((body.name, event))
             for loc in event_locations(body.name, event):
                 name = str(loc)
-                base_rule = proxy_rule if name in infeasible else cap_rule
+                ap_loc = world.get_location(name)
+                # Unachievable missions (curated edge-ban ∪ dv-infeasible) are
+                # EXCLUDED: AP fill places only filler there (never progression
+                # or useful), so they can't strand items when capability can't
+                # reach them — replacing the old all-parts proxy, which made a
+                # location holding progression circularly unreachable.  The
+                # capability rule still stands as the access rule (honest: the
+                # location IS unreachable; EXCLUDED just keeps progression out).
+                if name in infeasible:
+                    ap_loc.progress_type = LocationProgressType.EXCLUDED
                 if item is None:
-                    world.get_location(name).access_rule = base_rule
+                    ap_loc.access_rule = cap_rule
                 else:
-                    def rule(state: CollectionState, _base=base_rule, _item=item) -> bool:
-                        return state.has(_item, player) and _base(state)
-                    world.get_location(name).access_rule = rule
+                    # Goal-contract gate item via the chokepoint (kept
+                    # PROGRESSION) — the event is reachable only with the
+                    # goal-contract item held.
+                    gate = require_item(world, item)
+                    def rule(state: CollectionState, _base=cap_rule, _gate=gate) -> bool:
+                        return _gate(state) and _base(state)
+                    ap_loc.access_rule = rule
 
 
 def _apply_home_system_local_exclusions(world: KSP1World) -> None:
@@ -613,11 +833,12 @@ def _set_early_bucket_item_bans(world: KSP1World, player: int, difficulty: int) 
     """Ban Progressive Launch Pad from starter inventory only.
 
     The Pad item is a blow-open item: collecting it raises the launch-mass
-    cap by a big jump and opens many bodies at once.  Keeping it out of
-    the starter bucket spreads its discovery across the game.
-    Sphere-ladder Rule B handles other early-bucket restrictions
-    (e.g. the differentiators previously banned by the now-removed
-    ``ban_differentiators_early`` option).
+    cap by a big jump and opens many bodies at once.  It must never be
+    *handed to the player at game load* — even at a binding low base where
+    the pad is needed early, the player should have to earn it on a real
+    location, not start with it.  So it's banned from the starter bucket
+    (the auto-checked starting-inventory locations); the placement system
+    still has to find it an early *non-starter* home.
     """
     if not world.options.progressive_launch_pad:
         return
@@ -700,6 +921,12 @@ class GoalSpec:
     complete_tech_tree: bool = False
     home_system_local: bool = False
     home: BodyName | None = None
+    # The random_contracts "free" goal: a single home-body flag plant whose only
+    # real gate is completing X contracts. Its content is the contracts, not the
+    # destination, so it must NOT restrict contract generation to the home system
+    # (see is_home_system_only) and its tiny launch mass must not cap contract
+    # difficulty (see generate_contracts).
+    free_goal: bool = False
 
     def is_home_system_only(self, home: BodyName) -> bool:
         """True when every goal body is in ``home``'s local neighbourhood.
@@ -711,6 +938,10 @@ class GoalSpec:
         is a separate progression axis from body reach).
         """
         if self.complete_tech_tree:
+            return False
+        # The free goal's flag-at-home target would otherwise read as
+        # "home system only" and wrongly confine every contract to home.
+        if self.free_goal:
             return False
         all_bodies = (
             set(self.flag_bodies)
@@ -730,10 +961,6 @@ _PRESET_GOALS: dict[int, GoalSpec] = {
     Goal.option_eeloo_return: GoalSpec(
         display_name="Eeloo Return",
         return_bodies=(BodyName.EELOO,),
-    ),
-    Goal.option_eve_return: GoalSpec(
-        display_name="Eve Return",
-        return_bodies=(BodyName.EVE,),
     ),
     Goal.option_flag_every_body: GoalSpec(
         display_name="Flag Every Body",
@@ -760,7 +987,9 @@ _PRESET_GOALS: dict[int, GoalSpec] = {
             BodyName.LAYTHE, BodyName.VALL, BodyName.TYLO,
             BodyName.BOP, BodyName.POL,
         ),
-        home_system_local=True,
+        # home_system_local is DERIVED in _filter_home_from_spec (True from a
+        # Jool home where these moons are local, False from Kerbin/Duna where
+        # this is a valid cross-system run) — never hardcoded on the preset.
     ),
 }
 
@@ -791,6 +1020,17 @@ def resolve_goal_spec(options, home: BodyName,
         or options.orbit_bodies.value
         or options.flyby_bodies.value
     )
+
+    # The random_contracts "free" goal: a single home-body flag plant. Built
+    # directly (already materialized) so it bypasses _filter_home_from_spec,
+    # which would strip the home body and leave an empty, target-less spec.
+    if goal_value == Goal.option_random_contracts:
+        return GoalSpec(
+            display_name="Random Contracts",
+            flag_bodies=(home,),
+            free_goal=True,
+            home=home,
+        )
 
     if goal_value != Goal.option_custom and has_body_lists:
         raise RuntimeError(
@@ -861,12 +1101,20 @@ def resolve_goal_spec(options, home: BodyName,
 
 def _filter_home_from_spec(spec: GoalSpec, home: BodyName) -> GoalSpec:
     """Drop ``home`` from every body list (a goal can't ask the player to do
-    a mission on their starting body — trivially achievable), and stamp
-    ``home`` onto the returned spec so the spec is fully materialized.
+    a mission on their starting body — trivially achievable), stamp ``home``,
+    and DERIVE ``home_system_local``.
+
+    ``home_system_local`` is purely a byproduct of whether the resolved goal
+    happens to sit entirely within the home system — never a preset/user choice.
+    When it does (e.g. mun_flag from Kerbin, or jool_moons_return from a Jool
+    home), it's a focused local run and external bodies are banned from logic.
+    A goal that reaches outside the home system — e.g. jool_moons_return from
+    Kerbin, or mun_flag from Duna — is a perfectly valid, if ambitious,
+    cross-system mission; it's simply not "local".
     """
     def _strip(bodies: tuple[BodyName, ...]) -> tuple[BodyName, ...]:
         return tuple(b for b in bodies if b != home)
-    return GoalSpec(
+    materialized = GoalSpec(
         display_name=spec.display_name,
         flag_bodies=_strip(spec.flag_bodies),
         return_bodies=_strip(spec.return_bodies),
@@ -874,9 +1122,11 @@ def _filter_home_from_spec(spec: GoalSpec, home: BodyName) -> GoalSpec:
         orbit_bodies=_strip(spec.orbit_bodies),
         flyby_bodies=_strip(spec.flyby_bodies),
         complete_tech_tree=spec.complete_tech_tree,
-        home_system_local=spec.home_system_local,
+        free_goal=spec.free_goal,
         home=home,
     )
+    return replace(materialized,
+                   home_system_local=materialized.is_home_system_only(home))
 
 
 def _validate_home_system_local(spec: GoalSpec) -> None:
@@ -936,6 +1186,51 @@ def create_victory_location(world: KSP1World) -> None:
     victory_location.place_locked_item(create_item(world, "Victory"))
 
 
+def create_threshold_locations(world: KSP1World) -> None:
+    """Create goal-mode threshold + contract-completion-event locations
+    (count / progressive_unlock only; no-op otherwise).
+
+    Threshold locations are REAL, pre-filled locations: each holds a locked goal
+    contract item (or Progressive R&D copy for the tech-tree goal). The client
+    reports them once the completed-contract count reaches the threshold,
+    releasing the locked item through the normal AP channel — so the existing
+    item-gated contract-offer machinery needs no change.
+
+    For each non-goal contract we also mint an address-None EVENT location
+    ("Contract Complete: ...") locked with a "Contract Completed" event item; its
+    access rule (set in _set_contract_rules, identical to the contract's) makes
+    ``state.has("Contract Completed", X)`` mean "X contracts completable in
+    logic", which is what the threshold access rules gate on.
+    """
+    from BaseClasses import Location
+    from .items import create_item, KSP1Item
+    from .contracts import CONTRACT_COMPLETED_EVENT
+    from .locations import KSP1Location, LOCATION_NAME_TO_ID
+
+    defs = world.contract_threshold_defs
+    if not defs:
+        return
+
+    menu = world.get_region("Menu")
+
+    # Threshold locations: real (addressed), pre-filled with the locked item.
+    threshold_locs = {
+        loc_name: LOCATION_NAME_TO_ID[loc_name] for loc_name, _c, _i in defs
+    }
+    menu.add_locations(threshold_locs, KSP1Location)
+    for loc_name, _count, item_name in defs:
+        world.get_location(loc_name).place_locked_item(create_item(world, item_name))
+
+    # Contract-completion events: one per non-goal contract, address None.
+    for spec in world.contract_specs:
+        ev_name = spec.display_name.replace("Contract: ", "Contract Complete: ", 1)
+        ev_loc = Location(world.player, ev_name, None, menu)
+        menu.locations.append(ev_loc)
+        ev_loc.place_locked_item(
+            KSP1Item(CONTRACT_COMPLETED_EVENT, ItemClassification.progression,
+                     None, world.player))
+
+
 def _all_locations_infeasible(
     body: BodyName, event: EventName,
     model_infeasible_locations: frozenset[str],
@@ -963,11 +1258,14 @@ def _set_victory_rules(
         player, spec, safety, world.model_infeasible_locations,
         world.mission_builder.home,
     )
-    goal_items = tuple(s.item_name for s in world.goal_contract_specs)
+    # Goal-contract items gate Victory; route through the chokepoint so they're
+    # kept PROGRESSION (a demoted goal item the beatability sweep never collects
+    # makes the goal unreachable).
+    goal_gate = require_items(
+        world, [s.item_name for s in world.goal_contract_specs])
 
     def victory_rule(state: CollectionState) -> bool:
-        return (all(state.has(item, player) for item in goal_items)
-                and base_rule(state))
+        return goal_gate(state) and base_rule(state)
 
     world.get_location("Victory").access_rule = victory_rule
     world.multiworld.completion_condition[player] = (
@@ -992,14 +1290,8 @@ def _make_goal_spec_rule(
 
     # Flag bodies
     if spec.flag_bodies:
-        flag_bodies = spec.flag_bodies
-        def flag_rule(state: CollectionState) -> bool:
-            cap = get_capability(state, player)
-            for b in flag_bodies:
-                if not cap.bodies[b].access[EventName.FLAG_PLANT]:
-                    return False
-            return True
-        sub_rules.append(flag_rule)
+        sub_rules.append(_make_goal_event_rule(
+            player, spec.flag_bodies, EventName.FLAG_PLANT))
 
     # Return bodies
     proxy_return = [b for b in spec.return_bodies
@@ -1007,14 +1299,8 @@ def _make_goal_spec_rule(
                                                    model_infeasible_locations)]
     normal_return = [b for b in spec.return_bodies if b not in proxy_return]
     if normal_return:
-        nr = tuple(normal_return)
-        def return_rule(state: CollectionState) -> bool:
-            cap = get_capability(state, player)
-            for b in nr:
-                if not cap.bodies[b].access[EventName.RETURN]:
-                    return False
-            return True
-        sub_rules.append(return_rule)
+        sub_rules.append(_make_goal_event_rule(
+            player, normal_return, EventName.RETURN))
     if proxy_return:
         sub_rules.append(_make_all_parts_rule(player))
 
@@ -1024,38 +1310,20 @@ def _make_goal_spec_rule(
                                                    model_infeasible_locations)]
     normal_sample = [b for b in spec.sample_return_bodies if b not in proxy_sample]
     if normal_sample:
-        ns = tuple(normal_sample)
-        def sample_rule(state: CollectionState) -> bool:
-            cap = get_capability(state, player)
-            for b in ns:
-                if not cap.bodies[b].access[EventName.SAMPLE_RETURN]:
-                    return False
-            return True
-        sub_rules.append(sample_rule)
+        sub_rules.append(_make_goal_event_rule(
+            player, normal_sample, EventName.SAMPLE_RETURN))
     if proxy_sample:
         sub_rules.append(_make_all_parts_rule(player))
 
     # Orbit bodies
     if spec.orbit_bodies:
-        orbit_bodies = spec.orbit_bodies
-        def orbit_rule(state: CollectionState) -> bool:
-            cap = get_capability(state, player)
-            for b in orbit_bodies:
-                if not cap.bodies[b].access[EventName.ORBIT]:
-                    return False
-            return True
-        sub_rules.append(orbit_rule)
+        sub_rules.append(_make_goal_event_rule(
+            player, spec.orbit_bodies, EventName.ORBIT))
 
     # Flyby bodies
     if spec.flyby_bodies:
-        flyby_bodies = spec.flyby_bodies
-        def flyby_rule(state: CollectionState) -> bool:
-            cap = get_capability(state, player)
-            for b in flyby_bodies:
-                if not cap.bodies[b].access[EventName.FLYBY]:
-                    return False
-            return True
-        sub_rules.append(flyby_rule)
+        sub_rules.append(_make_goal_event_rule(
+            player, spec.flyby_bodies, EventName.FLYBY))
 
     # Complete tech tree
     if spec.complete_tech_tree:

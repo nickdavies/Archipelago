@@ -2,8 +2,8 @@
 Universal Tracker regen round-trip tests.
 
 Verifies that generating a world, extracting slot_data, and regenerating
-via re_gen_passthrough produces the same progressive representatives,
-location set, and access rule results.
+via re_gen_passthrough produces the same location set and access rule
+results.
 """
 import unittest
 
@@ -43,11 +43,6 @@ class TestUTRegen(unittest.TestCase):
         world2: KSP1World = mw2.worlds[1]
         return world1, world2, slot_data
 
-    def test_progressive_representatives_match(self):
-        """Regen must produce identical progressive representatives."""
-        world1, world2, _ = self._regen_from_slot_data(seed=42)
-        self.assertEqual(world1.progressive_representatives, world2.progressive_representatives)
-
     def test_location_set_matches(self):
         """Regen must produce the same set of location names."""
         world1, world2, _ = self._regen_from_slot_data(seed=42)
@@ -61,8 +56,7 @@ class TestUTRegen(unittest.TestCase):
         regen_sd = world2.fill_slot_data()
         # These keys must match exactly — they control access rules.
         for key in ("goal", "difficulty", "start_with_launch_clamps",
-                     "tech_slots_per_node", "goal_locations", "goal_display_name",
-                     "progressive_representatives"):
+                     "tech_slots_per_node", "goal_locations", "goal_display_name"):
             self.assertEqual(
                 original_sd[key], regen_sd[key],
                 f"slot_data[{key!r}] mismatch after regen",
@@ -95,6 +89,56 @@ class TestUTRegen(unittest.TestCase):
             world1.goal_spec.flyby_bodies, world2.goal_spec.flyby_bodies,
         )
 
+    def test_count_mode_thresholds_round_trip(self):
+        """count-mode X and threshold defs reconstruct identically after regen."""
+        opts = {
+            "goal": "flag_every_body",
+            "goal_contract_mode": "count",
+            "contracts_available": 10,
+        }
+        world1, world2, original_sd = self._regen_from_slot_data(seed=7, options=opts)
+        self.assertEqual(world1.contracts_required, world2.contracts_required)
+        self.assertEqual(world1.contract_threshold_defs, world2.contract_threshold_defs)
+        regen_sd = world2.fill_slot_data()
+        for key in ("goal_contract_mode", "contracts_required", "contract_thresholds"):
+            self.assertEqual(original_sd[key], regen_sd[key],
+                             f"slot_data[{key!r}] mismatch after regen")
+
+    def test_progressive_unlock_thresholds_round_trip(self):
+        """progressive_unlock threshold ordering survives regen (launch-mass sort
+        is deterministic, so the same goal item lands on the same threshold)."""
+        opts = {
+            "goal": "flag_every_body",
+            "goal_contract_mode": "progressive_unlock",
+            "contracts_available": 10,
+        }
+        world1, world2, _ = self._regen_from_slot_data(seed=11, options=opts)
+        self.assertEqual(world1.contract_threshold_defs, world2.contract_threshold_defs)
+
+    def test_random_orbit_params_round_trip(self):
+        """RANDOM_ORBIT target orbits reconstruct identically after regen (a
+        re-roll would diverge and the sphere-ladder cost would drift)."""
+        opts = {"contract_type_weights": {"random_orbit": 5, "orbit": 1, "mine_ore": 1}}
+        world1, world2, original_sd = self._regen_from_slot_data(seed=21, options=opts)
+        self.assertEqual(
+            world1.mission_builder.random_orbit_params,
+            world2.mission_builder.random_orbit_params,
+        )
+        self.assertEqual(original_sd["random_orbit_params"],
+                         world2.fill_slot_data()["random_orbit_params"])
+
+    def test_random_contracts_round_trip(self):
+        """random_contracts goal (free flag-on-home) reconstructs after regen."""
+        opts = {
+            "goal": "random_contracts",
+            "goal_contract_mode": "count",
+            "contracts_available": 10,
+        }
+        world1, world2, _ = self._regen_from_slot_data(seed=13, options=opts)
+        self.assertTrue(world2.goal_spec.free_goal)
+        self.assertEqual(world1.goal_spec.flag_bodies, world2.goal_spec.flag_bodies)
+        self.assertEqual(world1.contract_threshold_defs, world2.contract_threshold_defs)
+
 
 class TestExplainRule(unittest.TestCase):
     """Test the explain_rule UT hook."""
@@ -123,29 +167,6 @@ class TestExplainRule(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertIsInstance(result, list)
         self.assertIn("Received Parts", result[0]["text"])
-
-    def test_parts_progressive_reveals_chains(self):
-        result = self.world.explain_rule("parts progressive", self.state)
-        self.assertIsNotNone(result)
-        text = result[0]["text"]
-        self.assertIn("Progressive Parts (this seed)", text)
-        # Every chain in this seed's reps must appear in the output.
-        for chain_name in self.world.progressive_representatives:
-            if self.world.progressive_representatives[chain_name]:
-                self.assertIn(chain_name, text)
-
-    def test_parts_progressive_filtered_chain(self):
-        result = self.world.explain_rule("parts progressive launch", self.state)
-        self.assertIsNotNone(result)
-        text = result[0]["text"]
-        self.assertIn("Progressive Launch Engine", text)
-        # Vacuum-engine chain must NOT appear when filtering "launch".
-        self.assertNotIn("Progressive Vacuum Engine", text)
-
-    def test_parts_progressive_no_match(self):
-        result = self.world.explain_rule("parts progressive zzznoexist", self.state)
-        self.assertIsNotNone(result)
-        self.assertIn("No progressive chain matches", result[0]["text"])
 
     def test_parts_filter_still_works(self):
         """The 'progressive' sub-keyword must not break ordinary filters."""

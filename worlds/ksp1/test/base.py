@@ -7,12 +7,11 @@ runtime is dominated by this step being re-run for every test method.
 
 Most tests don't read any of the sphere-ladder side effects:
 ``pre_fill`` populates ``world._sphere_ladder``, mutates item
-classifications via ``_reclassify_spare_progressives``, installs Rule A
+classifications via ``_demote_non_rep_parts``, installs Rule A
 (bootstrap-local) on KSC biomes, installs Rule B (per-copy tier ban) on
 non-bootstrap locations, and registers ``S_launch.delta`` as
-``multiworld.local_early_items``. Tests that only inspect ``itempool``,
-``progressive_representatives``, or do their own reachability sweeps
-don't need any of that.
+``multiworld.local_early_items``. Tests that only inspect ``itempool``
+or do their own reachability sweeps don't need any of that.
 
 This base stubs ``pre_fill`` to a no-op so world setup completes through
 the other (fast) gen steps. Tests that depend on sphere-ladder side
@@ -72,3 +71,48 @@ class KSP1TestBase(WorldTestBase):
             apply_sphere_ladder(self.world)
             self._real_pre_fill_done = True
         yield
+
+    def test_all_state_can_reach_everything(self):
+        """KSP1 override of WorldTestBase's default reachability check.
+
+        Some KSP1 locations are unreachable BY DESIGN (filler-only) and must be
+        exempt from the all-reachable assertion — otherwise this test flakes on
+        seeds that happen to produce them:
+
+        * Model-infeasible missions (``world.model_infeasible_locations`` —
+          curated edge bans + per-home dv-infeasible) carry an honest capability
+          rule that stays unreachable even with every item (e.g. an Eve surface
+          return while Eve ascent is banned).
+        * Contracts with no sphere-ladder bracket (and the curated goal-contract
+          proxies) gate on the all-parts proxy ``has_all(every part)``, which a
+          location-short pool can't satisfy — they're structurally unreachable
+          filler, not a logic path.
+
+        Everything else must still be reachable, and the seed must be beatable.
+        """
+        if not (self.run_default_tests and self.constructed):
+            return
+        world = self.multiworld.worlds[self.player]
+        exempt = set(getattr(world, "model_infeasible_locations", frozenset()))
+        # Contracts whose access rule falls back to the all-parts proxy
+        # (unbracketed, or the curated proxy set) are filler-only and can't be
+        # reached on a location-short pool — exempt their reward slots.
+        creps = getattr(world, "_cheap_contract_reps", {}) or {}
+        proxy_ids = getattr(world, "_proxy_contract_ids", set())
+        slot_count = getattr(world, "non_goal_slot_count", 2)
+        for spec in (*getattr(world, "contract_specs", ()),
+                     *getattr(world, "goal_contract_specs", ())):
+            if creps.get(spec.contract_id) is None or spec.contract_id in proxy_ids:
+                exempt.update(spec.location_names(slot_count))
+        with self.subTest("Game", game=self.game, seed=self.multiworld.seed):
+            state = self.multiworld.get_all_state(False)
+            for location in self.multiworld.get_locations():
+                if location.name in exempt:
+                    continue
+                with self.subTest("Location should be reached",
+                                  location=location.name):
+                    self.assertTrue(location.can_reach(state),
+                                    f"{location.name} unreachable")
+            with self.subTest("Beatable"):
+                self.multiworld.state = state
+                self.assertBeatable(True)

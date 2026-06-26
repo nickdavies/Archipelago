@@ -98,6 +98,41 @@ def _has_module(part_dict: dict, module_name: str) -> bool:
     return _find_module(part_dict, module_name) is not None
 
 
+def _parse_vec(val: str) -> list[float] | None:
+    """Parse a comma-separated float vector ('x, y, z, ...') into a list of
+    floats, or None if any field is non-numeric.  Used for attach nodes and
+    CoMOffset."""
+    out: list[float] = []
+    for tok in val.split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        try:
+            out.append(float(tok))
+        except ValueError:
+            return None
+    return out or None
+
+
+def _parse_node(val: str) -> dict | None:
+    """Parse a KSP attach-node line into ``{pos:[x,y,z], dir:[x,y,z], size}``.
+
+    KSP node format is ``x, y, z, orient_x, orient_y, orient_z[, size]`` where
+    ``y`` is the vertical/stack axis and (x,z) the radial plane.  ``size`` is the
+    node diameter class (int) and may be omitted.  Returns None if fewer than 3
+    numeric fields parse.  Emitted raw so consumers can derive structural roles
+    (spine-stackable / radial / splitter) from the geometry rather than guessing
+    from bulkhead profiles."""
+    nums = _parse_vec(val)
+    if nums is None or len(nums) < 3:
+        return None
+    return {
+        "pos": nums[0:3],
+        "dir": nums[3:6] if len(nums) >= 6 else [0.0, 0.0, 0.0],
+        "size": int(nums[6]) if len(nums) >= 7 else None,
+    }
+
+
 def extract_part(part_dict: dict) -> dict | None:
     """Extract relevant fields from a parsed PART block. Returns None if filtered."""
     name = part_dict.get("name", "")
@@ -139,6 +174,31 @@ def extract_part(part_dict: dict) -> dict | None:
 
     # Tech required
     result["tech_required"] = part_dict.get("TechRequired", "")
+
+    # Attach geometry (generic facts; consumers derive structural roles —
+    # spine-stackable / radial / splitter — from this rather than from bulkhead
+    # profiles, which can't tell a straight adapter from a slanted one).
+    stack_nodes = []
+    for k in sorted(part_dict):
+        if k.startswith("node_stack"):
+            node = _parse_node(part_dict[k])
+            if node is not None:
+                node["id"] = k[len("node_stack_"):] or "stack"
+                stack_nodes.append(node)
+    if stack_nodes:
+        result["stack_nodes"] = stack_nodes
+    if "node_attach" in part_dict:
+        an = _parse_node(part_dict["node_attach"])
+        if an is not None:
+            result["attach_node"] = an
+    if "CoMOffset" in part_dict:
+        com = _parse_vec(part_dict["CoMOffset"])
+        if com is not None and len(com) >= 3:
+            result["com_offset"] = com[0:3]
+    if "attachRules" in part_dict:
+        rules = _parse_vec(part_dict["attachRules"])
+        if rules is not None:
+            result["attach_rules"] = [int(r) for r in rules]
 
     # Engine data
     engine_mod = _find_module(part_dict, "ModuleEngines") or _find_module(part_dict, "ModuleEnginesFX")
@@ -182,6 +242,58 @@ def extract_part(part_dict: dict) -> dict | None:
     resources = _parse_resources(part_dict)
     if resources:
         result["resources"] = resources
+
+    # Crew capacity (top-level field, present on command pods / crew cabins)
+    try:
+        crew = int(part_dict.get("CrewCapacity", "0"))
+    except ValueError:
+        crew = 0
+    if crew > 0:
+        result["crew_capacity"] = crew
+
+    # Solar panel (fixed and deployable both use ModuleDeployableSolarPanel)
+    solar_mod = _find_module(part_dict, "ModuleDeployableSolarPanel")
+    if solar_mod:
+        try:
+            charge = float(solar_mod.get("chargeRate", "0"))
+        except ValueError:
+            charge = 0.0
+        if charge > 0:
+            # `isTracking = false` is set explicitly on fixed panels (OX-STAT,
+            # OX-STAT-XL).  Absent or "true" means deployable/tracking.
+            tracking = solar_mod.get("isTracking", "true").strip().lower() != "false"
+            result["solar"] = {
+                "charge_rate": charge,
+                "tracking": tracking,
+            }
+
+    # Antenna (ModuleDataTransmitter)
+    antenna_mod = _find_module(part_dict, "ModuleDataTransmitter")
+    if antenna_mod:
+        try:
+            power = float(antenna_mod.get("antennaPower", "0"))
+        except ValueError:
+            power = 0.0
+        if power > 0:
+            combinable = antenna_mod.get("antennaCombinable", "False").strip().lower() == "true"
+            atype = antenna_mod.get("antennaType", "").strip()
+            result["antenna"] = {
+                "power": power,
+                "combinable": combinable,
+                "type": atype,
+            }
+
+    # SAS service level (ModuleSAS — appears on probe cores AND command pods AND
+    # standalone reaction wheel modules).  Standalone reaction wheels generally
+    # don't carry SAS in stock; probe cores and pods do.  Stored unconditionally
+    # so the rank scorer can use it directly.
+    sas_mod = _find_module(part_dict, "ModuleSAS")
+    if sas_mod:
+        try:
+            lvl = int(sas_mod.get("SASServiceLevel", "0"))
+        except ValueError:
+            lvl = 0
+        result["sas_level"] = lvl
 
     return result
 

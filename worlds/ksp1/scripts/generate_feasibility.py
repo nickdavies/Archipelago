@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-"""Generate the static FEASIBILITY table consumed by the world rules.
+"""Generate the static FEASIBILITY tables consumed by the world rules.
 
-For every body that can serve as a starting body, this script:
+One table is produced PER DIFFICULTY (feasibility depends on the dv
+margin, which differs per difficulty), each at a uniform rep-selection
+overhead.  For every body that can serve as a starting body, the script:
 
 1. Builds an "everything maxed" item-count function — one of every
    individual part in ``PART_DB`` plus every progressive item at its
-   max tier.  This is strictly more permissive than any single seed's
-   rep selection, so the set of bodies it flags as infeasible is the
-   floor: anything banned here can't be reached even by the best-case
-   parts kit.
+   max tier — and adds a small ``percent_margin`` overhead on top as a
+   rep-selection safety buffer (a real seed gets one rep per category,
+   possibly worse than the best part).
 2. Runs ``compute_capability_from_items`` against a ``MissionBuilder``
-   rooted at that home.
+   rooted at that home, at each difficulty profile.
 3. Records which non-home landable bodies have ``RETURN`` or
    ``SAMPLE_RETURN`` reported as unreachable (False access).  These
    bodies get the "all-parts collected" proxy rule at goal-evaluation
@@ -51,7 +52,7 @@ from worlds.ksp1.bodies import (
 )
 from worlds.ksp1.capability import compute_capability_from_items
 from worlds.ksp1.locations import EVENT_BY_NAME, EventName, MissionLocation
-from worlds.ksp1.parts import PART_DB, PROGRESSIVE_PART_COUNTS
+from worlds.ksp1.parts import PART_DB
 
 
 # Mission events whose feasibility the script probes.  Each (body, event)
@@ -61,35 +62,39 @@ from worlds.ksp1.parts import PART_DB, PROGRESSIVE_PART_COUNTS
 _PROBED_EVENTS: tuple[EventName, ...] = (EventName.RETURN, EventName.SAMPLE_RETURN)
 
 
-# Difficulty used when probing feasibility.  ``casual`` is intentional —
-# its 30% percent-margin and 200 m/s fixed-margin add enough headroom on
-# top of the raw capability check that a body has to be solidly feasible
-# with maxed reps before we declare it non-proxy.  Marginal missions
-# (Tylo return at ~4 km/s in a single Kerbin stage) that *just barely*
-# clear the normal-difficulty check fail under casual margins and end
-# up routed to the all-parts proxy, where they belong.
-DEFAULT_DIFFICULTY: str = "casual"
+# One table is baked per difficulty.  Feasibility genuinely depends on
+# difficulty — the dv margin differs per profile (casual demands the most
+# cushion, expert the least), so a mission can be flyable at expert yet
+# infeasible at casual.  A single difficulty-agnostic table can't express
+# that, so the world reads the table matching the seed's difficulty.
+# Order matches ``options.Difficulty.value`` (0..2).
+DIFFICULTIES: tuple[str, ...] = ("casual", "normal", "expert")
 
-# Extra ``percent_margin`` on top of the chosen difficulty profile.
-# ``casual + 25%`` matches the post-F4 banned set against the historical
-# hand-tuned list with only one residual difference: Tylo→Kerbin Sample
-# Return is now feasible (F4's multi-stage + LF Tank + ion guarantee
-# makes the Tylo→Kerbin→Tylo round trip genuinely buildable).  Lower
-# overheads under-ban Laythe Return from many homes; higher overheads
-# (≥30%) over-ban Tylo→Laythe Return as collateral.  Was 10% pre-F4
-# when single-stage modelling left more missions naturally infeasible.
+# Extra ``percent_margin`` added on top of EACH difficulty profile.  This is
+# a REP-SELECTION safety buffer, not a difficulty knob: the probe runs with
+# the max kit (one of every part), but a real seed gets ONE representative
+# per category that may be heavier or weaker, so a mission that *just barely*
+# closes with the best parts could fail with the reps actually granted.  The
+# buffer keeps such marginal missions classified infeasible.  Uniform across
+# difficulties because rep variance is difficulty-independent.  At 25% the
+# marginal deep sample-returns that widen the fill-famine tail (e.g. expert SSR
+# requiring Tylo+Laythe) drop back to the proxy, restoring the zero-reject bar.
 DEFAULT_OVERHEAD: float = 0.25
+
+# Default difficulty for the single-home helper (the per-home probe still
+# takes an explicit difficulty; this only covers callers that omit it).
+DEFAULT_DIFFICULTY: str = "normal"
 
 
 def _max_kit_counts() -> dict[str, int]:
-    """One of every individual part, every progressive at max tier.
+    """One of every individual part in ``PART_DB``.
 
-    The progressive-tier overrides come second so they win when an item
-    name appears in both PART_DB and PROGRESSIVE_PART_COUNTS.
+    With parts de-progressivized, every concrete part is its own item, so
+    the most permissive kit is simply one of each — strictly more
+    permissive than any single seed's selection, making the bodies this
+    flags infeasible the floor.
     """
-    counts: dict[str, int] = {name: 1 for name in PART_DB}
-    counts.update(PROGRESSIVE_PART_COUNTS)
-    return counts
+    return {name: 1 for name in PART_DB}
 
 
 def _profile_with_overhead(base_name: str, overhead: float) -> str:
@@ -170,7 +175,7 @@ def build_table(
     difficulty_name: str = DEFAULT_DIFFICULTY,
     overhead: float = DEFAULT_OVERHEAD,
 ) -> dict[BodyName, frozenset[str]]:
-    """Compute the full per-home model-infeasible-locations table."""
+    """Compute the per-home model-infeasible-locations table for one difficulty."""
     table: dict[BodyName, frozenset[str]] = {}
     for home in _candidate_homes():
         table[home] = compute_model_infeasible_for_home(
@@ -179,20 +184,31 @@ def build_table(
     return table
 
 
-def _format_table(table: dict[BodyName, frozenset[str]]) -> str:
-    """Serialise the table as a Python source file.  Stable ordering so
-    the diff is minimal across regenerations.
+def build_all_tables(
+    overhead: float = DEFAULT_OVERHEAD,
+) -> dict[str, dict[BodyName, frozenset[str]]]:
+    """Compute one per-home table per difficulty (see ``DIFFICULTIES``)."""
+    return {
+        difficulty: build_table(difficulty_name=difficulty, overhead=overhead)
+        for difficulty in DIFFICULTIES
+    }
+
+
+def _format_table(tables: dict[str, dict[BodyName, frozenset[str]]]) -> str:
+    """Serialise the per-difficulty tables as a Python source file.  Stable
+    ordering so the diff is minimal across regenerations.
     """
     lines = [
-        '"""Static model-infeasible-locations table — checked in,',
+        '"""Static model-infeasible-locations tables — checked in,',
         'regenerated by ``worlds/ksp1/scripts/generate_feasibility.py``.',
         '',
-        'For each body that can serve as a starting body, lists the AP',
-        'location names whose mission the dv model cannot verify even',
-        'when the player has every progressive item at max tier and one',
-        'of every part in ``PART_DB``.  Goal rules that include any of',
-        'these locations fall back to the "all-parts collected" proxy',
-        'at completion-check time.',
+        'One table per difficulty (feasibility depends on the dv margin, which',
+        'differs per difficulty).  For each body that can serve as a starting',
+        'body, lists the AP location names whose mission the dv model cannot',
+        'verify even when the player has every progressive item at max tier and',
+        'one of every part in ``PART_DB`` (plus a rep-selection safety margin).',
+        'Goal rules that include any of these locations fall back to the',
+        '"all-parts collected" proxy at completion-check time.',
         '',
         'Entries are full AP location names (one per slot — e.g. three',
         '``Eve Return 1..3`` entries for the three RETURN slots) so the',
@@ -207,15 +223,21 @@ def _format_table(table: dict[BodyName, frozenset[str]]) -> str:
         'from worlds.ksp1.bodies import BodyName',
         '',
         '',
-        'MODEL_INFEASIBLE_LOCATIONS: dict[BodyName, frozenset[str]] = {',
+        'MODEL_INFEASIBLE_LOCATIONS_BY_DIFFICULTY: '
+        'dict[str, dict[BodyName, frozenset[str]]] = {',
     ]
-    for home in sorted(table.keys()):
-        entries = sorted(table[home])
-        if not entries:
-            lines.append(f"    BodyName.{home.name}: frozenset(),")
-        else:
-            quoted = ", ".join(f"{e!r}" for e in entries)
-            lines.append(f"    BodyName.{home.name}: frozenset({{{quoted}}}),")
+    for difficulty in DIFFICULTIES:
+        table = tables[difficulty]
+        lines.append(f"    {difficulty!r}: {{")
+        for home in sorted(table.keys()):
+            entries = sorted(table[home])
+            if not entries:
+                lines.append(f"        BodyName.{home.name}: frozenset(),")
+            else:
+                quoted = ", ".join(f"{e!r}" for e in entries)
+                lines.append(
+                    f"        BodyName.{home.name}: frozenset({{{quoted}}}),")
+        lines.append("    },")
     lines.append("}")
     lines.append("")
     return "\n".join(lines)
@@ -234,20 +256,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check", action="store_true",
                         help="Verify the checked-in table matches what "
                              "the script would produce; non-zero exit on drift.")
-    parser.add_argument("--difficulty", default=DEFAULT_DIFFICULTY,
-                        choices=sorted(DIFFICULTY_PROFILES.keys()),
-                        help=f"DifficultyProfile name to use for the feasibility "
-                             f"probe (default: {DEFAULT_DIFFICULTY!r} — its larger "
-                             f"margins keep marginal missions in the proxy set).")
     parser.add_argument("--overhead", type=float, default=DEFAULT_OVERHEAD,
-                        help="Extra fractional percent_margin added on top of the "
-                             "chosen difficulty profile (e.g. 0.10 = require an "
-                             "extra 10%% dv headroom for a body to count as non-"
-                             "proxy).  Default 0.")
+                        help="Extra fractional percent_margin added on top of every "
+                             "difficulty profile as a rep-selection safety buffer "
+                             f"(default: {DEFAULT_OVERHEAD}).")
     args = parser.parse_args(argv)
 
-    table = build_table(difficulty_name=args.difficulty, overhead=args.overhead)
-    rendered = _format_table(table)
+    tables = build_all_tables(overhead=args.overhead)
+    rendered = _format_table(tables)
 
     if args.write and args.check:
         parser.error("--write and --check are mutually exclusive")

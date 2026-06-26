@@ -4,11 +4,8 @@ Gold-standard location logic integration tests.
 Two testing strategies:
 
   Real-items tests (TestKerbinEarlyLocations):
-    Collects actual items and verifies location accessibility.
-    Progressive items are used because individual parts absorbed into
-    progressive chains can only be unlocked through their progressive tier
-    mechanism — collecting the bare part name does nothing if the part's
-    progressive parent hasn't been collected.
+    Collects actual part items (each KSP part is its own AP item, keyed by
+    ksp_name) and verifies location accessibility.
 
   Mocked-capability tests (TestKerbinReturnVsMunReturn, TestFlybyPerBodyWiring,
     TestCrewedEventsRequireBodyProfile, TestTechTreeBandGating):
@@ -17,12 +14,12 @@ Two testing strategies:
     physics.  Directly catches the class of bug where a rule closure
     captures the wrong body_name.
 
-Key item names for real-item tests:
-  "Progressive Capsule"       → has_capsule = True
-  "Progressive SRB"           → SRB available for sounding altitude calc
-  "Progressive Probe Core"    → lightest_probe set (required for sounding)
-  "parachuteSingle"           → has_parachutes (Mk16 Parachute, not in progressive chain)
-  "Progressive Launch Engine" → has_throttleable_engine (tier-1 includes Swivel)
+Key part items for real-item tests:
+  "mk1pod.v2"        → has_capsule = True (Mk1 Command Pod)
+  "solidBooster1-1"  → SRB available for sounding altitude calc (BACC Thumper)
+  "probeCoreSphere.v2" → lightest_probe set (Stayputnik, required for sounding)
+  "parachuteSingle"  → has_parachutes (Mk16 Parachute)
+  "liquidEngine2.v2" → has_throttleable_engine (LV-T45 Swivel)
 """
 import unittest
 from unittest.mock import patch, MagicMock
@@ -54,6 +51,13 @@ def _make_body_cap(events) -> MagicMock:
     All EventName values are present; unlisted ones default to False.
     """
     bp = MagicMock()
+    events = set(events)
+    # Physical invariant: crewed landing implies uncrewed (robotic) landing — a
+    # heavier crewed craft touching down means a lighter probe can too.  Keeps
+    # the surface-instrument science gate (LANDING) consistent with the
+    # surface-sample crew gate (CREWED_LANDING).
+    if EventName.CREWED_LANDING in events:
+        events.add(EventName.LANDING)
     bp.access = {e: (e in events) for e in EventName}
     return bp
 
@@ -200,9 +204,8 @@ class TestLocationSetStructure(unittest.TestCase):
 class TestKerbinEarlyLocations(KSP1TestBase):
     """Kerbin special locations tested with real items.
 
-    Progressive items used because individual parts in progressive chains are
-    only unlocked through their tier mechanism — collecting 'Mk1 Command Pod'
-    does nothing if 'Progressive Capsule' hasn't been collected first.
+    Each KSP part is its own AP item (keyed by ksp_name); collecting one grants
+    that part to the capability model directly.
     """
 
     def test_nothing_accessible_without_items(self):
@@ -220,8 +223,8 @@ class TestKerbinEarlyLocations(KSP1TestBase):
             )
 
     def test_capsule_enables_first_launch_and_landing(self):
-        """Progressive Capsule sets has_capsule; the capsule path enables First Launch and First Landing."""
-        self.collect_by_name("Progressive Capsule")
+        """A capsule sets has_capsule; the capsule path enables First Launch and First Landing."""
+        self.collect_by_name("mk1pod.v2")
         self.assertTrue(self.can_reach_location("Kerbin First Launch"),
                         "First Launch: has_capsule path must pass")
         self.assertTrue(self.can_reach_location("Kerbin First Landing"),
@@ -232,7 +235,7 @@ class TestKerbinEarlyLocations(KSP1TestBase):
 
     def test_capsule_enables_all_ksc_biomes(self):
         """has_capsule → KSC EVA science → all 12 KSC biome locations accessible."""
-        self.collect_by_name("Progressive Capsule")
+        self.collect_by_name("mk1pod.v2")
         for biome in KSC_BIOME_NAMES:
             self.assertTrue(
                 self.can_reach_location(biome),
@@ -245,8 +248,8 @@ class TestKerbinEarlyLocations(KSP1TestBase):
         An SRB alone cannot produce sounding altitude — the sounding model
         requires a payload (probe core or capsule + chute + decoupler) to compute.
         """
-        self.collect_by_name("Progressive SRB")
-        self.collect_by_name("Progressive Probe Core")
+        self.collect_by_name("solidBooster1-1")
+        self.collect_by_name("probeCoreSphere.v2")
         self.assertTrue(
             self.can_reach_location("Kerbin First Launch"),
             "First Launch: sounding > 0 path must pass with SRB + probe",
@@ -258,8 +261,8 @@ class TestKerbinEarlyLocations(KSP1TestBase):
 
     def test_srb_with_probe_no_landing_without_descent(self):
         """SRB + probe: sounding > 0 but no safe descent → First Landing NO, KSC biomes NO."""
-        self.collect_by_name("Progressive SRB")
-        self.collect_by_name("Progressive Probe Core")
+        self.collect_by_name("solidBooster1-1")
+        self.collect_by_name("probeCoreSphere.v2")
         self.assertFalse(
             self.can_reach_location("Kerbin First Landing"),
             "First Landing requires parachute or throttleable engine; SRB + probe has neither",
@@ -272,11 +275,10 @@ class TestKerbinEarlyLocations(KSP1TestBase):
 
     def test_srb_plus_parachute_enables_first_landing(self):
         """SRB + probe + parachute: sounding > 0 AND has_parachutes → First Landing YES."""
-        self.collect_by_name("Progressive SRB")
-        self.collect_by_name("Progressive Probe Core")
-        # Progressive Parachute tier 1 unlocks parachuteSingle/parachuteLarge
-        # (the rep is auto-granted; we don't need to also collect the part name).
-        self.collect_by_name("Progressive Parachute")
+        self.collect_by_name("solidBooster1-1")
+        self.collect_by_name("probeCoreSphere.v2")
+        # Mk16 parachute → has_parachutes (safe descent).
+        self.collect_by_name("parachuteSingle")
         self.assertTrue(
             self.can_reach_location("Kerbin First Landing"),
             "First Landing: sounding > 0 + parachutes must pass",
@@ -284,10 +286,10 @@ class TestKerbinEarlyLocations(KSP1TestBase):
 
     def test_srb_plus_throttleable_engine_enables_landing(self):
         """SRB + probe + throttleable engine: sounding > 0 AND has_throttleable_engine → First Landing YES."""
-        self.collect_by_name("Progressive SRB")
-        self.collect_by_name("Progressive Probe Core")
-        # Progressive Launch Engine tier-1 includes LV-T45 Swivel (throttleable)
-        self.collect_by_name("Progressive Launch Engine")
+        self.collect_by_name("solidBooster1-1")
+        self.collect_by_name("probeCoreSphere.v2")
+        # LV-T45 Swivel is throttleable → has_throttleable_engine.
+        self.collect_by_name("liquidEngine2.v2")
         self.assertTrue(
             self.can_reach_location("Kerbin First Landing"),
             "First Landing: sounding > 0 + throttleable engine must pass",
@@ -295,7 +297,7 @@ class TestKerbinEarlyLocations(KSP1TestBase):
 
     def test_splashdown_needs_altitude_and_descent_control(self):
         """Capsule alone (sounding = 0): Splashdown rule requires sounding ≥ 1.0 km."""
-        self.collect_by_name("Progressive Capsule")
+        self.collect_by_name("mk1pod.v2")
         self.assertFalse(
             self.can_reach_location("Splashdown"),
             "Splashdown needs sounding ≥ 1 km; capsule alone gives sounding = 0",
@@ -303,22 +305,22 @@ class TestKerbinEarlyLocations(KSP1TestBase):
 
     def test_splashdown_accessible_with_srb_probe_parachute(self):
         """SRB + probe + parachute: sounding ≥ 1 km AND has_parachutes → Splashdown YES."""
-        self.collect_by_name("Progressive SRB")
-        self.collect_by_name("Progressive Probe Core")
-        self.collect_by_name("Progressive Parachute")
+        self.collect_by_name("solidBooster1-1")
+        self.collect_by_name("probeCoreSphere.v2")
+        self.collect_by_name("parachuteSingle")
         self.assertTrue(
             self.can_reach_location("Splashdown"),
             "Splashdown: sounding ≥ 1 km + parachutes must pass (tier-1 SRBs easily reach 1 km)",
         )
 
     def test_capsule_enables_kerbin_eva_missions(self):
-        """Progressive Capsule alone → all capsule-only Kerbin locations reachable.
+        """A capsule alone → all capsule-only Kerbin locations reachable.
 
         Kerbin Sample Return and Flag Plant have empty MISSION_PROFILES (no rocket
         needed — launchpad EVA). These must not be blocked by body-level gates
         that duplicate per-edge checks.
         """
-        self.collect_by_name("Progressive Capsule")
+        self.collect_by_name("mk1pod.v2")
 
         # Per-body mission events with empty profiles (always achievable with capsule)
         for loc in (
@@ -344,7 +346,7 @@ class TestKerbinEarlyLocations(KSP1TestBase):
         Sample Return, Flag Plant, First Launch/Landing, and KSC biomes all
         require a capsule (crewed EVA). A probe core is not a substitute.
         """
-        self.collect_by_name("Progressive Probe Core")
+        self.collect_by_name("probeCoreSphere.v2")
 
         for loc in (
             "Kerbin Sample Return 1", "Kerbin Sample Return 2", "Kerbin Sample Return 3",
@@ -366,7 +368,7 @@ class TestKerbinEarlyLocations(KSP1TestBase):
 
         Neither capsule nor probe core → no command authority at all.
         """
-        self.collect_by_name("Progressive LFO Tank")
+        self.collect_by_name("fuelTankSmall")
 
         for loc in (
             "Kerbin Sample Return 1", "Kerbin Sample Return 2", "Kerbin Sample Return 3",
@@ -386,10 +388,11 @@ class TestKerbinEarlyLocations(KSP1TestBase):
     def test_altitude_checks_gate_with_sounding(self):
         """Altitude check locations require strictly increasing sounding thresholds.
 
-        Uses mocked capability to avoid depending on the SRB physics model.
-        Altitudes are read from the Kerbin home location set so this stays
-        correct if the milestone schedule shifts (Phase 3a moved from
-        5/15/25/…/70 to 5/10/16/20/30/45/70).
+        Mocks the sounding-altitude computation (``_compute_sounding_altitude``,
+        the cheap-flags function the altitude rule actually calls) to avoid
+        depending on the SRB physics model.  Altitudes are read from the Kerbin
+        home location set so this stays correct if the milestone schedule shifts
+        (Phase 3a moved from 5/15/25/…/70 to 5/10/16/20/30/45/70).
         """
         altitudes = sorted(
             int(loc.threshold_km)
@@ -400,9 +403,7 @@ class TestKerbinEarlyLocations(KSP1TestBase):
         )
 
         # sounding = 10 km: only the lowest milestones pass
-        cap = _make_zero_cap()
-        cap.sounding_altitude_km = 10.0
-        with patch("worlds.ksp1.rules.get_capability", return_value=cap):
+        with patch("worlds.ksp1.rules._compute_sounding_altitude", return_value=10.0):
             for km in altitudes:
                 name = f"Kerbin {km}km Altitude"
                 if km <= 10:
@@ -413,9 +414,7 @@ class TestKerbinEarlyLocations(KSP1TestBase):
                                      f"{km} km check must fail with 10 km sounding")
 
         # sounding = 50 km: everything below 50 km passes, top tier fails
-        cap2 = _make_zero_cap()
-        cap2.sounding_altitude_km = 50.0
-        with patch("worlds.ksp1.rules.get_capability", return_value=cap2):
+        with patch("worlds.ksp1.rules._compute_sounding_altitude", return_value=50.0):
             for km in altitudes:
                 name = f"Kerbin {km}km Altitude"
                 if km <= 50:

@@ -48,6 +48,9 @@ class MissionType(StrEnum):
     SAMPLE_RETURN = "sample_return"
     FLAG_PLANT = "flag_plant"
     ESCAPE = "escape"
+    # Rescue: reach the target's ORBIT, rendezvous, and bring a stranded Kerbal
+    # home — like RETURN but the return starts from low orbit (no landing leg).
+    RESCUE = "rescue"
     # Home-body-only mission types (no MissionBuilder profile entry)
     SOUNDING = "sounding"
     FIRST_LAUNCH = "first_launch"
@@ -95,9 +98,9 @@ DIFFICULTY_PROFILES: dict[str, DifficultyProfile] = {
     # plane_change_fraction models a window-timing SKILL: matching an inclined
     # target's plane is mostly avoidable by departing at the node, but it's a
     # non-obvious optimization beginners don't do.  So casual pays ~full,
-    # normal+ are expected to time it (lower and lower tolerance up the ladder),
-    # insane pays nothing.  Only ASCENT-to-encounter edges carry a plane change;
-    # descending X→parent is always free (see _add_home_return_paths).
+    # normal+ are expected to time it (lower and lower tolerance up the ladder).
+    # Only ASCENT-to-encounter edges carry a plane change; descending X→parent
+    # is always free (see _add_home_return_paths).
     "casual": DifficultyProfile(
         fixed_margin=200, percent_margin=0.30, plane_change_fraction=1.00,
         min_twr_atmo=1.5, min_twr_vac=1.2,
@@ -111,11 +114,6 @@ DIFFICULTY_PROFILES: dict[str, DifficultyProfile] = {
     "expert": DifficultyProfile(
         fixed_margin=50, percent_margin=0.05, plane_change_fraction=0.05,
         min_twr_atmo=1.3, min_twr_vac=1.1,
-        ship_cd=0.2, srb_needs_rcs=False,
-    ),
-    "insane": DifficultyProfile(
-        fixed_margin=0, percent_margin=0.00, plane_change_fraction=0.00,
-        min_twr_atmo=1.2, min_twr_vac=1.0,
         ship_cd=0.2, srb_needs_rcs=False,
     ),
 }
@@ -269,21 +267,26 @@ class Body:
         r_sync = self.sync_orbit_radius_m
         return self.radius_km * 1000.0 < r_sync < soi_m
 
+    def raise_dv(self, r_target_m: float) -> float:
+        """Hohmann two-burn delta-v (m/s) to raise from low orbit to a circular
+        orbit at ``r_target_m``. 0 if the target is at/below low orbit or unknown.
+        Used for the stationary-orbit raise and the random-orbit apoapsis raise."""
+        mu = self.gm
+        r_lo = self.lo_radius_m
+        if math.isinf(r_target_m) or r_target_m <= r_lo:
+            return 0.0
+        a_t = (r_lo + r_target_m) / 2.0
+        v_lo = math.sqrt(mu / r_lo)
+        v_peri = math.sqrt(mu * (2.0 / r_lo - 1.0 / a_t))
+        v_apo = math.sqrt(mu * (2.0 / r_target_m - 1.0 / a_t))
+        v_target = math.sqrt(mu / r_target_m)
+        return (v_peri - v_lo) + (v_target - v_apo)
+
     @property
     def stationary_raise_dv(self) -> float:
         """Hohmann delta-v to raise from low orbit to synchronous orbit (m/s).
         0 if sync is at/below low orbit (very fast rotators) or unknown."""
-        mu = self.gm
-        r_lo = self.lo_radius_m
-        r_sync = self.sync_orbit_radius_m
-        if math.isinf(r_sync) or r_sync <= r_lo:
-            return 0.0
-        a_t = (r_lo + r_sync) / 2.0
-        v_lo = math.sqrt(mu / r_lo)
-        v_peri = math.sqrt(mu * (2.0 / r_lo - 1.0 / a_t))
-        v_apo = math.sqrt(mu * (2.0 / r_sync - 1.0 / a_t))
-        v_sync = math.sqrt(mu / r_sync)
-        return (v_peri - v_lo) + (v_sync - v_apo)
+        return self.raise_dv(self.sync_orbit_radius_m)
 
     # ------------------------------------------------------------------
     # Suborbital ascent physics
@@ -416,7 +419,7 @@ MUN = Body(
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=14,
     solar_distance_au=1.0,
-    landing_leg_tier=2,
+    landing_leg_tier=1,
     power_requirement="solar",
     eva_jetpack_twr=_jetpack_twr(1.63),
     dv=BodyDeltaV(
@@ -462,7 +465,7 @@ MOHO = Body(
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=20,
     solar_distance_au=0.34,
-    landing_leg_tier=2,
+    landing_leg_tier=1,
     power_requirement="solar",
     eva_jetpack_twr=_jetpack_twr(2.70),
     dv=BodyDeltaV(
@@ -535,7 +538,7 @@ DUNA = Body(
     atm_pressure_kpa=6.755, atm_density_kg_m3=0.096,
     can_land=True, low_orbit_alt_km=50,
     solar_distance_au=1.52,
-    landing_leg_tier=2,
+    landing_leg_tier=1,
     power_requirement="solar_marginal",
     eva_jetpack_twr=_jetpack_twr(2.94),
     dv=BodyDeltaV(
@@ -559,7 +562,7 @@ IKE = Body(
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=10,
     solar_distance_au=1.52,
-    landing_leg_tier=2,
+    landing_leg_tier=1,
     power_requirement="solar_marginal",
     eva_jetpack_twr=_jetpack_twr(1.10),
     dv=BodyDeltaV(
@@ -582,7 +585,7 @@ DRES = Body(
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=25,
     solar_distance_au=2.65,
-    landing_leg_tier=2,
+    landing_leg_tier=1,
     power_requirement="solar_marginal",
     eva_jetpack_twr=_jetpack_twr(2.94),
     dv=BodyDeltaV(
@@ -658,7 +661,7 @@ VALL = Body(
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=15,
     solar_distance_au=5.20,
-    landing_leg_tier=2,
+    landing_leg_tier=1,
     power_requirement="rtg",
     eva_jetpack_twr=_jetpack_twr(2.31),
     dv=BodyDeltaV(
@@ -750,7 +753,7 @@ EELOO = Body(
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=10,
     solar_distance_au=6.0,
-    landing_leg_tier=2,
+    landing_leg_tier=1,
     power_requirement="rtg",
     eva_jetpack_twr=_jetpack_twr(1.72),
     dv=BodyDeltaV(
@@ -868,7 +871,8 @@ MissionProfiles = dict[tuple[BodyName, MissionType], list[list[MissionEdge]]]
 # Pad" (index = number of copies received).  Other homes scale these by
 # their surface→low-orbit dv ratio.  Index 0 (no copies) is the starting
 # cap; index N is "unlimited" so the player isn't blocked at the goal.
-_PROGRESSIVE_LAUNCH_PAD_CAPS_KERBIN: tuple[float, ...] = (100.0, 200.0, 500.0, float("inf"))
+_PROGRESSIVE_LAUNCH_PAD_CAPS_KERBIN: tuple[float, ...] = (
+    20.0, 100.0, 400.0, float("inf"))
 
 # Reference Isp used in the rocket-equation scaling (m/s).  Roughly an
 # LV-909 vacuum engine — a mid-tier optimization point that matches
@@ -897,6 +901,50 @@ def progressive_launch_pad_caps_for(home: BodyName) -> tuple[float, ...]:
         cap * ratio if cap != float("inf") else cap
         for cap in _PROGRESSIVE_LAUNCH_PAD_CAPS_KERBIN
     )
+
+
+# ---------------------------------------------------------------------------
+# Random-orbit contracts
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class RandomOrbitParams:
+    """A seeded target orbit for a RANDOM_ORBIT contract — the client renders it
+    and the player matches it within the deviation window. Periapsis sits at the
+    body's low orbit; apoapsis (altitude), eccentricity, and inclination vary.
+    The extra delta-v cost is modelled at the home body in
+    ``ContractTypeDef.transform_mission`` (inclination rotation loss + apoapsis
+    raise); off-home it's free (capture into any orbit), so it's not modelled."""
+    inclination_deg: float
+    sma_m: float
+    eccentricity: float
+
+    @property
+    def apoapsis_m(self) -> float:
+        return self.sma_m * (1.0 + self.eccentricity)
+
+
+def generate_random_orbit_params(rng, bodies) -> dict[BodyName, RandomOrbitParams]:
+    """Seeded random target orbit per orbitable body. Periapsis pinned to low
+    orbit (always achievable); apoapsis up to ~3x low orbit, capped inside the
+    SOI; inclination 0-90 deg. Deterministic for a given ``rng`` so UT regen can
+    restore the same orbits from slot_data instead of re-rolling."""
+    out: dict[BodyName, RandomOrbitParams] = {}
+    for b in bodies:
+        if not b.is_orbitable:
+            continue
+        r_lo = b.lo_radius_m
+        soi_m = b.soi_radius_km * 1000.0
+        r_ap_cap = min(r_lo * 3.0, 0.7 * soi_m) if soi_m > 0 else r_lo * 3.0
+        r_ap_cap = max(r_ap_cap, r_lo * 1.05)   # always leave a little room
+        r_ap = rng.uniform(r_lo, r_ap_cap)
+        r_pe = r_lo
+        ecc = (r_ap - r_pe) / (r_ap + r_pe)
+        sma = (r_pe + r_ap) / 2.0
+        incl = rng.uniform(0.0, 90.0)
+        out[b.name] = RandomOrbitParams(
+            inclination_deg=incl, sma_m=sma, eccentricity=ecc)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -956,8 +1004,19 @@ class MissionBuilder:
     # ladder's hot loop.
     _MAX_PROFILE_ALTS = 2
 
+    # Rescue rendezvous/phasing margin (m/s) — the cost of matching and closing
+    # on the stranded craft's orbit, baked into the RESCUE profile at the target
+    # body. Modest (a coplanar same-orbit rendezvous is cheap) and conservative.
+    _RESCUE_RENDEZVOUS_DV = 200.0
+
     def __init__(self, home: BodyName):
         self.home: BodyName = home
+        # Per-body seeded target orbits for RANDOM_ORBIT contracts. Populated by
+        # the world in generate_early (fresh or UT-restored); empty until then.
+        # transform_mission reads these to model the home-orbit extra cost, so
+        # the sphere ladder (which calls spec.mission_transform(mission_builder))
+        # sees the same cost without any per-contract param threading.
+        self.random_orbit_params: dict[BodyName, "RandomOrbitParams"] = {}
         # Precomputed relay-tier table keyed by destination BodyName.
         # Built before edge construction so ``_edge`` can stamp the
         # value onto every ``MissionEdge.relay_tier`` directly — the
@@ -977,6 +1036,14 @@ class MissionBuilder:
         self._profiles: MissionProfiles = {}
         self._build_profiles()
         self._validate()
+        # Missions the world has declared unachievable: curated edge-bans (e.g.
+        # Eve ascent) ∪ per-home dv-infeasible (offline table).  Empty by default
+        # — the world sets it at generation time (the offline table generator
+        # keeps it empty so it measures RAW maximal capability).  The capability
+        # assessment treats these as access=False, so contracts / goals / location
+        # rules that route through capability inherit the ban without their own
+        # check.  See ``world.py`` (``_BANNED_EDGES`` / ``unachievable_missions``).
+        self.unachievable: frozenset[tuple[BodyName, MissionType]] = frozenset()
 
     # ------------------------------------------------------------------
     # Public lookup API
@@ -999,6 +1066,37 @@ class MissionBuilder:
 
     def has_profile(self, body: BodyName, mission_type: MissionType) -> bool:
         return (body, mission_type) in self._profiles
+
+    def is_achievable(self, body: BodyName, mission_type: MissionType) -> bool:
+        """False iff ``(body, mission_type)`` is in the world-declared
+        ``unachievable`` set (curated edge-ban ∪ dv-infeasible).  Capability and
+        every reachability consumer route through this so a ban can't be missed.
+        """
+        return (body, mission_type) not in self.unachievable
+
+    def missions_using_edges(
+        self, banned_edges: "frozenset[tuple[BodyName, EdgeType]]"
+    ) -> frozenset[tuple[BodyName, MissionType]]:
+        """Graph-derive the missions banned by an edge set: a ``(body,
+        mission_type)`` is banned iff it HAS profiles and EVERY profile
+        alternative traverses a banned ``(edge.body, edge.edge_type)``.
+
+        This is the curated-ban expansion: ban one edge (e.g. Eve ascent) and
+        every mission with no clean alternative around it is banned — the
+        ``downstream`` closure, computed from the graph rather than hand-listed.
+        A mission with no profiles is NOT banned (empty profile = trivially
+        achievable, e.g. Kerbin launchpad sample return).
+        """
+        if not banned_edges:
+            return frozenset()
+        banned: set[tuple[BodyName, MissionType]] = set()
+        for (body, mt), profiles in self._profiles.items():
+            if profiles and all(
+                any((e.body, e.edge_type) in banned_edges for e in profile)
+                for profile in profiles
+            ):
+                banned.add((body, mt))
+        return frozenset(banned)
 
     def all_keys(self):
         return self._profiles.keys()
@@ -1041,6 +1139,16 @@ class MissionBuilder:
         bnl = body.value.lower()
         return self._edge(
             f"{bnl}_low_orbit", f"{bnl}_sync_orbit", self._PV, dv, body,
+            attitude=True,
+        )
+
+    def make_phasing_edge(self, body: BodyName, dv: float) -> MissionEdge:
+        """A pure-vacuum low-orbit phasing/matching burn (the rendezvous margin a
+        rescue adds at the target body). A self-loop on the target's low orbit so
+        it sums into the mission dv without changing the trajectory."""
+        bnl = body.value.lower()
+        return self._edge(
+            f"{bnl}_low_orbit", f"{bnl}_low_orbit", self._PV, dv, body,
             attitude=True,
         )
 
@@ -1466,6 +1574,10 @@ class MissionBuilder:
                 land_profile = ascent + [deorbit]
                 self._add(hn, MissionType.LAND, land_profile)
                 self._add(hn, MissionType.RETURN, land_profile)
+                # RESCUE — reach home orbit, rendezvous, and deorbit the rescued
+                # Kerbal. Ascent + phasing burn (at low orbit) + deorbit.
+                phasing = self.make_phasing_edge(hn, self._RESCUE_RENDEZVOUS_DV)
+                self._add(hn, MissionType.RESCUE, ascent + [phasing, deorbit])
 
         # FLAG_PLANT and SAMPLE_RETURN: walk out from launchpad (Kerbal EVA),
         # no rocket required.  See user note in CLAUDE.md about Kerbin
@@ -1530,6 +1642,20 @@ class MissionBuilder:
             # missions are flyby-and-back, not sample retrieval.
             if body.can_land:
                 self._add(bn, MissionType.SAMPLE_RETURN, *combos)
+
+        # RESCUE — reach the target's LOW ORBIT (not surface), rendezvous, and
+        # bring the stranded Kerbal home. Like RETURN but the return always
+        # starts from low orbit (no landing+ascent leg at the target), with a
+        # rendezvous/phasing burn baked in at the target's low orbit.
+        rescue_outbound = self._find_outbound_paths(home_surface, target_lo)
+        rescue_return = self._find_return_paths(target_lo, home_surf)
+        if rescue_outbound and rescue_return:
+            phasing = self.make_phasing_edge(bn, self._RESCUE_RENDEZVOUS_DV)
+            rescue_combos = [out + [phasing] + ret
+                             for out in rescue_outbound for ret in rescue_return]
+            rescue_combos.sort(key=lambda p: sum(e.base_dv for e in p))
+            self._add(bn, MissionType.RESCUE,
+                      *rescue_combos[:self._MAX_PROFILE_ALTS])
 
     # ------------------------------------------------------------------
     # Cross-validation
@@ -1829,13 +1955,20 @@ def science_budget(
     can_land_crewed: bool,
     home: BodyName,
     psi_tier: int = 0,
+    *,
+    can_land_uncrewed: bool,
 ) -> float:
     """
     Estimate the total science collectible from *body* given the player's
     current instrument and crew capabilities.
 
     Conservative (golden rule): uses min(fly_low, fly_high) for flying
-    situations, does not count surface-sample crew value without crewed landing.
+    situations, does not count surface-sample crew value without crewed landing,
+    and does not count surface *instrument* science without an (uncrewed)
+    landing — surface readings require physically landing a craft, and the
+    client only awards them on a real touchdown.  ``can_land_uncrewed`` is the
+    player's ability to land a (robotic) craft; ``can_land_crewed`` (which
+    implies it) additionally unlocks the surface-sample crew value.
 
     Base instrument values (from KSP science definitions):
       Thermometer: 8   Barometer: 12   Crew Report: 5   EVA Report: 8
@@ -1904,21 +2037,21 @@ def science_budget(
             eff_fly_low, eff_fly_high
         )
 
-    # Landed science (scales with biome count)
+    # Landed science (scales with biome count).  Surface INSTRUMENT readings
+    # require landing a craft (uncrewed is enough — a probe places the
+    # instruments); the surface SAMPLE crew value (in crew_surface_val)
+    # additionally requires crewed landing.  A body the player can only orbit
+    # yields no surface science.
     landed = 0.0
     if body.can_land and body.num_biomes > 0:
-        landed = (
-            (base_instr + psi_landed) * eff_landed
-            + crew_surface_val * eff_landed
-        ) * body.num_biomes
+        landed_instr = (base_instr + psi_landed) * eff_landed if can_land_uncrewed else 0.0
+        landed = (landed_instr + crew_surface_val * eff_landed) * body.num_biomes
 
-    # Splashed science (ocean biomes only)
+    # Splashed science (ocean biomes only) — same landing gate.
     splashed = 0.0
     if body.has_ocean and body.num_splash_biomes > 0:
-        splashed = (
-            (base_instr + psi_splashed) * eff_splashed
-            + crew_surface_val * eff_splashed
-        ) * body.num_splash_biomes
+        splashed_instr = (base_instr + psi_splashed) * eff_splashed if can_land_uncrewed else 0.0
+        splashed = (splashed_instr + crew_surface_val * eff_splashed) * body.num_splash_biomes
 
     return orbital + flying + landed + splashed
 

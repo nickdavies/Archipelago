@@ -51,13 +51,10 @@ class TestItemLocationBalance(KSP1TestBase):
 
     def test_no_negative_filler_count(self):
         """Pool should never have more part items than locations."""
-        from worlds.ksp1.parts import PROGRESSIVE_PART_COUNTS
-        rep_count = sum(PROGRESSIVE_PART_COUNTS.values())
         part_item_count = (
             len(_SORTED_PART_NAMES)
             - len(ALWAYS_PRECOLLECTED)
             - len(CLAMP_PRECOLLECTED)
-            - rep_count  # representatives removed from pool
         )
         real_loc_count = sum(
             1 for loc in self.multiworld.get_locations(self.player)
@@ -70,15 +67,20 @@ class TestItemLocationBalance(KSP1TestBase):
 
 
 class TestAllLocationsReachable(KSP1TestBase):
-    """Every non-event location must be reachable with all items collected."""
+    """Every non-event location must be reachable with all items collected,
+    except the deliberately model-infeasible ones (curated bans + per-home
+    dv-infeasible) which carry an honest unreachable capability rule."""
+    needs_real_pre_fill = True  # mission/tech/contract rules read cheap-ladder reps
 
     def test_all_locations_reachable_with_all_items(self):
         self.collect_all_but([])
         state = self.multiworld.state
+        infeasible = self.world.model_infeasible_locations
         unreachable = [
             loc.name
             for loc in self.multiworld.get_locations(self.player)
-            if loc.address is not None and not loc.can_reach(state)
+            if loc.address is not None and loc.name not in infeasible
+            and not loc.can_reach(state)
         ]
         detail = ""
         if unreachable:
@@ -102,6 +104,7 @@ class TestAllLocationsReachable(KSP1TestBase):
 
 class TestScienceBudget(KSP1TestBase):
     """Science budget with all parts must cover every tech tier."""
+    needs_real_pre_fill = True  # _accessible_science reads the cheap-ladder science reps
 
     def test_capability_sees_reachable_bodies(self):
         """With all items, the capability system must consider bodies reachable."""
@@ -201,21 +204,6 @@ class TestItemClassification(KSP1TestBase):
                 return item.classification
         raise KeyError(name)
 
-    def test_progressive_engine_items_in_pool(self):
-        """Progressive engine items must be in the pool. Per-seed,
-        `_reclassify_spare_progressives` may demote spare copies to
-        useful when the goal doesn't need every tier, so we don't
-        assert classification — only pool presence."""
-        for name in (
-            "Progressive Launch Engine",
-            "Progressive Vacuum Engine",
-        ):
-            count = sum(
-                1 for item in self.multiworld.itempool
-                if item.name == name
-            )
-            self.assertGreater(count, 0, f"{name} must be in the item pool")
-
     def test_rcs_is_useful(self):
         self.assertEqual(
             self._classification("RCSBlock.v2"),  # RV-105
@@ -223,32 +211,10 @@ class TestItemClassification(KSP1TestBase):
             "RCS Thruster should be useful, not progression",
         )
 
-    def test_progressive_ladder_in_pool(self):
-        # Telescopic ladders moved into Progressive Ladder group; the
-        # group item itself replaces them in the pool. Per-seed,
-        # `_reclassify_spare_progressives` may demote some/all copies to
-        # useful when the goal doesn't need the chain, but the pool must
-        # always contain Progressive Ladder copies.
-        count = sum(
-            1 for item in self.multiworld.itempool
-            if item.name == "Progressive Ladder"
-        )
-        self.assertGreater(
-            count, 0,
-            "Progressive Ladder must be in the item pool",
-        )
-
-    def test_basic_ladder_is_useful(self):
-        # ladder1 was demoted to useful (Progressive Ladder uses telescopic variants).
-        self.assertEqual(
-            self._classification("ladder1"),
-            ItemClassification.useful,
-            "ladder1 should be useful (excluded from Progressive Ladder)",
-        )
-
 
 class TestProgressiveRD(KSP1TestBase):
     """Progressive R&D items gate higher tech tree bands."""
+    needs_real_pre_fill = True  # tech-tier reachability reads the cheap-ladder science reps
 
     def test_progressive_rd_in_pool(self):
         """Pool must contain exactly PROGRESSIVE_RD_COUNT copies."""
@@ -315,6 +281,9 @@ class TestProgressiveRD(KSP1TestBase):
 class TestCompleteTechTreeGoalRD(KSP1TestBase):
     """complete_tech_tree goal requires Progressive R&D x MAX_RD_BAND."""
     options = {"goal": "complete_tech_tree"}
+    # Victory's science gate reads the cheap-ladder reps (_science_body_event_reps),
+    # a pre_fill side effect; without the real ladder it's conservatively unreachable.
+    needs_real_pre_fill = True
 
     def test_goal_unreachable_without_rd(self):
         """Victory location must be unreachable without Progressive R&D."""

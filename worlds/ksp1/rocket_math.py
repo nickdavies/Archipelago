@@ -17,6 +17,7 @@ from .parts import (
     Engine, FuelTank, SolidBooster, MultiMount,
     MAX_RADIAL_ENGINES,
 )
+from .part_geometry import PartRole
 from .capability_reasons import StageDiagnostic, StageFailure
 
 G0: float = 9.80665  # standard gravity, m/s²
@@ -99,19 +100,21 @@ def _tank_ratio(t):
 
 
 def _packable_tanks(tanks, engine):
-    """Return ``(packable, rho_star)``: the mountable, non-radial, near-best-ratio
-    tanks for this engine (largest first) and the best fuel:dry ratio among them.
+    """Return ``(packable, rho_star)``: the mountable, spine-stackable,
+    near-best-ratio tanks for this engine (largest first) and the best fuel:dry
+    ratio among them.
 
-    Only tanks the ``engine`` can mount on survive — radial side-tanks (no
-    central stack node) are excluded and the optimizer's size gate
-    (``engine.size_class <= tank.size_class``) is applied.  Among those, tanks
-    more than ``_TANK_PACK_RATIO_TOLERANCE`` worse than the best fuel:dry ratio
-    are dropped: for uniform-ratio fuel types this keeps every tank (the pack is
-    just "largest first"), but for an LF engine seeing oxidizer-drained LFO
-    views it discards the dead-oxidizer tanks, keeping the build's mass honest.
-    ``rho_star`` is returned so the caller need not recompute the max."""
+    Only tanks the ``engine`` can mount on survive — non-SPINE tanks (radial side
+    tanks, single-node tanks like the FL-C1000, slanted/coupler adapters) can't
+    form a central stackable column and are excluded, and the optimizer's size
+    gate (``engine.size_class <= tank.size_class``) is applied.  Among those,
+    tanks more than ``_TANK_PACK_RATIO_TOLERANCE`` worse than the best fuel:dry
+    ratio are dropped: for uniform-ratio fuel types this keeps every tank (the
+    pack is just "largest first"), but for an LF engine seeing oxidizer-drained
+    LFO views it discards the dead-oxidizer tanks, keeping the build's mass
+    honest.  ``rho_star`` is returned so the caller need not recompute the max."""
     mountable = [t for t in tanks
-                 if not t.is_radial and t.fuel_mass > 0.0
+                 if PartRole.SPINE in t.roles and t.fuel_mass > 0.0
                  and engine.size_class <= t.size_class]
     if not mountable:
         return [], 0.0
@@ -172,7 +175,29 @@ def _pack_columns(fuel_target, packable, cols):
 def _covering_tank(packable, remaining):
     """Smallest packable tank that can hold ``remaining`` (it gets partial-filled
     to it); the largest tank if none is big enough.  Allocation-free.  Shared by
-    ``_pack_columns`` and ``_pack_dry`` so their dry mass always agrees."""
+    ``_pack_columns`` and ``_pack_dry`` so their dry mass always agrees.
+
+    Fast path (byte-identical to the forward scan below): a covering call almost
+    always follows a FULL greedy pack, so ``remaining`` is below the smallest
+    packable tank's fuel (measured: 100% of calls).  Then every tank covers it,
+    so the answer is the smallest-fuel tank — tie-broken to the FIRST in packable
+    (largest-first) order, exactly as the scan's ``< cov_fuel`` does.  packable is
+    sorted fuel-descending, so equal-min-fuel tanks are contiguous at the end:
+    return the last element when its fuel is unique (the common case, O(1)), else
+    walk back over the tied run to its first member.  Avoids the O(len) scan that
+    dominated this hot leaf (avg ~5.5 tanks/call)."""
+    smallest = packable[-1]
+    if remaining <= smallest.fuel_mass:
+        mf = smallest.fuel_mass
+        if len(packable) == 1 or packable[-2].fuel_mass != mf:
+            return smallest                  # unique smallest fuel — the covering
+        cov = smallest                       # ties at min fuel: take first-in-order
+        for t in reversed(packable):
+            if t.fuel_mass == mf:
+                cov = t
+            else:
+                break
+        return cov
     cov = None
     cov_fuel = float("inf")
     for t in packable:
@@ -281,20 +306,27 @@ def _size_parallel_unit(payload, e_mass, n_eng_core, n_eng_boost,
     R_minus_1 = math.exp(required_dv / isp_g0) - 1.0
     hi = max(R_minus_1 * (payload + e_mass * n_eng_core) / (n_boost + 1), 0.05)
     grow = 0
-    while dv_exact(hi) < required_dv and grow < _PARALLEL_FUEL_GROW:
+    dv_hi = dv_exact(hi)
+    while dv_hi < required_dv and grow < _PARALLEL_FUEL_GROW:
         hi *= 2.0
         grow += 1
-    if dv_exact(hi) < required_dv:
+        dv_hi = dv_exact(hi)
+    if dv_hi < required_dv:
         return None
-    lo = 0.0  # always search DOWN from a sufficient hi to the true minimum
+    # Search DOWN from a sufficient hi to the true minimum.  ``dv_hi`` tracks the
+    # dv at the current ``hi`` (always >= required), so the final hi's dv needs
+    # no recompute — saves two dv_exact per call (grow-exit + return) vs always
+    # re-evaluating, with byte-identical results.
+    lo = 0.0
     for _ in range(_PARALLEL_BISECT_ITERS):
         mid = 0.5 * (lo + hi)
-        if dv_exact(mid) >= required_dv:
-            hi = mid
+        dv_mid = dv_exact(mid)
+        if dv_mid >= required_dv:
+            hi, dv_hi = mid, dv_mid
         else:
             lo = mid
     col_dry = _pack_dry(hi, packable, 1)
-    return hi, col_dry, dv_exact(hi)
+    return hi, col_dry, dv_hi
 
 
 # ---------------------------------------------------------------------------
@@ -1483,14 +1515,6 @@ _F4_DV_SPLITS: dict[int, tuple[tuple[float, ...], ...]] = {
         (0.6, 0.4),
         (0.7, 0.3),
     ),
-    3: (
-        (0.5, 0.3, 0.2),
-        (0.4, 0.4, 0.2),
-        (0.4, 0.3, 0.3),
-        (0.5, 0.25, 0.25),
-        (0.6, 0.2, 0.2),
-        (0.3, 0.4, 0.3),
-    ),
 }
 
 # Per-stage TWR floor.  Stage 1 (liftoff) uses whatever the caller passes
@@ -1501,9 +1525,12 @@ _F4_DV_SPLITS: dict[int, tuple[tuple[float, ...], ...]] = {
 _F4_TWR_MIDDLE: float = 1.0          # sustainer (vacuum, already moving)
 _F4_TWR_TOP_CIRCULARIZE: float = 0.8 # circularisation (near-orbital, horizontal burn)
 
-# Max K supported in MVP. Diminishing returns past 3; K=4 adds extra
-# decoupler mass that rarely beats K=3.
-_F4_MAX_K: int = 3
+# Max ascent stages.  Capped at 2: measured across 50k+ ascent evaluations,
+# K=3 rescued feasibility 0 times (K≤2 is the feasibility frontier) and beat
+# K=2 on launch mass only ~1% of the time, while accounting for ~54% of
+# multi-stage stage-builds.  Dropping K=3 is feasibility-identical and at most
+# ~1% mass-conservative (the Golden-Rule-safe direction).
+_F4_MAX_K: int = 2
 
 
 def find_optimal_multistage_ascent(

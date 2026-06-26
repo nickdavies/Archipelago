@@ -7,19 +7,25 @@ slot_data round-trip, and the three-gate access rule under a full world setup.
 """
 import unittest
 
+import random as _random
+
 from worlds.ksp1 import contracts as C
 from worlds.ksp1.bodies import (
     ALL_BODIES, BodyName, MissionBuilder, DIFFICULTY_PROFILES,
+    generate_random_orbit_params,
 )
 from worlds.ksp1.capability import _pre_pass
 from worlds.ksp1.test.base import KSP1TestBase
 
 MB = MissionBuilder(home=BodyName.KERBIN)
+# RANDOM_ORBIT contracts read their seeded target orbit off the mission_builder;
+# populate it so every type can build parameters / render in tests.
+MB.random_orbit_params = generate_random_orbit_params(_random.Random(0), ALL_BODIES)
 DIFF = DIFFICULTY_PROFILES["normal"]
 
 
 def _flags(item_count_fn):
-    return _pre_pass(item_count_fn, start_with_clamps=True, rep_names=frozenset(),
+    return _pre_pass(item_count_fn, start_with_clamps=True,
                      progressive_launch_pad=False,
                      launch_pad_caps=MB.launch_pad_caps)
 
@@ -77,25 +83,114 @@ class TestSlotDataRoundTrip(unittest.TestCase):
     def test_to_from_slot_dict(self):
         d = MUN_MINE.to_slot_dict()
         self.assertEqual(d["item"], "Contract: Mine Ore on Mun")
-        self.assertEqual(d["location"], "Contract: Mine Ore on Mun")
+        # Non-goal contracts ship two slot-suffixed reward locations.
+        self.assertEqual(
+            d["locations"],
+            ["Contract: Mine Ore on Mun 1", "Contract: Mine Ore on Mun 2"],
+        )
         self.assertEqual(d["schema"], C.CONTRACT_SCHEMA_VERSION)
         kinds = [p["kind"] for p in d["parameters"]]
         self.assertEqual(kinds, ["situation", "resource"])
         self.assertEqual(C.ContractSpec.from_slot_dict(d), MUN_MINE)
+
+    def test_goal_contract_single_location(self):
+        # Goal contracts stay 1:1 — one unsuffixed reward location.
+        goal = C.ContractSpec(C.ContractType.RETURN, BodyName.DUNA, is_goal=True)
+        d = goal.to_slot_dict()
+        self.assertEqual(d["locations"], ["Contract: Return from Duna"])
+        self.assertEqual(goal.location_name, "Contract: Return from Duna")
+
+    def test_parse_contract_location_name_both_forms(self):
+        # The sphere ladder must resolve both non-goal slots AND the bare goal
+        # form back to a spec; threshold/event names must NOT match.
+        for name in ("Contract: Mine Ore on Mun",
+                     "Contract: Mine Ore on Mun 1",
+                     "Contract: Mine Ore on Mun 2"):
+            spec = C.parse_contract_location_name(name)
+            self.assertIsNotNone(spec, name)
+            self.assertEqual(spec.contract_type, C.ContractType.MINE_ORE)
+            self.assertEqual(spec.body, BodyName.MUN)
+        for name in ("Contract Threshold 3",
+                     "Contract Complete: Mine Ore on Mun",
+                     "Mun Flag Plant 1"):
+            self.assertIsNone(C.parse_contract_location_name(name), name)
 
     def test_every_type_round_trips(self):
         # to_slot_dict/from_slot_dict must rebuild an identical spec for EVERY
         # contract type (UT regen reconstructs from fields, never re-randomizes),
         # and to_slot_dict must build a non-empty parameter tree for each type
         # without raising NotImplementedError.
+        from worlds.ksp1.bodies import (
+            ALL_BODIES, MissionBuilder, BodyName, generate_random_orbit_params,
+        )
+        import random as _random
+        mb = MissionBuilder(home=BodyName.KERBIN)
+        # RANDOM_ORBIT reads its seeded target orbit off the mission_builder.
+        mb.random_orbit_params = generate_random_orbit_params(
+            _random.Random(1), ALL_BODIES)
         for ct, td in C.CONTRACT_TYPE_DEFS.items():
             with self.subTest(contract_type=ct):
                 body = _first_compatible_body(td)
                 self.assertIsNotNone(body, f"{ct} has no compatible body")
                 spec = C.ContractSpec(ct, body)
-                d = spec.to_slot_dict()
+                d = spec.to_slot_dict(mb)
                 self.assertTrue(d["parameters"], f"{ct} emitted no parameters")
                 self.assertEqual(C.ContractSpec.from_slot_dict(d), spec)
+
+    def test_random_orbit_home_cost_modeled(self):
+        # The extra orbit cost (inclination rotation loss + apoapsis raise) MUST
+        # be modeled at the home body: a clearly inclined/raised home orbit costs
+        # more than a plain home orbit.
+        from worlds.ksp1.bodies import MissionBuilder, RandomOrbitParams
+        mb = MissionBuilder(home=BodyName.KERBIN)
+        kerbin = next(b for b in ALL_BODIES if b.name == BodyName.KERBIN)
+        mb.random_orbit_params[BodyName.KERBIN] = RandomOrbitParams(
+            inclination_deg=45.0, sma_m=kerbin.lo_radius_m * 1.5, eccentricity=0.2)
+        base = C.evaluate_contract(
+            C.ContractSpec(C.ContractType.ORBIT, BodyName.KERBIN), FULL, DIFF, mb)
+        rand = C.evaluate_contract(
+            C.ContractSpec(C.ContractType.RANDOM_ORBIT, BodyName.KERBIN), FULL, DIFF, mb)
+        self.assertIsNotNone(rand)
+        self.assertGreater(rand.launch_mass, base.launch_mass,
+                           "inclined/raised home orbit must cost more than a plain orbit")
+
+    def test_kerbal_rescue_params_and_free_seat(self):
+        # Rescue emits the spawn primitive + a crew-cabin free-seat objective,
+        # and is infeasible without a crew cabin to bring the Kerbal home.
+        spec = C.ContractSpec(C.ContractType.KERBAL_RESCUE, BodyName.MUN)
+        kinds = [p.to_json()["kind"] for p in spec.type_def.build_parameters(BodyName.MUN)]
+        self.assertIn("rescue", kinds)
+        self.assertIn("has_any_part", kinds)  # the crew_cabin free seat
+        # Feasible with full kit; the crew_cabin category must resolve a part.
+        self.assertTrue(C.can_complete_contract(spec, FULL, DIFF, MB))
+        self.assertIsNotNone(C.required_part_manifest(spec, FULL))
+        # No crew part available at all -> the free seat can't be delivered.
+        no_crew = _flags(lambda n: 0)
+        self.assertIsNone(C.required_part_manifest(spec, no_crew))
+
+    def test_kerbal_rescue_no_target_landing(self):
+        # The rescue trajectory reaches the target's LOW ORBIT and returns from
+        # there -- it must never include the target's surface (no landing leg).
+        from worlds.ksp1.bodies import MissionType
+        for profile in MB.profiles_for(BodyName.MUN, MissionType.RESCUE):
+            nodes = {e.source for e in profile} | {e.destination for e in profile}
+            self.assertNotIn("mun_surface", nodes,
+                             "rescue must not land at the target body")
+            self.assertIn("mun_low_orbit", nodes)
+
+    def test_random_orbit_offhome_no_penalty(self):
+        # Off-home, capture is free into any inclination/altitude — so a remote
+        # random orbit must NOT be penalised (modeled as the base orbit).
+        from worlds.ksp1.bodies import MissionBuilder, RandomOrbitParams
+        mb = MissionBuilder(home=BodyName.KERBIN)
+        mun = next(b for b in ALL_BODIES if b.name == BodyName.MUN)
+        mb.random_orbit_params[BodyName.MUN] = RandomOrbitParams(
+            inclination_deg=80.0, sma_m=mun.lo_radius_m * 2.0, eccentricity=0.3)
+        base = C.evaluate_contract(
+            C.ContractSpec(C.ContractType.ORBIT, BodyName.MUN), FULL, DIFF, mb)
+        rand = C.evaluate_contract(
+            C.ContractSpec(C.ContractType.RANDOM_ORBIT, BodyName.MUN), FULL, DIFF, mb)
+        self.assertAlmostEqual(rand.launch_mass, base.launch_mass, places=3)
 
     def test_is_goal_flag_round_trips(self):
         # is_goal is the only field that distinguishes a goal contract in
@@ -123,6 +218,9 @@ class TestSlotDataRoundTrip(unittest.TestCase):
 class TestContractWorldIntegration(KSP1TestBase):
     """Default options (mine weight 1) generate mine contracts; verify the pool,
     the three-gate access rule, and slot_data emission under a real world."""
+    # The contract access rule gates on has_all(_cheap_contract_reps) — a pre_fill
+    # side effect; without the real ladder it's conservatively unreachable.
+    needs_real_pre_fill = True
 
     def test_contracts_generated(self):
         self.assertTrue(self.world.contract_specs,
@@ -182,7 +280,7 @@ class TestContractRequiredParts(KSP1TestBase):
     required parts are promoted to progression."""
     options = {
         "contract_type_weights": {"mine_ore": 10},
-        "non_goal_contract_count": 8,
+        "contracts_available": 8,
     }
 
     def test_required_parts_promoted_to_progression(self):
@@ -253,7 +351,7 @@ class TestStockBackedContractTypes(KSP1TestBase):
             "equatorial_orbit": 5, "polar_orbit": 5,
             "stationary_orbit": 5, "transmit_science": 5,
         },
-        "non_goal_contract_count": 20,
+        "contracts_available": 20,
     }
     needs_real_pre_fill = True
 
@@ -279,7 +377,7 @@ class TestHomeBodyOrbitalContract(KSP1TestBase):
     multi-type config sampled it only by luck."""
     options = {
         "contract_type_weights": {"equatorial_orbit": 1},
-        "non_goal_contract_count": 40,
+        "contracts_available": 40,
         "allow_missions_harder_than_goal": True,
     }
 
@@ -378,7 +476,7 @@ class TestExplainContractGeneric(unittest.TestCase):
                     self.assertIn("Gate 3", text)
                     self.assertIn("Contract parameters", text)
                     # Every emitted parameter primitive must show its kind.
-                    for p in td.build_parameters(body):
+                    for p in td.build_parameters(body, MB):
                         self.assertIn(p.to_json()["kind"], text)
 
     def test_full_kit_mine_shows_required_parts_and_rocket(self):
@@ -405,6 +503,33 @@ class TestExplainContractGeneric(unittest.TestCase):
         ))
         self.assertIn("drill: MISSING", text)
         self.assertIn("Gate 3 - physics delivery: NO", text)
+
+
+class TestRequirementSeam(unittest.TestCase):
+    """The typed Requirement union. Baseline contracts derive AnyOf from
+    required_categories — behaviour-identical to the old category tuple — and
+    the part-resolution consumers fail closed on any kind they don't handle, so
+    a future Requirement subclass can't be silently dropped."""
+
+    def test_every_def_derives_anyof_from_categories(self):
+        for ct, td in C.CONTRACT_TYPE_DEFS.items():
+            with self.subTest(contract_type=ct):
+                self.assertEqual(
+                    td.requirements,
+                    tuple(C.AnyOf(cat) for cat in td.required_categories))
+
+    def test_unhandled_requirement_kind_fails_closed(self):
+        from types import SimpleNamespace
+        unknown = C.Requirement()  # base class, no resolver branch
+        td = C.ContractTypeDef(
+            contract_type=C.ContractType.ORBIT, location_noun="X",
+            base_mission_type=C.MissionType.ORBIT, crewed=None,
+            required_categories=(), title_fmt="", synopsis_fmt="",
+            requirements=(unknown,))
+        with self.assertRaises(NotImplementedError):
+            C.required_part_names_for([SimpleNamespace(type_def=td)])
+        with self.assertRaises(NotImplementedError):
+            C.required_part_breakdown(SimpleNamespace(type_def=td), FULL)
 
 
 if __name__ == "__main__":

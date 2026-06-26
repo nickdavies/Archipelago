@@ -52,6 +52,12 @@ class BlockingReason(str, Enum):
     # --- Mass / pad -----------------------------------------------------
     LAUNCH_MASS_EXCEEDED = "launch_mass_exceeded"
 
+    # --- Curated buildings (buildings_in_logic) -------------------------
+    # Total vessel mass exceeds the VAB/SPH buildable-mass cap.
+    VESSEL_MASS_EXCEEDED = "vessel_mass_exceeded"
+    # EVA required but the Astronaut Complex isn't upgraded enough.
+    CANNOT_EVA = "cannot_eva"
+
     # --- Sounding / altitude --------------------------------------------
     SOUNDING_ALTITUDE_TOO_LOW = "sounding_altitude_too_low"
     NO_SOUNDING_ALTITUDE = "no_sounding_altitude"
@@ -220,6 +226,11 @@ class BlockingInfo:
         if r == BlockingReason.LAUNCH_MASS_EXCEEDED:
             return (f"launch mass {self.mass_actual:.0f}t exceeds launch pad "
                     f"cap {self.mass_cap:.0f}t")
+        if r == BlockingReason.VESSEL_MASS_EXCEEDED:
+            return (f"vessel mass {self.mass_actual:.0f}t exceeds VAB/SPH "
+                    f"cap {self.mass_cap:.0f}t")
+        if r == BlockingReason.CANNOT_EVA:
+            return "Astronaut Complex not upgraded enough for EVA"
         # Sounding -----------------------------------------------------
         if r == BlockingReason.SOUNDING_ALTITUDE_TOO_LOW:
             base = (f"sounding altitude {self.altitude_km:.1f} km < "

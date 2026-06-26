@@ -3,7 +3,10 @@ import unittest
 
 from worlds.ksp1.bodies import BodyName
 from worlds.ksp1.options import Goal
-from worlds.ksp1.data.feasibility import MODEL_INFEASIBLE_LOCATIONS
+from worlds.ksp1.data.feasibility import MODEL_INFEASIBLE_LOCATIONS_BY_DIFFICULTY
+
+# Tests resolve against the default-difficulty (normal) table.
+MODEL_INFEASIBLE_LOCATIONS = MODEL_INFEASIBLE_LOCATIONS_BY_DIFFICULTY["normal"]
 from worlds.ksp1.locations import EVENT_BY_NAME, EventName, MissionLocation
 from worlds.ksp1.rules import (
     GoalSpec,
@@ -246,6 +249,9 @@ KSP1TestBase = _SharedKSP1TestBase
 class TestMunReturnGoalReachability(KSP1TestBase):
     """Custom return_bodies=["Mun"] goal — reachable with all items, not with none."""
     options = {"goal": "mun_sample_return"}
+    # Victory routes through the cheap-ladder reps (_cheap_mission_reps), a pre_fill
+    # side effect; without the real ladder it's conservatively unreachable.
+    needs_real_pre_fill = True
 
     def test_victory_reachable_with_all_items(self):
         self.collect_all_but([])
@@ -266,6 +272,9 @@ class TestMunReturnGoalReachability(KSP1TestBase):
 class TestMunFlagGoal(KSP1TestBase):
     """Mun flag preset goal."""
     options = {"goal": "mun_flag"}
+    # Victory routes through the cheap-ladder reps (_cheap_mission_reps), a pre_fill
+    # side effect; without the real ladder it's conservatively unreachable.
+    needs_real_pre_fill = True
 
     def test_victory_reachable_with_all_items(self):
         self.collect_all_but([])
@@ -273,26 +282,6 @@ class TestMunFlagGoal(KSP1TestBase):
         self.assertTrue(
             victory.can_reach(self.multiworld.state),
             "Mun Flag victory should be reachable with all items",
-        )
-
-
-class TestEveReturnGoal(KSP1TestBase):
-    """Eve return uses all-parts proxy."""
-    options = {"goal": "eve_return"}
-
-    def test_victory_reachable_with_all_items(self):
-        self.collect_all_but([])
-        victory = self.multiworld.get_location("Victory", self.player)
-        self.assertTrue(
-            victory.can_reach(self.multiworld.state),
-            "Eve Return victory should be reachable with all items",
-        )
-
-    def test_victory_unreachable_with_no_items(self):
-        victory = self.multiworld.get_location("Victory", self.player)
-        self.assertFalse(
-            victory.can_reach(self.multiworld.state),
-            "Eve Return victory should be unreachable with no items",
         )
 
 
