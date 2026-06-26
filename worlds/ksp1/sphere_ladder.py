@@ -39,7 +39,7 @@ from Options import OptionError
 
 from .bodies import (
     ALL_BODIES, BODY_BY_NAME, BodyName, DIFFICULTY_PROFILES, DifficultyProfile,
-    MissionBuilder, MissionType,
+    MissionBuilder, MissionType, home_system_bodies,
 )
 from .capability import (
     EquipmentFlags, ProfileResult,
@@ -116,6 +116,25 @@ _DEEP_SPACE_ENABLERS: frozenset[str] = frozenset(
 # of the enablers (preserves early-game variance; the bumper finds its own kit).
 _DEEP_INJECT_DV_FRAC: float = 0.5
 _DEEP_INJECT_MIN_DV: float = 12000.0
+
+# Attitude enabler — folded into the cumulative kit (REPS ONLY) from the boundary
+# of leaving the home system onward.  INTERIM for bug 004: the attitude gate is
+# all-or-nothing and ignores torque vs vessel mass, so a terminal capsule with no
+# built-in reaction wheel forces gimballed engines on every stage and balloons
+# the build (the capsule non-monotonicity, bug 096 — a lighter wheel-less capsule
+# yields a heavier/infeasible rocket).  Once the chain leaves the home system the
+# interplanetary stacks are heavy enough to hit this, so requiring a real
+# standalone wheel from that boundary on means the optimizer always has one and
+# never force-gimbals.  Unlike the deep-space enablers this is reps-only (no rank
+# bump): the cheap access rule gates on ``sphere.reps_collected``, so reps
+# membership is enough to require the wheel, and skipping the rank bump avoids
+# reordering spheres / shifting _item_min_sphere — that perturbation cascaded into
+# early-band fill famines (a sphere-0 inject famined the scarce first spheres; a
+# rank-bumped leave-home inject reordered spheres and stranded near missions).
+# The REAL fix is a torque model (bug 004); this does not model torque.
+_ATTITUDE_ENABLER_NAME = "advSasModule"
+_ATTITUDE_ENABLERS: frozenset[str] = frozenset(
+    {_ATTITUDE_ENABLER_NAME} & set(PART_DB))
 
 
 if TYPE_CHECKING:
@@ -3411,29 +3430,59 @@ def _build_ladder_graph_walk(
         n: _goal_dv(n, world.mission_builder) for n in _all_walk_names
     }
     _deep_enablers = _DEEP_SPACE_ENABLERS - precollected_names
+    _attitude_enablers = _ATTITUDE_ENABLERS - precollected_names
     _deep_max_dv = max(_sphere_dv_by_name.values(), default=0.0)
     _deep_inject_dv = (
         _DEEP_INJECT_DV_FRAC * _deep_max_dv
         if _deep_enablers and _deep_max_dv >= _DEEP_INJECT_MIN_DV
         else float("inf")
     )
+    # Attitude enabler threshold: the cheapest mission whose body is outside the
+    # home system (the boundary of leaving home).  The capsule non-monotonicity
+    # only bites once the chain leaves the home system (interplanetary stacks
+    # heavy enough that a wheel-less terminal capsule would force gimbal); the
+    # deep-space-enabler band fires too LATE for far homes (Laythe's hard missions
+    # start just past leaving the Jool system, below the 0.5·max band) and misses
+    # them.
+    _home_body_values = {b.value for b in home_system_bodies(bn_home)}
+    _attitude_inject_dv = (
+        min(
+            (dv for n, dv in _sphere_dv_by_name.items()
+             if (_pl := _parse_location(n)) is not None
+             and _pl.body not in _home_body_values),
+            default=float("inf"),
+        )
+        if _attitude_enablers else float("inf")
+    )
 
     def _apply_deep_inject(sig: Signature, reps: frozenset[str],
                            dv: float) -> tuple[Signature, frozenset[str]]:
-        if dv < _deep_inject_dv:
-            return sig, reps
-        reps = reps | _deep_enablers
-        for _ep in _deep_enablers:
-            for _ax, _rk in rank_sig_for(_ep, ctx).axes:
-                if _rk > sig.rank(_ax):
-                    sig = sig.with_rank(_ax, _rk)
+        # Deep-space enablers bump BOTH reps and the rank signature (the rank
+        # gives them a placement upper bound and reorders the sphere).  The
+        # attitude enabler is REPS-ONLY: the cheap access rule gates on
+        # ``sphere.reps_collected`` (line ~2746), so reps membership alone makes
+        # the deep missions require a real wheel — and skipping the rank bump
+        # avoids perturbing the sphere sort / _item_min_sphere, which cascaded
+        # into early-band fill famines when attitude was rank-bumped.  Its
+        # placement floor stays at its organic SAS-rank sphere (early), well
+        # below where it's now required.
+        if dv >= _deep_inject_dv:
+            reps = reps | _deep_enablers
+            for _ep in _deep_enablers:
+                for _ax, _rk in rank_sig_for(_ep, ctx).axes:
+                    if _rk > sig.rank(_ax):
+                        sig = sig.with_rank(_ax, _rk)
+        if dv >= _attitude_inject_dv:
+            reps = reps | _attitude_enablers
         return sig, reps
 
-    # If any walked mission crosses the deep threshold, fold the enablers into
-    # the global keep-set (the per-mission cumulative inject is applied below
-    # when each sphere is assembled, where the location's dv is in hand).
+    # If any walked mission crosses a threshold, fold those enablers into the
+    # global keep-set (the per-mission cumulative inject is applied below when
+    # each sphere is assembled, where the location's dv is in hand).
     if _deep_inject_dv != float("inf"):
         cumulative_reps = cumulative_reps | _deep_enablers
+    if _attitude_inject_dv != float("inf"):
+        cumulative_reps = cumulative_reps | _attitude_enablers
 
     # ---- assemble the predictable anchors into the walk -----------------
     # Process anchors in dv order, accumulating each one's cumulative kit into
