@@ -2555,6 +2555,27 @@ def _install_ladder_rules(
     buildings_in_logic = bool(world.options.buildings_in_logic)
     bn_home = mb.home
 
+    # Per-level funding sphere for the counted progressives the chain injects:
+    # R&D at its band-funding spheres (see apply_sphere_ladder) and PSI where the
+    # science model funds it.  ``_counted_avail(funding, j)`` is the highest level
+    # available by a location's bracket sphere ``j`` — used below to give missions
+    # their transitive R&D/PSI requirement, the same way the pad is recorded.
+    from .items import (
+        PROGRESSIVE_SCIENCE_INSTRUMENT_NAME as _PSI_NAME,
+        PROGRESSIVE_PSI_COUNT as _PSI_MAX,
+    )
+
+    def _counted_funding(kind: str, max_level: int) -> dict[int, int]:
+        return {lvl: _first_covering_sphere(
+                    spheres, Signature.of((Counted(kind, lvl),)))
+                for lvl in range(1, max_level + 1)}
+
+    def _counted_avail(funding: dict[int, int], j: int) -> int:
+        return max((lvl for lvl, idx in funding.items() if idx <= j), default=0)
+
+    _rd_funding = _counted_funding(PROGRESSIVE_RD_NAME, PROGRESSIVE_RD_COUNT)
+    _psi_funding = _counted_funding(_PSI_NAME, _PSI_MAX)
+
     # strict_ladder: keep the original capability access rule per
     # location so post_fill can swap it back in and independently
     # re-verify the cheap-rule fill is winnable under real capability.
@@ -2657,15 +2678,34 @@ def _install_ladder_rules(
             # leave the capability rule as the (slow) fallback.
             continue
         bracket_by_loc[loc.name] = j
-        # Missions are gated by MASS (the pad tonnage cap), so the pad is their
-        # only counted-progressive requirement (R&D/PSI gate science, not
-        # missions).  Recording the precise per-mission pad makes the placement
-        # self-ban a real destination gate: a pad copy can't land at a mission
-        # that already needs that many copies.
+        # Counted-progressive requirements, recorded so the unified placement
+        # window can never drop a counted copy behind a location that needs it
+        # (and so the cheap access rule gates on them explicitly), exactly as for
+        # the pad:
+        #   * Pad — the mission's launch-mass tonnage cap (physics-static).
+        #   * R&D / PSI — a mission reaches its reps through tech nodes gated by
+        #     has(R&D, band) and funded by science (PSI yield).  The placement
+        #     window puts every rep at a sphere below the mission, so a rep's
+        #     tech-node band is <= the R&D/PSI available at the mission's own
+        #     bracket sphere j; requiring exactly that much is a sound upper bound
+        #     on the mission's transitive need (verified: max rep band <=
+        #     rd_avail(j) for every bracketed mission).  Without this, R&D/PSI
+        #     copies float onto hard missions that transitively require them and
+        #     the capability cross-check deadlocks.
         if pad_req > 0:
             location_signatures[loc.name] = location_signatures.get(
                 loc.name, Signature.empty()
             ).with_counted(PROGRESSIVE_LAUNCH_PAD_NAME, pad_req)
+        _rd_lvl = _counted_avail(_rd_funding, j)
+        if _rd_lvl > 0:
+            location_signatures[loc.name] = location_signatures.get(
+                loc.name, Signature.empty()
+            ).with_counted(PROGRESSIVE_RD_NAME, _rd_lvl)
+        _psi_lvl = _counted_avail(_psi_funding, j)
+        if _psi_lvl > 0:
+            location_signatures[loc.name] = location_signatures.get(
+                loc.name, Signature.empty()
+            ).with_counted(_PSI_NAME, _psi_lvl)
         # (per-mission building reqs are recorded above, before the j-is-None
         # bail, so they also cover unbracketed-but-eventually-reachable
         # locations — unique-provider building copies must never strand there.)

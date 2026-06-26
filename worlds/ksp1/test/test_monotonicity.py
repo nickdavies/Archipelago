@@ -35,9 +35,14 @@ GAME = "Kerbal Space Program 1"
 # Seeds known to exercise the cheap-bracket vs capability agreement.  The
 # complete_tech_tree/kerbin seed is the exact case whose Mun-return RTG charge
 # was non-monotone before capability._required_power_source — a direct
-# regression guard.  flag_every_body/kerbin gives broad body/mission coverage.
+# regression guard.  duna_return/kerbin/count is the seed whose 3rd Progressive
+# R&D stranded behind Tylo Sample Return until missions gained their transitive
+# Counted(R&D, rd_avail(M_sphere)) requirement (sphere_ladder._install_ladder_rules)
+# — guards the counted-progressive cycle.  flag_every_body/kerbin gives broad
+# body/mission coverage.
 _CONFIGS = [
     ("complete_tech_tree", "kerbin", "findable", 10655457994218381434),
+    ("duna_return", "kerbin", "count", 10727693526395107800),
     ("flag_every_body", "kerbin", "findable", 0xDEADBEEF),
 ]
 
@@ -84,5 +89,8 @@ class TestCapabilityCrossCheck:
     def test_complete_tech_tree_kerbin(self):
         self._check(*_CONFIGS[0])
 
-    def test_flag_every_body_kerbin(self):
+    def test_duna_return_kerbin_count(self):
         self._check(*_CONFIGS[1])
+
+    def test_flag_every_body_kerbin(self):
+        self._check(*_CONFIGS[2])
