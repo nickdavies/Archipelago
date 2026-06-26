@@ -28,9 +28,13 @@ import os
 # (jool_moons from a Jool moon) leave the top spheres location-sparse, where a
 # sphere-index margin would floor recovery parts into a dead zone.  A true
 # per-capacity floor (the old ``cascade_lo``) is the "right" model but couldn't
-# both pace a contended category AND leave it room; this sidesteps that and is
-# overpower-bounded + solve-clean (0% fill at expert, kerbin + laythe).  Tunable.
-_USEFUL_FLOOR_MARGIN_FRAC = 0.30
+# both pace a contended category AND leave it room; this sidesteps that.  At 0.30
+# the band over-packed the location-sparse top on concentrated easy goals
+# (kerbin/expert mun_flag ~16% FillError — core remaining_fill is greedy with a
+# single swap, so it can't find the otherwise-feasible item->location matching
+# once the band is tight); 0.40 leaves enough room and is solve-clean (0 fill
+# across kerbin expert+normal and laythe expert, 2214 seeds).  Tunable.
+_USEFUL_FLOOR_MARGIN_FRAC = 0.40
 from dataclasses import dataclass, field
 from random import Random
 from typing import Callable, TYPE_CHECKING, Optional
