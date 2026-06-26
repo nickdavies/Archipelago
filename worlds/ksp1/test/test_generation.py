@@ -35,18 +35,24 @@ class TestFillStandardSampleReturns(KSP1TestBase):
 
 
 class TestItemLocationBalance(KSP1TestBase):
-    """Item pool must exactly match non-event location count."""
+    """Item pool must exactly match the count of locations that still need filling.
+
+    Counts UNFILLED locations (``loc.item is None``): count / progressive_unlock
+    goal-contract modes pre-fill threshold locations with a locked goal item,
+    which the filler-balance in ``create_all_items`` correctly excludes — so the
+    invariant is itempool == unfilled non-event locations, not all of them.
+    """
 
     def test_item_count_equals_location_count(self):
-        real_locs = [
+        unfilled_locs = [
             loc for loc in self.multiworld.get_locations(self.player)
-            if loc.address is not None
+            if loc.address is not None and loc.item is None
         ]
         self.assertEqual(
             len(self.multiworld.itempool),
-            len(real_locs),
+            len(unfilled_locs),
             f"Item pool size {len(self.multiworld.itempool)} != "
-            f"location count {len(real_locs)}",
+            f"unfilled location count {len(unfilled_locs)}",
         )
 
     def test_no_negative_filler_count(self):

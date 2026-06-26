@@ -76,6 +76,8 @@ instead you complete missions:
   Flag Plant, Return, and Sample Return. Each event type has multiple slots.
 - **Tech Tree Nodes** (124–248) — Each of the 62 tech nodes has 2–4 location slots (scaled by difficulty).
   Purchasing a node with science points awards these checks.
+- **Contracts** (10 by default) — Native KSP contracts injected by the client; completing one checks its reward
+  location(s). Under the default Count goal mode, completing contracts is also how you unlock your goal.
 
 ## Which items can be in another player's world?
 
@@ -99,13 +101,16 @@ The victory condition is configurable. Preset goals include:
 
 - **Duna Return** (default) — Return a vessel or crew from Duna.
 - **Eeloo Return** — Return from Eeloo.
-- **Eve Return** — Return from Eve (challenge goal).
 - **Flag Every Body** — Plant a flag on all 15 landable bodies.
 - **Standard Returns** — Return from 11 bodies (excluding Eve, Tylo, Laythe).
 - **Standard Sample Returns** — Crewed sample return from the same 11 bodies.
 - **Complete Tech Tree** — Purchase all 62 tech tree nodes.
 - **Mun Flag** — Plant a flag on the Mun (short run).
 - **Mun Sample Return** — Crewed sample return from the Mun (short run).
+- **Jool Moons Return** — Return from each Jool moon (Laythe, Vall, Tylo, Bop, Pol). Your home body is
+  filtered out, so a Laythe start gives a tight 4-target Jool-system goal.
+- **Random Contracts** — No destination goal: complete a number of your available contracts, then plant a
+  flag at home to win. Only valid with Goal Contract Mode = count or progressive_unlock.
 - **Custom** — Build your own goal from five body-list options: `flag_bodies`, `return_bodies`,
   `sample_return_bodies`, `orbit_bodies`, and `flyby_bodies`. Set goal to `custom` and populate one or
   more of these lists with body names. `orbit_bodies` and `flyby_bodies` accept all 17 bodies including
@@ -120,8 +125,13 @@ won't contain items required for progression.
 
 - **Difficulty** — Controls delta-V margins, starting location count, and tech tree density. Casual is forgiving;
   Expert assumes near-optimal delta-V piloting. **Only Normal has been thoroughly tested so far.**
-- **Item Pacing** — Prevents powerful items from appearing too early. Gentle (default) keeps tier-2 items out of
-  starting slots; Strict extends this restriction further.
+- **Goal Contract Mode** — How your goal is unlocked. **Count (default):** complete a number of your available
+  contracts and the goal is awarded. Other modes: *Findable* (the goal item is in the multiworld pool and found
+  like any other item), *Starting* (the goal is granted up front, limited only by physics/parts), and
+  *Progressive Unlock* (goal missions unlock one at a time as you complete contracts).
+- **Contracts Available** — How many ordinary (non-goal) contracts are placed in the seed (default 10). These
+  are side objectives the client tracks; completing them is how Count and Progressive Unlock release your goal.
+  Contract mission types and their relative frequency are configurable too.
 - **Exclude Late Tech Tree** — Prevents progression items from being placed in tier-8 tech nodes, avoiding a
   late-game science grind if you'd rather focus on flying missions than gaining science.
 - **Start With Launch Clamps** — Enabled by default. Disabling makes launch clamps a progression gate for

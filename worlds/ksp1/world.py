@@ -386,11 +386,10 @@ class KSP1World(World):
                 contracts.generate_contracts(self))
         self.contract_required_part_names = contracts.required_part_names_for(
             (*self.contract_specs, *self.goal_contract_specs))
-        # Reward slots each non-goal contract yields this seed: base 2 plus the
-        # Contract Repeats option. Resolved once here so every per-seed consumer
-        # (region registration, access rules, /explain, slot_data) reads one
-        # value instead of re-deriving from options. 0 repeats == exactly 2.
-        self.non_goal_slot_count = contracts.non_goal_slot_count(self.options)
+        # Reward locations each non-goal contract emits this seed. Read once here
+        # so every per-seed consumer (region registration, access rules, /explain,
+        # slot_data) shares one value.
+        self.locations_per_contract = contracts.LOCATIONS_PER_CONTRACT
         _validate_goal_contracts_registrable(self.goal_contract_specs)
 
         # Goal contract mode: validate + resolve X and the threshold locations.
@@ -646,7 +645,7 @@ class KSP1World(World):
         return items.get_filler_item_name(self)
 
     def fill_slot_data(self) -> dict[str, Any]:
-        d = self.options.as_dict("goal", "difficulty", "start_with_launch_clamps", "item_pacing")
+        d = self.options.as_dict("goal", "difficulty", "start_with_launch_clamps")
         # Home body — used by the client mod to drive every per-body
         # comparison (KSC biome prefixes, altitude polling guard, splashdown
         # detection, first-launch / first-landing / first-crash events).
@@ -739,7 +738,7 @@ class KSP1World(World):
         # native KSP contract from `parameters` and reports `location` on
         # completion. Goal contracts ride the same array.
         d["contracts"] = [
-            spec.to_slot_dict(self.mission_builder, self.non_goal_slot_count)
+            spec.to_slot_dict(self.mission_builder, self.locations_per_contract)
             for spec in (*self.contract_specs, *self.goal_contract_specs)
         ]
         # Seeded RANDOM_ORBIT target orbits, per body — carried so UT regen
@@ -762,10 +761,6 @@ class KSP1World(World):
         d["goal_contract_mode"] = self.options.goal_contract_mode.value
         d["contracts_required"] = self.contracts_required
         d["contracts_available"] = self.options.contracts_available.value
-        # Reward-slot repeats: carried so UT regen recomputes the same
-        # non_goal_slot_count from the option (like every other option), rather
-        # than inferring it from the contracts array length.
-        d["contract_repeats"] = self.options.contract_repeats.value
         thresholds_map: dict[str, list[str]] = {}
         for loc_name, count, _item in self.contract_threshold_defs:
             thresholds_map.setdefault(str(count), []).append(loc_name)
@@ -818,8 +813,6 @@ class KSP1World(World):
             self.options.goal_contract_mode.value = slot_data["goal_contract_mode"]
         if "contracts_available" in slot_data:
             self.options.contracts_available.value = slot_data["contracts_available"]
-        if "contract_repeats" in slot_data:
-            self.options.contract_repeats.value = slot_data["contract_repeats"]
         self._ut_contracts_required = slot_data.get("contracts_required")
 
         # Restore the exact RANDOM_ORBIT target orbits (re-rolling would diverge).
@@ -924,7 +917,7 @@ class KSP1World(World):
         world's own specs (the source of truth) rather than parsing the display
         name, so /explain covers every contract type without per-type handling."""
         for spec in (*self.contract_specs, *self.goal_contract_specs):
-            if name in spec.location_names(self.non_goal_slot_count):
+            if name in spec.location_names(self.locations_per_contract):
                 return spec
         return None
 

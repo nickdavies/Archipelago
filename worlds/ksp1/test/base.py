@@ -99,7 +99,7 @@ class KSP1TestBase(WorldTestBase):
         # reached on a location-short pool — exempt their reward slots.
         creps = getattr(world, "_cheap_contract_reps", {}) or {}
         proxy_ids = getattr(world, "_proxy_contract_ids", set())
-        slot_count = getattr(world, "non_goal_slot_count", 2)
+        slot_count = getattr(world, "locations_per_contract", 2)
         for spec in (*getattr(world, "contract_specs", ()),
                      *getattr(world, "goal_contract_specs", ())):
             if creps.get(spec.contract_id) is None or spec.contract_id in proxy_ids:

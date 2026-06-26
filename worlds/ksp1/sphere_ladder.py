@@ -2630,7 +2630,7 @@ def _install_ladder_rules(
     contract_gate: dict[str, str] = {}
     for spec in (*getattr(world, "contract_specs", ()),
                  *getattr(world, "goal_contract_specs", ())):
-        for slot in spec.location_names(world.non_goal_slot_count):
+        for slot in spec.location_names(world.locations_per_contract):
             contract_gate[slot] = spec.item_name
     for loc in world.multiworld.get_locations(player):
         if loc.address is None or loc.name in bootstrap_locations:
@@ -2803,7 +2803,7 @@ def _install_cheap_mission_reps(world: "KSP1World", ladder: SphereLadder) -> Non
     for spec in (*getattr(world, "contract_specs", ()),
                  *getattr(world, "goal_contract_specs", ())):
         best: Optional[tuple[int, frozenset[str]]] = None
-        for ln in spec.location_names(world.non_goal_slot_count):
+        for ln in spec.location_names(world.locations_per_contract):
             j = bracket.get(ln)
             if j is not None and (best is None or j < best[0]):
                 best = (j, frozenset(spheres[j].reps_collected))
@@ -2983,7 +2983,7 @@ def _install_unified_sphere_rules(
     _goal_award_names: set[str] = set()
     for spec in (*getattr(world, "contract_specs", ()),
                  *getattr(world, "goal_contract_specs", ())):
-        own = [ln for ln in spec.location_names(world.non_goal_slot_count)
+        own = [ln for ln in spec.location_names(world.locations_per_contract)
                if ln in loc_sphere]
         if not own:
             continue
@@ -2994,7 +2994,7 @@ def _install_unified_sphere_rules(
     _goal_diff_sphere = max(
         (loc_sphere[ln]
          for spec in getattr(world, "goal_contract_specs", ())
-         for ln in spec.location_names(world.non_goal_slot_count)
+         for ln in spec.location_names(world.locations_per_contract)
          if ln in loc_sphere),
         default=len(spheres))
     award_names = frozenset(award_own_locs)

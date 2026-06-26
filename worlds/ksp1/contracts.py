@@ -48,40 +48,23 @@ if TYPE_CHECKING:
 # assumed exactly 2 must reject rather than silently drop the extras.
 CONTRACT_SCHEMA_VERSION = 5
 
-# Base number of reward locations a non-goal contract awards, sharing ONE gate
-# item: completing the contract checks every slot, so each non-goal contract is
-# net (slots - 1) locations of slack for the multiworld. Goal contracts stay 1:1
-# (a single, unsuffixed location) — see ContractSpec.location_names.
-NON_GOAL_SLOT_COUNT = 2
-
-# Upper bound on the Contract Repeats option (extra reward slots per non-goal
-# contract beyond the base 2). The data package registers every possible slot
-# name up to NON_GOAL_SLOT_COUNT + MAX_CONTRACT_REPEATS so any option value has
-# stable ids; a given seed creates only its resolved subset.
-MAX_CONTRACT_REPEATS = 8
-MAX_NON_GOAL_SLOT_COUNT = NON_GOAL_SLOT_COUNT + MAX_CONTRACT_REPEATS
-
-
-def effective_contract_repeats(options) -> int:
-    """Extra reward slots each non-goal contract yields beyond the base 2.
-    Clamped to MAX_CONTRACT_REPEATS so a stale yaml can never exceed the
-    registered slot-name universe. 0 (default) == today's exactly-2-slots
-    behavior."""
-    opt = getattr(options, "contract_repeats", None)
-    if opt is None:
-        return 0
-    return max(0, min(int(opt.value), MAX_CONTRACT_REPEATS))
-
-
-def non_goal_slot_count(options) -> int:
-    """Reward-slot count per non-goal contract for this world:
-    ``NON_GOAL_SLOT_COUNT + contract_repeats``."""
-    return NON_GOAL_SLOT_COUNT + effective_contract_repeats(options)
+# Number of reward locations each non-goal contract emits, all sharing ONE gate
+# item: completing the contract checks every location, so each non-goal contract
+# is net (count - 1) locations of slack for the multiworld. Goal contracts stay
+# 1:1 (a single, unsuffixed location) — see ContractSpec.location_names.
+#
+# Internal tuning knob (formerly the Contract Repeats option): raise it to spread
+# a contract's rewards across more locations / spheres. The data package
+# registers slot names up to MAX_LOCATIONS_PER_CONTRACT, so this can be raised up
+# to that ceiling without re-registering location ids.
+LOCATIONS_PER_CONTRACT = 2
+MAX_LOCATIONS_PER_CONTRACT = 10
 
 # Event item locked on each non-goal contract's "Contract Complete: ..." event
-# location (address None). state.has(this, X) == "X contracts completable in
-# logic", which paces the count/progressive_unlock threshold locations.
-CONTRACT_COMPLETED_EVENT = "Contract Completed"
+# location (address None). state.count(this, X) == "X contracts completable in
+# logic", which paces the count/progressive_unlock threshold locations. Named for
+# what it represents to the player: progress toward the contract-count threshold.
+CONTRACT_COUNT_PROGRESS_EVENT = "Contract Count Progress"
 
 # Mine Ore contract: fixed ore quantity to extract. 50 fits in the smallest ore
 # tank (RadialOreTank holds 75), so a single tank suffices — 100 would force a
@@ -733,15 +716,13 @@ class ContractSpec:
     def item_name(self) -> str:
         return self.display_name
 
-    def location_names(self, slot_count: int = NON_GOAL_SLOT_COUNT) -> tuple[str, ...]:
+    def location_names(self, slot_count: int = LOCATIONS_PER_CONTRACT) -> tuple[str, ...]:
         """The reward location(s) this contract checks. Goal contracts stay 1:1
         (a single unsuffixed location, ignoring ``slot_count``); non-goal
-        contracts award ``slot_count`` slot-suffixed locations ("... 1",
-        "... 2", ...) that share one gate item and one access rule.
-        ``slot_count`` defaults to the base 2 (today's behavior); a world threads
-        ``NON_GOAL_SLOT_COUNT + contract_repeats`` through for repeating contracts
-        and the data package threads ``MAX_NON_GOAL_SLOT_COUNT`` to register every
-        possible slot name."""
+        contracts award ``slot_count`` suffixed locations ("... 1", "... 2", ...)
+        that share one gate item and one access rule. ``slot_count`` defaults to
+        ``LOCATIONS_PER_CONTRACT``; the data package threads
+        ``MAX_LOCATIONS_PER_CONTRACT`` to register every possible location name."""
         if self.is_goal:
             return (self.display_name,)
         return tuple(
@@ -753,14 +734,14 @@ class ContractSpec:
     def location_name(self) -> str:
         """The canonical / primary location (slot 1). Goal logic, /explain, and
         the client's binding key all use this; the suffixed siblings share its
-        access rule. Independent of the seed's slot count — slot 1 always exists
-        (>= the base 2 non-goal slots), so this is stable as repeats vary."""
+        access rule. Independent of the seed's location count — location 1 always
+        exists (>= the base 2 per contract), so this is stable if it's raised."""
         if self.is_goal:
             return self.display_name
         return f"{self.display_name} 1"
 
     def to_slot_dict(self, mission_builder=None,
-                     slot_count: int = NON_GOAL_SLOT_COUNT) -> dict:
+                     slot_count: int = LOCATIONS_PER_CONTRACT) -> dict:
         """The self-describing manifest entry the dumb client actuates. Carries
         ``contract_type``/``body`` structurally so UT regen reconstructs the
         spec from fields, never by parsing the display name (the client ignores
@@ -1031,18 +1012,6 @@ def _full_kit_flags(world: "KSP1World") -> "EquipmentFlags":
 def _difficulty(world: "KSP1World") -> DifficultyProfile:
     name = ["casual", "normal", "expert"][world.options.difficulty.value]
     return DIFFICULTY_PROFILES[name]
-
-
-# Auto (-1) total non-goal contract count, by difficulty index. Harder settings
-# get fewer (tighter fill, faster gen). Calibrated further once data exists.
-_AUTO_COUNT_BY_DIFFICULTY = (12, 10, 8)
-
-
-def _resolve_count(world: "KSP1World") -> int:
-    raw = world.options.contracts_available.value
-    if raw < 0:
-        return _AUTO_COUNT_BY_DIFFICULTY[world.options.difficulty.value]
-    return raw
 
 
 # Goal body-list attribute -> the mission type it implies. Used to compute the
@@ -1392,7 +1361,7 @@ def generate_contracts(world: "KSP1World") -> tuple[list[ContractSpec], list[Con
             candidates.append(spec)
 
     chosen = _weighted_sample_without_replacement(
-        rng, candidates, weights, _resolve_count(world))
+        rng, candidates, weights, world.options.contracts_available.value)
 
     # Home-body contract floor: guarantee a minimum number of home-body
     # contracts (the earliest-reachable locations in a run) so the item fill

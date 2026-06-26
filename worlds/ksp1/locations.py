@@ -44,7 +44,7 @@ from .bodies import (
     home_altitude_milestones,
 )
 from .contracts import (
-    all_possible_contract_specs, GOAL_CONTRACT_TYPES, MAX_NON_GOAL_SLOT_COUNT,
+    all_possible_contract_specs, GOAL_CONTRACT_TYPES, MAX_LOCATIONS_PER_CONTRACT,
 )
 from .tech_tree import TECH_NODES
 
@@ -500,7 +500,7 @@ def _build_location_table() -> dict[str, int]:
 
 # Every reward-location name a contract could ever register: for each possible
 # (type, body), the bare goal-contract form AND every non-goal slot suffix up to
-# MAX_NON_GOAL_SLOT_COUNT (base 2 + the Contract Repeats ceiling). Registering the
+# MAX_LOCATIONS_PER_CONTRACT (base 2 + the Contract Repeats ceiling). Registering the
 # universe maximum keeps location ids stable regardless of the seed's
 # contract_repeats value; a given seed creates only its resolved subset (see
 # create_regions). Sorted by contract_id so the id block is stable.
@@ -509,7 +509,7 @@ CONTRACT_LOCATION_NAMES: tuple[str, ...] = tuple(
     for spec in sorted(all_possible_contract_specs(), key=lambda s: s.contract_id)
     for name in (
         spec.display_name,
-        *(f"{spec.display_name} {i}" for i in range(1, MAX_NON_GOAL_SLOT_COUNT + 1)),
+        *(f"{spec.display_name} {i}" for i in range(1, MAX_LOCATIONS_PER_CONTRACT + 1)),
     )
 )
 
@@ -607,11 +607,11 @@ def create_all_locations(world: KSP1World) -> None:
         region.add_locations(node_locs, KSP1Location)
 
     # Contract completion locations (only the contracts this seed generated).
-    # Non-goal contracts register ``world.non_goal_slot_count`` slot locations
+    # Non-goal contracts register ``world.locations_per_contract`` slot locations
     # (base 2 + Contract Repeats); goal contracts one.
     contract_locs = {
         name: LOCATION_NAME_TO_ID[name]
         for spec in (*world.contract_specs, *world.goal_contract_specs)
-        for name in spec.location_names(world.non_goal_slot_count)
+        for name in spec.location_names(world.locations_per_contract)
     }
     menu.add_locations(contract_locs, KSP1Location)

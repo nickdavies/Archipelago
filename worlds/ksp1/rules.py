@@ -41,7 +41,7 @@ from .locations import (
     effective_tech_slots_per_node,
     event_locations,
 )
-from .options import Difficulty, Goal, GoalContractMode, ItemPacing
+from .options import Difficulty, Goal, GoalContractMode
 from .tech_tree import MAX_TIER, MAX_RD_BAND, cumulative_tier_cost, TECH_NODES, LEAF_TECH_NODES
 from .gates import AccumulationGate, Resource
 
@@ -308,7 +308,7 @@ def set_all_rules(world: KSP1World) -> None:
     _set_threshold_rules(world, player)
     _apply_home_system_local_exclusions(world)
     # Tech tree rules are now region entrance rules (see regions.py).
-    _set_item_pacing_rules(world, player, difficulty)
+    _ban_early_science_windfalls(world, player, difficulty)
     _set_early_bucket_item_bans(world, player, difficulty)
     if world.goal_spec.is_home_system_only(world.mission_builder.home):
         _set_interplanetary_item_rules(world, player)
@@ -556,7 +556,7 @@ def _set_contract_rules(world: KSP1World, player: int) -> None:
     # stranded items and forced the expensive strict_ladder fallback re-fill.
     world._contract_ruled_locations = set()
     # In count / progressive_unlock each non-goal contract has a completion-event
-    # location; it shares the contract's rule so has("Contract Completed", X)
+    # location; it shares the contract's rule so has("Contract Count Progress", X)
     # counts contracts completable in logic.
     counts_contracts = world.options.goal_contract_mode.value in (
         GoalContractMode.option_count,
@@ -601,13 +601,13 @@ def _set_contract_rules(world: KSP1World, player: int) -> None:
         # Every non-goal reward slot (base 2 + Contract Repeats) shares the one
         # gate+capability rule, so the extra slots land at the contract's own
         # sphere as buffer-fill.
-        for loc_name in spec.location_names(world.non_goal_slot_count):
+        for loc_name in spec.location_names(world.locations_per_contract):
             world.get_location(loc_name).access_rule = rule
             world._contract_ruled_locations.add(loc_name)
 
         # Non-goal completion event shares the rule (count / progressive_unlock):
         # reachable iff the contract is completable, so it contributes one to the
-        # "Contract Completed" count exactly when the contract is done in logic.
+        # "Contract Count Progress" count exactly when the contract is done in logic.
         if counts_contracts and not spec.is_goal:
             ev_name = spec.display_name.replace("Contract: ", "Contract Complete: ", 1)
             world.get_location(ev_name).access_rule = rule
@@ -626,13 +626,13 @@ def _set_contract_rules(world: KSP1World, player: int) -> None:
 
 def _set_threshold_rules(world: KSP1World, player: int) -> None:
     """Gate each goal-mode threshold location on the completed-contract count:
-    ``state.has("Contract Completed", required_count)``. The event items are
+    ``state.has("Contract Count Progress", required_count)``. The event items are
     swept in as their (contract-gated) event locations become reachable, so a
     threshold unlocks exactly when ``required_count`` contracts are completable
     in logic, releasing its locked goal item. No-op in findable / starting."""
-    from .contracts import CONTRACT_COMPLETED_EVENT
+    from .contracts import CONTRACT_COUNT_PROGRESS_EVENT
     def measure(state: CollectionState) -> float:
-        return state.count(CONTRACT_COMPLETED_EVENT, player)
+        return state.count(CONTRACT_COUNT_PROGRESS_EVENT, player)
     for loc_name, count, _item in world.contract_threshold_defs:
         gate = AccumulationGate(Resource.CONTRACT_COMPLETION, count)
         world.get_location(loc_name).access_rule = gate.runtime_rule(measure)
@@ -770,52 +770,39 @@ def _make_science_pack_rule():
     return rule
 
 
-def _set_item_pacing_rules(world: KSP1World, player: int, difficulty: int) -> None:
-    """
-    Apply item_rules to early locations.
+def _ban_early_science_windfalls(world: KSP1World, player: int, difficulty: int) -> None:
+    """Keep early checks from handing out science / tech windfalls.
 
-    Bans `_EARLY_BANNED_ITEMS` from Band A (starting inventory) and Band B
-    (KSC biomes + Kerbin specials + early Kerbin events). Under strict
-    pacing, also bans them from Band C (tier 1-3 tech tree).  Additionally
-    blocks all science pack filler from early tech tree under any pacing.
+    Bans ``_EARLY_BANNED_ITEMS`` (Progressive R&D + the two largest science
+    packs) from the starting inventory, KSC biomes, home-body specials, and early
+    home mission events, and blocks all science-pack filler from early-tier tech
+    nodes (tiers 1-3).  Always on: the early game should hand out parts to fly
+    with, not a science jackpot or the tech-band gate.
     """
     from worlds.generic.Rules import add_item_rule
-
-    pacing = world.options.item_pacing.value
-    if pacing == ItemPacing.option_off:
-        return
 
     num_slots = effective_tech_slots_per_node(world.options, difficulty)
     num_starting = effective_starting_inv_count(world.options, difficulty)
     early_ban_rule = _make_early_ban_rule(player)
 
-    # Band A: Starting Inventory
+    # Starting Inventory
     for name in STARTING_INV_NAMES[:num_starting]:
         add_item_rule(world.get_location(name), early_ban_rule)
 
-    # Band B: KSC biomes + home-body specials + early home events
+    # KSC biomes + home-body specials + early home mission events (everything
+    # except Flyby/SOI Leave, which need escape).
     for name in world.location_builder.ksc_biome_names:
         add_item_rule(world.get_location(name), early_ban_rule)
-    home = world.mission_builder.home
     for name in world.location_builder.names:
         add_item_rule(world.get_location(name), early_ban_rule)
-    # Early home-body mission events (everything except Flyby/SOI Leave which need escape)
+    home = world.mission_builder.home
     for event in (EventName.ORBIT, EventName.EVA_IN_ORBIT, EventName.LANDING,
                   EventName.CREWED_LANDING, EventName.FLAG_PLANT,
                   EventName.RETURN, EventName.SAMPLE_RETURN):
         for loc in event_locations(home, event):
             add_item_rule(world.get_location(str(loc)), early_ban_rule)
 
-    # Band C: Early tech tree (tiers 1-3) — strict mode only
-    if pacing >= ItemPacing.option_strict:
-        for node in TECH_NODES:
-            if node.tier > _EARLY_TECH_MAX_TIER:
-                continue
-            for slot in range(1, num_slots + 1):
-                name = str(TechTreeLocation(node.display_name, slot))
-                add_item_rule(world.get_location(name), early_ban_rule)
-
-    # Science pack restriction on early tech tree (both gentle and strict)
+    # Science-pack filler off early-tier tech nodes (tiers 1-3).
     science_rule = _make_science_pack_rule()
     for node in TECH_NODES:
         if node.tier > _EARLY_TECH_MAX_TIER:
@@ -1197,14 +1184,14 @@ def create_threshold_locations(world: KSP1World) -> None:
     item-gated contract-offer machinery needs no change.
 
     For each non-goal contract we also mint an address-None EVENT location
-    ("Contract Complete: ...") locked with a "Contract Completed" event item; its
+    ("Contract Complete: ...") locked with a "Contract Count Progress" event item; its
     access rule (set in _set_contract_rules, identical to the contract's) makes
-    ``state.has("Contract Completed", X)`` mean "X contracts completable in
+    ``state.has("Contract Count Progress", X)`` mean "X contracts completable in
     logic", which is what the threshold access rules gate on.
     """
     from BaseClasses import Location
     from .items import create_item, KSP1Item
-    from .contracts import CONTRACT_COMPLETED_EVENT
+    from .contracts import CONTRACT_COUNT_PROGRESS_EVENT
     from .locations import KSP1Location, LOCATION_NAME_TO_ID
 
     defs = world.contract_threshold_defs
@@ -1227,7 +1214,7 @@ def create_threshold_locations(world: KSP1World) -> None:
         ev_loc = Location(world.player, ev_name, None, menu)
         menu.locations.append(ev_loc)
         ev_loc.place_locked_item(
-            KSP1Item(CONTRACT_COMPLETED_EVENT, ItemClassification.progression,
+            KSP1Item(CONTRACT_COUNT_PROGRESS_EVENT, ItemClassification.progression,
                      None, world.player))
 
 

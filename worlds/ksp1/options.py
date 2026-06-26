@@ -302,24 +302,6 @@ class KSP1ExcludeLocations(ExcludeLocations):
     default = frozenset()
 
 
-class ItemPacing(Choice):
-    """
-    Controls whether high-impact items are restricted from early locations.
-
-    off     -- No restrictions. Any item can appear anywhere.
-    gentle  -- Tier 2 items (big engines, decouplers, large tanks) excluded
-               from Starting Inventory and KSC biome locations.
-    strict  -- Additionally restricts tier 2 from early tech tree (tiers 1-3).
-    """
-    display_name = "Item Pacing"
-
-    option_off = 0
-    option_gentle = 1
-    option_strict = 2
-
-    default = option_gentle
-
-
 class KSP1Accessibility(ItemsAccessibility):
     """
     Set rules for reachability of locations.
@@ -399,20 +381,18 @@ class ContractTypeWeights(OptionDict):
     default = {str(ct): 1 for ct in NON_GOAL_TYPES}
 
 
-class ContractsAvailable(NamedRange):
+class ContractsAvailable(Range):
     """
-    Total number of ordinary (non-goal) contracts placed into the seed (Y).
+    Total number of ordinary (non-goal) contracts placed into the seed.
     Independent of the goal; goal contracts are separate.
 
-    auto  -- Derived from Difficulty (12/10/8/6).
-    0..40 -- Explicit override. Capped at the number of ever-achievable
-             (enabled-type, body) combinations available in the seed.
+    Capped at the number of ever-achievable (enabled-type, body) combinations
+    available in the seed, so a high value may yield fewer in practice.
     """
     display_name = "Contracts Available"
     range_start = 0
     range_end = 40
-    default = -1
-    special_range_names = {"auto": -1}
+    default = 10
 
 
 class ContractsRequiredForGoal(NamedRange):
@@ -436,13 +416,13 @@ class GoalContractMode(Choice):
     """
     How the goal contract item(s) reach the player.
 
-    findable           -- (default) goal contract item is in the multiworld
-                          item pool, found like any other item (today's behavior).
+    findable           -- goal contract item is in the multiworld item pool,
+                          found like any other item.
     starting           -- goal contract item(s) are precollected as EXTRA
                           starting items; you are limited only by physics, parts,
                           and buildings.
-    count              -- complete X of your Y available contracts; on hitting X
-                          all goal contract items are awarded at once.
+    count              -- (default) complete X of your Y available contracts; on
+                          hitting X all goal contract items are awarded at once.
     progressive_unlock -- complete contracts to unlock the goal contract items
                           one at a time (easiest goal mission first), the last
                           at X.
@@ -452,7 +432,7 @@ class GoalContractMode(Choice):
     option_starting = 1
     option_count = 2
     option_progressive_unlock = 3
-    default = option_findable
+    default = option_count
 
 
 class AllowMissionsHarderThanGoal(Toggle):
@@ -488,18 +468,6 @@ class AllowEveOnExpert(Toggle):
     default = 0
 
 
-class ContractRepeats(NamedRange):
-    """
-    Extra reward slots each non-goal contract yields beyond the base 2, as
-    buffer-fill across spheres. 0 = today's behavior. (Client offering a
-    contract multiple times is a fast-follow.)
-    """
-    display_name = "Contract Repeats"
-    range_start = 0
-    range_end = 8
-    default = 0
-
-
 class HomeContractFloor(Range):
     """
     Minimum number of home-body contracts guaranteed in the seed, regardless of
@@ -531,7 +499,6 @@ class KSP1Options(PerGameCommonOptions):
     starting_inventory_count: StartingInventoryCount
     science_safety_factor: ScienceSafetyFactor
     start_with_launch_clamps: StartWithLaunchClamps
-    item_pacing: ItemPacing
     accessibility: KSP1Accessibility
     exclude_locations: KSP1ExcludeLocations
     exclude_late_tech_tree: ExcludeLateTechTree
@@ -543,7 +510,6 @@ class KSP1Options(PerGameCommonOptions):
     goal_contract_mode: GoalContractMode
     allow_missions_harder_than_goal: AllowMissionsHarderThanGoal
     allow_eve_on_expert: AllowEveOnExpert
-    contract_repeats: ContractRepeats
     home_contract_floor: HomeContractFloor
     flag_bodies: FlagBodies
     return_bodies: ReturnBodies
