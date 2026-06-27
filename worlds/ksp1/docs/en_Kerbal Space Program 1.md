@@ -180,3 +180,10 @@ it might not be reachable yet. This is the fastest way to understand what's bloc
 If you believe a location shown as in-logic is not actually achievable with your current parts, please
 file an [issue](https://github.com/nickdavies/Archipelago/issues) with the location name and either your
 parts list (from `/explain parts`) or your `.zip` and `.apsave` files.
+
+## Credits
+
+The in-game flags shipped with the client mod are based on the wonderful work of
+[1Kerbonaut](https://github.com/1Kerbonaut) from the
+[KSP-Style-Flags](https://github.com/1Kerbonaut/KSP-Style-Flags/tree/v1.0) project (v1.0).
+Many thanks for making them available!
