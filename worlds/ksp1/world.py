@@ -281,6 +281,19 @@ class KSP1World(World):
     def generate_early(self) -> None:
         """Resolve goal spec and apply ExcludeLateTechTree."""
         self.capability_cache = {}
+        # buildings_in_logic is known-broken: the client can't actuate the
+        # Astronaut-Complex / SPH unlocks (item-name mismatch + no Progressive
+        # SPH item), so an enabled run soft-locks EVA-gated progression.  The
+        # option is hidden (Visibility.none), but a stale yaml that still sets
+        # it would otherwise regenerate into the broken state — force it off
+        # here so that can't happen.  Remove this guard once the client/server
+        # facility names are aligned and a Progressive SPH item is pooled.
+        if self.options.buildings_in_logic.value:
+            import logging
+            logging.warning(
+                "KSP1 (player %s): 'buildings_in_logic' is known-broken and "
+                "has been force-disabled for this seed.", self.player)
+            self.options.buildings_in_logic.value = 0
         # Every pooled item name that some access rule gates on (via
         # ``state.has``/``has_all``).  Populated at rule-construction time
         # through the ``rules.require_item(s)`` chokepoint — building the

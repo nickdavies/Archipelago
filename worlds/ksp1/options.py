@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from Options import Choice, ExcludeLocations, ItemsAccessibility, NamedRange, OptionDict, OptionSet, PerGameCommonOptions, Range, Toggle
+from Options import Choice, ExcludeLocations, ItemsAccessibility, NamedRange, OptionDict, OptionSet, PerGameCommonOptions, Range, Toggle, Visibility
 
 from .bodies import ALL_BODIES, BodyName
 from .contracts import ContractType, NON_GOAL_TYPES
@@ -354,15 +354,29 @@ class ProgressiveLaunchPad(Toggle):
 
 class BuildingsInLogic(Toggle):
     """
-    Gate curated KSP facilities (VAB/SPH, Tracking Station, Astronaut Complex)
-    as in-logic progression.
+    BROKEN — do not enable.  Hidden and force-disabled as of 0.6.1.
 
-    When off (default), all facilities are maxed — today's behavior, no facility
-    gates anything. When on, curated buildings become gated capability effects
-    (wired by the buildings-in-logic work; no on behavior yet).
+    Intended to gate curated KSP facilities (VAB/SPH, Astronaut Complex) as
+    in-logic progression: when on, those facilities start at level 0 and the
+    player upgrades them by collecting building progressives.  The server side
+    is wired, but the client cannot actuate two of the three gates:
+
+      - The unlock items are pooled as "Progressive Astronaut Complex" /
+        "Progressive Tracking Station" (with spaces) but the client's
+        facility map keys are "Progressive AstronautComplex" /
+        "Progressive TrackingStation" (no space) — so the client silently
+        ignores them and never raises the cap.
+      - No "Progressive SPH" item is pooled at all, yet SPH is gated to 0.
+
+    Net effect when enabled: the Astronaut Complex and SPH lock to level 0
+    with no way to unlock them, soft-locking EVA-gated progression.  Force-
+    disabled in ``KSP1World.generate_early`` and hidden from templates until
+    the client/server facility names are aligned and a Progressive SPH item
+    is added.  The wiring is left intact for that fix.
     """
     display_name = "Buildings In Logic"
     default = 0
+    visibility = Visibility.none
 
 
 class ContractTypeWeights(OptionDict):
