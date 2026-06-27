@@ -805,6 +805,13 @@ _RANK_PRE_PASS_CACHE: dict[tuple, EquipmentFlags] = {}
 _BUMP_STATS_ON: bool = os.environ.get("KSP_BUMP_STATS") == "1"
 _BUMP_STATS: list = []
 
+# Verbose bumper diagnostics (the "sphere-bumper RESCUE (bailed to full-admit
+# kit)" lines etc.).  Useful for spotting model-infeasible / fragile missions, so
+# the solve-rate rig sets KSP_DEBUG=1.  Off for a plain Generate.py run: those
+# lines read like errors to an end user and prompt false bug reports — they only
+# ever need to see hard failures.
+_DEBUG: bool = os.environ.get("KSP_DEBUG") == "1"
+
 
 def _enrich_kit_alternates(kit, ctx: RankContext) -> None:
     """Populate ``kit.alternates`` and ``kit.stage_*_alternates`` in place.
@@ -1543,34 +1550,38 @@ def minimal_ranks_for(
             # axes are exhausted (e.g. non-NO_VIABLE_STAGE blockers only).
             axis = _pick_rank_bump(result.blocking, sig, rng)
         if axis is None:
-            # The greedy bumper could not map any remaining blocker to an axis
-            # it can still raise — a structural smell (the rep at some capped
-            # axis can't satisfy the mission).  Make it loud: every rescue is a
-            # mission the rank ladder couldn't build cleanly.
-            diag_lines = []
-            for b in result.blocking:
-                sd = getattr(b, "stage_diag", None)
-                if sd is not None:
-                    diag_lines.append(
-                        f"{b.reason.name}/{sd.failure.value} "
-                        f"dv={sd.best_dv_achieved:.0f}/{sd.required_dv:.0f} "
-                        f"twr={sd.best_twr_achieved:.2f}/{sd.twr_floor:.2f} "
-                        f"payload={sd.payload_mass:.1f}t cap={sd.mass_cap:.0f}t"
-                    )
-                else:
-                    diag_lines.append(b.reason.name)
-            partial = getattr(result, "partial_stages", [])
-            stage_summary = " | ".join(
-                f"{s.engine_count}x{s.engine_name}+{sum(n for n, _ in s.tank_manifest)}tk "
-                f"dv={s.delta_v:.0f} wet={s.stage_mass_wet:.1f}t"
-                for s in partial
-            )
-            logging.warning(
-                "KSP1 sphere-bumper RESCUE (bailed to full-admit kit): "
-                "%s/%s crewed=%s\n  blockers: %s\n  partial rocket (launch->top): %s",
-                info.body, info.mission_type, info.crewed,
-                "; ".join(diag_lines), stage_summary or "(none built)",
-            )
+            # The greedy bumper could not map any remaining blocker to an axis it
+            # can still raise — a structural smell (the rep at some capped axis
+            # can't satisfy the mission).  Log it under KSP_DEBUG only: it's how
+            # the solve-rate rig spots model-infeasible / fragile missions, but to
+            # an end user these lines read like errors and prompt false bug
+            # reports.  A plain Generate.py run stays quiet and proceeds to the
+            # capability-guided rescue below regardless.
+            if _DEBUG:
+                diag_lines = []
+                for b in result.blocking:
+                    sd = getattr(b, "stage_diag", None)
+                    if sd is not None:
+                        diag_lines.append(
+                            f"{b.reason.name}/{sd.failure.value} "
+                            f"dv={sd.best_dv_achieved:.0f}/{sd.required_dv:.0f} "
+                            f"twr={sd.best_twr_achieved:.2f}/{sd.twr_floor:.2f} "
+                            f"payload={sd.payload_mass:.1f}t cap={sd.mass_cap:.0f}t"
+                        )
+                    else:
+                        diag_lines.append(b.reason.name)
+                partial = getattr(result, "partial_stages", [])
+                stage_summary = " | ".join(
+                    f"{s.engine_count}x{s.engine_name}+{sum(n for n, _ in s.tank_manifest)}tk "
+                    f"dv={s.delta_v:.0f} wet={s.stage_mass_wet:.1f}t"
+                    for s in partial
+                )
+                logging.warning(
+                    "KSP1 sphere-bumper RESCUE (bailed to full-admit kit): "
+                    "%s/%s crewed=%s\n  blockers: %s\n  partial rocket (launch->top): %s",
+                    info.body, info.mission_type, info.crewed,
+                    "; ".join(diag_lines), stage_summary or "(none built)",
+                )
             # Capability-guided rescue: when greedy ran out of axis
             # bumps, run a single full-admit eval at MAX ranks.  If
             # feasible, ``ProfileResult.kit_used`` is the complete
