@@ -25,7 +25,7 @@ from .bodies import (
     BODY_BY_NAME, ALL_BODIES,
     BodyName, MissionType, DifficultyProfile, DIFFICULTY_PROFILES,
     Body, MissionEdge, MissionBuilder, EdgeType,
-    effective_dv, home_system_bodies, parent_chain,
+    effective_dv, effective_physics_profile_name, home_system_bodies, parent_chain,
 )
 from .parts import (
     PART_DB, CapabilityFlag, Engine, FuelTank, SolidBooster, HeatShield,
@@ -2850,7 +2850,7 @@ def _compute_capability(state: CollectionState, player: int) -> RocketCapability
     """Full capability computation from the current collection state."""
     world = state.multiworld.worlds[player]
     options = world.options
-    difficulty_name = ["casual", "normal", "expert"][options.difficulty.value]
+    difficulty_name = effective_physics_profile_name(options)
     start_with_clamps = bool(options.start_with_launch_clamps.value)
     cap, _ = compute_capability_from_items(
         lambda name: state.count(name, player),

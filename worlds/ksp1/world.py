@@ -14,6 +14,7 @@ from .capability import CAPABILITY_ITEMS, RocketCapability
 from .data.feasibility import MODEL_INFEASIBLE_LOCATIONS_BY_DIFFICULTY
 from .bodies import (
     ALL_BODIES, BodyName, EdgeType, MissionBuilder, MissionType, RandomOrbitParams,
+    effective_physics_profile_name,
     generate_random_orbit_params, generate_rescue_orbit_params,
     home_relative_science_values,
 )
@@ -28,9 +29,6 @@ from .locations import (
     effective_starting_inv_count, effective_tech_slots_per_node,
 )
 
-# Difficulty index → name, matching ``options.Difficulty.value`` order.
-_DIFFICULTY_NAMES: tuple[str, ...] = ("casual", "normal", "expert")
-
 # Curated edge bans: graph subsections too tedious to fly, banned by POLICY
 # (independent of the dv feasibility verdict).  Expressed as edges, not
 # locations: a mission is banned iff every one of its profiles must traverse a
@@ -42,7 +40,7 @@ _DIFFICULTY_NAMES: tuple[str, ...] = ("casual", "normal", "expert")
 _BANNED_EDGES: frozenset[tuple[BodyName, EdgeType]] = frozenset(
     {(BodyName.EVE, EdgeType.ATMOSPHERIC_ASCENT)}
 )
-from .options import Goal, GoalContractMode, KSP1Options, STARTING_BODY_POOLS, StartingBody
+from .options import Difficulty, Goal, GoalContractMode, KSP1Options, PhysicsDifficulty, STARTING_BODY_POOLS, StartingBody
 from .tech_tree import MAX_TIER, NODES_BY_TIER, TECH_NODES, TIER_TO_BAND
 
 
@@ -352,7 +350,7 @@ class KSP1World(World):
         # is derived from it for the name-keyed consumers (location pass, goal
         # spec, contracts).  The offline generator uses a RAW builder (empty
         # ``unachievable``) so the table keeps measuring true maximal capability.
-        diff_name = _DIFFICULTY_NAMES[self.options.difficulty.value]
+        diff_name = effective_physics_profile_name(self.options)
         _table_names = MODEL_INFEASIBLE_LOCATIONS_BY_DIFFICULTY.get(
             diff_name, {}).get(self.mission_builder.home, frozenset())
         unachievable: set[tuple[BodyName, MissionType]] = {
@@ -360,7 +358,12 @@ class KSP1World(World):
             for name in _table_names
             if (ml := MissionLocation.parse(name)) is not None
         }
-        if not self.options.allow_eve_on_expert.value:
+        # Eve curation: only base-expert seeds may opt Eve back in.  Gated on
+        # base Difficulty (not Physics Difficulty) so a 'zero' physics run on a
+        # casual/normal base can never surface Eve.
+        eve_allowed = (self.options.allow_eve_on_expert.value
+                       and self.options.difficulty.value == Difficulty.option_expert)
+        if not eve_allowed:
             unachievable |= self.mission_builder.missions_using_edges(_BANNED_EDGES)
         self.unachievable_missions = frozenset(unachievable)
         self.mission_builder.unachievable = self.unachievable_missions
@@ -686,6 +689,12 @@ class KSP1World(World):
         d["tech_slots_per_node"] = effective_tech_slots_per_node(
             self.options, self.options.difficulty.value
         )
+        # Resolved physics profile name (generous/comfortable/small/zero).  The
+        # C# client ignores it, but Universal Tracker regen needs it to rebuild
+        # logic with the same dv margins (else an explicit-physics seed would
+        # regen at the auto profile).  Stored as the resolved name so it is also
+        # directly usable by the capability diagnostic tools.
+        d["physics_difficulty"] = effective_physics_profile_name(self.options)
         d["node_bands"] = {n.node_id: TIER_TO_BAND[n.tier] for n in TECH_NODES}
         d["goal_locations"] = goal_spec_location_names(self.goal_spec)
         d["goal_display_name"] = self.goal_spec.display_name
@@ -814,6 +823,14 @@ class KSP1World(World):
         self.options.goal.value = slot_data["goal"]
         self.options.difficulty.value = slot_data["difficulty"]
         self.options.start_with_launch_clamps.value = slot_data["start_with_launch_clamps"]
+        # Physics profile: restore as an explicit level so regen logic matches
+        # the original margins regardless of base difficulty.  The resolved name
+        # (never "auto") maps back through the option's own name_lookup.  Absent
+        # on pre-PhysicsDifficulty seeds → leave at the option default (auto).
+        phys = slot_data.get("physics_difficulty")
+        if phys is not None:
+            _name_to_value = {n: v for v, n in PhysicsDifficulty.name_lookup.items()}
+            self.options.physics_difficulty.value = _name_to_value[phys]
         # Restore the chosen home body.  ``starting_body`` in slot_data
         # is the canonical ``BodyName`` string (``"Kerbin"`` / ``"Mun"``
         # / ...) — the same value the client mod reads.  Reverse-map to
@@ -911,9 +928,7 @@ class KSP1World(World):
 
         in_logic = loc_obj.can_reach(state)
         info = CHECK_MAP.get(target_name)
-        difficulty_name = ["casual", "normal", "expert"][
-            self.options.difficulty.value
-        ]
+        difficulty_name = effective_physics_profile_name(self.options)
 
         cap, flags = compute_capability_from_items(
             lambda name: state.count(name, self.player),

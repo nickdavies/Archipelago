@@ -22,7 +22,7 @@ MB = MissionBuilder(home=BodyName.KERBIN)
 # mission_builder; populate both so every type can build parameters in tests.
 MB.random_orbit_params = generate_random_orbit_params(_random.Random(0), ALL_BODIES)
 MB.rescue_orbit_params = generate_rescue_orbit_params(_random.Random(0), ALL_BODIES)
-DIFF = DIFFICULTY_PROFILES["normal"]
+DIFF = DIFFICULTY_PROFILES["comfortable"]
 
 
 def _flags(item_count_fn):
@@ -525,7 +525,7 @@ class TestExplainContractGeneric(unittest.TestCase):
                 with self.subTest(contract_type=ct, kit=label):
                     lines = format_contract_output(
                         spec, in_logic=False, item_held=False,
-                        flags=flags, diff=DIFF, difficulty_name="normal",
+                        flags=flags, diff=DIFF, difficulty_name="comfortable",
                         mission_builder=MB, proxy=False,
                     )
                     text = "\n".join(lines)
@@ -542,7 +542,7 @@ class TestExplainContractGeneric(unittest.TestCase):
         from worlds.ksp1.capability_format import format_contract_output
         text = "\n".join(format_contract_output(
             MUN_MINE, in_logic=True, item_held=True,
-            flags=FULL, diff=DIFF, difficulty_name="normal",
+            flags=FULL, diff=DIFF, difficulty_name="comfortable",
             mission_builder=MB, proxy=False,
         ))
         # Gate 2 lists the lightest part per required category.
@@ -557,7 +557,7 @@ class TestExplainContractGeneric(unittest.TestCase):
         from worlds.ksp1.capability_format import format_contract_output
         text = "\n".join(format_contract_output(
             MUN_MINE, in_logic=False, item_held=False,
-            flags=EMPTY, diff=DIFF, difficulty_name="normal",
+            flags=EMPTY, diff=DIFF, difficulty_name="comfortable",
             mission_builder=MB, proxy=False,
         ))
         self.assertIn("drill: MISSING", text)

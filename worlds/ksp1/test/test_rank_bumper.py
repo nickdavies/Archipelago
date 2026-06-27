@@ -29,7 +29,7 @@ MISSION_BUILDER = MissionBuilder(home=BodyName.KERBIN)
 def _bumper(loc: str, seed: int = 42, prior: Signature = Signature.empty()):
     return minimal_ranks_for(
         loc, prior, DEFAULT_CONTEXT,
-        difficulty="normal",
+        difficulty="comfortable",
         progressive_launch_pad=False,
         start_with_clamps=True,
         rng=random.Random(seed),

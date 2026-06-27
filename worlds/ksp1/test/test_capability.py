@@ -7,9 +7,11 @@ bypassing the CollectionState so we don't need a full world setup.
 import unittest
 
 from worlds.ksp1.bodies import (
-    ALL_BODIES, BODY_BY_NAME, DIFFICULTY_PROFILES, DifficultyProfile,
+    ALL_BODIES, BODY_BY_NAME, DIFFICULTY_PROFILES,
     BodyName, MissionBuilder, MissionType, effective_dv,
+    effective_physics_profile_name,
 )
+from worlds.ksp1.options import Difficulty, PhysicsDifficulty
 
 # Phase 3a refactor: MISSION_PROFILES is no longer a module-level constant in
 # bodies.py — it now lives behind ``MissionBuilder``.  Tests construct one
@@ -191,23 +193,18 @@ def _make_flags(
 
 
 def _normal_diff():
-    return DIFFICULTY_PROFILES["normal"]
+    return DIFFICULTY_PROFILES["comfortable"]
 
 
 def _casual_diff():
-    return DIFFICULTY_PROFILES["casual"]
+    return DIFFICULTY_PROFILES["generous"]
 
 
-# A 0-margin profile (no dv/plane-change cushion) for tests that want the
-# physics budget as tractable as possible to isolate a single gate (e.g. the
-# parachute gate) rather than mission margins. Mirrors the retired "insane"
-# profile so those tests keep their intent without depending on a difficulty.
+# The 0-margin physics profile (no dv/plane-change cushion) for tests that want
+# the physics budget as tractable as possible to isolate a single gate (e.g. the
+# parachute gate) rather than mission margins.
 def _zero_margin_diff():
-    return DifficultyProfile(
-        fixed_margin=0, percent_margin=0.00, plane_change_fraction=0.00,
-        min_twr_atmo=1.2, min_twr_vac=1.0,
-        ship_cd=0.2, srb_needs_rcs=False,
-    )
+    return DIFFICULTY_PROFILES["zero"]
 
 
 # ---------------------------------------------------------------------------
@@ -522,26 +519,73 @@ class TestStagingTier(unittest.TestCase):
 
 
 class TestDifficultyMargins(unittest.TestCase):
-    """Casual margins should require more dv than expert (the tightest difficulty)."""
+    """Generous margins should require more dv than small (a tighter profile)."""
 
-    def test_effective_dv_casual_greater_than_expert(self) -> None:
+    def test_effective_dv_generous_greater_than_small(self) -> None:
         from worlds.ksp1.bodies import effective_dv, DIFFICULTY_PROFILES
-        casual = DIFFICULTY_PROFILES["casual"]
-        expert = DIFFICULTY_PROFILES["expert"]
+        generous = DIFFICULTY_PROFILES["generous"]
+        small = DIFFICULTY_PROFILES["small"]
         base = 1000.0
         self.assertGreater(
-            effective_dv(base, casual),
-            effective_dv(base, expert),
+            effective_dv(base, generous),
+            effective_dv(base, small),
         )
 
-    def test_plane_change_included_at_casual(self) -> None:
+    def test_plane_change_included_at_generous(self) -> None:
         from worlds.ksp1.bodies import effective_dv, DIFFICULTY_PROFILES
-        casual = DIFFICULTY_PROFILES["casual"]
-        expert = DIFFICULTY_PROFILES["expert"]
-        dv_casual = effective_dv(100.0, casual, plane_change_dv=1000.0)
-        dv_expert = effective_dv(100.0, expert, plane_change_dv=1000.0)
-        # Casual includes 100% of 1000 plane change; expert includes only 5%.
-        self.assertGreater(dv_casual, dv_expert)
+        generous = DIFFICULTY_PROFILES["generous"]
+        small = DIFFICULTY_PROFILES["small"]
+        dv_generous = effective_dv(100.0, generous, plane_change_dv=1000.0)
+        dv_small = effective_dv(100.0, small, plane_change_dv=1000.0)
+        # Generous includes 100% of 1000 plane change; small includes only 5%.
+        self.assertGreater(dv_generous, dv_small)
+
+
+class _OptsStub:
+    """Minimal duck-typed options for the physics-profile resolver."""
+    def __init__(self, difficulty, physics=None):
+        self.difficulty = difficulty
+        if physics is not None:
+            self.physics_difficulty = physics
+
+
+class TestPhysicsDifficultyResolution(unittest.TestCase):
+    """effective_physics_profile_name: auto follows Difficulty, explicit wins."""
+
+    def test_auto_follows_base_difficulty(self) -> None:
+        for dv, expected in (
+            (Difficulty.option_casual, "generous"),
+            (Difficulty.option_normal, "comfortable"),
+            (Difficulty.option_expert, "small"),
+        ):
+            # auto via the explicit auto option
+            o = _OptsStub(Difficulty(dv),
+                          PhysicsDifficulty(PhysicsDifficulty.option_auto))
+            self.assertEqual(effective_physics_profile_name(o), expected)
+            # auto via a missing attr (duck-typed options without the option)
+            self.assertEqual(
+                effective_physics_profile_name(_OptsStub(Difficulty(dv))),
+                expected,
+            )
+
+    def test_explicit_level_overrides_base(self) -> None:
+        for level, name in (
+            (PhysicsDifficulty.option_generous, "generous"),
+            (PhysicsDifficulty.option_comfortable, "comfortable"),
+            (PhysicsDifficulty.option_small, "small"),
+            (PhysicsDifficulty.option_zero, "zero"),
+        ):
+            # base difficulty is casual but the explicit physics level wins
+            o = _OptsStub(Difficulty(Difficulty.option_casual),
+                          PhysicsDifficulty(level))
+            self.assertEqual(effective_physics_profile_name(o), name)
+            self.assertIn(name, DIFFICULTY_PROFILES)
+
+    def test_zero_profile_has_no_margin(self) -> None:
+        z = DIFFICULTY_PROFILES["zero"]
+        self.assertEqual(z.fixed_margin, 0)
+        self.assertEqual(z.percent_margin, 0.0)
+        self.assertEqual(z.plane_change_fraction, 0.0)
 
 
 class TestInjectLadder(unittest.TestCase):

@@ -34,6 +34,14 @@ class TestFillStandardSampleReturns(KSP1TestBase):
     needs_real_pre_fill = True
 
 
+class TestFillPhysicsZero(KSP1TestBase):
+    """Fill smoke test with the explicit zero-margin physics profile (no dv
+    cushion) — generation must still produce a solvable seed."""
+    options = {"physics_difficulty": "zero"}
+    run_default_tests = True
+    needs_real_pre_fill = True
+
+
 class TestItemLocationBalance(KSP1TestBase):
     """Item pool must exactly match the count of locations that still need filling.
 

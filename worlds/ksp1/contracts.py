@@ -32,7 +32,7 @@ from typing import Optional, TYPE_CHECKING
 
 from .bodies import (
     ALL_BODIES, BODY_BY_NAME, BodyName, MissionType, DifficultyProfile,
-    DIFFICULTY_PROFILES, MissionBuilder,
+    DIFFICULTY_PROFILES, MissionBuilder, effective_physics_profile_name,
 )
 from .parts import CONTRACT_CATEGORY_MEMBERS, MiscEquipment
 
@@ -1072,8 +1072,7 @@ def _full_kit_flags(world: "KSP1World") -> "EquipmentFlags":
 
 
 def _difficulty(world: "KSP1World") -> DifficultyProfile:
-    name = ["casual", "normal", "expert"][world.options.difficulty.value]
-    return DIFFICULTY_PROFILES[name]
+    return DIFFICULTY_PROFILES[effective_physics_profile_name(world.options)]
 
 
 # Goal body-list attribute -> the mission type it implies. Used to compute the

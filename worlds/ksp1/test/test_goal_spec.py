@@ -5,8 +5,8 @@ from worlds.ksp1.bodies import BodyName
 from worlds.ksp1.options import Goal
 from worlds.ksp1.data.feasibility import MODEL_INFEASIBLE_LOCATIONS_BY_DIFFICULTY
 
-# Tests resolve against the default-difficulty (normal) table.
-MODEL_INFEASIBLE_LOCATIONS = MODEL_INFEASIBLE_LOCATIONS_BY_DIFFICULTY["normal"]
+# Tests resolve against the default physics profile (comfortable) table.
+MODEL_INFEASIBLE_LOCATIONS = MODEL_INFEASIBLE_LOCATIONS_BY_DIFFICULTY["comfortable"]
 from worlds.ksp1.locations import EVENT_BY_NAME, EventName, MissionLocation
 from worlds.ksp1.rules import (
     GoalSpec,

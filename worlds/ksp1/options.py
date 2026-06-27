@@ -177,14 +177,15 @@ class StartingBody(Choice):
 
 class Difficulty(Choice):
     """
-    Controls delta-V margins and hardware requirement strictness.
+    Sets pacing defaults: Tech Slots Per Node, Starting Inventory Count,
+    Science Safety Factor, and contract pacing — each overridable independently.
 
-    Also sets defaults for Tech Slots Per Node, Starting Inventory Count,
-    and Science Safety Factor — each of which can be overridden independently.
+    Delta-V margins and hardware strictness are NOT set here — those are the
+    Physics Difficulty option (which defaults to follow this).
 
-    casual  -- Generous margins; 20 starts, 4 tech slots/node, 50% science.
-    normal  -- Default margins;  15 starts, 4 tech slots/node, 70% science.
-    expert  -- Tight margins;    10 starts, 3 tech slots/node, 85% science.
+    casual  -- 20 starts, 4 tech slots/node, 50% science; physics 'generous'.
+    normal  -- 15 starts, 4 tech slots/node, 70% science; physics 'comfortable'.
+    expert  -- 10 starts, 3 tech slots/node, 85% science; physics 'small'.
     """
     display_name = "Difficulty"
 
@@ -265,6 +266,36 @@ class ScienceSafetyFactor(NamedRange):
     range_end = 100
     default = -1
     special_range_names = {"auto": -1}
+
+
+class PhysicsDifficulty(Choice):
+    """
+    Delta-V margins and hardware strictness used by the capability model.
+
+    This is the physics axis only — it does NOT touch tech-slot, starting-
+    inventory, science, or contract pacing (those follow Difficulty).  The
+    levels are hand-curated profiles, not a numeric dial: margins shrink while
+    other knobs (e.g. drag credit) move the other way, so there's no meaningful
+    value "between" two levels.
+
+    auto        -- Follow Difficulty (casual->generous, normal->comfortable,
+                   expert->small).  The default.
+    generous    -- Largest margins; most forgiving (casual physics).
+    comfortable -- Default margins (normal physics).
+    small       -- Tight margins (expert physics).
+    zero        -- No margin at all: every dv budget must close exactly, no
+                   plane-change cushion, lowest TWR floors.  "Fly it perfectly."
+                   Maps to no Difficulty — opt in deliberately.
+    """
+    display_name = "Physics Difficulty"
+
+    option_auto = 0
+    option_generous = 1
+    option_comfortable = 2
+    option_small = 3
+    option_zero = 4
+
+    default = option_auto
 
 
 class StartWithLaunchClamps(Toggle):
@@ -468,15 +499,14 @@ class AllowMissionsHarderThanGoal(Toggle):
 
 class AllowEveOnExpert(Toggle):
     """
-    Allow Eve surface return / sample-return missions as goals and contracts on
-    difficulties where the model considers them flyable (expert).
+    Allow Eve surface return / sample-return missions as goals and contracts.
 
     Off (default): Eve return and sample-return are excluded everywhere as a
-    deliberate curation choice — they're physically achievable on the harder
-    difficulties but tedious to fly, so they never become a goal target or a
-    contract. On: they become available wherever the per-difficulty feasibility
-    model says they're achievable (in practice, expert). At casual/normal
-    Eve is infeasible regardless, so this option only bites on expert.
+    deliberate curation choice — they're physically achievable but tedious to
+    fly, so they never become a goal target or a contract. On: they become
+    available, but ONLY when base Difficulty is expert — independent of Physics
+    Difficulty (so a 'zero' physics run on a casual/normal base never surfaces
+    Eve).
     """
     display_name = "Allow Eve On Expert"
     default = 0
@@ -512,6 +542,7 @@ class KSP1Options(PerGameCommonOptions):
     tech_slots_per_node: TechSlotsPerNode
     starting_inventory_count: StartingInventoryCount
     science_safety_factor: ScienceSafetyFactor
+    physics_difficulty: PhysicsDifficulty
     start_with_launch_clamps: StartWithLaunchClamps
     accessibility: KSP1Accessibility
     exclude_locations: KSP1ExcludeLocations

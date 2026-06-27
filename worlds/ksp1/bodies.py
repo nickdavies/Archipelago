@@ -94,29 +94,76 @@ class DifficultyProfile:
     srb_needs_rcs: bool         # True = SRBs require RCS for throttle-mode edges
 
 
+# Physics-difficulty profiles, keyed by the PhysicsDifficulty option's level
+# names (generous/comfortable/small = old casual/normal/expert physics; zero =
+# the retired "insane" 0-margin profile).  This is the PHYSICS axis only —
+# base Difficulty (tech slots / inventory / science / contract pacing) is
+# separate.  Resolve a world's profile name with effective_physics_profile_name.
 DIFFICULTY_PROFILES: dict[str, DifficultyProfile] = {
     # plane_change_fraction models a window-timing SKILL: matching an inclined
     # target's plane is mostly avoidable by departing at the node, but it's a
-    # non-obvious optimization beginners don't do.  So casual pays ~full,
-    # normal+ are expected to time it (lower and lower tolerance up the ladder).
-    # Only ASCENT-to-encounter edges carry a plane change; descending X→parent
-    # is always free (see _add_home_return_paths).
-    "casual": DifficultyProfile(
+    # non-obvious optimization beginners don't do.  So generous pays ~full,
+    # tighter levels are expected to time it (lower and lower tolerance up the
+    # ladder).  Only ASCENT-to-encounter edges carry a plane change; descending
+    # X→parent is always free (see _add_home_return_paths).
+    "generous": DifficultyProfile(
         fixed_margin=200, percent_margin=0.30, plane_change_fraction=1.00,
         min_twr_atmo=1.5, min_twr_vac=1.2,
         ship_cd=0.0, srb_needs_rcs=True,
     ),
-    "normal": DifficultyProfile(
+    "comfortable": DifficultyProfile(
         fixed_margin=100, percent_margin=0.15, plane_change_fraction=0.25,
         min_twr_atmo=1.5, min_twr_vac=1.2,
         ship_cd=0.1, srb_needs_rcs=True,
     ),
-    "expert": DifficultyProfile(
+    "small": DifficultyProfile(
         fixed_margin=50, percent_margin=0.05, plane_change_fraction=0.05,
         min_twr_atmo=1.3, min_twr_vac=1.1,
         ship_cd=0.2, srb_needs_rcs=False,
     ),
+    # No dv margin at all: every budget must close exactly.  srb_needs_rcs is an
+    # equipment-gating flag, not a margin lever — it travels with the profile
+    # for now and stays False here (matching 'small').
+    "zero": DifficultyProfile(
+        fixed_margin=0, percent_margin=0.00, plane_change_fraction=0.00,
+        min_twr_atmo=1.2, min_twr_vac=1.0,
+        ship_cd=0.2, srb_needs_rcs=False,
+    ),
 }
+
+
+# Base Difficulty.value → default physics profile when PhysicsDifficulty=auto.
+# Raw-int keys (mirrors locations.py's difficulty tables) so bodies.py stays
+# free of an options import (options.py imports bodies — the reverse would cycle).
+_AUTO_PHYSICS_BY_DIFFICULTY: dict[int, str] = {
+    0: "generous",     # casual
+    1: "comfortable",  # normal
+    2: "small",        # expert
+}
+
+
+def effective_physics_profile_name(options) -> str:
+    """Physics profile key for this world.  Honors the PhysicsDifficulty option
+    when set; otherwise derives from base Difficulty.  The returned string is a
+    key of ``DIFFICULTY_PROFILES`` (generous/comfortable/small/zero)."""
+    pd = getattr(options, "physics_difficulty", None)
+    if pd is not None and pd.value != 0:   # 0 == PhysicsDifficulty.option_auto
+        return pd.current_key              # generous/comfortable/small/zero
+    return _AUTO_PHYSICS_BY_DIFFICULTY[options.difficulty.value]
+
+
+def physics_profile_name_from_slot_data(slot_data: dict) -> str:
+    """Diagnostic helper: physics profile key for a seed's ``slot_data``.
+
+    Prefers an explicit ``physics_difficulty`` profile name when present;
+    otherwise derives from the base ``difficulty`` index assuming
+    PhysicsDifficulty=auto.  (Physics difficulty is generation-only, so it is
+    not written to slot_data today — non-auto seeds degrade to their auto
+    profile here.  Add the key to make diagnostics exact.)"""
+    name = slot_data.get("physics_difficulty")
+    if name in DIFFICULTY_PROFILES:
+        return name
+    return _AUTO_PHYSICS_BY_DIFFICULTY[slot_data.get("difficulty", 1)]
 
 
 def effective_dv(base_dv: float, profile: DifficultyProfile,

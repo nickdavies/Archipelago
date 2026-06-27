@@ -56,11 +56,42 @@ class TestUTRegen(unittest.TestCase):
         regen_sd = world2.fill_slot_data()
         # These keys must match exactly — they control access rules.
         for key in ("goal", "difficulty", "start_with_launch_clamps",
-                     "tech_slots_per_node", "goal_locations", "goal_display_name"):
+                     "tech_slots_per_node", "physics_difficulty",
+                     "goal_locations", "goal_display_name"):
             self.assertEqual(
                 original_sd[key], regen_sd[key],
                 f"slot_data[{key!r}] mismatch after regen",
             )
+
+    def test_explicit_physics_difficulty_round_trip(self):
+        """An explicit (non-auto) physics profile must survive regen — else UT
+        would rebuild the seed's logic with the default (auto) dv margins.
+
+        The regen world is built with DEFAULT options (no physics override) so
+        the only path to 'zero' is the restored slot_data, isolating the hook.
+        """
+        from test.general import call_all
+        from worlds.ksp1.bodies import effective_physics_profile_name
+
+        mw1 = setup_multiworld(
+            KSP1World,
+            steps=("generate_early", "create_regions", "create_items", "set_rules"),
+            seed=42,
+            options={"physics_difficulty": "zero"},
+        )
+        world1: KSP1World = mw1.worlds[1]
+        slot_data = world1.fill_slot_data()
+        self.assertEqual(slot_data["physics_difficulty"], "zero")
+
+        mw2 = setup_multiworld(KSP1World, steps=(), seed=43, options={})
+        mw2.re_gen_passthrough = {KSP1World.game: slot_data}
+        for step in ("generate_early", "create_regions", "create_items", "set_rules"):
+            call_all(mw2, step)
+        world2: KSP1World = mw2.worlds[1]
+
+        # Default opts would resolve to 'comfortable'; slot_data must force 'zero'.
+        self.assertEqual(effective_physics_profile_name(world2.options), "zero")
+        self.assertEqual(world2.fill_slot_data()["physics_difficulty"], "zero")
 
     def test_custom_goal_round_trip(self):
         """Custom goal bodies survive the slot_data → regen cycle."""

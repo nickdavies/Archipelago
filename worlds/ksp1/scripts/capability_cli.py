@@ -27,6 +27,7 @@ from test.general import setup_multiworld
 
 from worlds.ksp1.bodies import (
     ALL_BODIES, BodyName, DIFFICULTY_PROFILES, MissionBuilder, effective_dv,
+    physics_profile_name_from_slot_data,
 )
 from worlds.ksp1.capability import (
     compute_capability_from_items, evaluate_mission_detailed,
@@ -245,9 +246,7 @@ def cmd_rocket(ap: APState, check_name: str, verbose: bool = False) -> None:
 
     info = CHECK_MAP.get(check_name)
 
-    difficulty_name = ["casual", "normal", "expert"][
-        ap.slot_data.get("difficulty", 1)
-    ]
+    difficulty_name = physics_profile_name_from_slot_data(ap.slot_data)
 
     cap, flags = compute_capability_from_items(
         lambda name: state.count(name, player),
@@ -416,9 +415,10 @@ def main() -> None:
                         help="Show received items list")
     parser.add_argument("--parts-list", action="store_true",
                         help="Show received parts with human-readable names")
-    parser.add_argument("--difficulty", default="normal",
+    parser.add_argument("--difficulty", default="comfortable",
                         choices=list(DIFFICULTY_PROFILES.keys()),
-                        help="Difficulty for 'missions' adj_dv column (default: normal)")
+                        help="Physics difficulty for 'missions' adj_dv column "
+                             "(default: comfortable)")
 
     args = parser.parse_args()
 

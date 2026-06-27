@@ -62,13 +62,13 @@ from worlds.ksp1.parts import PART_DB
 _PROBED_EVENTS: tuple[EventName, ...] = (EventName.RETURN, EventName.SAMPLE_RETURN)
 
 
-# One table is baked per difficulty.  Feasibility genuinely depends on
-# difficulty — the dv margin differs per profile (casual demands the most
-# cushion, expert the least), so a mission can be flyable at expert yet
-# infeasible at casual.  A single difficulty-agnostic table can't express
-# that, so the world reads the table matching the seed's difficulty.
-# Order matches ``options.Difficulty.value`` (0..2).
-DIFFICULTIES: tuple[str, ...] = ("casual", "normal", "expert")
+# One table is baked per PHYSICS difficulty.  Feasibility genuinely depends on
+# the dv margin profile (generous demands the most cushion, zero none at all),
+# so a mission can be flyable at 'small' yet infeasible at 'generous'.  A single
+# margin-agnostic table can't express that, so the world reads the table
+# matching the seed's resolved physics profile
+# (``effective_physics_profile_name``).  Keys are ``DIFFICULTY_PROFILES`` keys.
+DIFFICULTIES: tuple[str, ...] = ("generous", "comfortable", "small", "zero")
 
 # Extra ``percent_margin`` added on top of EACH difficulty profile.  This is
 # a REP-SELECTION safety buffer, not a difficulty knob: the probe runs with
@@ -81,9 +81,9 @@ DIFFICULTIES: tuple[str, ...] = ("casual", "normal", "expert")
 # requiring Tylo+Laythe) drop back to the proxy, restoring the zero-reject bar.
 DEFAULT_OVERHEAD: float = 0.25
 
-# Default difficulty for the single-home helper (the per-home probe still
-# takes an explicit difficulty; this only covers callers that omit it).
-DEFAULT_DIFFICULTY: str = "normal"
+# Default physics difficulty for the single-home helper (the per-home probe
+# still takes an explicit difficulty; this only covers callers that omit it).
+DEFAULT_DIFFICULTY: str = "comfortable"
 
 
 def _max_kit_counts() -> dict[str, int]:

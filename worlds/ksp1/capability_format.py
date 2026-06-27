@@ -13,7 +13,7 @@ from typing import Optional
 
 from worlds.ksp1.bodies import (
     ALL_BODIES, BODY_BY_NAME, BodyName, MissionType, DIFFICULTY_PROFILES, EdgeType,
-    MissionBuilder, MissionEdge, min_relay_tier,
+    MissionBuilder, MissionEdge, min_relay_tier, physics_profile_name_from_slot_data,
 )
 from worlds.ksp1.capability import (
     EquipmentFlags, ProfileResult,
@@ -574,9 +574,7 @@ def build_bug_report_dict(
     user_description: Optional[str] = None,
 ) -> dict:
     """Build a JSON-serializable bug report dict."""
-    difficulty_name = ["casual", "normal", "expert"][
-        slot_data.get("difficulty", 1)
-    ]
+    difficulty_name = physics_profile_name_from_slot_data(slot_data)
 
     report: dict = {
         "slot_data": slot_data,
