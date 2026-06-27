@@ -354,6 +354,17 @@ class ContractTypeDef:
     # suits surface contracts.
     location_prep: str = "on"
     crew_requirement: int = 0        # >0 => the crew_cabin category must total N seats
+    # Categories listed in ``required_categories`` that gate AP reachability/fill
+    # but are NOT emitted as in-game contract objectives by ``build_parameters``.
+    # Use only when the requirement is met by something other than a vessel part.
+    # KERBAL_RESCUE is the sole case today: it lists "eva_jetpack" here because the
+    # *stranded* kerbal carries the jetpack (the client equips the rescuee), so a
+    # "vessel must carry a jetpack" objective would be both wrong (the rescuer
+    # doesn't need it) and unsatisfiable (a jetpack lives in a kerbal's inventory,
+    # never as a vessel part) — yet the rescue should still be paced behind jetpack
+    # tech in logic. This is per-type on purpose: a different contract could
+    # legitimately require a vessel-carried jetpack.
+    logic_only_categories: tuple[str, ...] = ()
     # True if this type makes sense on the HOME body. Orbit / station / satellite
     # content around home is good early-game; "go land/mine elsewhere" types are
     # silly at home. Generation only places a contract on the home body when this
@@ -369,6 +380,13 @@ class ContractTypeDef:
             object.__setattr__(
                 self, "requirements",
                 tuple(AnyOf(cat) for cat in self.required_categories))
+        # logic_only_categories only SUPPRESS a category's objective; they never
+        # add a gate, so each must be a real required category (catches typos).
+        unknown = set(self.logic_only_categories) - set(self.required_categories)
+        if unknown:
+            raise ValueError(
+                f"{self.contract_type}: logic_only_categories {sorted(unknown)} "
+                f"not in required_categories {self.required_categories}")
 
     def requires_landing(self) -> bool:
         return self.base_mission_type in (
@@ -467,7 +485,8 @@ class ContractTypeDef:
             # battery + power + relay). Native objective checks where they exist
             # (lab/power), explicit part lists otherwise (battery/relay).
             params = [SituationParam("landed", body)]
-            params += [_category_param(cat) for cat in self.required_categories]
+            params += [_category_param(cat) for cat in self.required_categories
+                       if cat not in self.logic_only_categories]
             return params
         if self.contract_type == ContractType.SPACE_STATION:
             # In orbit with crew capacity >= N (stock CrewCapacityParameter, which
@@ -537,7 +556,8 @@ class ContractTypeDef:
                         f"KERBAL_RESCUE on {body} has no assigned rescue orbit")
                 sma = R
             params = [RescueParam(body, sma=sma)]
-            params += [_category_param(cat) for cat in self.required_categories]
+            params += [_category_param(cat) for cat in self.required_categories
+                       if cat not in self.logic_only_categories]
             return params
         if self.contract_type == ContractType.FLYBY:
             return [SituationParam("flyby", body)]      # stock EnterSOI(body)
@@ -663,8 +683,11 @@ CONTRACT_TYPE_DEFS: dict[ContractType, ContractTypeDef] = {
         # like a station's crew cabins). crewed=None lets a probe-controlled
         # craft with an empty cabin do it (lightest), or a crewed capsule.
         # An EVA jetpack so the stranded Kerbal can cross to the rescue craft —
-        # without it they can only float, so the rescue is impossible.
+        # without it they can only float. The CLIENT equips the rescuee with it,
+        # so it's a logic gate (paces the rescue behind jetpack tech / fill), NOT a
+        # contract objective — hence logic_only_categories below.
         required_categories=("crew_cabin", "eva_jetpack"),
+        logic_only_categories=("eva_jetpack",),
         crew_requirement=1,
         home_safe=True,
         title_fmt="Rescue a stranded Kerbal in orbit of {body}",
