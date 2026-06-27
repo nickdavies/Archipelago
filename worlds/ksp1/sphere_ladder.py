@@ -2438,6 +2438,15 @@ def _assert_gate_items_progression(world) -> None:
 _ACCESS_RULE_MODE = os.environ.get("KSP_ACCESS_RULE_MODE", "strict_ladder")
 
 
+def _infeasible_false_rule(state) -> bool:
+    """Access rule for a model-infeasible location (a banned or
+    dv-infeasible-at-maximal-kit mission): unreachable under ANY kit, so a cheap
+    constant False. Replaces the capability rule for these so fill never runs
+    physics for them, and backstops the placement window — a progression/useful
+    item placed here is always unreachable, so AP fill will never put one here."""
+    return False
+
+
 def _make_bracket_rule(player: int, reps: tuple, signature: "Signature"):
     """Cheap reachability rule DERIVED from the location's full requirement
     signature — total over every ``Threshold`` kind:
@@ -2697,8 +2706,12 @@ def _install_ladder_rules(
                     loc.name, Signature.empty()
                 ).with_counted(_kind, _lvl)
         if j is None:
-            # No sphere reaches this mission with its reps-only kit —
-            # leave the capability rule as the (slow) fallback.
+            # No sphere reaches this mission with its reps-only kit — leave the
+            # capability rule as the (slow) correct fallback for an
+            # unbracketed-but-eventually-reachable mission. (Genuinely infeasible
+            # locations are handled by the constant-False backstop loop below;
+            # they never reach here — they have no signature, so the
+            # ``location_signatures`` filter above skips them.)
             continue
         bracket_by_loc[loc.name] = j
         # Counted-progressive requirements, recorded so the unified placement
@@ -2758,6 +2771,21 @@ def _install_ladder_rules(
         # the same protection strict_validation relies on.  Placement balance
         # is the unified sphere rule's job (_install_unified_sphere_rules).
         rebracketed += 1
+    # Constant-False backstop for model-infeasible locations (banned /
+    # dv-infeasible at maximal kit).  The walk gives them no signature, so the
+    # loop above skips them and they still carry the physics capability rule from
+    # set_rules — which returns False under ANY kit but costs a get_capability
+    # call every time fill evaluates them.  Swap in a cheap constant False: keeps
+    # physics out of the fill hot path AND guarantees AP fill can never strand a
+    # progression/useful item on an unreachable location.  NOT saved into
+    # ``saved`` — post_fill must not restore the capability rule (that would
+    # re-leak physics into the spoiler); False is equivalent and permanent here.
+    if install_access:
+        for loc in world.multiworld.get_locations(player):
+            if (loc.address is not None
+                    and loc.name in world.model_infeasible_locations
+                    and loc.name not in contract_ruled):
+                loc.access_rule = _infeasible_false_rule
     world._cheap_access_rebracketed = rebracketed
     world._cheap_access_bracket = bracket_by_loc
     if save_original and install_access:
