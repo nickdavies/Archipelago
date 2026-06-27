@@ -179,14 +179,18 @@ class SampleReturnParam:
 @dataclass(frozen=True)
 class RescueParam:
     """Rescue a stranded Kerbal from orbit of ``body`` and return them home. The
-    client SPAWNS the stranded Kerbal (a small pod in low orbit around ``body``)
-    when the contract is accepted, and completes when that Kerbal is recovered.
-    Unlike every other primitive, this one creates world state rather than just
-    watching the player's vessel — see the client RescuePrimitive."""
+    client SPAWNS the stranded Kerbal (a small pod) at the seeded ``sma``
+    (circular equatorial orbit, radius from the body's centre in metres) when the
+    contract is accepted, and completes when that Kerbal is recovered. ``sma`` is
+    a collision-safe altitude the generator also charges dv for, so logic and the
+    real mission agree. Unlike every other primitive, this one creates world
+    state rather than just watching the player's vessel — see the client
+    RescuePrimitive."""
     body: str
+    sma: float = 0.0   # rescue-orbit radius from body centre (m); 0 = client default
 
     def to_json(self) -> dict:
-        return {"kind": "rescue", "body": str(self.body)}
+        return {"kind": "rescue", "body": str(self.body), "sma": self.sma}
 
 
 @dataclass(frozen=True)
@@ -394,9 +398,32 @@ class ContractTypeDef:
         penalty; STATIONARY appends the low-orbit→sync raise burn; RANDOM pays
         the inclination rotation loss + a raise to its apoapsis. All are free at
         remote bodies (capture straight into the target plane / a high orbit),
-        so they return ``edges`` unchanged off home. (RESCUE's rendezvous margin
-        is baked into its profile at build time, not here — it's at the target
-        body mid-trajectory, so it can't be appended without disconnecting.)"""
+        so they return ``edges`` unchanged off home.
+
+        RESCUE is the exception that fires for EVERY target (before the home
+        guard): the cost to fly to the seeded rescue orbit and back is a round
+        trip applied to the profile's rendezvous self-loop, computed per regime."""
+        if self.contract_type == ContractType.KERBAL_RESCUE:
+            R = mission_builder.rescue_orbit_params.get(target_body)
+            if R is None:
+                return edges  # defensive: no orbit assigned -> base profile
+            tgt = BODY_BY_NAME[target_body]
+            home = BODY_BY_NAME[home_body]
+            if home.parent == target_body:
+                # Child -> parent (moon home, target is its parent planet): the
+                # profile escapes the home moon into the parent frame; from there
+                # it's a Hohmann up/down between the moon's orbital radius and R,
+                # NOT a descent to the parent's deep low orbit (which over-charges
+                # 2.5-8.7x).
+                r_M = home.parent_periapsis_km * 1000.0
+                extra = 2.0 * tgt.hohmann_dv(r_M, R)
+            else:
+                # Home / sibling / parent->child / interplanetary: the profile
+                # already reaches (often aerobrakes cheaply into) low orbit, but R
+                # sits above the atmosphere, so charge the propulsive round trip
+                # low-orbit <-> R that aerobraking cannot provide.
+                extra = 2.0 * tgt.raise_dv(R)
+            return mission_builder.bump_selfloop(edges, extra)
         if target_body != home_body:
             return edges
         home = BODY_BY_NAME[home_body]
@@ -495,11 +522,21 @@ class ContractTypeDef:
         if self.contract_type == ContractType.SAMPLE_RETURN:
             return [SampleReturnParam(body)]
         if self.contract_type == ContractType.KERBAL_RESCUE:
-            # The client spawns the stranded Kerbal in orbit of `body` and
-            # completes when they are recovered. The crew-cabin free seat is a
-            # separate has_any_part objective so the player must actually have
-            # room to bring the Kerbal home.
-            params = [RescueParam(body)]
+            # The client spawns the stranded Kerbal at the seeded collision-safe
+            # rescue orbit (sma) of `body` and completes when they are recovered.
+            # The crew-cabin free seat + EVA jetpack are separate has_any_part
+            # objectives (room to bring the Kerbal home, and a jetpack so they can
+            # cross to the craft). The orbit lives on the mission_builder, which
+            # is always passed in real generation; if it's present but has no
+            # orbit for this body, that's a wiring bug (fail loud).
+            sma = 0.0
+            if mission_builder is not None:
+                R = mission_builder.rescue_orbit_params.get(body)
+                if R is None:
+                    raise ValueError(
+                        f"KERBAL_RESCUE on {body} has no assigned rescue orbit")
+                sma = R
+            params = [RescueParam(body, sma=sma)]
             params += [_category_param(cat) for cat in self.required_categories]
             return params
         if self.contract_type == ContractType.FLYBY:

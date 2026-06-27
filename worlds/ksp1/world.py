@@ -14,7 +14,8 @@ from .capability import CAPABILITY_ITEMS, RocketCapability
 from .data.feasibility import MODEL_INFEASIBLE_LOCATIONS_BY_DIFFICULTY
 from .bodies import (
     ALL_BODIES, BodyName, EdgeType, MissionBuilder, MissionType, RandomOrbitParams,
-    generate_random_orbit_params, home_relative_science_values,
+    generate_random_orbit_params, generate_rescue_orbit_params,
+    home_relative_science_values,
 )
 from .items import (
     ITEM_NAME_TO_ID, PROGRESSIVE_LAUNCH_PAD_CAPS, _FILLER_ITEMS,
@@ -373,6 +374,18 @@ class KSP1World(World):
             self.mission_builder.random_orbit_params = ut_orbits
         else:
             self.mission_builder.random_orbit_params = generate_random_orbit_params(
+                random.Random(self.random.getrandbits(64)), ALL_BODIES)
+
+        # Seeded collision-safe rescue orbits for KERBAL_RESCUE contracts — same
+        # timing/why as the random orbits above (the feasibility + cap read the
+        # real reach-the-orbit cost via transform_mission). The derived-RNG draw
+        # sits adjacent to the random-orbit draw to keep ordering stable; UT regen
+        # restores the exact orbits from slot_data instead of re-rolling.
+        ut_rescue = getattr(self, "_ut_rescue_orbit_params", None)
+        if ut_rescue is not None:
+            self.mission_builder.rescue_orbit_params = ut_rescue
+        else:
+            self.mission_builder.rescue_orbit_params = generate_rescue_orbit_params(
                 random.Random(self.random.getrandbits(64)), ALL_BODIES)
 
         # Generate this seed's contracts (deterministic from the world seed).
@@ -752,6 +765,13 @@ class KSP1World(World):
             }
             for body, p in self.mission_builder.random_orbit_params.items()
         }
+        # Seeded KERBAL_RESCUE orbits, per body (radius from centre, m) — carried
+        # so UT regen restores the exact orbits; the client also gets each via the
+        # contract's rescue parameter (sma). Server-side record.
+        d["rescue_orbit_params"] = {
+            str(body): r
+            for body, r in self.mission_builder.rescue_orbit_params.items()
+        }
         # Goal contract mode. ``contract_thresholds`` is the client's watcher map
         # {completed-contract-count -> [threshold locations to report]}: when the
         # player's completed non-goal-contract count reaches a key, the client
@@ -825,6 +845,13 @@ class KSP1World(World):
                     eccentricity=entry["eccentricity"],
                 )
                 for body, entry in rop.items()
+            }
+
+        # Restore the exact KERBAL_RESCUE orbits (re-rolling would diverge).
+        rescue_op = slot_data.get("rescue_orbit_params")
+        if rescue_op:
+            self._ut_rescue_orbit_params = {
+                BodyName(body): float(r) for body, r in rescue_op.items()
             }
 
         # A custom goal isn't a single enum value — its body lists ARE the goal,

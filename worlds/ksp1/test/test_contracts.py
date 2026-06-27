@@ -11,16 +11,17 @@ import random as _random
 
 from worlds.ksp1 import contracts as C
 from worlds.ksp1.bodies import (
-    ALL_BODIES, BodyName, MissionBuilder, DIFFICULTY_PROFILES,
-    generate_random_orbit_params,
+    ALL_BODIES, BodyName, BODY_BY_NAME, MissionBuilder, DIFFICULTY_PROFILES,
+    MissionType, generate_random_orbit_params, generate_rescue_orbit_params,
 )
 from worlds.ksp1.capability import _pre_pass
 from worlds.ksp1.test.base import KSP1TestBase
 
 MB = MissionBuilder(home=BodyName.KERBIN)
-# RANDOM_ORBIT contracts read their seeded target orbit off the mission_builder;
-# populate it so every type can build parameters / render in tests.
+# RANDOM_ORBIT / KERBAL_RESCUE contracts read their seeded target orbit off the
+# mission_builder; populate both so every type can build parameters in tests.
 MB.random_orbit_params = generate_random_orbit_params(_random.Random(0), ALL_BODIES)
+MB.rescue_orbit_params = generate_rescue_orbit_params(_random.Random(0), ALL_BODIES)
 DIFF = DIFFICULTY_PROFILES["normal"]
 
 
@@ -122,11 +123,14 @@ class TestSlotDataRoundTrip(unittest.TestCase):
         # without raising NotImplementedError.
         from worlds.ksp1.bodies import (
             ALL_BODIES, MissionBuilder, BodyName, generate_random_orbit_params,
+            generate_rescue_orbit_params,
         )
         import random as _random
         mb = MissionBuilder(home=BodyName.KERBIN)
-        # RANDOM_ORBIT reads its seeded target orbit off the mission_builder.
+        # RANDOM_ORBIT / KERBAL_RESCUE read their seeded target orbit off the mb.
         mb.random_orbit_params = generate_random_orbit_params(
+            _random.Random(1), ALL_BODIES)
+        mb.rescue_orbit_params = generate_rescue_orbit_params(
             _random.Random(1), ALL_BODIES)
         for ct, td in C.CONTRACT_TYPE_DEFS.items():
             with self.subTest(contract_type=ct):
@@ -177,6 +181,61 @@ class TestSlotDataRoundTrip(unittest.TestCase):
             self.assertNotIn("mun_surface", nodes,
                              "rescue must not land at the target body")
             self.assertIn("mun_low_orbit", nodes)
+
+    def test_rescue_orbit_is_collision_safe(self):
+        # The seeded rescue orbit must clear every moon's full PeR..ApR range
+        # (plus the moon's SOI) and sit above low orbit / below the SOI, across
+        # many seeds, for planets with moons and moonless bodies alike.
+        margin = 0.0  # allow R right at a band edge
+        for seed in range(60):
+            params = generate_rescue_orbit_params(_random.Random(seed), ALL_BODIES)
+            for tgt in (BodyName.JOOL, BodyName.KERBIN, BodyName.DUNA,
+                        BodyName.EVE, BodyName.MOHO, BodyName.LAYTHE):
+                R = params[tgt]
+                B = BODY_BY_NAME[tgt]
+                self.assertGreaterEqual(R, B.lo_radius_m - 1.0,
+                                        f"{tgt} R below low orbit (seed {seed})")
+                self.assertLessEqual(R, B.soi_radius_km * 1000.0,
+                                     f"{tgt} R outside SOI (seed {seed})")
+                for m in ALL_BODIES:
+                    if m.parent != tgt:
+                        continue
+                    lo = m.parent_periapsis_km * 1000.0 - m.soi_radius_km * 1000.0
+                    hi = m.parent_apoapsis_km * 1000.0 + m.soi_radius_km * 1000.0
+                    self.assertFalse(
+                        lo - margin <= R <= hi + margin,
+                        f"{tgt} rescue R={R:.0f} clips {m.name}'s "
+                        f"[{lo:.0f},{hi:.0f}] band (seed {seed})")
+
+    def test_rescue_dv_regime_general_vs_child_parent(self):
+        # transform_mission charges the round trip to the seeded orbit: the
+        # general case as 2*raise_dv(low<->R); the child->parent case as a
+        # 2*Hohmann between the home moon's orbital radius and R (much cheaper,
+        # since you never descend to the parent's low orbit).
+        td = C.CONTRACT_TYPE_DEFS[C.ContractType.KERBAL_RESCUE]
+
+        def bump(home, tgt, R):
+            mb = MissionBuilder(home=home)
+            mb.rescue_orbit_params = {tgt: R}
+            base = list(mb.profiles_for(tgt, MissionType.RESCUE)[0])
+            before = sum(e.base_dv for e in base)
+            after = sum(e.base_dv for e in td.transform_mission(tgt, home, base, mb))
+            return after - before
+
+        kerbin = BODY_BY_NAME[BodyName.KERBIN]
+        jool = BODY_BY_NAME[BodyName.JOOL]
+        # General (home target): 2*raise_dv.
+        Rk = kerbin.lo_radius_m * 2.0
+        self.assertAlmostEqual(bump(BodyName.KERBIN, BodyName.KERBIN, Rk),
+                               2.0 * kerbin.raise_dv(Rk), places=3)
+        # Child->parent (Laythe home, Jool target): 2*Hohmann(r_moon, R), and
+        # strictly cheaper than the (wrong) 2*raise_dv-from-low-orbit would be.
+        r_M = BODY_BY_NAME[BodyName.LAYTHE].parent_periapsis_km * 1000.0
+        Rj = 16_000_000.0
+        got = bump(BodyName.LAYTHE, BodyName.JOOL, Rj)
+        self.assertAlmostEqual(got, 2.0 * jool.hohmann_dv(r_M, Rj), places=3)
+        self.assertLess(got, 2.0 * jool.raise_dv(Rj),
+                        "child->parent must be cheaper than raise-from-low-orbit")
 
     def test_random_orbit_offhome_no_penalty(self):
         # Off-home, capture is free into any inclination/altitude — so a remote

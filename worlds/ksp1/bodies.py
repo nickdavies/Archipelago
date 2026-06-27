@@ -167,6 +167,16 @@ class Body:
     rotation_period_s: float        # sidereal day, seconds
     soi_radius_km: float            # sphere-of-influence radius
 
+    # --- Orbit around parent (moons only; 0 for planets) ---
+    # Periapsis / apoapsis radius of this moon's orbit around its PARENT body
+    # (km from the parent's centre), from KSP stock orbital elements
+    # PeR=a(1-e), ApR=a(1+e). Used to carve collision-safe altitude bands for
+    # rescue orbits around a planet (exclude each moon's full PeR..ApR range +
+    # its SOI) and to size the home-moon->parent Hohmann for child->parent
+    # rescues. VERIFY the less-common moons' exact values vs the wiki.
+    parent_periapsis_km: float = 0.0
+    parent_apoapsis_km: float = 0.0
+
     # --- Suborbital altitude ladder ---
     # Top of the home-body altitude-record milestone ladder (km).  For
     # atmospheric bodies this is the Kármán-equivalent (where the atmo
@@ -267,20 +277,31 @@ class Body:
         r_sync = self.sync_orbit_radius_m
         return self.radius_km * 1000.0 < r_sync < soi_m
 
+    def hohmann_dv(self, r1_m: float, r2_m: float) -> float:
+        """Hohmann two-burn delta-v (m/s) between two circular orbits at radii
+        ``r1_m`` and ``r2_m`` (from this body's centre). Symmetric — works for a
+        raise (r2 > r1) or a lower (r2 < r1). 0 if either radius is unknown /
+        non-positive / infinite or the two coincide. Used for the random-rescue
+        in-system transfer (e.g. a child→parent Hohmann between the home moon's
+        orbital radius and the rescue orbit)."""
+        mu = self.gm
+        if (mu <= 0.0 or math.isinf(r1_m) or math.isinf(r2_m)
+                or r1_m <= 0.0 or r2_m <= 0.0 or r1_m == r2_m):
+            return 0.0
+        a_t = (r1_m + r2_m) / 2.0
+        v1 = math.sqrt(mu / r1_m)
+        v2 = math.sqrt(mu / r2_m)
+        vt1 = math.sqrt(mu * (2.0 / r1_m - 1.0 / a_t))
+        vt2 = math.sqrt(mu * (2.0 / r2_m - 1.0 / a_t))
+        return abs(vt1 - v1) + abs(v2 - vt2)
+
     def raise_dv(self, r_target_m: float) -> float:
         """Hohmann two-burn delta-v (m/s) to raise from low orbit to a circular
         orbit at ``r_target_m``. 0 if the target is at/below low orbit or unknown.
         Used for the stationary-orbit raise and the random-orbit apoapsis raise."""
-        mu = self.gm
-        r_lo = self.lo_radius_m
-        if math.isinf(r_target_m) or r_target_m <= r_lo:
+        if math.isinf(r_target_m) or r_target_m <= self.lo_radius_m:
             return 0.0
-        a_t = (r_lo + r_target_m) / 2.0
-        v_lo = math.sqrt(mu / r_lo)
-        v_peri = math.sqrt(mu * (2.0 / r_lo - 1.0 / a_t))
-        v_apo = math.sqrt(mu * (2.0 / r_target_m - 1.0 / a_t))
-        v_target = math.sqrt(mu / r_target_m)
-        return (v_peri - v_lo) + (v_target - v_apo)
+        return self.hohmann_dv(self.lo_radius_m, r_target_m)
 
     @property
     def stationary_raise_dv(self) -> float:
@@ -415,6 +436,7 @@ KERBIN = Body(
 MUN = Body(
     name=BodyName.MUN, parent=BodyName.KERBIN,
     rotation_period_s=138984.38, soi_radius_km=2429.559,   # tidally locked
+    parent_periapsis_km=12000, parent_apoapsis_km=12000,   # around Kerbin: a=12000 e=0
     surface_gravity=1.63, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=14,
@@ -438,6 +460,7 @@ MUN = Body(
 MINMUS = Body(
     name=BodyName.MINMUS, parent=BodyName.KERBIN,
     rotation_period_s=40400.0, soi_radius_km=2247.428,
+    parent_periapsis_km=47000, parent_apoapsis_km=47000,   # around Kerbin: a=47000 e=0
     surface_gravity=0.491, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=10,
@@ -511,6 +534,7 @@ EVE = Body(
 GILLY = Body(
     name=BodyName.GILLY, parent=BodyName.EVE,
     rotation_period_s=28255.0, soi_radius_km=126.123,
+    parent_periapsis_km=14175, parent_apoapsis_km=48825,   # around Eve: a=31500 e=0.55
     surface_gravity=0.049, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=6,
@@ -558,6 +582,7 @@ DUNA = Body(
 IKE = Body(
     name=BodyName.IKE, parent=BodyName.DUNA,
     rotation_period_s=65517.862, soi_radius_km=1049.599,   # tidally locked
+    parent_periapsis_km=3104, parent_apoapsis_km=3296,     # around Duna: a=3200 e=0.03
     surface_gravity=1.10, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=10,
@@ -632,6 +657,7 @@ JOOL = Body(
 LAYTHE = Body(
     name=BodyName.LAYTHE, parent=BodyName.JOOL,
     rotation_period_s=52980.879, soi_radius_km=3723.646,   # tidally locked
+    parent_periapsis_km=27184, parent_apoapsis_km=27184,   # around Jool: a=27184 e=0
     surface_gravity=7.85, has_atmosphere=True,
     atm_pressure_kpa=60.795, atm_density_kg_m3=0.73,
     can_land=True, low_orbit_alt_km=60,
@@ -657,6 +683,7 @@ LAYTHE = Body(
 VALL = Body(
     name=BodyName.VALL, parent=BodyName.JOOL,
     rotation_period_s=105962.09, soi_radius_km=2406.401,   # tidally locked
+    parent_periapsis_km=43152, parent_apoapsis_km=43152,   # around Jool: a=43152 e=0
     surface_gravity=2.31, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=15,
@@ -680,6 +707,7 @@ VALL = Body(
 TYLO = Body(
     name=BodyName.TYLO, parent=BodyName.JOOL,
     rotation_period_s=211926.36, soi_radius_km=10856.51,   # tidally locked
+    parent_periapsis_km=68500, parent_apoapsis_km=68500,   # around Jool: a=68500 e=0
     surface_gravity=7.85, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=30,
@@ -703,6 +731,7 @@ TYLO = Body(
 BOP = Body(
     name=BodyName.BOP, parent=BodyName.JOOL,
     rotation_period_s=544507.43, soi_radius_km=1221.061,   # tidally locked
+    parent_periapsis_km=98302, parent_apoapsis_km=158698,  # around Jool: a=128500 e=0.235
     surface_gravity=0.589, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=10,
@@ -726,6 +755,7 @@ BOP = Body(
 POL = Body(
     name=BodyName.POL, parent=BodyName.JOOL,
     rotation_period_s=901902.62, soi_radius_km=1042.139,   # tidally locked
+    parent_periapsis_km=149158, parent_apoapsis_km=210622, # around Jool: a=179890 e=0.17085
     surface_gravity=0.373, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=6,
@@ -947,6 +977,83 @@ def generate_random_orbit_params(rng, bodies) -> dict[BodyName, RandomOrbitParam
     return out
 
 
+# Clearance kept below/above each moon's SOI when carving a rescue band, and
+# below the body's own SOI (m).  Conservative buffer so an inclined/eccentric
+# moon never clips the orbit.
+_RESCUE_BAND_MARGIN_M: float = 500_000.0
+
+
+def generate_rescue_orbit_params(rng, bodies) -> dict[BodyName, float]:
+    """Seeded collision-safe circular-equatorial rescue-orbit radius (m from the
+    body's centre) per orbitable body. The client spawns the stranded Kerbal
+    here and the capability model charges the dv to reach it, so the two agree.
+
+    For a body WITH moons: exclude each moon's full periapsis..apoapsis range
+    around the body (plus the moon's SOI and a margin), merge overlaps, cap the
+    ceiling at the outermost moon's exclusion top (so no absurd near-SOI orbit),
+    then pick a random circular radius from the surviving gaps weighted by gap
+    width.  Moonless bodies use one band from low orbit up to a RANDOM_ORBIT-style
+    cap.  Deterministic for a given ``rng`` so UT regen restores the same orbits
+    from slot_data instead of re-rolling."""
+    children: dict[BodyName, list] = {}
+    for b in bodies:
+        if b.parent is not None:
+            children.setdefault(b.parent, []).append(b)
+    out: dict[BodyName, float] = {}
+    for b in bodies:
+        if not b.is_orbitable:
+            continue
+        floor = b.lo_radius_m
+        soi_m = b.soi_radius_km * 1000.0
+        moons = children.get(b.name, [])
+        if moons:
+            excl = sorted(
+                (m.parent_periapsis_km * 1000.0 - m.soi_radius_km * 1000.0
+                 - _RESCUE_BAND_MARGIN_M,
+                 m.parent_apoapsis_km * 1000.0 + m.soi_radius_km * 1000.0
+                 + _RESCUE_BAND_MARGIN_M)
+                for m in moons)
+            merged: list[tuple[float, float]] = []
+            for lo, hi in excl:
+                if merged and lo <= merged[-1][1]:
+                    merged[-1] = (merged[-1][0], max(merged[-1][1], hi))
+                else:
+                    merged.append((lo, hi))
+            # Stay within the moon system — no absurd band above the outermost
+            # moon out to the (huge) SOI edge.
+            ceiling = merged[-1][1]
+            if soi_m > 0.0:
+                ceiling = min(ceiling, soi_m - _RESCUE_BAND_MARGIN_M)
+            gaps: list[tuple[float, float]] = []
+            cur = floor
+            for lo, hi in merged:
+                if lo > cur:
+                    gaps.append((cur, min(lo, ceiling)))
+                cur = max(cur, hi)
+                if cur >= ceiling:
+                    break
+            if cur < ceiling:
+                gaps.append((cur, ceiling))
+        else:
+            cap = min(0.7 * soi_m, 3.0 * floor) if soi_m > 0.0 else 3.0 * floor
+            gaps = [(floor, max(cap, floor * 1.05))]
+        gaps = [(lo, hi) for lo, hi in gaps if hi - lo > 1000.0]  # drop slivers
+        if not gaps:
+            out[b.name] = floor   # no safe band (planet-pack robustness)
+            continue
+        total = sum(hi - lo for lo, hi in gaps)
+        pick = rng.uniform(0.0, total)
+        acc = 0.0
+        chosen = gaps[-1]
+        for lo, hi in gaps:
+            acc += hi - lo
+            if pick <= acc:
+                chosen = (lo, hi)
+                break
+        out[b.name] = rng.uniform(chosen[0], chosen[1])
+    return out
+
+
 # ---------------------------------------------------------------------------
 # MissionBuilder
 # ---------------------------------------------------------------------------
@@ -1017,6 +1124,12 @@ class MissionBuilder:
         # the sphere ladder (which calls spec.mission_transform(mission_builder))
         # sees the same cost without any per-contract param threading.
         self.random_orbit_params: dict[BodyName, "RandomOrbitParams"] = {}
+        # Per-body seeded collision-safe rescue-orbit radius (m from centre) for
+        # KERBAL_RESCUE contracts. Same lifecycle as random_orbit_params:
+        # populated by the world (fresh or UT-restored), read by transform_mission
+        # to charge the dv to reach the orbit and by build_parameters to tell the
+        # client where to spawn the stranded Kerbal.
+        self.rescue_orbit_params: dict[BodyName, float] = {}
         # Precomputed relay-tier table keyed by destination BodyName.
         # Built before edge construction so ``_edge`` can stamp the
         # value onto every ``MissionEdge.relay_tier`` directly — the
@@ -1129,6 +1242,22 @@ class MissionBuilder:
         return [
             replace(e, base_dv=e.base_dv + extra_dv)
             if (e.source == src and e.destination == dst) else e
+            for e in edges
+        ]
+
+    def bump_selfloop(
+        self, edges: list[MissionEdge], extra_dv: float
+    ) -> list[MissionEdge]:
+        """Return ``edges`` with the (unique) pure-vacuum self-loop's dv increased
+        by ``extra_dv``. A rescue profile carries exactly one such phasing/
+        rendezvous self-loop; ``transform_mission`` bumps it by the round-trip
+        cost of reaching the seeded rescue orbit. No-op if ``extra_dv`` is
+        non-positive or no self-loop is present."""
+        if extra_dv <= 0.0:
+            return edges
+        return [
+            replace(e, base_dv=e.base_dv + extra_dv)
+            if (e.source == e.destination and e.edge_type == self._PV) else e
             for e in edges
         ]
 
@@ -1643,19 +1772,52 @@ class MissionBuilder:
             if body.can_land:
                 self._add(bn, MissionType.SAMPLE_RETURN, *combos)
 
-        # RESCUE — reach the target's LOW ORBIT (not surface), rendezvous, and
-        # bring the stranded Kerbal home. Like RETURN but the return always
-        # starts from low orbit (no landing+ascent leg at the target), with a
-        # rendezvous/phasing burn baked in at the target's low orbit.
-        rescue_outbound = self._find_outbound_paths(home_surface, target_lo)
-        rescue_return = self._find_return_paths(target_lo, home_surf)
-        if rescue_outbound and rescue_return:
-            phasing = self.make_phasing_edge(bn, self._RESCUE_RENDEZVOUS_DV)
-            rescue_combos = [out + [phasing] + ret
-                             for out in rescue_outbound for ret in rescue_return]
-            rescue_combos.sort(key=lambda p: sum(e.base_dv for e in p))
-            self._add(bn, MissionType.RESCUE,
-                      *rescue_combos[:self._MAX_PROFILE_ALTS])
+        # RESCUE — reach the target's orbit, rendezvous, bring the stranded
+        # Kerbal home. The seeded rescue-orbit radius cost is added in
+        # ``transform_mission`` (bumps the rendezvous self-loop); here we only
+        # build the base "reach the body and come back" profile.
+        if self.home_body.parent == bn:
+            # CHILD -> PARENT (home is a moon, target is its parent planet).
+            # You never descend to the parent's low orbit — you ESCAPE the home
+            # moon (dvLI) into the parent frame at the moon's orbital radius,
+            # then Hohmann up/down to the rescue orbit (added in transform), then
+            # recapture into the home moon and land. Routing to the parent's deep
+            # low orbit would over-charge 2.5-8.7x.
+            home = self.home_body
+            hnl_home = self.home.lower()
+            ascent_paths = self._find_outbound_paths(
+                f"{hnl_home}_surface", f"{hnl_home}_low_orbit")
+            lo_edges = self._outbound.get(f"{hnl_home}_low_orbit", [])
+            deorbit = next(
+                (e for s, e in lo_edges
+                 if s == "aero" and e.destination == f"{hnl_home}_surface"),
+                next((e for s, e in lo_edges
+                      if e.destination == f"{hnl_home}_surface"), None))
+            dvli = home.dv.dvLI
+            if ascent_paths and deorbit is not None and dvli is not None:
+                node = f"{bnl}_rescue_orbit"   # synthetic: parent frame at r_moon
+                eject = self._edge(f"{hnl_home}_low_orbit", node,
+                                   self._PV, dvli, home.name, attitude=True)
+                phasing = self._edge(node, node, self._PV,
+                                     self._RESCUE_RENDEZVOUS_DV, bn, attitude=True)
+                capture = self._edge(node, f"{hnl_home}_low_orbit",
+                                     self._PV, dvli, home.name, attitude=True)
+                self._add(bn, MissionType.RESCUE,
+                          ascent_paths[0] + [eject, phasing, capture, deorbit])
+        else:
+            # General case: reach the target's LOW ORBIT (not surface),
+            # rendezvous, and bring the stranded Kerbal home. Like RETURN but the
+            # return always starts from low orbit (no landing+ascent leg at the
+            # target), with a rendezvous/phasing burn baked in at low orbit.
+            rescue_outbound = self._find_outbound_paths(home_surface, target_lo)
+            rescue_return = self._find_return_paths(target_lo, home_surf)
+            if rescue_outbound and rescue_return:
+                phasing = self.make_phasing_edge(bn, self._RESCUE_RENDEZVOUS_DV)
+                rescue_combos = [out + [phasing] + ret
+                                 for out in rescue_outbound for ret in rescue_return]
+                rescue_combos.sort(key=lambda p: sum(e.base_dv for e in p))
+                self._add(bn, MissionType.RESCUE,
+                          *rescue_combos[:self._MAX_PROFILE_ALTS])
 
     # ------------------------------------------------------------------
     # Cross-validation
