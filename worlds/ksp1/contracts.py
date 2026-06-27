@@ -625,7 +625,9 @@ CONTRACT_TYPE_DEFS: dict[ContractType, ContractTypeDef] = {
         # A free seat to bring the stranded Kerbal home (delivered as payload,
         # like a station's crew cabins). crewed=None lets a probe-controlled
         # craft with an empty cabin do it (lightest), or a crewed capsule.
-        required_categories=("crew_cabin",),
+        # An EVA jetpack so the stranded Kerbal can cross to the rescue craft —
+        # without it they can only float, so the rescue is impossible.
+        required_categories=("crew_cabin", "eva_jetpack"),
         crew_requirement=1,
         home_safe=True,
         title_fmt="Rescue a stranded Kerbal in orbit of {body}",

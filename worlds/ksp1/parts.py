@@ -1432,6 +1432,12 @@ CONTRACT_PART_CATEGORIES: dict[str, PartCategory] = {
         "crew_cabin", predicate=lambda cfg: (cfg.get("crew_capacity") or 0) > 0,
         exclude=frozenset({"seatExternalCmd"}),
         description="crewed pod or cabin (provides seats)"),
+    # Curated single part — the stranded Kerbal must jetpack across to the rescue
+    # craft, so a crew rescue is impossible without one (they'd float). Promoted
+    # to progression per-seed (not chain-guaranteed) so it's a real gate.
+    "eva_jetpack": PartCategory(
+        "eva_jetpack", members=frozenset({"evaJetpack"}),
+        description="EVA jetpack (kerbal orbital maneuvering for rescue)"),
 }
 
 # Resolved ksp_name membership per category, computed once over the full part
