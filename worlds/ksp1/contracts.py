@@ -199,23 +199,30 @@ class SpecificOrbitParam:
     """Match a specific target orbit around ``body``. Wraps stock
     SpecificOrbitParameter (the satellite-contract orbit param) on the client; the
     client renders the blue target orbit and completes when the active vessel
-    matches within ``deviation``. The orbit is a deterministic function of
-    (orbit_type, body) — circular at the body's low-orbit altitude — so nothing
-    random crosses the wire. ``lan``/``arg_pe``/``mna``/``epoch`` are 0 for a
-    circular orbit and defaulted client-side, so they're not sent."""
+    matches within ``deviation``.
+
+    ``lan`` (longitude of ascending node) and ``arg_pe`` (argument of periapsis)
+    are the orbit's spatial orientation, in degrees. RANDOM_ORBIT fills them with
+    seeded random values for visual variety; the deterministic types (equatorial /
+    polar / stationary) leave them 0. They are additive, optional wire fields:
+    older clients ignore them (rendering at orientation 0) and newer clients read
+    them, defaulting to 0 when absent — so no contract-schema bump is needed.
+    ``mna``/``epoch`` stay 0 (phase along the orbit doesn't matter for matching)."""
     body: str
     orbit_type: str          # FinePrint.Utilities.OrbitType name, e.g. "EQUATORIAL"
     inclination: float
     eccentricity: float
     sma: float               # semi-major axis, metres
     deviation: float
+    lan: float = 0.0         # longitude of ascending node (deg) — orientation only
+    arg_pe: float = 0.0      # argument of periapsis (deg) — orientation only
 
     def to_json(self) -> dict:
         return {
             "kind": "specific_orbit", "body": str(self.body),
             "orbit_type": self.orbit_type, "inclination": self.inclination,
             "eccentricity": self.eccentricity, "sma": self.sma,
-            "deviation": self.deviation,
+            "deviation": self.deviation, "lan": self.lan, "arg_pe": self.arg_pe,
         }
 
 
@@ -516,9 +523,11 @@ class ContractTypeDef:
                 body=body, orbit_type=otype, inclination=inc,
                 eccentricity=0.0, sma=sma, deviation=ORBIT_DEVIATION)]
         if self.contract_type == ContractType.RANDOM_ORBIT:
-            # The seeded target orbit (inclination / apoapsis / eccentricity)
-            # lives on the mission_builder; the client renders it via the stock
-            # SpecificOrbitParameter and the player matches it within deviation.
+            # The seeded target orbit (inclination / apoapsis / eccentricity /
+            # orientation) lives on the mission_builder; the client renders it via
+            # the stock SpecificOrbitParameter and the player matches it within
+            # deviation. LAN + argument of periapsis are sent for visual variety
+            # (no delta-v cost — see RandomOrbitParams / orbit_reach_dv).
             if mission_builder is None:
                 raise ValueError("RANDOM_ORBIT build_parameters needs mission_builder")
             params = mission_builder.random_orbit_params.get(body)
@@ -528,7 +537,8 @@ class ContractTypeDef:
                 body=body, orbit_type="EQUATORIAL",
                 inclination=params.inclination_deg,
                 eccentricity=params.eccentricity, sma=params.sma_m,
-                deviation=ORBIT_DEVIATION)]
+                deviation=ORBIT_DEVIATION,
+                lan=params.lan_deg, arg_pe=params.arg_pe_deg)]
         if self.contract_type == ContractType.TRANSMIT_SCIENCE:
             # Gather + phone home science from the body's space. CollectScience
             # credits on transmit OR recover; the relay category is the antenna +

@@ -338,6 +338,28 @@ class TestSlotDataRoundTrip(unittest.TestCase):
                         f"{tgt} orbit [{p.periapsis_m:.0f},{p.apoapsis_m:.0f}] clips "
                         f"{m.name}'s [{band_lo:.0f},{band_hi:.0f}] band (seed {seed})")
 
+    def test_random_orbit_orientation_randomized(self):
+        # LAN + argument of periapsis are randomized for visual variety: in
+        # [0, 360), varying across bodies, ridden over the specific_orbit wire as
+        # additive fields. They carry NO delta-v (orbit_reach_dv never sees them).
+        params = generate_random_orbit_params(_random.Random(7), ALL_BODIES)
+        lans, args = set(), set()
+        for p in params.values():
+            self.assertTrue(0.0 <= p.lan_deg < 360.0, f"LAN out of range: {p.lan_deg}")
+            self.assertTrue(0.0 <= p.arg_pe_deg < 360.0, f"argPe out of range: {p.arg_pe_deg}")
+            lans.add(round(p.lan_deg, 3))
+            args.add(round(p.arg_pe_deg, 3))
+        self.assertGreater(len(lans), 5, "LAN should vary across bodies")
+        self.assertGreater(len(args), 5, "argument of periapsis should vary")
+        # The seeded orientation rides the wire on a RANDOM_ORBIT contract.
+        mb = MissionBuilder(home=BodyName.KERBIN)
+        mb.random_orbit_params = params
+        j = next(p.to_json() for p in C.CONTRACT_TYPE_DEFS[C.ContractType.RANDOM_ORBIT]
+                 .build_parameters(BodyName.MUN, mb)
+                 if p.to_json()["kind"] == "specific_orbit")
+        self.assertEqual(j["lan"], params[BodyName.MUN].lan_deg)
+        self.assertEqual(j["arg_pe"], params[BodyName.MUN].arg_pe_deg)
+
     def test_is_goal_flag_round_trips(self):
         # is_goal is the only field that distinguishes a goal contract in
         # slot_data (UT recategorizes on it), so it must survive the wire.
@@ -472,13 +494,23 @@ class TestParamWireFormat(unittest.TestCase):
                          {"kind": "sample_return", "body": "Duna"})
 
     def test_specific_orbit(self):
+        # Orientation defaults to 0 (deterministic types don't set it).
         self.assertEqual(
             C.SpecificOrbitParam(
                 body=BodyName.KERBIN, orbit_type="EQUATORIAL", inclination=0.0,
                 eccentricity=0.0, sma=700000.0, deviation=10.0).to_json(),
             {"kind": "specific_orbit", "body": "Kerbin",
              "orbit_type": "EQUATORIAL", "inclination": 0.0, "eccentricity": 0.0,
-             "sma": 700000.0, "deviation": 10.0})
+             "sma": 700000.0, "deviation": 10.0, "lan": 0.0, "arg_pe": 0.0})
+        # A randomized orbit carries its orientation over the wire.
+        self.assertEqual(
+            C.SpecificOrbitParam(
+                body=BodyName.MUN, orbit_type="EQUATORIAL", inclination=45.0,
+                eccentricity=0.2, sma=300000.0, deviation=10.0,
+                lan=120.0, arg_pe=275.0).to_json(),
+            {"kind": "specific_orbit", "body": "Mun",
+             "orbit_type": "EQUATORIAL", "inclination": 45.0, "eccentricity": 0.2,
+             "sma": 300000.0, "deviation": 10.0, "lan": 120.0, "arg_pe": 275.0})
 
     def test_collect_science(self):
         self.assertEqual(C.CollectScienceParam(BodyName.MUN, "space").to_json(),

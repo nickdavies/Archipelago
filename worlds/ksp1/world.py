@@ -784,6 +784,8 @@ class KSP1World(World):
                 "inclination": p.inclination_deg,
                 "sma": p.sma_m,
                 "eccentricity": p.eccentricity,
+                "lan": p.lan_deg,
+                "arg_pe": p.arg_pe_deg,
             }
             for body, p in self.mission_builder.random_orbit_params.items()
         }
@@ -873,6 +875,10 @@ class KSP1World(World):
                     inclination_deg=entry["inclination"],
                     sma_m=entry["sma"],
                     eccentricity=entry["eccentricity"],
+                    # Orientation fields are additive — default 0 when restoring a
+                    # slot_data written before they existed.
+                    lan_deg=entry.get("lan", 0.0),
+                    arg_pe_deg=entry.get("arg_pe", 0.0),
                 )
                 for body, entry in rop.items()
             }

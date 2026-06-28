@@ -1139,10 +1139,19 @@ class RandomOrbitParams:
     so the orbit can be a tame circle or a wild ellipse depending on the band's
     width, but it never crosses a moon's path.  Inclination varies 0-90°.  The dv
     to reach the orbit is modelled per arrival regime (home / capture / in-system
-    moon transfer) in ``ContractTypeDef.transform_mission`` via ``orbit_reach_dv``."""
+    moon transfer) in ``ContractTypeDef.transform_mission`` via ``orbit_reach_dv``.
+
+    ``lan_deg`` (longitude of ascending node) and ``arg_pe_deg`` (argument of
+    periapsis) are the orbit's spatial *orientation*.  They are randomized purely
+    for visual variety — reaching any LAN is a launch-window / arrival-timing
+    choice and the argument of periapsis is set by where you burn, so neither
+    costs delta-v and neither affects ``orbit_reach_dv`` (which depends only on the
+    periapsis/apoapsis radii and the inclination magnitude)."""
     inclination_deg: float
     sma_m: float
     eccentricity: float
+    lan_deg: float = 0.0
+    arg_pe_deg: float = 0.0
 
     @property
     def apoapsis_m(self) -> float:
@@ -1157,17 +1166,22 @@ def generate_random_orbit_params(rng, bodies) -> dict[BodyName, RandomOrbitParam
     """Seeded moon-safe target orbit per orbitable body.  Picks a width-weighted
     safe band, then places periapsis and apoapsis anywhere inside it (full
     eccentricity range — a narrow band yields a near-circle, a wide one a steep
-    ellipse) with inclination 0-90°.  Deterministic for a given ``rng`` so UT regen
-    restores the same orbits from slot_data instead of re-rolling."""
+    ellipse) with inclination 0-90° and a fully random spatial orientation
+    (longitude of ascending node + argument of periapsis, 0-360°, free variety).
+    Deterministic for a given ``rng`` so UT regen restores the same orbits from
+    slot_data instead of re-rolling."""
     out: dict[BodyName, RandomOrbitParams] = {}
     for b in bodies:
         if not b.is_orbitable:
             continue
         gaps = safe_orbit_bands(b, bodies)
         incl = rng.uniform(0.0, 90.0)
+        lan = rng.uniform(0.0, 360.0)
+        arg_pe = rng.uniform(0.0, 360.0)
         if not gaps:
             out[b.name] = RandomOrbitParams(
-                inclination_deg=incl, sma_m=b.min_orbit_radius_m, eccentricity=0.0)
+                inclination_deg=incl, sma_m=b.min_orbit_radius_m, eccentricity=0.0,
+                lan_deg=lan, arg_pe_deg=arg_pe)
             continue
         lo, hi = _weighted_gap_pick(gaps, rng)
         r1, r2 = rng.uniform(lo, hi), rng.uniform(lo, hi)
@@ -1175,7 +1189,8 @@ def generate_random_orbit_params(rng, bodies) -> dict[BodyName, RandomOrbitParam
         sma = (r_pe + r_ap) / 2.0
         ecc = (r_ap - r_pe) / (r_ap + r_pe) if (r_ap + r_pe) > 0.0 else 0.0
         out[b.name] = RandomOrbitParams(
-            inclination_deg=incl, sma_m=sma, eccentricity=ecc)
+            inclination_deg=incl, sma_m=sma, eccentricity=ecc,
+            lan_deg=lan, arg_pe_deg=arg_pe)
     return out
 
 
