@@ -177,6 +177,13 @@ def effective_dv(base_dv: float, profile: DifficultyProfile,
 # Body dataclasses
 # ---------------------------------------------------------------------------
 
+# Clearance kept above the tallest terrain peak when computing the lowest safe
+# orbit radius (m).  Covers terrain-mesh variation and gives a margin so a
+# circular orbit at the floor doesn't clip a peak on a bad pass.  Conservative
+# (Golden Rule): raising it only pushes orbit targets higher.
+_TERRAIN_ORBIT_CLEARANCE_M: float = 1000.0
+
+
 @dataclass(frozen=True)
 class BodyDeltaV:
     """Raw delta-v components from the planner graph.  None = not applicable."""
@@ -234,6 +241,14 @@ class Body:
     # Atmospheric pressure scale height (m).  KSP atmospheres decay as
     # p(h) ≈ exp(-h / scale_height).  0 = vacuum body, no Isp weighting.
     atm_scale_height_m: float = 0.0
+    # Highest terrain elevation above the datum radius (km), from the KSP wiki
+    # "Highest point".  KSP bodies can be lumpy enough that the science/space
+    # "low orbit" boundary sits BELOW a mountain peak — Gilly's low orbit is 6 km
+    # but its peaks reach ~6.4 km.  Used by ``min_orbit_radius_m`` to keep contract
+    # orbit targets (and rescue spawns) above the terrain; kept separate from
+    # ``low_orbit_alt_km`` so science/capability "in space low" semantics don't
+    # move.  0.0 = no data (no terrain floor applied; falls back to low orbit).
+    max_terrain_km: float = 0.0
 
     # --- Science budget (for tech-tree access rules) ---
     has_ocean: bool = False         # body has splashable liquid surface
@@ -273,6 +288,20 @@ class Body:
     def lo_radius_m(self) -> float:
         """Low-orbit radius (m) from body centre."""
         return (self.radius_km + self.low_orbit_alt_km) * 1000.0
+
+    @property
+    def min_orbit_radius_m(self) -> float:
+        """Lowest safe circular-orbit radius (m from centre) for an orbit a craft
+        must actually fly: the greater of low orbit and a clearance above the
+        tallest terrain peak.  For atmospheric bodies ``low_orbit_alt_km`` already
+        sits above the Kármán line, so low orbit wins; for lumpy vacuum bodies
+        (Gilly) the terrain floor wins.  This is the floor for contract orbit
+        targets and rescue spawns — distinct from ``lo_radius_m`` (the science /
+        capability 'in space low' boundary, which legitimately can sit below a
+        peak)."""
+        terrain_floor = (self.radius_km + self.max_terrain_km) * 1000.0 \
+            + _TERRAIN_ORBIT_CLEARANCE_M
+        return max(self.lo_radius_m, terrain_floor)
 
     @property
     def lo_circular_velocity(self) -> float:
@@ -355,6 +384,35 @@ class Body:
         """Hohmann delta-v to raise from low orbit to synchronous orbit (m/s).
         0 if sync is at/below low orbit (very fast rotators) or unknown."""
         return self.raise_dv(self.sync_orbit_radius_m)
+
+    def transfer_circular_to_ellipse_dv(
+        self, r_start_m: float, r_pe_m: float, r_ap_m: float
+    ) -> float:
+        """Delta-v (m/s) to go from a circular orbit at ``r_start_m`` to a target
+        orbit with periapsis ``r_pe_m`` and apoapsis ``r_ap_m`` (all radii from
+        this body's centre).  The unifying primitive behind every orbit-reach
+        cost: a two-burn Hohmann to the *near* side of the target (its periapsis if
+        the target sits above ``r_start``, its apoapsis if below), then a single
+        burn to set the *far* side.  If ``r_start`` lies between the target's
+        periapsis and apoapsis, the target ellipse already crosses your circle, so
+        only a velocity-match burn at ``r_start`` is charged.  0 if GM is unknown."""
+        mu = self.gm
+        if mu <= 0.0 or math.isinf(r_pe_m) or math.isinf(r_ap_m) or r_start_m <= 0.0:
+            return 0.0
+        r_pe_m, r_ap_m = min(r_pe_m, r_ap_m), max(r_pe_m, r_ap_m)
+        a = (r_pe_m + r_ap_m) / 2.0
+        if r_start_m <= r_pe_m:
+            # Hohmann up to the periapsis, then burn there to raise the apoapsis.
+            near = self.hohmann_dv(r_start_m, r_pe_m)
+            far = math.sqrt(mu * (2.0 / r_pe_m - 1.0 / a)) - math.sqrt(mu / r_pe_m)
+            return max(0.0, near + far)
+        if r_start_m >= r_ap_m:
+            # Hohmann down to the apoapsis, then burn there to lower the periapsis.
+            near = self.hohmann_dv(r_start_m, r_ap_m)
+            far = math.sqrt(mu / r_ap_m) - math.sqrt(mu * (2.0 / r_ap_m - 1.0 / a))
+            return max(0.0, near + far)
+        # Target ellipse already passes through r_start — just match velocity there.
+        return abs(math.sqrt(mu * (2.0 / r_start_m - 1.0 / a)) - math.sqrt(mu / r_start_m))
 
     # ------------------------------------------------------------------
     # Suborbital ascent physics
@@ -447,6 +505,7 @@ class MissionEdge:
 
 KERBIN = Body(
     name=BodyName.KERBIN, parent=None,
+    max_terrain_km=6.7674,   # wiki: tallest peak 6767.4 m (inert: atmospheric, Kármán governs)
     rotation_period_s=21549.425, soi_radius_km=84159.286,
     surface_gravity=9.81, has_atmosphere=True,
     atm_pressure_kpa=101.325, atm_density_kg_m3=1.225,
@@ -482,6 +541,7 @@ KERBIN = Body(
 
 MUN = Body(
     name=BodyName.MUN, parent=BodyName.KERBIN,
+    max_terrain_km=7.061,    # wiki: >7061 m near south pole
     rotation_period_s=138984.38, soi_radius_km=2429.559,   # tidally locked
     parent_periapsis_km=12000, parent_apoapsis_km=12000,   # around Kerbin: a=12000 e=0
     surface_gravity=1.63, has_atmosphere=False,
@@ -506,6 +566,7 @@ MUN = Body(
 
 MINMUS = Body(
     name=BodyName.MINMUS, parent=BodyName.KERBIN,
+    max_terrain_km=5.7,      # wiki: highest areas over 5.7 km
     rotation_period_s=40400.0, soi_radius_km=2247.428,
     parent_periapsis_km=47000, parent_apoapsis_km=47000,   # around Kerbin: a=47000 e=0
     surface_gravity=0.491, has_atmosphere=False,
@@ -530,6 +591,7 @@ MINMUS = Body(
 
 MOHO = Body(
     name=BodyName.MOHO, parent=None,
+    max_terrain_km=6.817,    # wiki: highest point 6817 m
     rotation_period_s=1210000.0, soi_radius_km=9646.663,
     surface_gravity=2.70, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
@@ -553,6 +615,7 @@ MOHO = Body(
 
 EVE = Body(
     name=BodyName.EVE, parent=None,
+    max_terrain_km=7.526,    # wiki: peak 7526 m (inert: atmospheric, Kármán governs)
     rotation_period_s=80500.0, soi_radius_km=85109.365,
     surface_gravity=16.7, has_atmosphere=True,
     atm_pressure_kpa=506.625, atm_density_kg_m3=5.0,
@@ -580,6 +643,7 @@ EVE = Body(
 
 GILLY = Body(
     name=BodyName.GILLY, parent=BodyName.EVE,
+    max_terrain_km=6.4,      # ~6400 m: not on wiki; operator playthrough + community measurement. AUDIT.
     rotation_period_s=28255.0, soi_radius_km=126.123,
     parent_periapsis_km=14175, parent_apoapsis_km=48825,   # around Eve: a=31500 e=0.55
     surface_gravity=0.049, has_atmosphere=False,
@@ -604,6 +668,7 @@ GILLY = Body(
 
 DUNA = Body(
     name=BodyName.DUNA, parent=None,
+    max_terrain_km=8.264,    # wiki: terrain up to 8264 m (inert: atmospheric, Kármán governs)
     rotation_period_s=65517.859, soi_radius_km=47921.949,
     surface_gravity=2.94, has_atmosphere=True,
     atm_pressure_kpa=6.755, atm_density_kg_m3=0.096,
@@ -628,6 +693,7 @@ DUNA = Body(
 
 IKE = Body(
     name=BodyName.IKE, parent=BodyName.DUNA,
+    max_terrain_km=12.75,    # wiki gives 12.75 km RANGE (max-min), used as a conservative upper bound. AUDIT.
     rotation_period_s=65517.862, soi_radius_km=1049.599,   # tidally locked
     parent_periapsis_km=3104, parent_apoapsis_km=3296,     # around Duna: a=3200 e=0.03
     surface_gravity=1.10, has_atmosphere=False,
@@ -652,6 +718,7 @@ IKE = Body(
 
 DRES = Body(
     name=BodyName.DRES, parent=None,
+    max_terrain_km=5.7,      # wiki: highest points just under 5.7 km
     rotation_period_s=34800.0, soi_radius_km=32832.840,
     surface_gravity=2.94, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
@@ -675,6 +742,7 @@ DRES = Body(
 
 JOOL = Body(
     name=BodyName.JOOL, parent=None,
+    max_terrain_km=0.0,      # gas giant: no solid surface, cannot land (inert: atmospheric)
     rotation_period_s=36000.0, soi_radius_km=2455985.2,
     surface_gravity=7.85, has_atmosphere=True,
     atm_pressure_kpa=1519.88, atm_density_kg_m3=10.0,
@@ -703,6 +771,7 @@ JOOL = Body(
 
 LAYTHE = Body(
     name=BodyName.LAYTHE, parent=BodyName.JOOL,
+    max_terrain_km=0.0,      # no wiki figure; inert anyway (atmospheric, Kármán governs)
     rotation_period_s=52980.879, soi_radius_km=3723.646,   # tidally locked
     parent_periapsis_km=27184, parent_apoapsis_km=27184,   # around Jool: a=27184 e=0
     surface_gravity=7.85, has_atmosphere=True,
@@ -729,6 +798,7 @@ LAYTHE = Body(
 
 VALL = Body(
     name=BodyName.VALL, parent=BodyName.JOOL,
+    max_terrain_km=7.976,    # wiki: elevation up to 7976 m
     rotation_period_s=105962.09, soi_radius_km=2406.401,   # tidally locked
     parent_periapsis_km=43152, parent_apoapsis_km=43152,   # around Jool: a=43152 e=0
     surface_gravity=2.31, has_atmosphere=False,
@@ -753,6 +823,7 @@ VALL = Body(
 
 TYLO = Body(
     name=BodyName.TYLO, parent=BodyName.JOOL,
+    max_terrain_km=11.29,    # wiki: peaks >11290 m
     rotation_period_s=211926.36, soi_radius_km=10856.51,   # tidally locked
     parent_periapsis_km=68500, parent_apoapsis_km=68500,   # around Jool: a=68500 e=0
     surface_gravity=7.85, has_atmosphere=False,
@@ -777,6 +848,7 @@ TYLO = Body(
 
 BOP = Body(
     name=BodyName.BOP, parent=BodyName.JOOL,
+    max_terrain_km=21.758,   # wiki: highest point 21758 m (tallest in the system)
     rotation_period_s=544507.43, soi_radius_km=1221.061,   # tidally locked
     parent_periapsis_km=98302, parent_apoapsis_km=158698,  # around Jool: a=128500 e=0.235
     surface_gravity=0.589, has_atmosphere=False,
@@ -801,6 +873,7 @@ BOP = Body(
 
 POL = Body(
     name=BodyName.POL, parent=BodyName.JOOL,
+    max_terrain_km=4.0,      # wiki: cliffs up to ~4 km (approximate, low confidence). AUDIT.
     rotation_period_s=901902.62, soi_radius_km=1042.139,   # tidally locked
     parent_periapsis_km=149158, parent_apoapsis_km=210622, # around Jool: a=179890 e=0.17085
     surface_gravity=0.373, has_atmosphere=False,
@@ -825,6 +898,7 @@ POL = Body(
 
 EELOO = Body(
     name=BodyName.EELOO, parent=None,
+    max_terrain_km=3.9,      # wiki: highest points almost 3.9 km
     rotation_period_s=19460.0, soi_radius_km=119082.94,
     surface_gravity=1.72, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
@@ -981,17 +1055,91 @@ def progressive_launch_pad_caps_for(home: BodyName) -> tuple[float, ...]:
 
 
 # ---------------------------------------------------------------------------
-# Random-orbit contracts
+# Safe target orbits (shared by RANDOM_ORBIT and KERBAL_RESCUE contracts)
 # ---------------------------------------------------------------------------
+
+# Clearance kept below/above each moon's SOI when carving a safe band, and below
+# the body's own SOI (m).  Conservative buffer so an inclined/eccentric moon
+# never clips the orbit.
+_MOON_BAND_MARGIN_M: float = 500_000.0
+
+
+def safe_orbit_bands(body: "Body", bodies) -> list[tuple[float, float]]:
+    """Moon-collision-safe radial bands ``[lo, hi]`` (m from ``body``'s centre)
+    that a contract target orbit may occupy.
+
+    The floor is ``body.min_orbit_radius_m`` — above the tallest terrain peak and
+    (for atmospheric bodies) the Kármán line.  For a body WITH moons, each moon's
+    full ``PeR..ApR`` range (plus its SOI and a margin) is excluded; the surviving
+    gaps between/below the moons are returned, capped at the outermost moon's
+    exclusion top (no absurd near-SOI band).  Moonless bodies get one band from
+    the floor up to ``0.7·SOI`` — wide enough for genuinely eccentric orbits.
+
+    Slivers narrower than 1 km are dropped.  May return ``[]`` (no safe band — a
+    dense planet-pack edge case); callers fall back to a circular orbit at the
+    floor.  Pure function of the body geometry, so deterministic."""
+    floor = body.min_orbit_radius_m
+    soi_m = body.soi_radius_km * 1000.0
+    moons = [m for m in bodies if m.parent == body.name]
+    if moons:
+        excl = sorted(
+            (m.parent_periapsis_km * 1000.0 - m.soi_radius_km * 1000.0
+             - _MOON_BAND_MARGIN_M,
+             m.parent_apoapsis_km * 1000.0 + m.soi_radius_km * 1000.0
+             + _MOON_BAND_MARGIN_M)
+            for m in moons)
+        merged: list[tuple[float, float]] = []
+        for lo, hi in excl:
+            if merged and lo <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], hi))
+            else:
+                merged.append((lo, hi))
+        ceiling = merged[-1][1]
+        if soi_m > 0.0:
+            ceiling = min(ceiling, soi_m - _MOON_BAND_MARGIN_M)
+        gaps: list[tuple[float, float]] = []
+        cur = floor
+        for lo, hi in merged:
+            if lo > cur:
+                gaps.append((cur, min(lo, ceiling)))
+            cur = max(cur, hi)
+            if cur >= ceiling:
+                break
+        if cur < ceiling:
+            gaps.append((cur, ceiling))
+    else:
+        # Moonless: one band up to 0.7·SOI so highly eccentric orbits are allowed
+        # (the dv to reach them is charged correctly per regime, so feasibility —
+        # not an arbitrary altitude cap — limits how wild they get).
+        cap = 0.7 * soi_m if soi_m > 0.0 else 3.0 * floor
+        gaps = [(floor, max(cap, floor * 1.05))]
+    return [(lo, hi) for lo, hi in gaps if hi - lo > 1000.0]
+
+
+def _weighted_gap_pick(
+    gaps: list[tuple[float, float]], rng
+) -> tuple[float, float]:
+    """Pick a band from ``gaps``, weighted by width (a wide gap between two
+    distant moons is more likely than a narrow sliver)."""
+    total = sum(hi - lo for lo, hi in gaps)
+    pick = rng.uniform(0.0, total)
+    acc = 0.0
+    for lo, hi in gaps:
+        acc += hi - lo
+        if pick <= acc:
+            return (lo, hi)
+    return gaps[-1]
+
 
 @dataclass(frozen=True)
 class RandomOrbitParams:
     """A seeded target orbit for a RANDOM_ORBIT contract — the client renders it
-    and the player matches it within the deviation window. Periapsis sits at the
-    body's low orbit; apoapsis (altitude), eccentricity, and inclination vary.
-    The extra delta-v cost is modelled at the home body in
-    ``ContractTypeDef.transform_mission`` (inclination rotation loss + apoapsis
-    raise); off-home it's free (capture into any orbit), so it's not modelled."""
+    and the player matches it within the deviation window.  Periapsis and apoapsis
+    are placed anywhere inside a single moon-safe band (see ``safe_orbit_bands``),
+    so the orbit can be a tame circle or a wild ellipse depending on the band's
+    width, but it never crosses a moon's path.  Inclination varies 0-90°.  The dv
+    to reach the orbit is modelled per arrival regime (home / capture / in-system
+    moon transfer) in ``ContractTypeDef.transform_mission`` via ``orbit_reach_dv``."""
     inclination_deg: float
     sma_m: float
     eccentricity: float
@@ -1000,105 +1148,140 @@ class RandomOrbitParams:
     def apoapsis_m(self) -> float:
         return self.sma_m * (1.0 + self.eccentricity)
 
+    @property
+    def periapsis_m(self) -> float:
+        return self.sma_m * (1.0 - self.eccentricity)
+
 
 def generate_random_orbit_params(rng, bodies) -> dict[BodyName, RandomOrbitParams]:
-    """Seeded random target orbit per orbitable body. Periapsis pinned to low
-    orbit (always achievable); apoapsis up to ~3x low orbit, capped inside the
-    SOI; inclination 0-90 deg. Deterministic for a given ``rng`` so UT regen can
-    restore the same orbits from slot_data instead of re-rolling."""
+    """Seeded moon-safe target orbit per orbitable body.  Picks a width-weighted
+    safe band, then places periapsis and apoapsis anywhere inside it (full
+    eccentricity range — a narrow band yields a near-circle, a wide one a steep
+    ellipse) with inclination 0-90°.  Deterministic for a given ``rng`` so UT regen
+    restores the same orbits from slot_data instead of re-rolling."""
     out: dict[BodyName, RandomOrbitParams] = {}
     for b in bodies:
         if not b.is_orbitable:
             continue
-        r_lo = b.lo_radius_m
-        soi_m = b.soi_radius_km * 1000.0
-        r_ap_cap = min(r_lo * 3.0, 0.7 * soi_m) if soi_m > 0 else r_lo * 3.0
-        r_ap_cap = max(r_ap_cap, r_lo * 1.05)   # always leave a little room
-        r_ap = rng.uniform(r_lo, r_ap_cap)
-        r_pe = r_lo
-        ecc = (r_ap - r_pe) / (r_ap + r_pe)
-        sma = (r_pe + r_ap) / 2.0
+        gaps = safe_orbit_bands(b, bodies)
         incl = rng.uniform(0.0, 90.0)
+        if not gaps:
+            out[b.name] = RandomOrbitParams(
+                inclination_deg=incl, sma_m=b.min_orbit_radius_m, eccentricity=0.0)
+            continue
+        lo, hi = _weighted_gap_pick(gaps, rng)
+        r1, r2 = rng.uniform(lo, hi), rng.uniform(lo, hi)
+        r_pe, r_ap = (r1, r2) if r1 <= r2 else (r2, r1)
+        sma = (r_pe + r_ap) / 2.0
+        ecc = (r_ap - r_pe) / (r_ap + r_pe) if (r_ap + r_pe) > 0.0 else 0.0
         out[b.name] = RandomOrbitParams(
             inclination_deg=incl, sma_m=sma, eccentricity=ecc)
     return out
 
 
-# Clearance kept below/above each moon's SOI when carving a rescue band, and
-# below the body's own SOI (m).  Conservative buffer so an inclined/eccentric
-# moon never clips the orbit.
-_RESCUE_BAND_MARGIN_M: float = 500_000.0
-
-
 def generate_rescue_orbit_params(rng, bodies) -> dict[BodyName, float]:
-    """Seeded collision-safe circular-equatorial rescue-orbit radius (m from the
-    body's centre) per orbitable body. The client spawns the stranded Kerbal
-    here and the capability model charges the dv to reach it, so the two agree.
-
-    For a body WITH moons: exclude each moon's full periapsis..apoapsis range
-    around the body (plus the moon's SOI and a margin), merge overlaps, cap the
-    ceiling at the outermost moon's exclusion top (so no absurd near-SOI orbit),
-    then pick a random circular radius from the surviving gaps weighted by gap
-    width.  Moonless bodies use one band from low orbit up to a RANDOM_ORBIT-style
-    cap.  Deterministic for a given ``rng`` so UT regen restores the same orbits
-    from slot_data instead of re-rolling."""
-    children: dict[BodyName, list] = {}
-    for b in bodies:
-        if b.parent is not None:
-            children.setdefault(b.parent, []).append(b)
+    """Seeded collision-safe circular rescue-orbit radius (m from the body's
+    centre) per orbitable body.  The client spawns the stranded Kerbal here and
+    the capability model charges the dv to reach it, so the two agree.  Reuses the
+    shared ``safe_orbit_bands`` carve (terrain/atmosphere floor + moon exclusion),
+    picking a single width-weighted circular radius.  Deterministic for a given
+    ``rng`` so UT regen restores the same orbits from slot_data."""
     out: dict[BodyName, float] = {}
     for b in bodies:
         if not b.is_orbitable:
             continue
-        floor = b.lo_radius_m
-        soi_m = b.soi_radius_km * 1000.0
-        moons = children.get(b.name, [])
-        if moons:
-            excl = sorted(
-                (m.parent_periapsis_km * 1000.0 - m.soi_radius_km * 1000.0
-                 - _RESCUE_BAND_MARGIN_M,
-                 m.parent_apoapsis_km * 1000.0 + m.soi_radius_km * 1000.0
-                 + _RESCUE_BAND_MARGIN_M)
-                for m in moons)
-            merged: list[tuple[float, float]] = []
-            for lo, hi in excl:
-                if merged and lo <= merged[-1][1]:
-                    merged[-1] = (merged[-1][0], max(merged[-1][1], hi))
-                else:
-                    merged.append((lo, hi))
-            # Stay within the moon system — no absurd band above the outermost
-            # moon out to the (huge) SOI edge.
-            ceiling = merged[-1][1]
-            if soi_m > 0.0:
-                ceiling = min(ceiling, soi_m - _RESCUE_BAND_MARGIN_M)
-            gaps: list[tuple[float, float]] = []
-            cur = floor
-            for lo, hi in merged:
-                if lo > cur:
-                    gaps.append((cur, min(lo, ceiling)))
-                cur = max(cur, hi)
-                if cur >= ceiling:
-                    break
-            if cur < ceiling:
-                gaps.append((cur, ceiling))
-        else:
-            cap = min(0.7 * soi_m, 3.0 * floor) if soi_m > 0.0 else 3.0 * floor
-            gaps = [(floor, max(cap, floor * 1.05))]
-        gaps = [(lo, hi) for lo, hi in gaps if hi - lo > 1000.0]  # drop slivers
+        gaps = safe_orbit_bands(b, bodies)
         if not gaps:
-            out[b.name] = floor   # no safe band (planet-pack robustness)
+            out[b.name] = b.min_orbit_radius_m   # no safe band (planet-pack)
             continue
-        total = sum(hi - lo for lo, hi in gaps)
-        pick = rng.uniform(0.0, total)
-        acc = 0.0
-        chosen = gaps[-1]
-        for lo, hi in gaps:
-            acc += hi - lo
-            if pick <= acc:
-                chosen = (lo, hi)
-                break
-        out[b.name] = rng.uniform(chosen[0], chosen[1])
+        lo, hi = _weighted_gap_pick(gaps, rng)
+        out[b.name] = rng.uniform(lo, hi)
     return out
+
+
+# Aerobrake-capture circularisation residual (m/s) — the dv left after an
+# atmospheric SOI capture drops you into low orbit.  Shared with the
+# AEROBRAKE_CAPTURE edge in ``_build_graph`` so the capture cost the base profile
+# charges and the cost ``orbit_reach_dv`` discounts against never drift.
+_AEROBRAKE_CAPTURE_RESIDUAL_DV: float = 100.0
+
+
+def _interplanetary_arrival_v_inf(home_body: BodyName, target_body: BodyName):
+    """Heliocentric Hohmann arrival v∞ (m/s) at a PLANET target when the transfer
+    crosses planetary systems, else ``None``.  Prices a direct propulsive capture
+    straight into a specific orbit.  Returns ``None`` for moon targets (their
+    capture v∞ is intra-system, not the planet's heliocentric value) and for
+    same-system transfers, so the caller falls back to the conservative
+    aerobrake-then-raise cost."""
+    tgt = BODY_BY_NAME[target_body]
+    if tgt.parent is not None:
+        return None
+    root = BODY_BY_NAME[home_body]
+    while root.parent is not None:
+        root = BODY_BY_NAME[root.parent]
+    if root.name == target_body:
+        return None
+    return planet_transfer_dv(root, tgt)[1]
+
+
+def orbit_reach_dv(
+    home_body: BodyName, target_body: BodyName,
+    r_pe_m: float, r_ap_m: float, *, round_trip: bool,
+) -> float:
+    """Radial delta-v (m/s) to reach a target orbit (periapsis ``r_pe_m``,
+    apoapsis ``r_ap_m``, radii from the target's centre) BEYOND what the base
+    mission profile to the target's low orbit already charges.  Inclination is
+    *not* included here — it is a launch-from-home cost only (off home the plane is
+    set for free at capture/transfer) and is added by ``transform_mission``.
+
+    Dispatches on the arrival regime (the three the base graph conflates):
+
+    * **A — orbit around home** (``target == home``): the base ascent reaches home
+      low orbit; raise from there to the target orbit.
+    * **C — moon home → its parent's system** (``target == home.parent``): the base
+      escapes the home moon into the parent frame at the moon's orbital radius
+      (and then mis-charges the descent as free — see bug 099), so charge the full
+      in-well transfer from the moon's orbital radius to the target orbit.
+    * **B — capture from outside the target's SOI** (everything else, e.g. Kerbin→
+      Jool or Kerbin→Mun): the base reaches the target's low orbit (aerobrake for
+      atmospheric planets, propulsive otherwise).  A propulsive capture into a
+      *higher* vacuum orbit costs no more than the low capture the base already
+      charges, so vacuum one-way orbits need nothing extra.  At an **atmospheric**
+      target the cheap aerobrake only reaches low orbit, so reaching the orbit is
+      the cheaper of (aerobrake to low, then raise) and (capture straight into the
+      orbit) — the latter priced from the interplanetary arrival v∞ so a steep
+      orbit isn't over-charged by forcing the low-orbit detour.  A **round trip**
+      (rescue) is propulsive both ways from low orbit regardless of atmosphere, so
+      it doubles the low→orbit raise.
+
+    Round trips double the radial cost (out and back).
+    """
+    tgt = BODY_BY_NAME[target_body]
+    if target_body == home_body:
+        one_way = tgt.transfer_circular_to_ellipse_dv(tgt.lo_radius_m, r_pe_m, r_ap_m)
+        return 2.0 * one_way if round_trip else one_way
+    home = BODY_BY_NAME[home_body]
+    if home.parent == target_body:
+        r_moon = home.parent_periapsis_km * 1000.0
+        one_way = tgt.transfer_circular_to_ellipse_dv(r_moon, r_pe_m, r_ap_m)
+        return 2.0 * one_way if round_trip else one_way
+    # Case B — capture from outside the target SOI.
+    aero_then_raise = tgt.transfer_circular_to_ellipse_dv(tgt.lo_radius_m, r_pe_m, r_ap_m)
+    if round_trip:
+        # Rescue: already captured at low orbit, must propulsively raise to the
+        # stranded orbit and lower back — both ways, regardless of atmosphere.
+        return 2.0 * aero_then_raise
+    if not tgt.has_atmosphere:
+        return 0.0
+    v_inf = _interplanetary_arrival_v_inf(home_body, target_body)
+    if v_inf is None:
+        return aero_then_raise   # atmo moon / same system: conservative fallback
+    mu = tgt.gm
+    a = (r_pe_m + r_ap_m) / 2.0
+    direct_capture = (math.sqrt(v_inf * v_inf + 2.0 * mu / r_pe_m)
+                      - math.sqrt(mu * (2.0 / r_pe_m - 1.0 / a)))
+    return max(0.0, min(aero_then_raise,
+                        direct_capture - _AEROBRAKE_CAPTURE_RESIDUAL_DV))
 
 
 # ---------------------------------------------------------------------------
@@ -1308,13 +1491,15 @@ class MissionBuilder:
             for e in edges
         ]
 
-    def make_raise_edge(self, body: BodyName, dv: float) -> MissionEdge:
-        """A pure-vacuum low-orbit → synchronous-orbit raise edge (the Hohmann
-        burn a stationary-orbit contract adds at the home body). Append it to a
-        base orbit profile via ``transform_mission``."""
+    def make_reach_edge(self, body: BodyName, dv: float) -> MissionEdge:
+        """A pure-vacuum self-loop at ``body``'s low orbit carrying the delta-v to
+        reach a specific target orbit from low orbit (the apoapsis raise / sync
+        raise / in-well transfer ``orbit_reach_dv`` returns). Appended to a base
+        ORBIT profile by ``transform_mission``; sums into the mission dv at vacuum
+        Isp without changing the trajectory nodes."""
         bnl = body.value.lower()
         return self._edge(
-            f"{bnl}_low_orbit", f"{bnl}_sync_orbit", self._PV, dv, body,
+            f"{bnl}_low_orbit", f"{bnl}_low_orbit", self._PV, dv, body,
             attitude=True,
         )
 
@@ -1452,7 +1637,8 @@ class MissionBuilder:
             capture_prop = self._edge(soi, lo, self._PV, escape_dv, bn, attitude=True)
             self._add_out(capture_prop, scheme="prop" if capture_has_aero_alt else "")
             if capture_has_aero_alt:
-                capture_aero = self._edge(soi, lo, self._AB, 100, bn, heat=True)
+                capture_aero = self._edge(
+                    soi, lo, self._AB, _AEROBRAKE_CAPTURE_RESIDUAL_DV, bn, heat=True)
                 self._add_out(capture_aero, scheme="aero")
             # Moon SOI → parent low orbit: passive transit when leaving a moon's
             # SOI.  After escape you find yourself in the parent's frame at

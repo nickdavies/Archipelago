@@ -237,9 +237,10 @@ class TestSlotDataRoundTrip(unittest.TestCase):
         self.assertLess(got, 2.0 * jool.raise_dv(Rj),
                         "child->parent must be cheaper than raise-from-low-orbit")
 
-    def test_random_orbit_offhome_no_penalty(self):
-        # Off-home, capture is free into any inclination/altitude — so a remote
-        # random orbit must NOT be penalised (modeled as the base orbit).
+    def test_random_orbit_offhome_vacuum_free(self):
+        # At a VACUUM target, a propulsive capture into a higher orbit costs no
+        # more than the low-orbit capture the base profile already charges, so a
+        # remote random orbit is free (modeled as the base orbit).
         from worlds.ksp1.bodies import MissionBuilder, RandomOrbitParams
         mb = MissionBuilder(home=BodyName.KERBIN)
         mun = next(b for b in ALL_BODIES if b.name == BodyName.MUN)
@@ -250,6 +251,92 @@ class TestSlotDataRoundTrip(unittest.TestCase):
         rand = C.evaluate_contract(
             C.ContractSpec(C.ContractType.RANDOM_ORBIT, BodyName.MUN), FULL, DIFF, mb)
         self.assertAlmostEqual(rand.launch_mass, base.launch_mass, places=3)
+
+    def test_random_orbit_offhome_atmospheric_charged(self):
+        # At an ATMOSPHERIC target (Jool), the base profile aerobrakes cheaply into
+        # LOW orbit — but you cannot aerobrake into a high orbit, so raising to the
+        # seeded orbit is a real propulsive burn that MUST be charged off-home.
+        # (Regression: this was previously free, under-charging high Jool/Eve/Duna
+        # orbits by hundreds-to-~2000 m/s.)
+        from worlds.ksp1.bodies import MissionBuilder, RandomOrbitParams
+        mb = MissionBuilder(home=BodyName.KERBIN)
+        jool = BODY_BY_NAME[BodyName.JOOL]
+        r_lo = jool.lo_radius_m
+        mb.random_orbit_params[BodyName.JOOL] = RandomOrbitParams(
+            inclination_deg=0.0, sma_m=r_lo * 2.0, eccentricity=0.0)  # circular 2x low
+        td = C.CONTRACT_TYPE_DEFS[C.ContractType.RANDOM_ORBIT]
+        base = mb.profiles_for(BodyName.JOOL, MissionType.ORBIT)[0]
+        extra = (sum(e.base_dv for e in td.transform_mission(
+                     BodyName.JOOL, BodyName.KERBIN, base, mb))
+                 - sum(e.base_dv for e in base))
+        expected = jool.transfer_circular_to_ellipse_dv(r_lo, r_lo * 2.0, r_lo * 2.0)
+        self.assertGreater(expected, 100.0)            # a real burn, not noise
+        self.assertAlmostEqual(extra, expected, places=3)
+
+    def test_orbit_moon_to_parent_charges_descent(self):
+        # CASE C: orbiting the parent from a moon home (Laythe -> Jool) must charge
+        # the in-well descent from the moon's orbital radius down to the target
+        # orbit. The base graph mis-charges that descent as free (bug 099); the
+        # contract transform corrects it. (Plain low Jool orbit from Laythe was
+        # under-charged by ~3 km/s.)
+        mb = MissionBuilder(home=BodyName.LAYTHE)
+        jool = BODY_BY_NAME[BodyName.JOOL]
+        laythe = BODY_BY_NAME[BodyName.LAYTHE]
+        td = C.CONTRACT_TYPE_DEFS[C.ContractType.ORBIT]
+        base = mb.profiles_for(BodyName.JOOL, MissionType.ORBIT)[0]
+        extra = (sum(e.base_dv for e in td.transform_mission(
+                     BodyName.JOOL, BodyName.LAYTHE, base, mb))
+                 - sum(e.base_dv for e in base))
+        r_moon = laythe.parent_periapsis_km * 1000.0
+        lo = jool.min_orbit_radius_m
+        expected = jool.transfer_circular_to_ellipse_dv(r_moon, lo, lo)
+        self.assertGreater(expected, 1000.0)           # a large, real descent
+        self.assertAlmostEqual(extra, expected, places=3)
+
+    def test_orbit_targets_clear_terrain(self):
+        # Lumpy bodies: every contract orbit target (random, equatorial, polar)
+        # must sit above the tallest terrain peak — never inside a mountain.
+        gilly = BODY_BY_NAME[BodyName.GILLY]
+        peak_radius = (gilly.radius_km + gilly.max_terrain_km) * 1000.0
+        self.assertGreater(gilly.min_orbit_radius_m, peak_radius,
+                           "Gilly orbit floor must clear its peaks")
+        self.assertGreater(gilly.min_orbit_radius_m, gilly.lo_radius_m,
+                           "Gilly is the lumpy case where terrain > low orbit")
+        for seed in range(40):
+            p = generate_random_orbit_params(_random.Random(seed), ALL_BODIES)[BodyName.GILLY]
+            self.assertGreaterEqual(p.periapsis_m, gilly.min_orbit_radius_m - 1.0,
+                                    f"random orbit periapsis below terrain (seed {seed})")
+        for ct in (C.ContractType.EQUATORIAL_ORBIT, C.ContractType.POLAR_ORBIT):
+            params = C.CONTRACT_TYPE_DEFS[ct].build_parameters(BodyName.GILLY)
+            sma = next(p.to_json()["sma"] for p in params
+                       if p.to_json()["kind"] == "specific_orbit")
+            self.assertGreaterEqual(sma, gilly.min_orbit_radius_m - 1.0,
+                                    f"{ct} target orbit below terrain")
+
+    def test_random_orbit_is_collision_safe(self):
+        # The seeded random orbit's full periapsis..apoapsis span must avoid every
+        # moon's PeR..ApR (+SOI) band — an eccentric orbit that crosses a moon's
+        # path is not flyable. Mirrors the rescue collision test for the eccentric
+        # case (both periapsis and apoapsis live in one moon-free gap).
+        for seed in range(60):
+            params = generate_random_orbit_params(_random.Random(seed), ALL_BODIES)
+            for tgt in (BodyName.JOOL, BodyName.KERBIN, BodyName.EVE, BodyName.DUNA):
+                p = params[tgt]
+                B = BODY_BY_NAME[tgt]
+                self.assertGreaterEqual(p.periapsis_m, B.min_orbit_radius_m - 1.0,
+                                        f"{tgt} periapsis below floor (seed {seed})")
+                self.assertLessEqual(p.apoapsis_m, B.soi_radius_km * 1000.0,
+                                     f"{tgt} apoapsis outside SOI (seed {seed})")
+                for m in ALL_BODIES:
+                    if m.parent != tgt:
+                        continue
+                    band_lo = m.parent_periapsis_km * 1000.0 - m.soi_radius_km * 1000.0
+                    band_hi = m.parent_apoapsis_km * 1000.0 + m.soi_radius_km * 1000.0
+                    overlaps = p.periapsis_m <= band_hi and band_lo <= p.apoapsis_m
+                    self.assertFalse(
+                        overlaps,
+                        f"{tgt} orbit [{p.periapsis_m:.0f},{p.apoapsis_m:.0f}] clips "
+                        f"{m.name}'s [{band_lo:.0f},{band_hi:.0f}] band (seed {seed})")
 
     def test_is_goal_flag_round_trips(self):
         # is_goal is the only field that distinguishes a goal contract in

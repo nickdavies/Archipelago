@@ -33,6 +33,7 @@ from typing import Optional, TYPE_CHECKING
 from .bodies import (
     ALL_BODIES, BODY_BY_NAME, BodyName, MissionType, DifficultyProfile,
     DIFFICULTY_PROFILES, MissionBuilder, effective_physics_profile_name,
+    orbit_reach_dv,
 )
 from .parts import CONTRACT_CATEGORY_MEMBERS, MiscEquipment
 
@@ -408,69 +409,64 @@ class ContractTypeDef:
             return body.has_stationary_orbit
         return True
 
+    def _target_orbit(self, target_body, mission_builder):
+        """The specific orbit this contract must reach around ``target_body``, as
+        ``(periapsis_m, apoapsis_m, inclination_deg)``, or ``None`` for types with
+        no specific orbit to reach beyond the base profile.  Orbital types that
+        target the body's low orbit use ``min_orbit_radius_m`` (terrain/atmosphere
+        safe — never below a mountain); STATIONARY uses the synchronous radius;
+        RANDOM/RESCUE read their seeded orbit off the ``mission_builder``."""
+        b = BODY_BY_NAME[target_body]
+        ct = self.contract_type
+        if ct in (ContractType.ORBIT, ContractType.EQUATORIAL_ORBIT,
+                  ContractType.SPACE_STATION):
+            r = b.min_orbit_radius_m
+            return (r, r, 0.0)
+        if ct == ContractType.POLAR_ORBIT:
+            r = b.min_orbit_radius_m
+            return (r, r, 90.0)
+        if ct == ContractType.STATIONARY_ORBIT:
+            r = b.sync_orbit_radius_m
+            return (r, r, 0.0)
+        if ct == ContractType.RANDOM_ORBIT:
+            p = mission_builder.random_orbit_params.get(target_body)
+            return None if p is None else (p.periapsis_m, p.apoapsis_m, p.inclination_deg)
+        if ct == ContractType.KERBAL_RESCUE:
+            R = mission_builder.rescue_orbit_params.get(target_body)
+            return None if R is None else (R, R, 0.0)
+        return None
+
     def transform_mission(self, target_body, home_body, edges, mission_builder):
         """Contract-specific mission modifier — rewrite the base mission's edge
         sequence (the profile-level hook passed to evaluate_mission_detailed).
-        Default identity. Orbit variants inject their extra delta-v here, and
-        only at the HOME body: POLAR pays the rotation-assist loss as an ascent
-        penalty; STATIONARY appends the low-orbit→sync raise burn; RANDOM pays
-        the inclination rotation loss + a raise to its apoapsis. All are free at
-        remote bodies (capture straight into the target plane / a high orbit),
-        so they return ``edges`` unchanged off home.
 
-        RESCUE is the exception that fires for EVERY target (before the home
-        guard): the cost to fly to the seeded rescue orbit and back is a round
-        trip applied to the profile's rendezvous self-loop, computed per regime."""
-        if self.contract_type == ContractType.KERBAL_RESCUE:
-            R = mission_builder.rescue_orbit_params.get(target_body)
-            if R is None:
-                return edges  # defensive: no orbit assigned -> base profile
-            tgt = BODY_BY_NAME[target_body]
+        Orbital contracts inject the delta-v to reach their *specific* target orbit
+        beyond what the base profile to the target's low orbit charges.  The radial
+        cost (raise / capture / in-system transfer) is regime-aware and computed by
+        ``orbit_reach_dv`` (home vs capture-from-outside vs moon→parent); the
+        inclination cost is a launch-from-home penalty only (off home the plane is
+        set for free at capture/transfer).  RESCUE is the round-trip case (out and
+        back to the stranded Kerbal's orbit).  Non-orbital types are identity."""
+        orbit = self._target_orbit(target_body, mission_builder)
+        if orbit is None:
+            return edges
+        r_pe, r_ap, inc_deg = orbit
+        round_trip = self.contract_type == ContractType.KERBAL_RESCUE
+        # Inclination rotation-assist loss (v_rot·(1 - cos i)) — only when launching
+        # from the home body; charged on the ascent edge (paid at low Isp).
+        if target_body == home_body and inc_deg > 0.0:
             home = BODY_BY_NAME[home_body]
-            if home.parent == target_body:
-                # Child -> parent (moon home, target is its parent planet): the
-                # profile escapes the home moon into the parent frame; from there
-                # it's a Hohmann up/down between the moon's orbital radius and R,
-                # NOT a descent to the parent's deep low orbit (which over-charges
-                # 2.5-8.7x).
-                r_M = home.parent_periapsis_km * 1000.0
-                extra = 2.0 * tgt.hohmann_dv(r_M, R)
-            else:
-                # Home / sibling / parent->child / interplanetary: the profile
-                # already reaches (often aerobrakes cheaply into) low orbit, but R
-                # sits above the atmosphere, so charge the propulsive round trip
-                # low-orbit <-> R that aerobraking cannot provide.
-                extra = 2.0 * tgt.raise_dv(R)
-            return mission_builder.bump_selfloop(edges, extra)
-        if target_body != home_body:
-            return edges
-        home = BODY_BY_NAME[home_body]
-        if self.contract_type == ContractType.POLAR_ORBIT:
-            return mission_builder.add_ascent_penalty(
-                edges, home_body, home.surface_rotation_velocity)
-        if self.contract_type == ContractType.STATIONARY_ORBIT:
-            return list(edges) + [
-                mission_builder.make_raise_edge(home_body, home.stationary_raise_dv)]
-        if self.contract_type == ContractType.RANDOM_ORBIT:
-            params = mission_builder.random_orbit_params.get(target_body)
-            if params is None:
-                return edges  # defensive: no orbit assigned -> base orbit
-            # Inclination rotation loss: the eastward assist you forgo, scaling
-            # from 0 (equatorial) to the full surface-rotation velocity (polar),
-            # i.e. v_rot * (1 - cos i). Charged on the ascent edge like POLAR.
             incl_penalty = home.surface_rotation_velocity * (
-                1.0 - math.cos(math.radians(params.inclination_deg)))
-            edges = mission_builder.add_ascent_penalty(
-                edges, home_body, incl_penalty)
-            # Apoapsis raise: conservatively model the eccentric orbit as a
-            # circular orbit at its apoapsis (>= the actual eccentric orbit's
-            # cost). raise_dv is 0 when apoapsis sits at low orbit.
-            raise_dv = home.raise_dv(params.apoapsis_m)
-            if raise_dv > 0.0:
-                edges = list(edges) + [
-                    mission_builder.make_raise_edge(home_body, raise_dv)]
+                1.0 - math.cos(math.radians(inc_deg)))
+            edges = mission_builder.add_ascent_penalty(edges, home_body, incl_penalty)
+        radial = orbit_reach_dv(
+            home_body, target_body, r_pe, r_ap, round_trip=round_trip)
+        if radial <= 0.0:
             return edges
-        return edges
+        if round_trip:
+            # Bump the rescue profile's existing rendezvous self-loop.
+            return mission_builder.bump_selfloop(edges, radial)
+        return list(edges) + [mission_builder.make_reach_edge(target_body, radial)]
 
     def build_parameters(self, body: BodyName, mission_builder=None) -> list:
         # ``mission_builder`` is required only for RANDOM_ORBIT (it owns the
@@ -501,9 +497,11 @@ class ContractTypeDef:
                                   ContractType.POLAR_ORBIT,
                                   ContractType.STATIONARY_ORBIT):
             # A circular target orbit, deterministic per (type, body). Equatorial
-            # / polar at the body's low orbit (inc 0 / 90); stationary at the
-            # synchronous radius. The mission transform (not here) adds the extra
-            # delta-v polar/stationary need at the home body.
+            # / polar at the body's lowest terrain-safe orbit (inc 0 / 90);
+            # stationary at the synchronous radius. ``min_orbit_radius_m`` (not
+            # ``lo_radius_m``) keeps the rendered orbit above the tallest peak on
+            # lumpy bodies (Gilly et al.). The mission transform (not here) adds
+            # the extra delta-v reaching these orbits needs.
             b = BODY_BY_NAME[body]
             if self.contract_type == ContractType.STATIONARY_ORBIT:
                 # A circular equatorial orbit at the synchronous radius IS a
@@ -511,9 +509,9 @@ class ContractTypeDef:
                 # stock param can't recompute the altitude from an OrbitType.
                 sma, inc, otype = b.sync_orbit_radius_m, 0.0, "EQUATORIAL"
             elif self.contract_type == ContractType.POLAR_ORBIT:
-                sma, inc, otype = b.lo_radius_m, 90.0, "POLAR"
+                sma, inc, otype = b.min_orbit_radius_m, 90.0, "POLAR"
             else:
-                sma, inc, otype = b.lo_radius_m, 0.0, "EQUATORIAL"
+                sma, inc, otype = b.min_orbit_radius_m, 0.0, "EQUATORIAL"
             return [SpecificOrbitParam(
                 body=body, orbit_type=otype, inclination=inc,
                 eccentricity=0.0, sma=sma, deviation=ORBIT_DEVIATION)]
