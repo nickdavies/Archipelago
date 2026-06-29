@@ -55,9 +55,14 @@ class _FakeOption:
 
 
 class _FakeSetOption:
-    """Minimal stand-in for an AP OptionSet with a .value set."""
+    """Minimal stand-in for an AP OptionSet.
+
+    AP's OptionSet stores the raw YAML body names as plain ``str`` (not
+    BodyName members), so coerce here — otherwise tests that pass BodyName
+    enums silently bypass the string->enum conversion that production hits.
+    """
     def __init__(self, values=None):
-        self.value = set(values) if values else set()
+        self.value = {str(v) for v in values} if values else set()
 
 
 class _FakeOptions:
@@ -141,6 +146,15 @@ class TestResolveGoalSpec(unittest.TestCase):
         self.assertEqual(spec.flyby_bodies, (BodyName.JOOL,))
         self.assertFalse(spec.orbit_bodies)
         self.assertIn("Flyby", spec.display_name)
+
+    def test_custom_raw_string_bodies(self):
+        # AP feeds raw YAML strings, not BodyName members.  The resolved spec
+        # must hold BodyName enums so downstream rules (e.g. ``b.value``) work.
+        # Regression for: custom goal -> 'str' object has no attribute 'value'.
+        opts = _FakeOptions(goal=Goal.option_custom, sample={"Kerbin"})
+        spec = resolve_goal_spec(opts, BodyName.LAYTHE, _KERBIN_INFEASIBLE_LOCATIONS)
+        self.assertEqual(spec.sample_return_bodies, (BodyName.KERBIN,))
+        self.assertTrue(all(isinstance(b, BodyName) for b in spec.sample_return_bodies))
 
     def test_custom_orbit_only_raises_without_goal_custom(self):
         opts = _FakeOptions(goal=Goal.option_duna_return, orbit=[BodyName.MUN])

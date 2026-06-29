@@ -1048,13 +1048,20 @@ def resolve_goal_spec(options, home: BodyName,
             parts.append("Flyby " + ", ".join(sorted(options.flyby_bodies.value)))
         display = "Custom: " + " + ".join(parts)
 
+        # OptionSet stores the raw YAML body names as plain strings; the
+        # GoalSpec and every downstream consumer expect BodyName members
+        # (e.g. ``b.value`` in the goal/event rules).  The preset specs use
+        # BodyName directly, so only this custom path needs the conversion.
+        def _to_bodies(values) -> tuple[BodyName, ...]:
+            return tuple(sorted(BodyName(v) for v in values))
+
         spec = GoalSpec(
             display_name=display,
-            flag_bodies=tuple(sorted(options.flag_bodies.value)),
-            return_bodies=tuple(sorted(options.return_bodies.value)),
-            sample_return_bodies=tuple(sorted(options.sample_return_bodies.value)),
-            orbit_bodies=tuple(sorted(options.orbit_bodies.value)),
-            flyby_bodies=tuple(sorted(options.flyby_bodies.value)),
+            flag_bodies=_to_bodies(options.flag_bodies.value),
+            return_bodies=_to_bodies(options.return_bodies.value),
+            sample_return_bodies=_to_bodies(options.sample_return_bodies.value),
+            orbit_bodies=_to_bodies(options.orbit_bodies.value),
+            flyby_bodies=_to_bodies(options.flyby_bodies.value),
         )
     elif goal_value == Goal.option_standard_returns:
         standard_bodies = tuple(
