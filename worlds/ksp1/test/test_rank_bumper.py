@@ -13,7 +13,9 @@ import random
 import unittest
 
 from worlds.ksp1.bodies import BodyName, MissionBuilder
-from worlds.ksp1.parts import PART_DB
+from worlds.ksp1.parts import DEFAULT_PART_MANAGER
+
+PART_DB = DEFAULT_PART_MANAGER.parts
 from worlds.ksp1.ranks import DEFAULT_CONTEXT, RankAxisKey, RankContext
 from worlds.ksp1.requirements import Rank, Signature
 from worlds.ksp1.sphere_ladder import (

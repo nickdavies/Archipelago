@@ -5,8 +5,10 @@ import math
 import unittest
 
 from worlds.ksp1.parts import (
-    Engine, FuelTank, SolidBooster, HeatShield, PART_DB,
+    Engine, FuelTank, SolidBooster, HeatShield, DEFAULT_PART_MANAGER,
 )
+
+PART_DB = DEFAULT_PART_MANAGER.parts
 from worlds.ksp1.rocket_math import (
     G0, stage_delta_v, srb_delta_v, required_tanks, twr,
     terminal_velocity, find_optimal_stage, StageResult,

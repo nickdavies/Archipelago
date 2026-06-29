@@ -73,8 +73,13 @@ from .parts import (
     Engine,
     FuelTank,
     MiscEquipment,
-    PART_DB,
+    DEFAULT_PART_MANAGER,
 )
+
+# The ladder reasons over the full installed part universe; per-seed pack and
+# possession filtering happen through item grants (reps) and the rank table, so
+# this is the PartManager's complete view — not the raw module global.
+PART_DB = DEFAULT_PART_MANAGER.parts
 from .part_geometry import PartRole
 from .ranks import (
     DEFAULT_CONTEXT, RANK_AXES, RANK_AXES_BY_KEY, RankAxisKey, RankContext,
@@ -838,7 +843,6 @@ def _enrich_kit_alternates(kit, ctx: RankContext) -> None:
     kit reproduces feasibility before adopting it; otherwise fall back
     to ``kit`` as-extracted.
     """
-    from .parts import PART_DB, MiscEquipment, CapabilityFlag
     from .ranks import RankAxisKey
 
     by_rank_per_axis = _items_at_rank(ctx)
@@ -2883,7 +2887,6 @@ def _size_only_axes() -> frozenset:
     """
     global _SIZE_ONLY_AXES
     if _SIZE_ONLY_AXES is None:
-        from .parts import PART_DB, FuelTank
         from .ranks import RankAxisKey
         ft_axis = {"lfo": RankAxisKey.LFO_TANK, "lf": RankAxisKey.LF_TANK,
                    "xenon": RankAxisKey.XENON_TANK,

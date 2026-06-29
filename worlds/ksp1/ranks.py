@@ -31,7 +31,8 @@ from enum import StrEnum
 from typing import Optional
 
 from .parts import (
-    PART_DB,
+    ALL_PACKS,
+    part_manager_for,
     AnyPart,
     CapabilityFlag,
     Decoupler,
@@ -85,6 +86,11 @@ class RankContext:
     stagers there; vacuum homes score by ``vac_isp * fuel_mass`` instead.
     """
     home_has_atmosphere: bool
+    # Which packs are enabled — determines the part universe the rank table is
+    # bucketed over (a disabled pack's parts occupy no rank). Defaults to every
+    # installed pack; Phase 2 binds the world's enabled set. The per-context
+    # caches key on this, so each distinct pack-set is computed once.
+    enabled_packs: frozenset[str] = ALL_PACKS
 
 
 # Kerbin baseline.  Used when no per-world context has been bound (tests,
@@ -388,9 +394,10 @@ _FUNGIBLE_AXES: frozenset[RankAxisKey] = frozenset({
 def _compute_ranks_for_context(ctx: RankContext) -> dict[RankAxisKey, dict[str, int]]:
     out: dict[RankAxisKey, dict[str, int]] = {}
     scores_out: dict[RankAxisKey, dict[str, float]] = {}
+    part_db = part_manager_for(ctx.enabled_packs).parts
     for axis in RANK_AXES:
         scored: list[tuple[str, float]] = []
-        for item_name, parts in PART_DB.items():
+        for item_name, parts in part_db.items():
             s = _item_score(parts, axis, ctx)
             if s is not None:
                 scored.append((item_name, s))

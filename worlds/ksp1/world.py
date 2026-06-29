@@ -8,6 +8,7 @@ from Options import OptionError
 from worlds.AutoWorld import LogicMixin, WebWorld, World
 
 from . import contracts, items, locations, regions, rules
+from .parts import ALL_PACKS, part_manager_for
 from .ksc_sites import ksc_site_slot_data
 from .rules import GoalSpec, resolve_goal_spec, goal_spec_location_names
 from .capability import CAPABILITY_ITEMS, RocketCapability
@@ -319,6 +320,10 @@ class KSP1World(World):
         # title-case round-trip rebuilds the canonical ``StrEnum`` value.
         home = BodyName(self.options.starting_body.current_key.title())
         self.mission_builder = MissionBuilder(home=home)
+        # Pack-aware source of truth for which parts this world may use. Phase 1
+        # enables every installed pack (behavior-identical); Phase 2 will derive
+        # the enabled set from the EnabledPartPacks option.
+        self.part_manager = part_manager_for(ALL_PACKS)
         self.location_builder = LocationBuilder(home=home)
         # Per-world RankContext for sphere-ladder + item.rank_sig.
         # ``home_has_atmosphere`` drives the SRB axis scorer; the rest

@@ -30,8 +30,13 @@ from worlds.ksp1.capability import (
     _inject_ladder, _compute_sounding_altitude,
     _group_edges,
 )
-from worlds.ksp1.parts import PART_DB, Engine, FuelTank, SolidBooster, MultiMount
+from worlds.ksp1.parts import (
+    DEFAULT_PART_MANAGER, Engine, FuelTank, SolidBooster, MultiMount,
+)
 from worlds.ksp1.rocket_math import find_optimal_stage, _adapter_max_engines
+
+# Tests read the full installed part universe through the public manager view.
+PART_DB = DEFAULT_PART_MANAGER.parts
 
 
 # ---------------------------------------------------------------------------
@@ -1473,7 +1478,6 @@ class TestAttitudeBundleManifestReconciles(unittest.TestCase):
     """
 
     def test_attitude_module_mass_reflects_real_part_masses(self) -> None:
-        from worlds.ksp1.parts import PART_DB
         from worlds.ksp1.capability import _attitude_bundle_for_stage
         # Setup: Stayputnik (no built-in wheels) + sasModule unlocked.
         flags = _make_flags(
@@ -1494,7 +1498,6 @@ class TestAttitudeBundleManifestReconciles(unittest.TestCase):
         self.assertAlmostEqual(bundle.mass, sas.mass, places=6)
 
     def test_rcs_bundle_includes_tank_when_terminal_lacks_monoprop(self) -> None:
-        from worlds.ksp1.parts import PART_DB
         from worlds.ksp1.capability import _attitude_bundle_for_stage
         flags = _make_flags(
             engines=[_RELIANT], tanks=[_FL_T400, _FL_T800],
@@ -1517,7 +1520,6 @@ class TestAttitudeBundleManifestReconciles(unittest.TestCase):
         self.assertAlmostEqual(bundle.mass, expected, places=6)
 
     def test_rcs_bundle_skips_tank_for_pod_with_internal_monoprop(self) -> None:
-        from worlds.ksp1.parts import PART_DB
         from worlds.ksp1.capability import _attitude_bundle_for_stage
         flags = _make_flags(
             engines=[_RELIANT], tanks=[_FL_T400, _FL_T800],

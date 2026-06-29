@@ -28,10 +28,9 @@ from .bodies import (
     effective_dv, effective_physics_profile_name, home_system_bodies, parent_chain,
 )
 from .parts import (
-    PART_DB, CapabilityFlag, Engine, FuelTank, SolidBooster, HeatShield,
-    Parachute, LandingLeg, Decoupler, MiscEquipment,
+    DEFAULT_PART_MANAGER, CapabilityFlag, Engine, FuelTank, SolidBooster,
+    HeatShield, Parachute, LandingLeg, Decoupler, MiscEquipment,
     MultiMount, MULTI_MOUNT_TABLE,
-    PART_TO_CONTRACT_CATEGORIES,
     usable_fuel_mass,
 )
 from .capability_reasons import BlockingInfo, BlockingReason
@@ -63,7 +62,7 @@ _CAPABILITY_PART_TYPES = (
     Parachute, LandingLeg, Decoupler, MiscEquipment,
 )
 CAPABILITY_ITEMS: frozenset[str] = frozenset(
-    name for name, parts in PART_DB.items()
+    name for name, parts in DEFAULT_PART_MANAGER.parts.items()
     if any(
         isinstance(p, _CAPABILITY_PART_TYPES) and (
             not isinstance(p, MiscEquipment) or p.provides
@@ -107,19 +106,12 @@ _RADIAL_SYMMETRY_GROUP: int = 8   # KSP's max radial symmetry; bigger = more rin
 _MAX_RADIAL_CHUTES: int = 56      # 7 groups of 8
 _MAX_INLINE_CHUTES: int = 1
 
-# Precomputed once: the part name + mass that provides FUEL_LINE (the
-# asparagus crossfeed enabler).  The real parallel-stage builder needs the
-# fuel line's mass/name to charge an asparagus crossfeed build.
-_FUEL_LINE_PART: Optional[str] = None
-_FUEL_LINE_MASS: float = 0.0
-for _nm, _parts in PART_DB.items():
-    _fl = next((_p for _p in _parts if isinstance(_p, MiscEquipment)
-                and CapabilityFlag.FUEL_LINE in _p.provides), None)
-    if _fl is not None:
-        _FUEL_LINE_PART = _nm
-        _FUEL_LINE_MASS = _fl.mass
-        break
-del _nm, _parts
+# The part name + mass that provides FUEL_LINE (the asparagus crossfeed
+# enabler).  The real parallel-stage builder needs the fuel line's mass/name to
+# charge an asparagus crossfeed build.  From the full installed universe — the
+# per-seed flag that gates its use is set count-gated in ``_pre_pass``.
+_FUEL_LINE_PART: Optional[str] = DEFAULT_PART_MANAGER.fuel_line_part
+_FUEL_LINE_MASS: float = DEFAULT_PART_MANAGER.fuel_line_mass
 
 # Minimum jetpack TWR for ladder-free sample return
 _MIN_EVA_JETPACK_TWR: float = 1.05
@@ -486,8 +478,9 @@ def _pre_pass(item_count_fn: Callable[[str], int],
         # Tracking Station / DSN_POWER is a DEFERRED seam (relay_tier already
         # gates comms); the item exists for pacing but is not read here.
 
-    # Process every PART_DB item.
-    for item_name, parts in PART_DB.items():
+    # Process every part in the installed universe; ``item_count_fn`` gates to
+    # what the player actually has (so a disabled pack's parts are excluded).
+    for item_name, parts in DEFAULT_PART_MANAGER.parts.items():
         count = item_count_fn(item_name)
         if count == 0:
             continue
@@ -673,7 +666,7 @@ def _apply_misc(flags: EquipmentFlags, part: MiscEquipment, count: int) -> None:
     # Generic contract-category membership — tracked by part name, independent
     # of the provides flags (drills/ore tanks carry no provides). Keeps the
     # lightest available part per category for contract payload sizing.
-    for cat_key in PART_TO_CONTRACT_CATEGORIES.get(part.name, ()):
+    for cat_key in DEFAULT_PART_MANAGER.part_to_categories.get(part.name, ()):
         cur = flags.category_lightest.get(cat_key)
         if cur is None or part.mass < cur.mass:
             flags.category_lightest[cat_key] = part
@@ -681,7 +674,7 @@ def _apply_misc(flags: EquipmentFlags, part: MiscEquipment, count: int) -> None:
     # seats: gate on crew_cabin category membership (which excludes
     # seatExternalCmd), matching category_lightest above. A raw crew_capacity
     # test admits a "station" of 5 lawn chairs (~0.25t), wrecking the mass model.
-    if "crew_cabin" in PART_TO_CONTRACT_CATEGORIES.get(part.name, ()):
+    if "crew_cabin" in DEFAULT_PART_MANAGER.part_to_categories.get(part.name, ()):
         flags.available_crew_parts.append(part)
     for flag in part.provides:
         if flag == CF.PROBE_CORE:
@@ -895,41 +888,16 @@ class ProfileResult:
         return [str(b) for b in self.blocking]
 
 
-# Precomputed once: the part name that provides FUEL_LINE (asparagus
-# enabler).  Scanning PART_DB inside _build_kit_used per call was a hot-
-# loop regression (called for every feasible eval).
-_FUEL_LINE_PART: Optional[str] = None
-_FUEL_LINE_MASS: float = 0.0
-for _nm, _parts in PART_DB.items():
-    _fl = next((_p for _p in _parts if isinstance(_p, MiscEquipment)
-                and CapabilityFlag.FUEL_LINE in _p.provides), None)
-    if _fl is not None:
-        _FUEL_LINE_PART = _nm
-        _FUEL_LINE_MASS = _fl.mass
-        break
-del _nm, _parts
-
-
-def _lightest_part_providing(flag: "CapabilityFlag") -> Optional[str]:
-    """Lightest PART_DB item that provides *flag*, by part mass.  Used to
-    capture presence-only enablers (large battery / solar array) in the
-    kit so a re-eval can reproduce the flag state."""
-    best: Optional[tuple[str, float]] = None
-    for nm, parts in PART_DB.items():
-        for p in parts:
-            if flag in getattr(p, "provides", ()):  # type: ignore[arg-type]
-                if best is None or p.mass < best[1]:
-                    best = (nm, p.mass)
-                break
-    return best[0] if best else None
-
-
-# Precomputed once: lightest parts that enable ION (xenon) engines via the
-# large-power gate in ``_filter_engines_for_ion``.  Battery is preferred —
-# it carries no rank axis, so adding it to a kit doesn't inflate any rank
-# ceiling (the large solar panel sits at SOLAR rank 3).
-_BATTERY_LARGE_PART: Optional[str] = _lightest_part_providing(CapabilityFlag.BATTERY_LARGE)
-_SOLAR_LARGE_PART: Optional[str] = _lightest_part_providing(CapabilityFlag.SOLAR_ARRAY_LARGE)
+# Lightest parts that enable ION (xenon) engines via the large-power gate in
+# ``_filter_engines_for_ion``.  Battery is preferred — it carries no rank axis,
+# so adding it to a kit doesn't inflate any rank ceiling (the large solar panel
+# sits at SOLAR rank 3).  From the full installed universe (see
+# ``PartManager.lightest_providing``); the per-seed flags that gate their use
+# are set count-gated in ``_pre_pass``.
+_BATTERY_LARGE_PART: Optional[str] = DEFAULT_PART_MANAGER.lightest_providing(
+    CapabilityFlag.BATTERY_LARGE)
+_SOLAR_LARGE_PART: Optional[str] = DEFAULT_PART_MANAGER.lightest_providing(
+    CapabilityFlag.SOLAR_ARRAY_LARGE)
 
 
 def _build_kit_used(flags: EquipmentFlags,
@@ -2891,7 +2859,7 @@ def cheap_flags(state: CollectionState, player: int) -> EquipmentFlags:
 # ---------------------------------------------------------------------------
 
 # (a) Every MiscEquipment with multi_mount flag must be in MULTI_MOUNT_TABLE
-for _item_name, _parts in PART_DB.items():
+for _item_name, _parts in DEFAULT_PART_MANAGER.parts.items():
     for _part in _parts:
         if isinstance(_part, MiscEquipment) and CapabilityFlag.MULTI_MOUNT in _part.provides:
             assert _part.name in MULTI_MOUNT_TABLE, (
@@ -2901,7 +2869,7 @@ for _item_name, _parts in PART_DB.items():
 # (b) Every MiscEquipment flag in parts.py must be a recognized CapabilityFlag.
 _KNOWN_FLAGS: frozenset[str] = frozenset(CapabilityFlag)
 
-for _item_name, _parts in PART_DB.items():
+for _item_name, _parts in DEFAULT_PART_MANAGER.parts.items():
     for _part in _parts:
         if isinstance(_part, MiscEquipment):
             _unknown = _part.provides - _KNOWN_FLAGS

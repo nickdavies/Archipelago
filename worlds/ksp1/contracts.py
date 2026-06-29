@@ -35,7 +35,7 @@ from .bodies import (
     DIFFICULTY_PROFILES, MissionBuilder, effective_physics_profile_name,
     orbit_reach_dv,
 )
-from .parts import CONTRACT_CATEGORY_MEMBERS, MiscEquipment
+from .parts import DEFAULT_PART_MANAGER, MiscEquipment
 
 if TYPE_CHECKING:
     from .capability import EquipmentFlags
@@ -312,7 +312,8 @@ def _category_param(cat: str):
     if cat in _CATEGORY_TO_SYSTEM:
         system, label = _CATEGORY_TO_SYSTEM[cat]
         return HasSystemParam(system=system, label=label)
-    parts = tuple(sorted(CONTRACT_CATEGORY_MEMBERS.get(cat, frozenset())))
+    parts = tuple(sorted(
+        DEFAULT_PART_MANAGER.category_members.get(cat, frozenset())))
     return HasAnyPartParam(parts, label=cat)
 
 
@@ -948,7 +949,6 @@ def contract_payload_parts(
     Returns ``None`` if a chain-guaranteed category has no part at this kit — the
     contract is infeasible at this rung and the bumper bumps the relevant chain.
     """
-    from .parts import CONTRACT_CATEGORY_MEMBERS, PART_DB
     parts: list[MiscEquipment] = []
     for cat, got in required_part_breakdown(spec, flags):
         if got is not None:
@@ -956,9 +956,10 @@ def contract_payload_parts(
         elif cat in _CHAIN_GUARANTEED_CATEGORIES:
             return None  # chain rep not yet unlocked at this kit
         else:
-            members = CONTRACT_CATEGORY_MEMBERS.get(cat, frozenset())
+            members = DEFAULT_PART_MANAGER.category_members.get(cat, frozenset())
             if members:
-                parts.append(min((PART_DB[n][0] for n in members),
+                parts.append(min((DEFAULT_PART_MANAGER.parts[n][0]
+                                  for n in members),
                                  key=lambda p: p.mass))
     return tuple(parts)
 
@@ -1029,7 +1030,6 @@ def required_part_names_for(specs) -> frozenset[str]:
     advancement pool with every variant, which adds fill pressure that can
     strand goal-path items. Empty when no contract uses a category (e.g. mine
     disabled) — unused mining parts then keep their normal classification."""
-    from .parts import PART_DB
     cats: set[str] = set()
     for s in specs:
         for req in s.type_def.requirements:
@@ -1045,9 +1045,10 @@ def required_part_names_for(specs) -> frozenset[str]:
     cats -= _CHAIN_GUARANTEED_CATEGORIES
     reps: set[str] = set()
     for cat in cats:
-        members = CONTRACT_CATEGORY_MEMBERS.get(cat, frozenset())
+        members = DEFAULT_PART_MANAGER.category_members.get(cat, frozenset())
         if members:
-            reps.add(min(members, key=lambda n: PART_DB[n][0].mass))
+            reps.add(min(members,
+                         key=lambda n: DEFAULT_PART_MANAGER.parts[n][0].mass))
     return frozenset(reps)
 
 

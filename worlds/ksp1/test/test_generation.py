@@ -10,9 +10,10 @@ import unittest
 from BaseClasses import ItemClassification
 
 from worlds.ksp1.items import (
-    _SORTED_PART_NAMES, ALWAYS_PRECOLLECTED, CLAMP_PRECOLLECTED,
+    ALWAYS_PRECOLLECTED, CLAMP_PRECOLLECTED,
     PROGRESSIVE_RD_NAME, PROGRESSIVE_RD_COUNT,
 )
+from worlds.ksp1.parts import DEFAULT_PART_MANAGER
 from worlds.ksp1.rules import _accessible_science, _can_afford_tier
 from worlds.ksp1.tech_tree import TECH_NODES, TIER_TO_BAND, MAX_RD_BAND, cumulative_tier_cost
 from worlds.ksp1.locations import EventName, TechTreeLocation
@@ -66,7 +67,7 @@ class TestItemLocationBalance(KSP1TestBase):
     def test_no_negative_filler_count(self):
         """Pool should never have more part items than locations."""
         part_item_count = (
-            len(_SORTED_PART_NAMES)
+            len(DEFAULT_PART_MANAGER.parts)
             - len(ALWAYS_PRECOLLECTED)
             - len(CLAMP_PRECOLLECTED)
         )

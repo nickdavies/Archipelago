@@ -2,10 +2,17 @@
 """
 Extract part data from KSP .cfg files into a JSON database.
 
-Standalone script — no Archipelago imports. Usage:
-    python extract_parts.py /path/to/GameData/Squad/Parts
+Point it at a GameData directory (ideally one with every pack installed). It
+discovers every part-bearing pack under GameData, labels each from
+``parts/packs.py`` (``KNOWN_PACK_ROOTS``), and stamps a per-part ``pack`` field.
+An unlabeled part-bearing pack is a hard error — add a mapping or ``--exclude``
+it — so a pack is never silently dropped. Usage:
 
-Outputs data/parts.json in the same directory as this script's parent.
+    python extract_parts.py /path/to/GameData [--exclude PACK ...]
+
+Loads only ``parts/packs.py`` (a dependency-free leaf) by file path, so it does
+not import the Archipelago part database. Outputs data/parts.json under the
+script's parent directory.
 """
 from __future__ import annotations
 
@@ -17,6 +24,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from cfg_parser import parse_cfg
+
+# Load the pack-identity model by file path so this script stays standalone
+# (importing worlds.ksp1.parts would build the whole part DB). packs.py is a
+# dependency-free leaf, so loading it in isolation is safe.
+import importlib.util as _ilu
+
+_packs_path = Path(__file__).resolve().parent.parent / "parts" / "packs.py"
+_spec = _ilu.spec_from_file_location("ksp1_part_packs", _packs_path)
+assert _spec is not None and _spec.loader is not None
+packs = _ilu.module_from_spec(_spec)
+_spec.loader.exec_module(packs)
 
 
 def _extract_title(raw_title: str) -> str:
@@ -363,30 +381,101 @@ def walk_and_extract_with_titles(parts_dir: str) -> dict[str, dict]:
     return all_parts
 
 
+def _tag_pack(part: dict, pack: str) -> dict:
+    """Return ``part`` with a ``pack`` field inserted right after ``name`` (so
+    JSON key order stays stable: name, pack, then the rest)."""
+    return {"name": part.get("name", ""), "pack": pack,
+            **{k: v for k, v in part.items() if k not in ("name", "pack")}}
+
+
+def _has_part_block(root: Path) -> bool:
+    """True if any .cfg under ``root`` declares a top-level PART block. Used to
+    decide whether a GameData directory is a part-bearing pack (and therefore
+    must be explicitly labeled or excluded)."""
+    for cfg_file in root.rglob("*.cfg"):
+        try:
+            text = cfg_file.read_text(encoding="utf-8-sig", errors="replace")
+        except OSError:
+            continue
+        for block_name, _ in parse_cfg(text):
+            if block_name == "PART":
+                return True
+    return False
+
+
+def _candidate_pack_roots(gamedata: Path) -> list[Path]:
+    """Pack roots under a GameData directory: every top-level mod folder, with
+    ``SquadExpansion`` expanded one level (its children are the DLC packs)."""
+    roots: list[Path] = []
+    for child in sorted(gamedata.iterdir()):
+        if not child.is_dir():
+            continue
+        if child.name == "SquadExpansion":
+            roots.extend(sorted(s for s in child.iterdir() if s.is_dir()))
+        else:
+            roots.append(child)
+    return roots
+
+
 def main() -> None:
-    if len(sys.argv) < 2:
-        print(f"Usage: {sys.argv[0]} <path/to/Parts> [<path/to/Parts> ...]",
+    argv = sys.argv[1:]
+    excluded: set[str] = set()
+    positional: list[str] = []
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--exclude" and i + 1 < len(argv):
+            excluded.add(argv[i + 1])
+            i += 2
+        else:
+            positional.append(argv[i])
+            i += 1
+
+    if len(positional) != 1:
+        print(f"Usage: {sys.argv[0]} <path/to/GameData> [--exclude PACK ...]",
               file=sys.stderr)
-        print("  e.g.: extract_parts.py GameData/Squad/Parts GameData/SquadExpansion/MakingHistory/Parts",
-              file=sys.stderr)
+        print("  Discovers every part-bearing pack under GameData and labels it"
+              " from packs.KNOWN_PACK_ROOTS.", file=sys.stderr)
+        print("  An unlabeled pack is a hard error (add a mapping or --exclude"
+              " it) so a pack is never silently dropped.", file=sys.stderr)
         sys.exit(1)
 
-    parts_dirs = sys.argv[1:]
-    for d in parts_dirs:
-        if not os.path.isdir(d):
-            print(f"Error: {d} is not a directory", file=sys.stderr)
-            sys.exit(1)
+    gamedata = Path(positional[0])
+    if not gamedata.is_dir():
+        print(f"Error: {gamedata} is not a directory", file=sys.stderr)
+        sys.exit(1)
 
-    # Merge parts from all directories (later dirs override earlier on conflict)
     parts: dict[str, dict] = {}
-    for parts_dir in parts_dirs:
-        parts.update(walk_and_extract_with_titles(parts_dir))
+    sources: list[str] = []
+    packs_present: set[str] = set()
 
-    # Sort alphabetically and add metadata
+    for root in _candidate_pack_roots(gamedata):
+        if not _has_part_block(root):
+            continue
+        rel = root.relative_to(gamedata).as_posix()
+        pack = packs.pack_for_gamedata_dir(rel)
+        if pack is None:
+            print(
+                f"Error: part-bearing pack root {rel!r} has no entry in "
+                f"packs.KNOWN_PACK_ROOTS.\n"
+                f"  Add a mapping for it, or pass --exclude <pack> to drop it "
+                f"on purpose. Refusing to silently drop a pack.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        if pack in excluded:
+            print(f"Skipping excluded pack {pack!r} ({rel})", file=sys.stderr)
+            continue
+        # Later packs override earlier on cfg-name conflict (matches old merge).
+        for name, part in walk_and_extract_with_titles(str(root)).items():
+            parts[name] = _tag_pack(part, pack)
+        sources.append(os.path.abspath(str(root)))
+        packs_present.add(pack)
+
     sorted_parts = dict(sorted(parts.items()))
     output = {
         "_meta": {
-            "sources": [os.path.abspath(d) for d in parts_dirs],
+            "sources": sources,
+            "packs": sorted(packs_present),
             "generated": datetime.now(timezone.utc).isoformat(),
             "part_count": len(sorted_parts),
         },
@@ -399,7 +488,8 @@ def main() -> None:
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(output, f, indent=2, ensure_ascii=False)
 
-    print(f"Wrote {len(sorted_parts)} parts to {out_path}")
+    print(f"Wrote {len(sorted_parts)} parts from packs "
+          f"{sorted(packs_present)} to {out_path}")
 
 
 if __name__ == "__main__":

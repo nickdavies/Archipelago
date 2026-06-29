@@ -8,10 +8,15 @@ import pkgutil
 import unittest
 
 from worlds.ksp1.parts import (
-    PART_DB, PART_REGISTRY, PartMapping, CapabilityFlag, _DUAL_PURPOSE,
+    DEFAULT_PART_MANAGER, PART_REGISTRY, PartMapping, CapabilityFlag,
     Engine, FuelTank, SolidBooster, HeatShield,
     Parachute, LandingLeg, Decoupler, MiscEquipment,
 )
+# Internal data-integrity test: reaches into the private loader for the raw
+# universe + the dual-purpose table it asserts on.
+from worlds.ksp1.parts._raw import _DUAL_PURPOSE
+
+PART_DB = DEFAULT_PART_MANAGER.parts
 
 
 def _load_json() -> dict:

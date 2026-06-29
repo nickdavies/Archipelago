@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING
 from BaseClasses import Item, ItemClassification
 
 from .parts import (
-    PART_DB, PART_REGISTRY, CapabilityFlag,
+    DEFAULT_PART_MANAGER, PART_REGISTRY, CapabilityFlag,
     Engine, FuelTank, SolidBooster, HeatShield, Parachute,
     LandingLeg, Decoupler, MiscEquipment,
 )
@@ -104,7 +104,9 @@ def _classify_part_item(item_name: str) -> ItemClassification:
     demotes everything else to USEFUL.  Parts with no provides flags
     (decorative wings, lights, fairings) start as FILLER.
     """
-    parts = PART_DB.get(item_name, [])
+    # Classification is pack-independent (an item's class never changes with the
+    # enabled set), so it reads the full installed universe.
+    parts = DEFAULT_PART_MANAGER.parts.get(item_name, [])
     if not parts:
         return ItemClassification.filler
 
@@ -124,9 +126,6 @@ def _classify_part_item(item_name: str) -> ItemClassification:
 # ---------------------------------------------------------------------------
 # Build ITEM_TABLE from PART_REGISTRY (stable offsets in 1000–1999)
 # ---------------------------------------------------------------------------
-
-# Sorted names for deterministic pool iteration.
-_SORTED_PART_NAMES: list[str] = sorted(PART_DB.keys())
 
 ITEM_TABLE: dict[str, tuple[int, ItemClassification]] = {
     m.ksp_name: (m.offset, _classify_part_item(m.ksp_name))
@@ -348,10 +347,12 @@ def create_all_items(world: KSP1World) -> None:
     for name in precollected:
         world.multiworld.push_precollected(create_item(world, name))
 
-    # Pool: every PART_DB entry as an individual item, skipping precollected.
+    # Pool: every enabled part as an individual item, skipping precollected.
+    # Sorted for deterministic iteration; the enabled set comes from the world's
+    # PartManager (Phase 2: a disabled pack's parts are simply absent here).
     pool: list[KSP1Item] = [
         create_item(world, name)
-        for name in _SORTED_PART_NAMES
+        for name in sorted(world.part_manager.parts)
         if name not in precollected
     ]
 

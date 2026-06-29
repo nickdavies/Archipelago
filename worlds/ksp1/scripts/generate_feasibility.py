@@ -52,7 +52,7 @@ from worlds.ksp1.bodies import (
 )
 from worlds.ksp1.capability import compute_capability_from_items
 from worlds.ksp1.locations import EVENT_BY_NAME, EventName, MissionLocation
-from worlds.ksp1.parts import PART_DB
+from worlds.ksp1.parts import DEFAULT_PART_MANAGER
 
 
 # Mission events whose feasibility the script probes.  Each (body, event)
@@ -94,7 +94,10 @@ def _max_kit_counts() -> dict[str, int]:
     permissive than any single seed's selection, making the bodies this
     flags infeasible the floor.
     """
-    return {name: 1 for name in PART_DB}
+    # Full installed universe. Phase 2 (pack-aware feasibility) will build this
+    # from a PartManager(enabled_packs) so a subset's max-kit excludes disabled
+    # packs' parts.
+    return {name: 1 for name in DEFAULT_PART_MANAGER.parts}
 
 
 def _profile_with_overhead(base_name: str, overhead: float) -> str:

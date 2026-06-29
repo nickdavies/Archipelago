@@ -88,6 +88,9 @@ eggs/
 lib/
 lib64/
 parts/
+# ...but the KSP1 world ships a `parts/` SOURCE package (worlds/ksp1/parts/),
+# which collides with the zc.buildout `parts/` build-artifact ignore above.
+!worlds/ksp1/parts/
 sdist/
 var/
 wheels/

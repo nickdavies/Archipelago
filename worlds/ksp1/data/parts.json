@@ -5,10 +5,15 @@
       "/home/nick/.local/share/Steam/steamapps/common/Kerbal Space Program/GameData/SquadExpansion/MakingHistory/Parts"
     ],
     "generated": "2026-06-17T21:31:04.008535+00:00",
-    "part_count": 416
+    "part_count": 416,
+    "packs": [
+      "MakingHistory",
+      "Stock"
+    ]
   },
   "AdvancedCanard": {
     "name": "AdvancedCanard",
+    "pack": "Stock",
     "title": "Advanced Canard",
     "mass": 0.08,
     "bulkhead_profiles": [
@@ -46,6 +51,7 @@
   },
   "CanardController": {
     "name": "CanardController",
+    "pack": "Stock",
     "title": "Standard Canard",
     "mass": 0.1,
     "bulkhead_profiles": [
@@ -83,6 +89,7 @@
   },
   "CargoStorageUnit": {
     "name": "CargoStorageUnit",
+    "pack": "Stock",
     "title": "SEQ-24 Cargo Storage Unit",
     "mass": 0.4,
     "bulkhead_profiles": [
@@ -132,6 +139,7 @@
   },
   "CircularIntake": {
     "name": "CircularIntake",
+    "pack": "Stock",
     "title": "Circular Intake",
     "mass": 0.04,
     "bulkhead_profiles": [
@@ -170,6 +178,7 @@
   },
   "Clydesdale": {
     "name": "Clydesdale",
+    "pack": "Stock",
     "title": "S2-33 \"Clydesdale\" Solid Fuel Booster",
     "mass": 21.0,
     "bulkhead_profiles": [
@@ -246,6 +255,7 @@
   },
   "ConformalStorageUnit": {
     "name": "ConformalStorageUnit",
+    "pack": "Stock",
     "title": "SEQ-3C Conformal Storage Unit",
     "mass": 0.02,
     "bulkhead_profiles": [
@@ -278,6 +288,7 @@
   },
   "Decoupler_0": {
     "name": "Decoupler_0",
+    "pack": "Stock",
     "title": "TD-06 Decoupler",
     "mass": 0.01,
     "bulkhead_profiles": [
@@ -327,6 +338,7 @@
   },
   "Decoupler_1": {
     "name": "Decoupler_1",
+    "pack": "Stock",
     "title": "TD-12 Decoupler",
     "mass": 0.04,
     "bulkhead_profiles": [
@@ -376,6 +388,7 @@
   },
   "Decoupler_1p5": {
     "name": "Decoupler_1p5",
+    "pack": "MakingHistory",
     "title": "TD-18 Decoupler",
     "mass": 0.09,
     "bulkhead_profiles": [
@@ -425,6 +438,7 @@
   },
   "Decoupler_2": {
     "name": "Decoupler_2",
+    "pack": "Stock",
     "title": "TD-25 Decoupler",
     "mass": 0.16,
     "bulkhead_profiles": [
@@ -474,6 +488,7 @@
   },
   "Decoupler_3": {
     "name": "Decoupler_3",
+    "pack": "Stock",
     "title": "TD-37 Decoupler",
     "mass": 0.36,
     "bulkhead_profiles": [
@@ -523,6 +538,7 @@
   },
   "Decoupler_4": {
     "name": "Decoupler_4",
+    "pack": "MakingHistory",
     "title": "TD-50 Decoupler",
     "mass": 0.64,
     "bulkhead_profiles": [
@@ -572,6 +588,7 @@
   },
   "EnginePlate1p5": {
     "name": "EnginePlate1p5",
+    "pack": "MakingHistory",
     "title": "EP-18 Engine Plate",
     "mass": 0.14,
     "bulkhead_profiles": [
@@ -621,6 +638,7 @@
   },
   "EnginePlate2": {
     "name": "EnginePlate2",
+    "pack": "MakingHistory",
     "title": "EP-25 Engine Plate",
     "mass": 0.25,
     "bulkhead_profiles": [
@@ -670,6 +688,7 @@
   },
   "EnginePlate3": {
     "name": "EnginePlate3",
+    "pack": "MakingHistory",
     "title": "EP-37 Engine Plate",
     "mass": 0.58,
     "bulkhead_profiles": [
@@ -719,6 +738,7 @@
   },
   "EnginePlate4": {
     "name": "EnginePlate4",
+    "pack": "MakingHistory",
     "title": "EP-50 Engine Plate",
     "mass": 1.0,
     "bulkhead_profiles": [
@@ -768,6 +788,7 @@
   },
   "EnginePlate5": {
     "name": "EnginePlate5",
+    "pack": "MakingHistory",
     "title": "EP-12 Engine Plate",
     "mass": 0.062,
     "bulkhead_profiles": [
@@ -817,6 +838,7 @@
   },
   "EquiTriangle0": {
     "name": "EquiTriangle0",
+    "pack": "MakingHistory",
     "title": "SP-T06 Structural Panel",
     "mass": 0.01,
     "bulkhead_profiles": [
@@ -880,6 +902,7 @@
   },
   "EquiTriangle1": {
     "name": "EquiTriangle1",
+    "pack": "MakingHistory",
     "title": "SP-T12 Structural Panel",
     "mass": 0.04,
     "bulkhead_profiles": [
@@ -943,6 +966,7 @@
   },
   "EquiTriangle1p5": {
     "name": "EquiTriangle1p5",
+    "pack": "MakingHistory",
     "title": "SP-T18 Structural Panel",
     "mass": 0.085,
     "bulkhead_profiles": [
@@ -1006,6 +1030,7 @@
   },
   "EquiTriangle2": {
     "name": "EquiTriangle2",
+    "pack": "MakingHistory",
     "title": "SP-T25 Structural Panel",
     "mass": 0.15,
     "bulkhead_profiles": [
@@ -1069,6 +1094,7 @@
   },
   "FuelCell": {
     "name": "FuelCell",
+    "pack": "Stock",
     "title": "Fuel Cell",
     "mass": 0.05,
     "bulkhead_profiles": [
@@ -1104,6 +1130,7 @@
   },
   "FuelCellArray": {
     "name": "FuelCellArray",
+    "pack": "Stock",
     "title": "Fuel Cell Array",
     "mass": 0.24,
     "bulkhead_profiles": [
@@ -1139,6 +1166,7 @@
   },
   "GearFixed": {
     "name": "GearFixed",
+    "pack": "Stock",
     "title": "LY-01 Fixed Landing Gear",
     "mass": 0.022,
     "bulkhead_profiles": [
@@ -1179,6 +1207,7 @@
   },
   "GearFree": {
     "name": "GearFree",
+    "pack": "Stock",
     "title": "LY-05 Steerable Landing Gear",
     "mass": 0.015,
     "bulkhead_profiles": [
@@ -1214,6 +1243,7 @@
   },
   "GearLarge": {
     "name": "GearLarge",
+    "pack": "Stock",
     "title": "LY-99 Extra Large Landing Gear",
     "mass": 0.6,
     "bulkhead_profiles": [
@@ -1249,6 +1279,7 @@
   },
   "GearMedium": {
     "name": "GearMedium",
+    "pack": "Stock",
     "title": "LY-60 Large Landing Gear",
     "mass": 0.4,
     "bulkhead_profiles": [
@@ -1284,6 +1315,7 @@
   },
   "GearSmall": {
     "name": "GearSmall",
+    "pack": "Stock",
     "title": "LY-35 Medium Landing Gear",
     "mass": 0.25,
     "bulkhead_profiles": [
@@ -1319,6 +1351,7 @@
   },
   "GooExperiment": {
     "name": "GooExperiment",
+    "pack": "Stock",
     "title": "Mystery Goo™ Containment Unit\\u0020",
     "mass": 0.05,
     "bulkhead_profiles": [
@@ -1351,6 +1384,7 @@
   },
   "GrapplingDevice": {
     "name": "GrapplingDevice",
+    "pack": "Stock",
     "title": "Advanced Grabbing Unit",
     "mass": 0.075,
     "bulkhead_profiles": [
@@ -1400,6 +1434,7 @@
   },
   "HECS2_ProbeCore": {
     "name": "HECS2_ProbeCore",
+    "pack": "Stock",
     "title": "Probodobodyne HECS2",
     "mass": 0.2,
     "bulkhead_profiles": [
@@ -1458,6 +1493,7 @@
   },
   "HeatShield0": {
     "name": "HeatShield0",
+    "pack": "Stock",
     "title": "Heat Shield (0.625m)",
     "mass": 0.025,
     "bulkhead_profiles": [
@@ -1510,6 +1546,7 @@
   },
   "HeatShield1": {
     "name": "HeatShield1",
+    "pack": "Stock",
     "title": "Heat Shield (1.25m)",
     "mass": 0.1,
     "bulkhead_profiles": [
@@ -1576,6 +1613,7 @@
   },
   "HeatShield1p5": {
     "name": "HeatShield1p5",
+    "pack": "MakingHistory",
     "title": "Heat Shield (1.875m)",
     "mass": 0.3,
     "bulkhead_profiles": [
@@ -1642,6 +1680,7 @@
   },
   "HeatShield2": {
     "name": "HeatShield2",
+    "pack": "Stock",
     "title": "Heat Shield (2.5m)",
     "mass": 0.5,
     "bulkhead_profiles": [
@@ -1708,6 +1747,7 @@
   },
   "HeatShield3": {
     "name": "HeatShield3",
+    "pack": "Stock",
     "title": "Heat Shield (3.75m)",
     "mass": 1.0,
     "bulkhead_profiles": [
@@ -1774,6 +1814,7 @@
   },
   "HighGainAntenna": {
     "name": "HighGainAntenna",
+    "pack": "Stock",
     "title": "Communotron HG-55",
     "mass": 0.075,
     "bulkhead_profiles": [
@@ -1811,6 +1852,7 @@
   },
   "HighGainAntenna5_v2": {
     "name": "HighGainAntenna5_v2",
+    "pack": "Stock",
     "title": "HG-5 High Gain Antenna",
     "mass": 0.07,
     "bulkhead_profiles": [
@@ -1864,6 +1906,7 @@
   },
   "ISRU": {
     "name": "ISRU",
+    "pack": "Stock",
     "title": "Convert-O-Tron 250",
     "mass": 4.25,
     "bulkhead_profiles": [
@@ -1914,6 +1957,7 @@
   },
   "InflatableAirlock": {
     "name": "InflatableAirlock",
+    "pack": "MakingHistory",
     "title": "Inflatable Airlock",
     "mass": 0.1,
     "bulkhead_profiles": [
@@ -1962,6 +2006,7 @@
   },
   "InflatableHeatShield": {
     "name": "InflatableHeatShield",
+    "pack": "Stock",
     "title": "Heat Shield (10m)",
     "mass": 1.5,
     "bulkhead_profiles": [
@@ -2025,6 +2070,7 @@
   },
   "InfraredTelescope": {
     "name": "InfraredTelescope",
+    "pack": "Stock",
     "title": "SENTINEL Infrared Telescope",
     "mass": 0.1,
     "bulkhead_profiles": [
@@ -2060,6 +2106,7 @@
   },
   "IntakeRadialLong": {
     "name": "IntakeRadialLong",
+    "pack": "Stock",
     "title": "Adjustable Ramp Intake (Radial)",
     "mass": 0.01,
     "bulkhead_profiles": [
@@ -2095,6 +2142,7 @@
   },
   "JetEngine": {
     "name": "JetEngine",
+    "pack": "Stock",
     "title": "J-33 \"Wheesley\" Turbofan Engine",
     "mass": 1.5,
     "bulkhead_profiles": [
@@ -2146,6 +2194,7 @@
   },
   "LargeTank": {
     "name": "LargeTank",
+    "pack": "Stock",
     "title": "Large Holding Tank",
     "mass": 2.0,
     "bulkhead_profiles": [
@@ -2212,6 +2261,7 @@
   },
   "Large_Crewed_Lab": {
     "name": "Large_Crewed_Lab",
+    "pack": "Stock",
     "title": "Mobile Processing Lab MPL-LG-2",
     "mass": 3.5,
     "crew_capacity": 2,
@@ -2262,6 +2312,7 @@
   },
   "LaunchEscapeSystem": {
     "name": "LaunchEscapeSystem",
+    "pack": "Stock",
     "title": "Launch Escape System",
     "mass": 0.9,
     "bulkhead_profiles": [
@@ -2310,6 +2361,7 @@
   },
   "LgRadialSolarPanel": {
     "name": "LgRadialSolarPanel",
+    "pack": "Stock",
     "title": "OX-STAT-XL Photovoltaic Panels",
     "mass": 0.04,
     "bulkhead_profiles": [
@@ -2346,6 +2398,7 @@
   },
   "LiquidEngineKE-1": {
     "name": "LiquidEngineKE-1",
+    "pack": "MakingHistory",
     "title": "Kerbodyne KE-1 \"Mastodon\" Liquid Fuel Engine",
     "mass": 5.0,
     "bulkhead_profiles": [
@@ -2422,6 +2475,7 @@
   },
   "LiquidEngineLV-T91": {
     "name": "LiquidEngineLV-T91",
+    "pack": "MakingHistory",
     "title": "LV-T91 \"Cheetah\" Liquid Fuel Engine",
     "mass": 1.0,
     "bulkhead_profiles": [
@@ -2496,6 +2550,7 @@
   },
   "LiquidEngineLV-TX87": {
     "name": "LiquidEngineLV-TX87",
+    "pack": "MakingHistory",
     "title": "LV-TX87 \"Bobcat\" Liquid Fuel Engine",
     "mass": 2.0,
     "bulkhead_profiles": [
@@ -2570,6 +2625,7 @@
   },
   "LiquidEngineRE-I2": {
     "name": "LiquidEngineRE-I2",
+    "pack": "MakingHistory",
     "title": "RE-I2 \"Skiff\" Liquid Fuel Engine",
     "mass": 1.6,
     "bulkhead_profiles": [
@@ -2644,6 +2700,7 @@
   },
   "LiquidEngineRE-J10": {
     "name": "LiquidEngineRE-J10",
+    "pack": "MakingHistory",
     "title": "RE-J10 \"Wolfhound\"  Liquid Fuel Engine",
     "mass": 3.3,
     "bulkhead_profiles": [
@@ -2704,6 +2761,7 @@
   },
   "LiquidEngineRK-7": {
     "name": "LiquidEngineRK-7",
+    "pack": "MakingHistory",
     "title": "RK-7 \"Kodiak\" Liquid Fueled Enine",
     "mass": 1.25,
     "bulkhead_profiles": [
@@ -2778,6 +2836,7 @@
   },
   "LiquidEngineRV-1": {
     "name": "LiquidEngineRV-1",
+    "pack": "MakingHistory",
     "title": "RV-1 \"Cub\" Vernier Engine",
     "mass": 0.18,
     "bulkhead_profiles": [
@@ -2822,6 +2881,7 @@
   },
   "MEMLander": {
     "name": "MEMLander",
+    "pack": "MakingHistory",
     "title": "Munar Excursion Module (M.E.M.)",
     "mass": 1.355,
     "crew_capacity": 2,
@@ -2899,6 +2959,7 @@
   },
   "MK1CrewCabin": {
     "name": "MK1CrewCabin",
+    "pack": "Stock",
     "title": "Mk1 Crew Cabin",
     "mass": 1.0,
     "crew_capacity": 2,
@@ -2954,6 +3015,7 @@
   },
   "MK1Fuselage": {
     "name": "MK1Fuselage",
+    "pack": "Stock",
     "title": "Mk1 Liquid Fuel Fuselage",
     "mass": 0.25,
     "bulkhead_profiles": [
@@ -3020,6 +3082,7 @@
   },
   "MK1IntakeFuselage": {
     "name": "MK1IntakeFuselage",
+    "pack": "Stock",
     "title": "Mk1 Diverterless Supersonic Intake",
     "mass": 0.17,
     "bulkhead_profiles": [
@@ -3087,6 +3150,7 @@
   },
   "Magnetometer": {
     "name": "Magnetometer",
+    "pack": "Stock",
     "title": "Magnetometer Boom",
     "mass": 0.05,
     "bulkhead_profiles": [
@@ -3135,6 +3199,7 @@
   },
   "Mark1Cockpit": {
     "name": "Mark1Cockpit",
+    "pack": "Stock",
     "title": "Mk1 Cockpit",
     "mass": 1.25,
     "crew_capacity": 1,
@@ -3185,6 +3250,7 @@
   },
   "Mark2Cockpit": {
     "name": "Mark2Cockpit",
+    "pack": "Stock",
     "title": "Mk1 Inline Cockpit",
     "mass": 1.0,
     "crew_capacity": 1,
@@ -3244,6 +3310,7 @@
   },
   "MassiveBooster": {
     "name": "MassiveBooster",
+    "pack": "Stock",
     "title": "S1 SRB-KD25k \"Kickback\" Solid Fuel Booster",
     "mass": 4.5,
     "bulkhead_profiles": [
@@ -3320,6 +3387,7 @@
   },
   "MiniDrill": {
     "name": "MiniDrill",
+    "pack": "Stock",
     "title": "Drill-O-Matic Junior' Mining Excavator",
     "mass": 0.25,
     "bulkhead_profiles": [
@@ -3352,6 +3420,7 @@
   },
   "MiniISRU": {
     "name": "MiniISRU",
+    "pack": "Stock",
     "title": "Convert-O-Tron 125",
     "mass": 1.25,
     "bulkhead_profiles": [
@@ -3401,6 +3470,7 @@
   },
   "Mite": {
     "name": "Mite",
+    "pack": "Stock",
     "title": "FM1 \"Mite\" Solid Fuel Booster",
     "mass": 0.075,
     "bulkhead_profiles": [
@@ -3477,6 +3547,7 @@
   },
   "Mk1FuselageStructural": {
     "name": "Mk1FuselageStructural",
+    "pack": "Stock",
     "title": "Structural Fuselage",
     "mass": 0.1,
     "bulkhead_profiles": [
@@ -3540,6 +3611,7 @@
   },
   "Mk2Pod": {
     "name": "Mk2Pod",
+    "pack": "MakingHistory",
     "title": "Mk2 Command Pod",
     "mass": 1.56,
     "crew_capacity": 2,
@@ -3603,6 +3675,7 @@
   },
   "MpoProbe": {
     "name": "MpoProbe",
+    "pack": "Stock",
     "title": "MPO Probe",
     "mass": 0.395,
     "bulkhead_profiles": [
@@ -3663,6 +3736,7 @@
   },
   "MtmStage": {
     "name": "MtmStage",
+    "pack": "Stock",
     "title": "MTM Stage",
     "mass": 0.415,
     "bulkhead_profiles": [
@@ -3778,6 +3852,7 @@
   },
   "OrbitalScanner": {
     "name": "OrbitalScanner",
+    "pack": "Stock",
     "title": "M4435 Narrow-Band Scanner",
     "mass": 0.1,
     "bulkhead_profiles": [
@@ -3827,6 +3902,7 @@
   },
   "Panel0": {
     "name": "Panel0",
+    "pack": "MakingHistory",
     "title": "SP-S06 Structural Panel",
     "mass": 0.02,
     "bulkhead_profiles": [
@@ -4058,6 +4134,7 @@
   },
   "Panel1": {
     "name": "Panel1",
+    "pack": "MakingHistory",
     "title": "SP-S12 Structural Panel",
     "mass": 0.075,
     "bulkhead_profiles": [
@@ -4289,6 +4366,7 @@
   },
   "Panel1p5": {
     "name": "Panel1p5",
+    "pack": "MakingHistory",
     "title": "SP-S18 Structural Panel",
     "mass": 0.17,
     "bulkhead_profiles": [
@@ -4520,6 +4598,7 @@
   },
   "Panel2": {
     "name": "Panel2",
+    "pack": "MakingHistory",
     "title": "SP-S25 Structural Panel",
     "mass": 0.3,
     "bulkhead_profiles": [
@@ -4751,6 +4830,7 @@
   },
   "Pollux": {
     "name": "Pollux",
+    "pack": "MakingHistory",
     "title": "THK \"Pollux\" Solid Fuel Booster",
     "mass": 8.0,
     "bulkhead_profiles": [
@@ -4827,6 +4907,7 @@
   },
   "R8winglet": {
     "name": "R8winglet",
+    "pack": "Stock",
     "title": "AV-R8 Winglet",
     "mass": 0.1,
     "bulkhead_profiles": [
@@ -4864,6 +4945,7 @@
   },
   "RAPIER": {
     "name": "RAPIER",
+    "pack": "Stock",
     "title": "CR-7 R.A.P.I.E.R. Engine",
     "mass": 2.0,
     "bulkhead_profiles": [
@@ -4929,6 +5011,7 @@
   },
   "RCSBlock_v2": {
     "name": "RCSBlock_v2",
+    "pack": "Stock",
     "title": "RV-105 RCS Thruster Block",
     "mass": 0.04,
     "bulkhead_profiles": [
@@ -4961,6 +5044,7 @@
   },
   "RCSFuelTank": {
     "name": "RCSFuelTank",
+    "pack": "Stock",
     "title": "FL-R120 RCS Fuel Tank",
     "mass": 0.08,
     "bulkhead_profiles": [
@@ -5013,6 +5097,7 @@
   },
   "RCSLinearSmall": {
     "name": "RCSLinearSmall",
+    "pack": "Stock",
     "title": "Place Anywhere 1 Linear RCS Port",
     "mass": 0.00125,
     "bulkhead_profiles": [
@@ -5045,6 +5130,7 @@
   },
   "RCSTank1-2": {
     "name": "RCSTank1-2",
+    "pack": "Stock",
     "title": "FL-R750 RCS Fuel Tank",
     "mass": 0.4,
     "bulkhead_profiles": [
@@ -5097,6 +5183,7 @@
   },
   "RCSblock_01_small": {
     "name": "RCSblock_01_small",
+    "pack": "Stock",
     "title": "RV-1X Variable Thruster Block",
     "mass": 0.005,
     "bulkhead_profiles": [
@@ -5129,6 +5216,7 @@
   },
   "RadialDrill": {
     "name": "RadialDrill",
+    "pack": "Stock",
     "title": "Drill-O-Matic' Mining Excavator",
     "mass": 1.25,
     "bulkhead_profiles": [
@@ -5161,6 +5249,7 @@
   },
   "RadialOreTank": {
     "name": "RadialOreTank",
+    "pack": "Stock",
     "title": "Radial Holding Tank",
     "mass": 0.125,
     "bulkhead_profiles": [
@@ -5196,6 +5285,7 @@
   },
   "RelayAntenna100": {
     "name": "RelayAntenna100",
+    "pack": "Stock",
     "title": "RA-100 Relay Antenna",
     "mass": 0.65,
     "bulkhead_profiles": [
@@ -5249,6 +5339,7 @@
   },
   "RelayAntenna5": {
     "name": "RelayAntenna5",
+    "pack": "Stock",
     "title": "RA-2 Relay Antenna",
     "mass": 0.15,
     "bulkhead_profiles": [
@@ -5302,6 +5393,7 @@
   },
   "RelayAntenna50": {
     "name": "RelayAntenna50",
+    "pack": "Stock",
     "title": "RA-15 Relay Antenna",
     "mass": 0.3,
     "bulkhead_profiles": [
@@ -5355,6 +5447,7 @@
   },
   "ReleaseValve": {
     "name": "ReleaseValve",
+    "pack": "Stock",
     "title": "FTE-1 Drain Valve",
     "mass": 0.01,
     "bulkhead_profiles": [
@@ -5387,6 +5480,7 @@
   },
   "Rockomax16_BW": {
     "name": "Rockomax16_BW",
+    "pack": "Stock",
     "title": "Rockomax X200-16 Fuel Tank",
     "mass": 1.0,
     "bulkhead_profiles": [
@@ -5454,6 +5548,7 @@
   },
   "Rockomax32_BW": {
     "name": "Rockomax32_BW",
+    "pack": "Stock",
     "title": "Rockomax X200-32 Fuel Tank",
     "mass": 2.0,
     "bulkhead_profiles": [
@@ -5521,6 +5616,7 @@
   },
   "Rockomax64_BW": {
     "name": "Rockomax64_BW",
+    "pack": "Stock",
     "title": "Rockomax Jumbo-64 Fuel Tank",
     "mass": 4.0,
     "bulkhead_profiles": [
@@ -5588,6 +5684,7 @@
   },
   "Rockomax8BW": {
     "name": "Rockomax8BW",
+    "pack": "Stock",
     "title": "Rockomax X200-8 Fuel Tank",
     "mass": 0.5,
     "bulkhead_profiles": [
@@ -5655,6 +5752,7 @@
   },
   "SSME": {
     "name": "SSME",
+    "pack": "Stock",
     "title": "S3 KS-25 \"Vector\" Liquid Fuel Engine",
     "mass": 4.0,
     "bulkhead_profiles": [
@@ -5716,6 +5814,7 @@
   },
   "ScienceBox": {
     "name": "ScienceBox",
+    "pack": "Stock",
     "title": "Experiment Storage Unit",
     "mass": 0.05,
     "bulkhead_profiles": [
@@ -5778,6 +5877,7 @@
   },
   "Separator_0": {
     "name": "Separator_0",
+    "pack": "Stock",
     "title": "TS-06 Stack Separator",
     "mass": 0.01,
     "bulkhead_profiles": [
@@ -5827,6 +5927,7 @@
   },
   "Separator_1": {
     "name": "Separator_1",
+    "pack": "Stock",
     "title": "TS-12 Stack Separator",
     "mass": 0.05,
     "bulkhead_profiles": [
@@ -5876,6 +5977,7 @@
   },
   "Separator_1p5": {
     "name": "Separator_1p5",
+    "pack": "MakingHistory",
     "title": "TS-18 Stack Separator",
     "mass": 0.12,
     "bulkhead_profiles": [
@@ -5925,6 +6027,7 @@
   },
   "Separator_2": {
     "name": "Separator_2",
+    "pack": "Stock",
     "title": "TS-25 Stack Separator",
     "mass": 0.21,
     "bulkhead_profiles": [
@@ -5974,6 +6077,7 @@
   },
   "Separator_3": {
     "name": "Separator_3",
+    "pack": "Stock",
     "title": "TS-37 Stack Separator",
     "mass": 0.48,
     "bulkhead_profiles": [
@@ -6023,6 +6127,7 @@
   },
   "Separator_4": {
     "name": "Separator_4",
+    "pack": "MakingHistory",
     "title": "TS-50 Stack Separator",
     "mass": 0.85,
     "bulkhead_profiles": [
@@ -6072,6 +6177,7 @@
   },
   "ServiceBay_125_v2": {
     "name": "ServiceBay_125_v2",
+    "pack": "Stock",
     "title": "Service Bay (1.25m)",
     "mass": 0.1,
     "bulkhead_profiles": [
@@ -6149,6 +6255,7 @@
   },
   "ServiceBay_250_v2": {
     "name": "ServiceBay_250_v2",
+    "pack": "Stock",
     "title": "Service Bay (2.5m)",
     "mass": 0.3,
     "bulkhead_profiles": [
@@ -6226,6 +6333,7 @@
   },
   "ServiceModule18": {
     "name": "ServiceModule18",
+    "pack": "MakingHistory",
     "title": "SM-18 Service Module",
     "mass": 0.15,
     "bulkhead_profiles": [
@@ -6275,6 +6383,7 @@
   },
   "ServiceModule25": {
     "name": "ServiceModule25",
+    "pack": "MakingHistory",
     "title": "SM-25 Service Module",
     "mass": 0.5,
     "bulkhead_profiles": [
@@ -6413,6 +6522,7 @@
   },
   "Shrimp": {
     "name": "Shrimp",
+    "pack": "Stock",
     "title": "F3S0 \"Shrimp\" Solid Fuel Booster",
     "mass": 0.15,
     "bulkhead_profiles": [
@@ -6489,6 +6599,7 @@
   },
   "Size1p5_Monoprop": {
     "name": "Size1p5_Monoprop",
+    "pack": "MakingHistory",
     "title": "FL-R400 RCS Fuel Tank",
     "mass": 0.25,
     "bulkhead_profiles": [
@@ -6541,6 +6652,7 @@
   },
   "Size1p5_Size0_Adapter_01": {
     "name": "Size1p5_Size0_Adapter_01",
+    "pack": "MakingHistory",
     "title": "FL-A150 Fuel Tank Adapter",
     "mass": 0.1,
     "bulkhead_profiles": [
@@ -6596,6 +6708,7 @@
   },
   "Size1p5_Size1_Adapter_01": {
     "name": "Size1p5_Size1_Adapter_01",
+    "pack": "MakingHistory",
     "title": "FL-A151L Fuel Tank Adapter",
     "mass": 0.375,
     "bulkhead_profiles": [
@@ -6651,6 +6764,7 @@
   },
   "Size1p5_Size1_Adapter_02": {
     "name": "Size1p5_Size1_Adapter_02",
+    "pack": "MakingHistory",
     "title": "FL-A151S Fuel Tank Adapter",
     "mass": 0.1,
     "bulkhead_profiles": [
@@ -6706,6 +6820,7 @@
   },
   "Size1p5_Size2_Adapter_01": {
     "name": "Size1p5_Size2_Adapter_01",
+    "pack": "MakingHistory",
     "title": "FL-A215 Fuel Tank Adapter",
     "mass": 0.75,
     "bulkhead_profiles": [
@@ -6761,6 +6876,7 @@
   },
   "Size1p5_Strut_Decoupler": {
     "name": "Size1p5_Strut_Decoupler",
+    "pack": "MakingHistory",
     "title": "Size 1.5 Decoupler",
     "mass": 0.09,
     "bulkhead_profiles": [
@@ -6811,6 +6927,7 @@
   },
   "Size1p5_Tank_01": {
     "name": "Size1p5_Tank_01",
+    "pack": "MakingHistory",
     "title": "FL-TX220 Fuel Tank",
     "mass": 0.1375,
     "bulkhead_profiles": [
@@ -6878,6 +6995,7 @@
   },
   "Size1p5_Tank_02": {
     "name": "Size1p5_Tank_02",
+    "pack": "MakingHistory",
     "title": "FL-TX440 Fuel Tank",
     "mass": 0.275,
     "bulkhead_profiles": [
@@ -6945,6 +7063,7 @@
   },
   "Size1p5_Tank_03": {
     "name": "Size1p5_Tank_03",
+    "pack": "MakingHistory",
     "title": "FL-TX900 Fuel Tank",
     "mass": 0.5625,
     "bulkhead_profiles": [
@@ -7012,6 +7131,7 @@
   },
   "Size1p5_Tank_04": {
     "name": "Size1p5_Tank_04",
+    "pack": "MakingHistory",
     "title": "FL-TX1800 Fuel Tank",
     "mass": 1.125,
     "bulkhead_profiles": [
@@ -7079,6 +7199,7 @@
   },
   "Size1p5_Tank_05": {
     "name": "Size1p5_Tank_05",
+    "pack": "MakingHistory",
     "title": "FL-C1000 Fuel Tank",
     "mass": 0.75,
     "bulkhead_profiles": [
@@ -7148,6 +7269,7 @@
   },
   "Size1to0ServiceModule": {
     "name": "Size1to0ServiceModule",
+    "pack": "MakingHistory",
     "title": "SM-6A Service Module",
     "mass": 0.075,
     "bulkhead_profiles": [
@@ -7197,6 +7319,7 @@
   },
   "Size2LFB_v2": {
     "name": "Size2LFB_v2",
+    "pack": "Stock",
     "title": "LFB KR-1x2 \"Twin-Boar\" Liquid Fuel Engine",
     "mass": 10.5,
     "bulkhead_profiles": [
@@ -7261,6 +7384,7 @@
   },
   "Size3AdvancedEngine": {
     "name": "Size3AdvancedEngine",
+    "pack": "Stock",
     "title": "Kerbodyne KR-2L+ \"Rhino\" Liquid Fuel Engine",
     "mass": 9.0,
     "bulkhead_profiles": [
@@ -7321,6 +7445,7 @@
   },
   "Size3EngineCluster": {
     "name": "Size3EngineCluster",
+    "pack": "Stock",
     "title": "S3 KS-25x4 \"Mammoth\" Liquid Fuel Engine",
     "mass": 15.0,
     "bulkhead_profiles": [
@@ -7367,6 +7492,7 @@
   },
   "Size3LargeTank": {
     "name": "Size3LargeTank",
+    "pack": "Stock",
     "title": "Kerbodyne S3-14400 Tank",
     "mass": 9.0,
     "bulkhead_profiles": [
@@ -7434,6 +7560,7 @@
   },
   "Size3MediumTank": {
     "name": "Size3MediumTank",
+    "pack": "Stock",
     "title": "Kerbodyne S3-7200 Tank",
     "mass": 4.5,
     "bulkhead_profiles": [
@@ -7501,6 +7628,7 @@
   },
   "Size3SmallTank": {
     "name": "Size3SmallTank",
+    "pack": "Stock",
     "title": "Kerbodyne S3-3600 Tank",
     "mass": 2.25,
     "bulkhead_profiles": [
@@ -7568,6 +7696,7 @@
   },
   "Size3To2Adapter_v2": {
     "name": "Size3To2Adapter_v2",
+    "pack": "Stock",
     "title": "Kerbodyne ADTP-2-3",
     "mass": 1.875,
     "bulkhead_profiles": [
@@ -7622,6 +7751,7 @@
   },
   "Size3_Size4_Adapter_01": {
     "name": "Size3_Size4_Adapter_01",
+    "pack": "MakingHistory",
     "title": "Kerbodyne S3-S4 Adapter Tank",
     "mass": 4.0,
     "bulkhead_profiles": [
@@ -7690,6 +7820,7 @@
   },
   "Size4_EngineAdapter_01": {
     "name": "Size4_EngineAdapter_01",
+    "pack": "MakingHistory",
     "title": "Kerbodyne Engine Cluster Adapter Tank",
     "mass": 5.625,
     "bulkhead_profiles": [
@@ -7801,6 +7932,7 @@
   },
   "Size4_Tank_01": {
     "name": "Size4_Tank_01",
+    "pack": "MakingHistory",
     "title": "Kerbodyne S4-64 Fuel Tank",
     "mass": 4.0,
     "bulkhead_profiles": [
@@ -7868,6 +8000,7 @@
   },
   "Size4_Tank_02": {
     "name": "Size4_Tank_02",
+    "pack": "MakingHistory",
     "title": "Kerbodyne S4-128 Fuel Tank",
     "mass": 8.0,
     "bulkhead_profiles": [
@@ -7935,6 +8068,7 @@
   },
   "Size4_Tank_03": {
     "name": "Size4_Tank_03",
+    "pack": "MakingHistory",
     "title": "Kerbodyne S4-256 Fuel Tank",
     "mass": 16.0,
     "bulkhead_profiles": [
@@ -8002,6 +8136,7 @@
   },
   "Size4_Tank_04": {
     "name": "Size4_Tank_04",
+    "pack": "MakingHistory",
     "title": "Kerbodyne S4-512 Fuel Tank",
     "mass": 32.0,
     "bulkhead_profiles": [
@@ -8069,6 +8204,7 @@
   },
   "Size_1_5_Cone": {
     "name": "Size_1_5_Cone",
+    "pack": "MakingHistory",
     "title": "Protective Rocket Nosecone Mk5A",
     "mass": 0.12,
     "bulkhead_profiles": [
@@ -8104,6 +8240,7 @@
   },
   "SmallGearBay": {
     "name": "SmallGearBay",
+    "pack": "Stock",
     "title": "LY-10 Small Landing Gear",
     "mass": 0.045,
     "bulkhead_profiles": [
@@ -8139,6 +8276,7 @@
   },
   "SmallTank": {
     "name": "SmallTank",
+    "pack": "Stock",
     "title": "Small Holding Tank",
     "mass": 0.5,
     "bulkhead_profiles": [
@@ -8205,6 +8343,7 @@
   },
   "StandardCtrlSrf": {
     "name": "StandardCtrlSrf",
+    "pack": "Stock",
     "title": "Elevon 1",
     "mass": 0.05,
     "bulkhead_profiles": [
@@ -8242,6 +8381,7 @@
   },
   "SurfAntenna": {
     "name": "SurfAntenna",
+    "pack": "Stock",
     "title": "Communotron 16-S",
     "mass": 0.015,
     "bulkhead_profiles": [
@@ -8279,6 +8419,7 @@
   },
   "SurfaceScanner": {
     "name": "SurfaceScanner",
+    "pack": "Stock",
     "title": "Surface Scanning Module",
     "mass": 0.005,
     "bulkhead_profiles": [
@@ -8311,6 +8452,7 @@
   },
   "SurveyScanner": {
     "name": "SurveyScanner",
+    "pack": "Stock",
     "title": "M700 Survey Scanner",
     "mass": 0.2,
     "bulkhead_profiles": [
@@ -8360,6 +8502,7 @@
   },
   "Thoroughbred": {
     "name": "Thoroughbred",
+    "pack": "Stock",
     "title": "S2-17 \"Thoroughbred\" Solid Fuel Booster",
     "mass": 10.0,
     "bulkhead_profiles": [
@@ -8436,6 +8579,7 @@
   },
   "Triangle0": {
     "name": "Triangle0",
+    "pack": "MakingHistory",
     "title": "SP-R06 Structural Panel",
     "mass": 0.01,
     "bulkhead_profiles": [
@@ -8597,6 +8741,7 @@
   },
   "Triangle1": {
     "name": "Triangle1",
+    "pack": "MakingHistory",
     "title": "SP-R12 Structural Panel",
     "mass": 0.04,
     "bulkhead_profiles": [
@@ -8758,6 +8903,7 @@
   },
   "Triangle1p5": {
     "name": "Triangle1p5",
+    "pack": "MakingHistory",
     "title": "SP-R18 Structural Panel",
     "mass": 0.085,
     "bulkhead_profiles": [
@@ -8919,6 +9065,7 @@
   },
   "Triangle2": {
     "name": "Triangle2",
+    "pack": "MakingHistory",
     "title": "SP-R25 Structural Panel",
     "mass": 0.15,
     "bulkhead_profiles": [
@@ -9080,6 +9227,7 @@
   },
   "Tube1": {
     "name": "Tube1",
+    "pack": "MakingHistory",
     "title": "T-12 Structural Tube",
     "mass": 0.075,
     "bulkhead_profiles": [
@@ -9157,6 +9305,7 @@
   },
   "Tube1p5": {
     "name": "Tube1p5",
+    "pack": "MakingHistory",
     "title": "T-18 Structural Tube",
     "mass": 0.075,
     "bulkhead_profiles": [
@@ -9234,6 +9383,7 @@
   },
   "Tube2": {
     "name": "Tube2",
+    "pack": "MakingHistory",
     "title": "T-25 Structural Tube",
     "mass": 0.075,
     "bulkhead_profiles": [
@@ -9311,6 +9461,7 @@
   },
   "Tube3": {
     "name": "Tube3",
+    "pack": "MakingHistory",
     "title": "T-37 Structural Tube",
     "mass": 0.075,
     "bulkhead_profiles": [
@@ -9388,6 +9539,7 @@
   },
   "Tube4": {
     "name": "Tube4",
+    "pack": "MakingHistory",
     "title": "T-50 Structural Tube",
     "mass": 0.075,
     "bulkhead_profiles": [
@@ -9465,6 +9617,7 @@
   },
   "adapterEngines": {
     "name": "adapterEngines",
+    "pack": "Stock",
     "title": "Mk3 Engine Mount",
     "mass": 0.7,
     "bulkhead_profiles": [
@@ -9570,6 +9723,7 @@
   },
   "adapterLargeSmallBi": {
     "name": "adapterLargeSmallBi",
+    "pack": "Stock",
     "title": "TVR-200L Stack Bi-Adapter",
     "mass": 0.1,
     "bulkhead_profiles": [
@@ -9634,6 +9788,7 @@
   },
   "adapterLargeSmallQuad": {
     "name": "adapterLargeSmallQuad",
+    "pack": "Stock",
     "title": "TVR-400L Stack Quad-Adapter",
     "mass": 0.2,
     "bulkhead_profiles": [
@@ -9726,6 +9881,7 @@
   },
   "adapterLargeSmallTri": {
     "name": "adapterLargeSmallTri",
+    "pack": "Stock",
     "title": "TVR-300L Stack Tri-Adapter",
     "mass": 0.15,
     "bulkhead_profiles": [
@@ -9804,6 +9960,7 @@
   },
   "adapterMk3-Mk2": {
     "name": "adapterMk3-Mk2",
+    "pack": "Stock",
     "title": "Mk3 to Mk2 Adapter",
     "mass": 1.43,
     "bulkhead_profiles": [
@@ -9872,6 +10029,7 @@
   },
   "adapterMk3-Size2": {
     "name": "adapterMk3-Size2",
+    "pack": "Stock",
     "title": "Mk3 to 2.5m Adapter",
     "mass": 1.79,
     "bulkhead_profiles": [
@@ -9940,6 +10098,7 @@
   },
   "adapterMk3-Size2Slant": {
     "name": "adapterMk3-Size2Slant",
+    "pack": "Stock",
     "title": "Mk3 to 2.5m Adapter Slanted",
     "mass": 1.79,
     "bulkhead_profiles": [
@@ -10008,6 +10167,7 @@
   },
   "adapterSize2-Mk2": {
     "name": "adapterSize2-Mk2",
+    "pack": "Stock",
     "title": "2.5m to Mk2 Adapter",
     "mass": 0.57,
     "bulkhead_profiles": [
@@ -10076,6 +10236,7 @@
   },
   "adapterSize2-Size1": {
     "name": "adapterSize2-Size1",
+    "pack": "Stock",
     "title": "C7 Brand Adapter - 2.5m to 1.25m",
     "mass": 0.57,
     "bulkhead_profiles": [
@@ -10144,6 +10305,7 @@
   },
   "adapterSize2-Size1Slant": {
     "name": "adapterSize2-Size1Slant",
+    "pack": "Stock",
     "title": "C7 Brand Adapter Slanted - 2.5m to 1.25m",
     "mass": 0.57,
     "bulkhead_profiles": [
@@ -10212,6 +10374,7 @@
   },
   "adapterSize3-Mk3": {
     "name": "adapterSize3-Mk3",
+    "pack": "Stock",
     "title": "Mk3 to 3.75m Adapter",
     "mass": 1.79,
     "bulkhead_profiles": [
@@ -10280,6 +10443,7 @@
   },
   "adapterSmallMiniShort": {
     "name": "adapterSmallMiniShort",
+    "pack": "Stock",
     "title": "FL-A5 Adapter",
     "mass": 0.04,
     "bulkhead_profiles": [
@@ -10330,6 +10494,7 @@
   },
   "adapterSmallMiniTall": {
     "name": "adapterSmallMiniTall",
+    "pack": "Stock",
     "title": "FL-A10 Adapter",
     "mass": 0.05,
     "bulkhead_profiles": [
@@ -10380,6 +10545,7 @@
   },
   "advSasModule": {
     "name": "advSasModule",
+    "pack": "Stock",
     "title": "Advanced Inline Stabilizer",
     "mass": 0.1,
     "bulkhead_profiles": [
@@ -10429,6 +10595,7 @@
   },
   "airScoop": {
     "name": "airScoop",
+    "pack": "Stock",
     "title": "XM-G50 Radial Air Intake",
     "mass": 0.02,
     "bulkhead_profiles": [
@@ -10464,6 +10631,7 @@
   },
   "airbrake1": {
     "name": "airbrake1",
+    "pack": "Stock",
     "title": "A.I.R.B.R.A.K.E.S",
     "mass": 0.05,
     "bulkhead_profiles": [
@@ -10496,6 +10664,7 @@
   },
   "airlinerCtrlSrf": {
     "name": "airlinerCtrlSrf",
+    "pack": "Stock",
     "title": "FAT-455 Aeroplane Control Surface",
     "mass": 0.17,
     "bulkhead_profiles": [
@@ -10533,6 +10702,7 @@
   },
   "airlinerMainWing": {
     "name": "airlinerMainWing",
+    "pack": "Stock",
     "title": "FAT-455 Aeroplane Main Wing",
     "mass": 0.78,
     "bulkhead_profiles": [
@@ -10573,6 +10743,7 @@
   },
   "airlinerTailFin": {
     "name": "airlinerTailFin",
+    "pack": "Stock",
     "title": "FAT-455 Aeroplane Tail Fin",
     "mass": 0.36,
     "bulkhead_profiles": [
@@ -10610,6 +10781,7 @@
   },
   "airplaneTail": {
     "name": "airplaneTail",
+    "pack": "Stock",
     "title": "Tail Connector A",
     "mass": 0.2,
     "bulkhead_profiles": [
@@ -10663,6 +10835,7 @@
   },
   "airplaneTailB": {
     "name": "airplaneTailB",
+    "pack": "Stock",
     "title": "Tail Connector B",
     "mass": 0.2,
     "bulkhead_profiles": [
@@ -10716,6 +10889,7 @@
   },
   "asasmodule1-2": {
     "name": "asasmodule1-2",
+    "pack": "Stock",
     "title": "Advanced Reaction Wheel Module, Large",
     "mass": 0.2,
     "bulkhead_profiles": [
@@ -10765,6 +10939,7 @@
   },
   "avionicsNoseCone": {
     "name": "avionicsNoseCone",
+    "pack": "Stock",
     "title": "CH-J3 Fly-By-Wire Avionics Hub",
     "mass": 0.08,
     "bulkhead_profiles": [
@@ -10801,6 +10976,7 @@
   },
   "basicFin": {
     "name": "basicFin",
+    "pack": "Stock",
     "title": "Basic Fin",
     "mass": 0.01,
     "bulkhead_profiles": [
@@ -10838,6 +11014,7 @@
   },
   "batteryBank": {
     "name": "batteryBank",
+    "pack": "Stock",
     "title": "Z-1k Rechargeable Battery Bank",
     "mass": 0.05,
     "bulkhead_profiles": [
@@ -10890,6 +11067,7 @@
   },
   "batteryBankLarge": {
     "name": "batteryBankLarge",
+    "pack": "Stock",
     "title": "Z-4K Rechargeable Battery Bank",
     "mass": 0.2,
     "bulkhead_profiles": [
@@ -10942,6 +11120,7 @@
   },
   "batteryBankMini": {
     "name": "batteryBankMini",
+    "pack": "Stock",
     "title": "Z-200 Rechargeable Battery Bank",
     "mass": 0.01,
     "bulkhead_profiles": [
@@ -11007,6 +11186,7 @@
   },
   "batteryPack": {
     "name": "batteryPack",
+    "pack": "Stock",
     "title": "Z-100 Rechargeable Battery Pack",
     "mass": 0.005,
     "bulkhead_profiles": [
@@ -11042,6 +11222,7 @@
   },
   "cargoContainer": {
     "name": "cargoContainer",
+    "pack": "Stock",
     "title": "SEQ-9 Container Module",
     "mass": 0.15,
     "bulkhead_profiles": [
@@ -11091,6 +11272,7 @@
   },
   "commDish": {
     "name": "commDish",
+    "pack": "Stock",
     "title": "Communotron 88-88",
     "mass": 0.1,
     "bulkhead_profiles": [
@@ -11145,6 +11327,7 @@
   },
   "crewCabin": {
     "name": "crewCabin",
+    "pack": "Stock",
     "title": "PPD-10 Hitchhiker Storage Container",
     "mass": 2.25,
     "crew_capacity": 4,
@@ -11195,6 +11378,7 @@
   },
   "cupola": {
     "name": "cupola",
+    "pack": "Stock",
     "title": "PPD-12 Cupola Module",
     "mass": 0.94,
     "crew_capacity": 1,
@@ -11255,6 +11439,7 @@
   },
   "deltaWing": {
     "name": "deltaWing",
+    "pack": "Stock",
     "title": "Delta Wing",
     "mass": 0.2,
     "bulkhead_profiles": [
@@ -11292,6 +11477,7 @@
   },
   "delta_small": {
     "name": "delta_small",
+    "pack": "Stock",
     "title": "Small Delta Wing",
     "mass": 0.05,
     "bulkhead_profiles": [
@@ -11329,6 +11515,7 @@
   },
   "dockingPort1": {
     "name": "dockingPort1",
+    "pack": "Stock",
     "title": "Clamp-O-Tron Shielded Docking Port",
     "mass": 0.1,
     "bulkhead_profiles": [
@@ -11377,6 +11564,7 @@
   },
   "dockingPort2": {
     "name": "dockingPort2",
+    "pack": "Stock",
     "title": "Clamp-O-Tron Docking Port",
     "mass": 0.05,
     "bulkhead_profiles": [
@@ -11440,6 +11628,7 @@
   },
   "dockingPort3": {
     "name": "dockingPort3",
+    "pack": "Stock",
     "title": "Clamp-O-Tron Docking Port Jr.",
     "mass": 0.02,
     "bulkhead_profiles": [
@@ -11503,6 +11692,7 @@
   },
   "dockingPortLarge": {
     "name": "dockingPortLarge",
+    "pack": "Stock",
     "title": "Clamp-O-Tron Docking Port Sr.",
     "mass": 0.2,
     "bulkhead_profiles": [
@@ -11552,6 +11742,7 @@
   },
   "dockingPortLateral": {
     "name": "dockingPortLateral",
+    "pack": "Stock",
     "title": "Inline Clamp-O-Tron",
     "mass": 0.3,
     "bulkhead_profiles": [
@@ -11601,6 +11792,7 @@
   },
   "domeLight1": {
     "name": "domeLight1",
+    "pack": "Stock",
     "title": "Domelight Mk1",
     "mass": 0.002,
     "bulkhead_profiles": [
@@ -11633,6 +11825,7 @@
   },
   "elevon2": {
     "name": "elevon2",
+    "pack": "Stock",
     "title": "Elevon 2",
     "mass": 0.06,
     "bulkhead_profiles": [
@@ -11670,6 +11863,7 @@
   },
   "elevon3": {
     "name": "elevon3",
+    "pack": "Stock",
     "title": "Elevon 3",
     "mass": 0.08,
     "bulkhead_profiles": [
@@ -11707,6 +11901,7 @@
   },
   "elevon5": {
     "name": "elevon5",
+    "pack": "Stock",
     "title": "Elevon 5",
     "mass": 0.08,
     "bulkhead_profiles": [
@@ -11744,6 +11939,7 @@
   },
   "engineLargeSkipper_v2": {
     "name": "engineLargeSkipper_v2",
+    "pack": "Stock",
     "title": "RE-I5 \"Skipper\" Liquid Fuel Engine",
     "mass": 3.0,
     "bulkhead_profiles": [
@@ -11804,6 +12000,7 @@
   },
   "evaChute": {
     "name": "evaChute",
+    "pack": "Stock",
     "title": "Personal Parachute",
     "mass": 0.004,
     "bulkhead_profiles": [],
@@ -11821,6 +12018,7 @@
   },
   "evaCylinder": {
     "name": "evaCylinder",
+    "pack": "Stock",
     "title": "EVA Fuel Cylinders",
     "mass": 0.005,
     "bulkhead_profiles": [],
@@ -11846,6 +12044,7 @@
   },
   "evaJetpack": {
     "name": "evaJetpack",
+    "pack": "Stock",
     "title": "EVA Jetpack",
     "mass": 0.02,
     "bulkhead_profiles": [],
@@ -11866,6 +12065,7 @@
   },
   "evaRepairKit": {
     "name": "evaRepairKit",
+    "pack": "Stock",
     "title": "EVA Repair Kit",
     "mass": 0.005,
     "bulkhead_profiles": [],
@@ -11888,6 +12088,7 @@
   },
   "evaScienceKit": {
     "name": "evaScienceKit",
+    "pack": "Stock",
     "title": "EVA Experiments Kit",
     "mass": 0.015,
     "bulkhead_profiles": [],
@@ -11910,6 +12111,7 @@
   },
   "externalTankCapsule": {
     "name": "externalTankCapsule",
+    "pack": "Stock",
     "title": "R-11 'Baguette' External Tank",
     "mass": 0.03375,
     "bulkhead_profiles": [
@@ -11946,6 +12148,7 @@
   },
   "externalTankRound": {
     "name": "externalTankRound",
+    "pack": "Stock",
     "title": "R-4 'Dumpling' External Tank",
     "mass": 0.01375,
     "bulkhead_profiles": [
@@ -11982,6 +12185,7 @@
   },
   "externalTankToroid": {
     "name": "externalTankToroid",
+    "pack": "Stock",
     "title": "R-12 'Doughnut' External Tank",
     "mass": 0.0375,
     "bulkhead_profiles": [
@@ -12036,6 +12240,7 @@
   },
   "fairingSize1": {
     "name": "fairingSize1",
+    "pack": "Stock",
     "title": "AE-FF1 Airstream Protective Shell (1.25m)",
     "mass": 0.075,
     "bulkhead_profiles": [
@@ -12253,6 +12458,7 @@
   },
   "fairingSize1p5": {
     "name": "fairingSize1p5",
+    "pack": "MakingHistory",
     "title": "AE-FF1.5 Airstream Protective Shell (1.875m) //Needs new autoloc for size",
     "mass": 0.15,
     "bulkhead_profiles": [
@@ -12470,6 +12676,7 @@
   },
   "fairingSize2": {
     "name": "fairingSize2",
+    "pack": "Stock",
     "title": "AE-FF2 Airstream Protective Shell (2.5m)",
     "mass": 0.175,
     "bulkhead_profiles": [
@@ -12687,6 +12894,7 @@
   },
   "fairingSize3": {
     "name": "fairingSize3",
+    "pack": "Stock",
     "title": "AE-FF3 Airstream Protective Shell (3.75m)",
     "mass": 0.475,
     "bulkhead_profiles": [
@@ -12904,6 +13112,7 @@
   },
   "fairingSize4": {
     "name": "fairingSize4",
+    "pack": "MakingHistory",
     "title": "AE-FF5 Airstream Protective Shell (5m) //Needs autoloc with new size",
     "mass": 0.8,
     "bulkhead_profiles": [
@@ -13121,6 +13330,7 @@
   },
   "fireworksLauncherBig": {
     "name": "fireworksLauncherBig",
+    "pack": "Stock",
     "title": "Starshot-32",
     "mass": 0.03,
     "bulkhead_profiles": [
@@ -13169,6 +13379,7 @@
   },
   "fireworksLauncherSmall": {
     "name": "fireworksLauncherSmall",
+    "pack": "Stock",
     "title": "Starshot-8",
     "mass": 0.00125,
     "bulkhead_profiles": [
@@ -13217,6 +13428,7 @@
   },
   "flag": {
     "name": "flag",
+    "pack": "Stock",
     "title": "",
     "mass": 0.0,
     "bulkhead_profiles": [],
@@ -13227,6 +13439,7 @@
   },
   "flagPartFlat": {
     "name": "flagPartFlat",
+    "pack": "Stock",
     "title": "RFP-F Flag Flat",
     "mass": 0.00015,
     "bulkhead_profiles": [
@@ -13259,6 +13472,7 @@
   },
   "flagPartSize0": {
     "name": "flagPartSize0",
+    "pack": "Stock",
     "title": "RFP-0 Flag (.625m)",
     "mass": 2.5e-05,
     "bulkhead_profiles": [
@@ -13292,6 +13506,7 @@
   },
   "flagPartSize1": {
     "name": "flagPartSize1",
+    "pack": "Stock",
     "title": "RFP-1 Flag  (1.25m)",
     "mass": 5e-05,
     "bulkhead_profiles": [
@@ -13325,6 +13540,7 @@
   },
   "flagPartSize1p5": {
     "name": "flagPartSize1p5",
+    "pack": "Stock",
     "title": "RFP-1.5 Flag  (1.875m)",
     "mass": 0.000125,
     "bulkhead_profiles": [
@@ -13358,6 +13574,7 @@
   },
   "flagPartSize2": {
     "name": "flagPartSize2",
+    "pack": "Stock",
     "title": "RFP-2 Flag  (2.5m)",
     "mass": 0.000225,
     "bulkhead_profiles": [
@@ -13391,6 +13608,7 @@
   },
   "flagPartSize3": {
     "name": "flagPartSize3",
+    "pack": "Stock",
     "title": "RFP-3 Flag  (3.75m)",
     "mass": 0.0005,
     "bulkhead_profiles": [
@@ -13424,6 +13642,7 @@
   },
   "flagPartSize4": {
     "name": "flagPartSize4",
+    "pack": "Stock",
     "title": "RFP-4 Flag  (5m)",
     "mass": 0.0009,
     "bulkhead_profiles": [
@@ -13457,6 +13676,7 @@
   },
   "foldingRadLarge": {
     "name": "foldingRadLarge",
+    "pack": "Stock",
     "title": "Thermal Control System (large)",
     "mass": 1.0,
     "bulkhead_profiles": [
@@ -13489,6 +13709,7 @@
   },
   "foldingRadMed": {
     "name": "foldingRadMed",
+    "pack": "Stock",
     "title": "Thermal Control System (medium)",
     "mass": 0.25,
     "bulkhead_profiles": [
@@ -13521,6 +13742,7 @@
   },
   "foldingRadSmall": {
     "name": "foldingRadSmall",
+    "pack": "Stock",
     "title": "Thermal Control System (small)",
     "mass": 0.05,
     "bulkhead_profiles": [
@@ -13553,6 +13775,7 @@
   },
   "fuelLine": {
     "name": "fuelLine",
+    "pack": "Stock",
     "title": "FTX-2 External Fuel Duct",
     "mass": 0.05,
     "bulkhead_profiles": [
@@ -13585,6 +13808,7 @@
   },
   "fuelTank": {
     "name": "fuelTank",
+    "pack": "Stock",
     "title": "FL-T400 Fuel Tank",
     "mass": 0.25,
     "bulkhead_profiles": [
@@ -13652,6 +13876,7 @@
   },
   "fuelTankSmall": {
     "name": "fuelTankSmall",
+    "pack": "Stock",
     "title": "FL-T200 Fuel Tank",
     "mass": 0.125,
     "bulkhead_profiles": [
@@ -13719,6 +13944,7 @@
   },
   "fuelTankSmallFlat": {
     "name": "fuelTankSmallFlat",
+    "pack": "Stock",
     "title": "FL-T100 Fuel Tank",
     "mass": 0.0625,
     "bulkhead_profiles": [
@@ -13786,6 +14012,7 @@
   },
   "fuelTank_long": {
     "name": "fuelTank_long",
+    "pack": "Stock",
     "title": "FL-T800 Fuel Tank",
     "mass": 0.5,
     "bulkhead_profiles": [
@@ -13853,6 +14080,7 @@
   },
   "groundAnchor": {
     "name": "groundAnchor",
+    "pack": "Stock",
     "title": "Stamp-O-Tron Ground Anchor",
     "mass": 0.05,
     "bulkhead_profiles": [
@@ -13902,6 +14130,7 @@
   },
   "groundLight1": {
     "name": "groundLight1",
+    "pack": "Stock",
     "title": "Work Lamp - Small",
     "mass": 0.002,
     "bulkhead_profiles": [],
@@ -13924,6 +14153,7 @@
   },
   "groundLight2": {
     "name": "groundLight2",
+    "pack": "Stock",
     "title": "Work Lamp - Stand",
     "mass": 0.003,
     "bulkhead_profiles": [],
@@ -13946,6 +14176,7 @@
   },
   "ionEngine": {
     "name": "ionEngine",
+    "pack": "Stock",
     "title": "IX-6315 \"Dawn\" Electric Propulsion System",
     "mass": 0.25,
     "bulkhead_profiles": [
@@ -14006,6 +14237,7 @@
   },
   "kerbalEVA": {
     "name": "kerbalEVA",
+    "pack": "Stock",
     "title": "",
     "mass": 0.0,
     "bulkhead_profiles": [],
@@ -14016,6 +14248,7 @@
   },
   "kerbalEVASlimSuit": {
     "name": "kerbalEVASlimSuit",
+    "pack": "Stock",
     "title": "",
     "mass": 0.0,
     "bulkhead_profiles": [],
@@ -14026,6 +14259,7 @@
   },
   "kerbalEVASlimSuitFemale": {
     "name": "kerbalEVASlimSuitFemale",
+    "pack": "Stock",
     "title": "",
     "mass": 0.0,
     "bulkhead_profiles": [],
@@ -14036,6 +14270,7 @@
   },
   "kerbalEVAVintage": {
     "name": "kerbalEVAVintage",
+    "pack": "Stock",
     "title": "",
     "mass": 0.0,
     "bulkhead_profiles": [],
@@ -14046,6 +14281,7 @@
   },
   "kerbalEVAfemale": {
     "name": "kerbalEVAfemale",
+    "pack": "Stock",
     "title": "",
     "mass": 0.0,
     "bulkhead_profiles": [],
@@ -14056,6 +14292,7 @@
   },
   "kerbalEVAfemaleVintage": {
     "name": "kerbalEVAfemaleVintage",
+    "pack": "Stock",
     "title": "",
     "mass": 0.0,
     "bulkhead_profiles": [],
@@ -14066,6 +14303,7 @@
   },
   "ksp_r_largeBatteryPack": {
     "name": "ksp_r_largeBatteryPack",
+    "pack": "Stock",
     "title": "Z-400 Rechargeable Battery",
     "mass": 0.02,
     "bulkhead_profiles": [
@@ -14101,6 +14339,7 @@
   },
   "kv1Pod": {
     "name": "kv1Pod",
+    "pack": "MakingHistory",
     "title": "KV-1 'Onion' Reentry Module",
     "mass": 0.75,
     "crew_capacity": 1,
@@ -14165,6 +14404,7 @@
   },
   "kv2Pod": {
     "name": "kv2Pod",
+    "pack": "MakingHistory",
     "title": "KV-2 'Onion' Reentry Module",
     "mass": 1.5,
     "crew_capacity": 2,
@@ -14229,6 +14469,7 @@
   },
   "kv3Pod": {
     "name": "kv3Pod",
+    "pack": "MakingHistory",
     "title": "KV-3 'Tato' Reentry Module",
     "mass": 2.25,
     "crew_capacity": 3,
@@ -14293,6 +14534,7 @@
   },
   "ladder1": {
     "name": "ladder1",
+    "pack": "Stock",
     "title": "Pegasus I Mobility Enhancer",
     "mass": 0.005,
     "bulkhead_profiles": [
@@ -14325,6 +14567,7 @@
   },
   "landerCabinSmall": {
     "name": "landerCabinSmall",
+    "pack": "Stock",
     "title": "Mk1 Lander Can",
     "mass": 0.6,
     "crew_capacity": 1,
@@ -14384,6 +14627,7 @@
   },
   "landingLeg1": {
     "name": "landingLeg1",
+    "pack": "Stock",
     "title": "LT-1 Landing Struts",
     "mass": 0.05,
     "bulkhead_profiles": [
@@ -14416,6 +14660,7 @@
   },
   "landingLeg1-2": {
     "name": "landingLeg1-2",
+    "pack": "Stock",
     "title": "LT-2 Landing Strut",
     "mass": 0.1,
     "bulkhead_profiles": [
@@ -14453,6 +14698,7 @@
   },
   "largeAdapter": {
     "name": "largeAdapter",
+    "pack": "Stock",
     "title": "Rockomax Brand Adapter",
     "mass": 0.1,
     "bulkhead_profiles": [
@@ -14503,6 +14749,7 @@
   },
   "largeAdapter2": {
     "name": "largeAdapter2",
+    "pack": "Stock",
     "title": "Rockomax Brand Adapter 02",
     "mass": 0.08,
     "bulkhead_profiles": [
@@ -14553,6 +14800,7 @@
   },
   "largeSolarPanel": {
     "name": "largeSolarPanel",
+    "pack": "Stock",
     "title": "Gigantor XL Solar Array",
     "mass": 0.3,
     "bulkhead_profiles": [
@@ -14589,6 +14837,7 @@
   },
   "launchClamp1": {
     "name": "launchClamp1",
+    "pack": "Stock",
     "title": "TT18-A Launch Stability Enhancer",
     "mass": 0.1,
     "bulkhead_profiles": [
@@ -14621,6 +14870,7 @@
   },
   "linearRcs": {
     "name": "linearRcs",
+    "pack": "Stock",
     "title": "Place-Anywhere 7 Linear RCS Port",
     "mass": 0.02,
     "bulkhead_profiles": [
@@ -14653,6 +14903,7 @@
   },
   "liquidEngine2-2_v2": {
     "name": "liquidEngine2-2_v2",
+    "pack": "Stock",
     "title": "RE-L10 \"Poodle\" Liquid Fuel Engine",
     "mass": 1.75,
     "bulkhead_profiles": [
@@ -14713,6 +14964,7 @@
   },
   "liquidEngine2_v2": {
     "name": "liquidEngine2_v2",
+    "pack": "Stock",
     "title": "LV-T45 \"Swivel\" Liquid Fuel Engine",
     "mass": 1.5,
     "bulkhead_profiles": [
@@ -14773,6 +15025,7 @@
   },
   "liquidEngine3_v2": {
     "name": "liquidEngine3_v2",
+    "pack": "Stock",
     "title": "LV-909 \"Terrier\" Liquid Fuel Engine",
     "mass": 0.5,
     "bulkhead_profiles": [
@@ -14833,6 +15086,7 @@
   },
   "liquidEngineMainsail_v2": {
     "name": "liquidEngineMainsail_v2",
+    "pack": "Stock",
     "title": "RE-M3 \"Mainsail\" Liquid Fuel Engine",
     "mass": 6.0,
     "bulkhead_profiles": [
@@ -14893,6 +15147,7 @@
   },
   "liquidEngineMini_v2": {
     "name": "liquidEngineMini_v2",
+    "pack": "Stock",
     "title": "48-7S \"Spark\" Liquid Fuel Engine",
     "mass": 0.13,
     "bulkhead_profiles": [
@@ -14953,6 +15208,7 @@
   },
   "liquidEngine_v2": {
     "name": "liquidEngine_v2",
+    "pack": "Stock",
     "title": "LV-T30 \"Reliant\" Liquid Fuel Engine",
     "mass": 1.25,
     "bulkhead_profiles": [
@@ -15013,6 +15269,7 @@
   },
   "longAntenna": {
     "name": "longAntenna",
+    "pack": "Stock",
     "title": "Communotron 16",
     "mass": 0.005,
     "bulkhead_profiles": [
@@ -15067,6 +15324,7 @@
   },
   "mediumDishAntenna": {
     "name": "mediumDishAntenna",
+    "pack": "Stock",
     "title": "Communotron DTS-M1",
     "mass": 0.05,
     "bulkhead_profiles": [
@@ -15104,6 +15362,7 @@
   },
   "microEngine_v2": {
     "name": "microEngine_v2",
+    "pack": "Stock",
     "title": "LV-1 \"Ant\" Liquid Fuel Engine",
     "mass": 0.02,
     "bulkhead_profiles": [
@@ -15178,6 +15437,7 @@
   },
   "miniFuelTank": {
     "name": "miniFuelTank",
+    "pack": "Stock",
     "title": "Oscar-B Fuel Tank",
     "mass": 0.025,
     "bulkhead_profiles": [
@@ -15245,6 +15505,7 @@
   },
   "miniFuselage": {
     "name": "miniFuselage",
+    "pack": "Stock",
     "title": "Mk0 Liquid Fuel Fuselage",
     "mass": 0.025,
     "bulkhead_profiles": [
@@ -15310,6 +15571,7 @@
   },
   "miniIntake": {
     "name": "miniIntake",
+    "pack": "Stock",
     "title": "Small Circular Intake",
     "mass": 0.007,
     "bulkhead_profiles": [
@@ -15348,6 +15610,7 @@
   },
   "miniJetEngine": {
     "name": "miniJetEngine",
+    "pack": "Stock",
     "title": "J-20 \"Juno\" Basic Jet Engine",
     "mass": 0.25,
     "bulkhead_profiles": [
@@ -15399,6 +15662,7 @@
   },
   "miniLandingLeg": {
     "name": "miniLandingLeg",
+    "pack": "Stock",
     "title": "LT-05 Micro Landing Strut",
     "mass": 0.015,
     "bulkhead_profiles": [
@@ -15431,6 +15695,7 @@
   },
   "mk1-3pod": {
     "name": "mk1-3pod",
+    "pack": "Stock",
     "title": "Mk1-3 Command Pod",
     "mass": 2.6,
     "crew_capacity": 3,
@@ -15491,6 +15756,7 @@
   },
   "mk1pod_v2": {
     "name": "mk1pod_v2",
+    "pack": "Stock",
     "title": "Mk1 Command Pod",
     "mass": 0.8,
     "crew_capacity": 1,
@@ -15551,6 +15817,7 @@
   },
   "mk2CargoBayL": {
     "name": "mk2CargoBayL",
+    "pack": "Stock",
     "title": "Mk2 Cargo Bay CRG-08",
     "mass": 0.5,
     "bulkhead_profiles": [
@@ -15628,6 +15895,7 @@
   },
   "mk2CargoBayS": {
     "name": "mk2CargoBayS",
+    "pack": "Stock",
     "title": "Mk2 Cargo Bay CRG-04",
     "mass": 0.25,
     "bulkhead_profiles": [
@@ -15705,6 +15973,7 @@
   },
   "mk2Cockpit_Inline": {
     "name": "mk2Cockpit_Inline",
+    "pack": "Stock",
     "title": "Mk2 Inline Cockpit",
     "mass": 2.0,
     "crew_capacity": 2,
@@ -15764,6 +16033,7 @@
   },
   "mk2Cockpit_Standard": {
     "name": "mk2Cockpit_Standard",
+    "pack": "Stock",
     "title": "Mk2 Cockpit",
     "mass": 2.0,
     "crew_capacity": 2,
@@ -15809,6 +16079,7 @@
   },
   "mk2CrewCabin": {
     "name": "mk2CrewCabin",
+    "pack": "Stock",
     "title": "MK2 Crew Cabin",
     "mass": 2.03,
     "crew_capacity": 4,
@@ -15872,6 +16143,7 @@
   },
   "mk2DockingPort": {
     "name": "mk2DockingPort",
+    "pack": "Stock",
     "title": "Mk2 Clamp-O-Tron",
     "mass": 0.3,
     "bulkhead_profiles": [
@@ -15925,6 +16197,7 @@
   },
   "mk2DroneCore": {
     "name": "mk2DroneCore",
+    "pack": "Stock",
     "title": "MK2 Drone Core",
     "mass": 0.2,
     "bulkhead_profiles": [
@@ -15983,6 +16256,7 @@
   },
   "mk2Fuselage": {
     "name": "mk2Fuselage",
+    "pack": "Stock",
     "title": "Mk2 Liquid Fuel Fuselage",
     "mass": 0.57,
     "bulkhead_profiles": [
@@ -16049,6 +16323,7 @@
   },
   "mk2FuselageLongLFO": {
     "name": "mk2FuselageLongLFO",
+    "pack": "Stock",
     "title": "Mk2 Rocket Fuel Fuselage",
     "mass": 0.57,
     "bulkhead_profiles": [
@@ -16116,6 +16391,7 @@
   },
   "mk2FuselageShortLFO": {
     "name": "mk2FuselageShortLFO",
+    "pack": "Stock",
     "title": "Mk2 Rocket Fuel Fuselage Short",
     "mass": 0.29,
     "bulkhead_profiles": [
@@ -16183,6 +16459,7 @@
   },
   "mk2FuselageShortLiquid": {
     "name": "mk2FuselageShortLiquid",
+    "pack": "Stock",
     "title": "Mk2 Liquid Fuel Fuselage Short",
     "mass": 0.29,
     "bulkhead_profiles": [
@@ -16249,6 +16526,7 @@
   },
   "mk2FuselageShortMono": {
     "name": "mk2FuselageShortMono",
+    "pack": "Stock",
     "title": "Mk2 Monopropellant Tank",
     "mass": 0.29,
     "bulkhead_profiles": [
@@ -16314,6 +16592,7 @@
   },
   "mk2LanderCabin_v2": {
     "name": "mk2LanderCabin_v2",
+    "pack": "Stock",
     "title": "Mk2 Lander Can",
     "mass": 1.355,
     "crew_capacity": 2,
@@ -16401,6 +16680,7 @@
   },
   "mk2SpacePlaneAdapter": {
     "name": "mk2SpacePlaneAdapter",
+    "pack": "Stock",
     "title": "Mk2 to 1.25m Adapter",
     "mass": 0.29,
     "bulkhead_profiles": [
@@ -16469,6 +16749,7 @@
   },
   "mk2_1m_AdapterLong": {
     "name": "mk2_1m_AdapterLong",
+    "pack": "Stock",
     "title": "Mk2 to 1.25m Adapter Long",
     "mass": 0.57,
     "bulkhead_profiles": [
@@ -16537,6 +16818,7 @@
   },
   "mk2_1m_Bicoupler": {
     "name": "mk2_1m_Bicoupler",
+    "pack": "Stock",
     "title": "Mk2 Bicoupler",
     "mass": 0.29,
     "bulkhead_profiles": [
@@ -16619,6 +16901,7 @@
   },
   "mk3CargoBayL": {
     "name": "mk3CargoBayL",
+    "pack": "Stock",
     "title": "Mk3 Cargo Bay CRG-100",
     "mass": 6.0,
     "bulkhead_profiles": [
@@ -16696,6 +16979,7 @@
   },
   "mk3CargoBayM": {
     "name": "mk3CargoBayM",
+    "pack": "Stock",
     "title": "Mk3 Cargo Bay CRG-50",
     "mass": 3.0,
     "bulkhead_profiles": [
@@ -16773,6 +17057,7 @@
   },
   "mk3CargoBayS": {
     "name": "mk3CargoBayS",
+    "pack": "Stock",
     "title": "Mk3 Cargo Bay CRG-25",
     "mass": 1.5,
     "bulkhead_profiles": [
@@ -16850,6 +17135,7 @@
   },
   "mk3CargoRamp": {
     "name": "mk3CargoRamp",
+    "pack": "Stock",
     "title": "Mk3 Cargo Ramp",
     "mass": 4.0,
     "bulkhead_profiles": [
@@ -16899,6 +17185,7 @@
   },
   "mk3Cockpit_Shuttle": {
     "name": "mk3Cockpit_Shuttle",
+    "pack": "Stock",
     "title": "Mk3 Cockpit",
     "mass": 3.5,
     "crew_capacity": 4,
@@ -16959,6 +17246,7 @@
   },
   "mk3CrewCabin": {
     "name": "mk3CrewCabin",
+    "pack": "Stock",
     "title": "Mk3 Passenger Module",
     "mass": 7.9,
     "crew_capacity": 16,
@@ -17009,6 +17297,7 @@
   },
   "mk3FuselageLFO_100": {
     "name": "mk3FuselageLFO_100",
+    "pack": "Stock",
     "title": "Mk3 Rocket Fuel Fuselage Long",
     "mass": 7.14,
     "bulkhead_profiles": [
@@ -17076,6 +17365,7 @@
   },
   "mk3FuselageLFO_25": {
     "name": "mk3FuselageLFO_25",
+    "pack": "Stock",
     "title": "Mk3 Rocket Fuel Fuselage Short",
     "mass": 1.79,
     "bulkhead_profiles": [
@@ -17143,6 +17433,7 @@
   },
   "mk3FuselageLFO_50": {
     "name": "mk3FuselageLFO_50",
+    "pack": "Stock",
     "title": "Mk3 Rocket Fuel Fuselage",
     "mass": 3.57,
     "bulkhead_profiles": [
@@ -17210,6 +17501,7 @@
   },
   "mk3FuselageLF_100": {
     "name": "mk3FuselageLF_100",
+    "pack": "Stock",
     "title": "Mk3 Liquid Fuel Fuselage Long",
     "mass": 7.14,
     "bulkhead_profiles": [
@@ -17276,6 +17568,7 @@
   },
   "mk3FuselageLF_25": {
     "name": "mk3FuselageLF_25",
+    "pack": "Stock",
     "title": "Mk3 Liquid Fuel Fuselage Short",
     "mass": 1.79,
     "bulkhead_profiles": [
@@ -17342,6 +17635,7 @@
   },
   "mk3FuselageLF_50": {
     "name": "mk3FuselageLF_50",
+    "pack": "Stock",
     "title": "Mk3 Liquid Fuel Fuselage",
     "mass": 3.57,
     "bulkhead_profiles": [
@@ -17408,6 +17702,7 @@
   },
   "mk3FuselageMONO": {
     "name": "mk3FuselageMONO",
+    "pack": "Stock",
     "title": "Mk3 Monopropellant Tank",
     "mass": 1.4,
     "bulkhead_profiles": [
@@ -17473,6 +17768,7 @@
   },
   "monopropMiniSphere": {
     "name": "monopropMiniSphere",
+    "pack": "MakingHistory",
     "title": "Stratus-V Minified Monopropellant Tank",
     "mass": 0.01,
     "bulkhead_profiles": [
@@ -17508,6 +17804,7 @@
   },
   "nacelleBody": {
     "name": "nacelleBody",
+    "pack": "Stock",
     "title": "Engine Nacelle",
     "mass": 0.15,
     "bulkhead_profiles": [
@@ -17575,6 +17872,7 @@
   },
   "navLight1": {
     "name": "navLight1",
+    "pack": "Stock",
     "title": "Navigation Light Mk1",
     "mass": 0.001,
     "bulkhead_profiles": [
@@ -17607,6 +17905,7 @@
   },
   "noseCone": {
     "name": "noseCone",
+    "pack": "Stock",
     "title": "Aerodynamic Nose Cone",
     "mass": 0.03,
     "bulkhead_profiles": [
@@ -17642,6 +17941,7 @@
   },
   "noseConeAdapter": {
     "name": "noseConeAdapter",
+    "pack": "Stock",
     "title": "NCS Adapter",
     "mass": 0.1,
     "bulkhead_profiles": [
@@ -17708,6 +18008,7 @@
   },
   "nuclearEngine": {
     "name": "nuclearEngine",
+    "pack": "Stock",
     "title": "LV-N \"Nerv\" Atomic Rocket Motor",
     "mass": 3.0,
     "bulkhead_profiles": [
@@ -17767,6 +18068,7 @@
   },
   "omsEngine": {
     "name": "omsEngine",
+    "pack": "Stock",
     "title": "O-10 \"Puff\" MonoPropellant Fuel Engine",
     "mass": 0.09,
     "bulkhead_profiles": [
@@ -17809,6 +18111,7 @@
   },
   "parachuteDrogue": {
     "name": "parachuteDrogue",
+    "pack": "Stock",
     "title": "Mk25 Parachute",
     "mass": 0.2,
     "bulkhead_profiles": [
@@ -17861,6 +18164,7 @@
   },
   "parachuteLarge": {
     "name": "parachuteLarge",
+    "pack": "Stock",
     "title": "Mk16-XL Parachute",
     "mass": 0.3,
     "bulkhead_profiles": [
@@ -17913,6 +18217,7 @@
   },
   "parachuteRadial": {
     "name": "parachuteRadial",
+    "pack": "Stock",
     "title": "Mk2-R Radial-Mount Parachute",
     "mass": 0.1,
     "bulkhead_profiles": [
@@ -17948,6 +18253,7 @@
   },
   "parachuteSingle": {
     "name": "parachuteSingle",
+    "pack": "Stock",
     "title": "Mk16 Parachute",
     "mass": 0.1,
     "bulkhead_profiles": [
@@ -18000,6 +18306,7 @@
   },
   "pointyNoseConeA": {
     "name": "pointyNoseConeA",
+    "pack": "Stock",
     "title": "Advanced Nose Cone - Type A",
     "mass": 0.075,
     "bulkhead_profiles": [
@@ -18048,6 +18355,7 @@
   },
   "pointyNoseConeB": {
     "name": "pointyNoseConeB",
+    "pack": "Stock",
     "title": "Advanced Nose Cone - Type B",
     "mass": 0.075,
     "bulkhead_profiles": [
@@ -18101,6 +18409,7 @@
   },
   "probeCoreCube": {
     "name": "probeCoreCube",
+    "pack": "Stock",
     "title": "Probodobodyne QBE",
     "mass": 0.07,
     "bulkhead_profiles": [
@@ -18159,6 +18468,7 @@
   },
   "probeCoreHex_v2": {
     "name": "probeCoreHex_v2",
+    "pack": "Stock",
     "title": "Probodobodyne HECS",
     "mass": 0.1,
     "bulkhead_profiles": [
@@ -18217,6 +18527,7 @@
   },
   "probeCoreOcto2_v2": {
     "name": "probeCoreOcto2_v2",
+    "pack": "Stock",
     "title": "Probodobodyne OKTO2",
     "mass": 0.04,
     "bulkhead_profiles": [
@@ -18275,6 +18586,7 @@
   },
   "probeCoreOcto_v2": {
     "name": "probeCoreOcto_v2",
+    "pack": "Stock",
     "title": "Probodobodyne OKTO",
     "mass": 0.1,
     "bulkhead_profiles": [
@@ -18333,6 +18645,7 @@
   },
   "probeCoreSphere_v2": {
     "name": "probeCoreSphere_v2",
+    "pack": "Stock",
     "title": "Probodobodyne Stayputnik",
     "mass": 0.05,
     "bulkhead_profiles": [
@@ -18376,6 +18689,7 @@
   },
   "probeStackLarge": {
     "name": "probeStackLarge",
+    "pack": "Stock",
     "title": "RC-L01 Remote Guidance Unit",
     "mass": 0.5,
     "bulkhead_profiles": [
@@ -18434,6 +18748,7 @@
   },
   "probeStackSmall": {
     "name": "probeStackSmall",
+    "pack": "Stock",
     "title": "RC-001S Remote Guidance Unit",
     "mass": 0.1,
     "bulkhead_profiles": [
@@ -18492,6 +18807,7 @@
   },
   "radPanelEdge": {
     "name": "radPanelEdge",
+    "pack": "Stock",
     "title": "Radiator Panel (edge)",
     "mass": 0.03,
     "bulkhead_profiles": [
@@ -18524,6 +18840,7 @@
   },
   "radPanelLg": {
     "name": "radPanelLg",
+    "pack": "Stock",
     "title": "Radiator Panel (large)",
     "mass": 0.05,
     "bulkhead_profiles": [
@@ -18556,6 +18873,7 @@
   },
   "radPanelSm": {
     "name": "radPanelSm",
+    "pack": "Stock",
     "title": "Radiator Panel (small)",
     "mass": 0.01,
     "bulkhead_profiles": [
@@ -18588,6 +18906,7 @@
   },
   "radialDecoupler": {
     "name": "radialDecoupler",
+    "pack": "Stock",
     "title": "TT-38K Radial Decoupler",
     "mass": 0.025,
     "bulkhead_profiles": [
@@ -18620,6 +18939,7 @@
   },
   "radialDecoupler1-2": {
     "name": "radialDecoupler1-2",
+    "pack": "Stock",
     "title": "Hydraulic Detachment Manifold",
     "mass": 0.4,
     "bulkhead_profiles": [
@@ -18652,6 +18972,7 @@
   },
   "radialDecoupler2": {
     "name": "radialDecoupler2",
+    "pack": "Stock",
     "title": "TT-70 Radial Decoupler",
     "mass": 0.05,
     "bulkhead_profiles": [
@@ -18684,6 +19005,7 @@
   },
   "radialDrogue": {
     "name": "radialDrogue",
+    "pack": "Stock",
     "title": "Mk12-R Radial-Mount Drogue Chute",
     "mass": 0.075,
     "bulkhead_profiles": [
@@ -18719,6 +19041,7 @@
   },
   "radialEngineBody": {
     "name": "radialEngineBody",
+    "pack": "Stock",
     "title": "Engine Pre-cooler",
     "mass": 0.15,
     "bulkhead_profiles": [
@@ -18786,6 +19109,7 @@
   },
   "radialEngineMini_v2": {
     "name": "radialEngineMini_v2",
+    "pack": "Stock",
     "title": "LV-1R \"Spider\" Liquid Fuel Engine",
     "mass": 0.02,
     "bulkhead_profiles": [
@@ -18829,6 +19153,7 @@
   },
   "radialLiquidEngine1-2": {
     "name": "radialLiquidEngine1-2",
+    "pack": "Stock",
     "title": "Mk-55 \"Thud\" Liquid Fuel Engine",
     "mass": 0.9,
     "bulkhead_profiles": [
@@ -18872,6 +19197,7 @@
   },
   "radialRCSTank": {
     "name": "radialRCSTank",
+    "pack": "Stock",
     "title": "Stratus-V Roundified Monopropellant Tank",
     "mass": 0.02,
     "bulkhead_profiles": [
@@ -18907,6 +19233,7 @@
   },
   "ramAirIntake": {
     "name": "ramAirIntake",
+    "pack": "Stock",
     "title": "Adjustable Ramp Intake",
     "mass": 0.06,
     "bulkhead_profiles": [
@@ -18945,6 +19272,7 @@
   },
   "rcsTankMini": {
     "name": "rcsTankMini",
+    "pack": "Stock",
     "title": "FL-R20 RCS Fuel Tank",
     "mass": 0.02,
     "bulkhead_profiles": [
@@ -19011,6 +19339,7 @@
   },
   "rcsTankRadialLong": {
     "name": "rcsTankRadialLong",
+    "pack": "Stock",
     "title": "Stratus-V Cylindrified Monopropellant Tank",
     "mass": 0.03,
     "bulkhead_profiles": [
@@ -19046,6 +19375,7 @@
   },
   "rocketNoseConeSize3": {
     "name": "rocketNoseConeSize3",
+    "pack": "Stock",
     "title": "Protective Rocket Nose Cone Mk12A",
     "mass": 0.4,
     "bulkhead_profiles": [
@@ -19081,6 +19411,7 @@
   },
   "rocketNoseConeSize4": {
     "name": "rocketNoseConeSize4",
+    "pack": "MakingHistory",
     "title": "Protective Nose Cone Mk16A",
     "mass": 0.8,
     "bulkhead_profiles": [
@@ -19116,6 +19447,7 @@
   },
   "rocketNoseCone_v3": {
     "name": "rocketNoseCone_v3",
+    "pack": "Stock",
     "title": "Protective Rocket Nose Cone Mk7",
     "mass": 0.2,
     "bulkhead_profiles": [
@@ -19151,6 +19483,7 @@
   },
   "roverBody_v2": {
     "name": "roverBody_v2",
+    "pack": "Stock",
     "title": "Probodobodyne RoveMate",
     "mass": 0.15,
     "bulkhead_profiles": [
@@ -19265,6 +19598,7 @@
   },
   "roverWheel1": {
     "name": "roverWheel1",
+    "pack": "Stock",
     "title": "RoveMax Model M1",
     "mass": 0.075,
     "bulkhead_profiles": [
@@ -19297,6 +19631,7 @@
   },
   "roverWheel2": {
     "name": "roverWheel2",
+    "pack": "Stock",
     "title": "RoveMax Model S2",
     "mass": 0.05,
     "bulkhead_profiles": [
@@ -19329,6 +19664,7 @@
   },
   "roverWheel3": {
     "name": "roverWheel3",
+    "pack": "Stock",
     "title": "RoveMax Model XL3",
     "mass": 1.25,
     "bulkhead_profiles": [
@@ -19361,6 +19697,7 @@
   },
   "roverWheelM1-F": {
     "name": "roverWheelM1-F",
+    "pack": "MakingHistory",
     "title": "RoveMax M1-F Rover Wheel",
     "mass": 0.025,
     "bulkhead_profiles": [
@@ -19393,6 +19730,7 @@
   },
   "rtg": {
     "name": "rtg",
+    "pack": "Stock",
     "title": "PB-NUK Radioisotope Thermoelectric Generator",
     "mass": 0.08,
     "bulkhead_profiles": [
@@ -19456,6 +19794,7 @@
   },
   "sasModule": {
     "name": "sasModule",
+    "pack": "Stock",
     "title": "Small Inline Reaction Wheel",
     "mass": 0.05,
     "bulkhead_profiles": [
@@ -19505,6 +19844,7 @@
   },
   "science_module": {
     "name": "science_module",
+    "pack": "Stock",
     "title": "SC-9001 Science Jr.",
     "mass": 0.2,
     "bulkhead_profiles": [
@@ -19568,6 +19908,7 @@
   },
   "seatExternalCmd": {
     "name": "seatExternalCmd",
+    "pack": "Stock",
     "title": "EAS-1 External Command Seat",
     "mass": 0.05,
     "crew_capacity": 1,
@@ -19601,6 +19942,7 @@
   },
   "sensorAccelerometer": {
     "name": "sensorAccelerometer",
+    "pack": "Stock",
     "title": "Double-C Seismic Accelerometer",
     "mass": 0.005,
     "bulkhead_profiles": [
@@ -19633,6 +19975,7 @@
   },
   "sensorAtmosphere": {
     "name": "sensorAtmosphere",
+    "pack": "Stock",
     "title": "Atmospheric Fluid Spectro-Variometer",
     "mass": 0.005,
     "bulkhead_profiles": [
@@ -19665,6 +20008,7 @@
   },
   "sensorBarometer": {
     "name": "sensorBarometer",
+    "pack": "Stock",
     "title": "PresMat Barometer",
     "mass": 0.005,
     "bulkhead_profiles": [
@@ -19697,6 +20041,7 @@
   },
   "sensorGravimeter": {
     "name": "sensorGravimeter",
+    "pack": "Stock",
     "title": "GRAVMAX Negative Gravioli Detector",
     "mass": 0.005,
     "bulkhead_profiles": [
@@ -19729,6 +20074,7 @@
   },
   "sensorThermometer": {
     "name": "sensorThermometer",
+    "pack": "Stock",
     "title": "2HOT Thermometer",
     "mass": 0.005,
     "bulkhead_profiles": [
@@ -19761,6 +20107,7 @@
   },
   "sepMotor1": {
     "name": "sepMotor1",
+    "pack": "Stock",
     "title": "Sepratron I",
     "mass": 0.0125,
     "bulkhead_profiles": [
@@ -19806,6 +20153,7 @@
   },
   "shockConeIntake": {
     "name": "shockConeIntake",
+    "pack": "Stock",
     "title": "Shock Cone Intake",
     "mass": 0.12,
     "bulkhead_profiles": [
@@ -19844,6 +20192,7 @@
   },
   "smallCargoContainer": {
     "name": "smallCargoContainer",
+    "pack": "Stock",
     "title": "SEQ-3 Cargo Storage Unit",
     "mass": 0.05,
     "bulkhead_profiles": [
@@ -19906,6 +20255,7 @@
   },
   "smallClaw": {
     "name": "smallClaw",
+    "pack": "Stock",
     "title": "Advanced Grabbing Unit Jr.",
     "mass": 0.03,
     "bulkhead_profiles": [
@@ -19955,6 +20305,7 @@
   },
   "smallCtrlSrf": {
     "name": "smallCtrlSrf",
+    "pack": "Stock",
     "title": "Elevon 4",
     "mass": 0.04,
     "bulkhead_profiles": [
@@ -19992,6 +20343,7 @@
   },
   "smallHardpoint": {
     "name": "smallHardpoint",
+    "pack": "Stock",
     "title": "Small Hardpoint",
     "mass": 0.05,
     "bulkhead_profiles": [
@@ -20024,6 +20376,7 @@
   },
   "smallRadialEngine_v2": {
     "name": "smallRadialEngine_v2",
+    "pack": "Stock",
     "title": "24-77 \"Twitch\" Liquid Fuel Engine",
     "mass": 0.08,
     "bulkhead_profiles": [
@@ -20072,6 +20425,7 @@
   },
   "solarPanelOX10C": {
     "name": "solarPanelOX10C",
+    "pack": "Stock",
     "title": "OX-10C Photovoltaic Panels",
     "mass": 0.09,
     "bulkhead_profiles": [
@@ -20108,6 +20462,7 @@
   },
   "solarPanelOX10L": {
     "name": "solarPanelOX10L",
+    "pack": "Stock",
     "title": "OX-10L 1x5 Photovoltaic Panels",
     "mass": 0.09,
     "bulkhead_profiles": [
@@ -20144,6 +20499,7 @@
   },
   "solarPanelSP10C": {
     "name": "solarPanelSP10C",
+    "pack": "Stock",
     "title": "SP-10C Photovoltaic Panels",
     "mass": 0.13,
     "bulkhead_profiles": [
@@ -20180,6 +20536,7 @@
   },
   "solarPanelSP10L": {
     "name": "solarPanelSP10L",
+    "pack": "Stock",
     "title": "SP-10L 1x5 Photovoltaic Panels",
     "mass": 0.13,
     "bulkhead_profiles": [
@@ -20216,6 +20573,7 @@
   },
   "solarPanels1": {
     "name": "solarPanels1",
+    "pack": "Stock",
     "title": "SP-W 3x2 Photovoltaic Panels",
     "mass": 0.025,
     "bulkhead_profiles": [
@@ -20252,6 +20610,7 @@
   },
   "solarPanels2": {
     "name": "solarPanels2",
+    "pack": "Stock",
     "title": "SP-L 1x6 Photovoltaic Panels",
     "mass": 0.025,
     "bulkhead_profiles": [
@@ -20288,6 +20647,7 @@
   },
   "solarPanels3": {
     "name": "solarPanels3",
+    "pack": "Stock",
     "title": "OX-4W 3x2 Photovoltaic Panels",
     "mass": 0.0175,
     "bulkhead_profiles": [
@@ -20324,6 +20684,7 @@
   },
   "solarPanels4": {
     "name": "solarPanels4",
+    "pack": "Stock",
     "title": "OX-4L 1x6 Photovoltaic Panels",
     "mass": 0.0175,
     "bulkhead_profiles": [
@@ -20360,6 +20721,7 @@
   },
   "solarPanels5": {
     "name": "solarPanels5",
+    "pack": "Stock",
     "title": "OX-STAT Photovoltaic Panels",
     "mass": 0.005,
     "bulkhead_profiles": [
@@ -20396,6 +20758,7 @@
   },
   "solidBooster1-1": {
     "name": "solidBooster1-1",
+    "pack": "Stock",
     "title": "BACC \"Thumper\" Solid Fuel Booster",
     "mass": 1.5,
     "bulkhead_profiles": [
@@ -20472,6 +20835,7 @@
   },
   "solidBooster_sm_v2": {
     "name": "solidBooster_sm_v2",
+    "pack": "Stock",
     "title": "RT-5 \"Flea\" Solid Fuel Booster",
     "mass": 0.45,
     "bulkhead_profiles": [
@@ -20548,6 +20912,7 @@
   },
   "solidBooster_v2": {
     "name": "solidBooster_v2",
+    "pack": "Stock",
     "title": "RT-10 \"Hammer\" Solid Fuel Booster",
     "mass": 0.75,
     "bulkhead_profiles": [
@@ -20624,6 +20989,7 @@
   },
   "spotLight1_v2": {
     "name": "spotLight1_v2",
+    "pack": "Stock",
     "title": "Illuminator Mk1",
     "mass": 0.015,
     "bulkhead_profiles": [
@@ -20656,6 +21022,7 @@
   },
   "spotLight2_v2": {
     "name": "spotLight2_v2",
+    "pack": "Stock",
     "title": "Illuminator Mk2",
     "mass": 0.015,
     "bulkhead_profiles": [
@@ -20688,6 +21055,7 @@
   },
   "spotLight3": {
     "name": "spotLight3",
+    "pack": "Stock",
     "title": "Spotlight Mk1",
     "mass": 0.005,
     "bulkhead_profiles": [
@@ -20720,6 +21088,7 @@
   },
   "stackBiCoupler_v2": {
     "name": "stackBiCoupler_v2",
+    "pack": "Stock",
     "title": "TVR-200 Stack Bi-Coupler",
     "mass": 0.1,
     "bulkhead_profiles": [
@@ -20783,6 +21152,7 @@
   },
   "stackPoint1": {
     "name": "stackPoint1",
+    "pack": "Stock",
     "title": "BZ-52 Radial Attachment Point",
     "mass": 0.04,
     "bulkhead_profiles": [
@@ -20832,6 +21202,7 @@
   },
   "stackQuadCoupler": {
     "name": "stackQuadCoupler",
+    "pack": "Stock",
     "title": "TVR-2160C Mk2 Stack Quad-Coupler",
     "mass": 0.175,
     "bulkhead_profiles": [
@@ -20923,6 +21294,7 @@
   },
   "stackTriCoupler_v2": {
     "name": "stackTriCoupler_v2",
+    "pack": "Stock",
     "title": "TVR-1180C Mk1 Stack Tri-Coupler",
     "mass": 0.15,
     "bulkhead_profiles": [
@@ -21000,6 +21372,7 @@
   },
   "standardNoseCone": {
     "name": "standardNoseCone",
+    "pack": "Stock",
     "title": "Small Nose Cone",
     "mass": 0.01,
     "bulkhead_profiles": [
@@ -21048,6 +21421,7 @@
   },
   "stationHub": {
     "name": "stationHub",
+    "pack": "Stock",
     "title": "Rockomax HubMax Multi-Point Connector",
     "mass": 1.5,
     "bulkhead_profiles": [
@@ -21153,6 +21527,7 @@
   },
   "stripLight1": {
     "name": "stripLight1",
+    "pack": "Stock",
     "title": "LightStrip Mk1",
     "mass": 0.001,
     "bulkhead_profiles": [
@@ -21185,6 +21560,7 @@
   },
   "structuralIBeam1": {
     "name": "structuralIBeam1",
+    "pack": "Stock",
     "title": "M-Beam 650 I-Beam",
     "mass": 0.08,
     "bulkhead_profiles": [
@@ -21248,6 +21624,7 @@
   },
   "structuralIBeam2": {
     "name": "structuralIBeam2",
+    "pack": "Stock",
     "title": "M-Beam 200 I-Beam",
     "mass": 0.375,
     "bulkhead_profiles": [
@@ -21311,6 +21688,7 @@
   },
   "structuralIBeam3": {
     "name": "structuralIBeam3",
+    "pack": "Stock",
     "title": "M-Beam 200 I-Beam Pocket Edition",
     "mass": 0.1875,
     "bulkhead_profiles": [
@@ -21374,6 +21752,7 @@
   },
   "structuralMiniNode": {
     "name": "structuralMiniNode",
+    "pack": "Stock",
     "title": "The Not-Rockomax Micronode",
     "mass": 0.15,
     "bulkhead_profiles": [
@@ -21479,6 +21858,7 @@
   },
   "structuralPanel1": {
     "name": "structuralPanel1",
+    "pack": "Stock",
     "title": "M-1x1 Structural Panel",
     "mass": 0.075,
     "bulkhead_profiles": [
@@ -21542,6 +21922,7 @@
   },
   "structuralPanel2": {
     "name": "structuralPanel2",
+    "pack": "Stock",
     "title": "M-2x2 Structural Panel",
     "mass": 0.3,
     "bulkhead_profiles": [
@@ -21605,6 +21986,7 @@
   },
   "structuralPylon": {
     "name": "structuralPylon",
+    "pack": "Stock",
     "title": "Structural Pylon",
     "mass": 0.2,
     "bulkhead_profiles": [
@@ -21637,6 +22019,7 @@
   },
   "structuralWing": {
     "name": "structuralWing",
+    "pack": "Stock",
     "title": "Structural Wing Type A",
     "mass": 0.1,
     "bulkhead_profiles": [
@@ -21674,6 +22057,7 @@
   },
   "structuralWing2": {
     "name": "structuralWing2",
+    "pack": "Stock",
     "title": "Structural Wing Type B",
     "mass": 0.1,
     "bulkhead_profiles": [
@@ -21711,6 +22095,7 @@
   },
   "structuralWing3": {
     "name": "structuralWing3",
+    "pack": "Stock",
     "title": "Structural Wing Type C",
     "mass": 0.05,
     "bulkhead_profiles": [
@@ -21748,6 +22133,7 @@
   },
   "structuralWing4": {
     "name": "structuralWing4",
+    "pack": "Stock",
     "title": "Structural Wing Type D",
     "mass": 0.025,
     "bulkhead_profiles": [
@@ -21785,6 +22171,7 @@
   },
   "strutConnector": {
     "name": "strutConnector",
+    "pack": "Stock",
     "title": "EAS-4 Strut Connector",
     "mass": 0.05,
     "bulkhead_profiles": [
@@ -21817,6 +22204,7 @@
   },
   "strutCube": {
     "name": "strutCube",
+    "pack": "Stock",
     "title": "Cubic Octagonal Strut",
     "mass": 0.001,
     "bulkhead_profiles": [
@@ -21880,6 +22268,7 @@
   },
   "strutOcto": {
     "name": "strutOcto",
+    "pack": "Stock",
     "title": "Octagonal Strut",
     "mass": 0.001,
     "bulkhead_profiles": [
@@ -21942,6 +22331,7 @@
   },
   "sweptWing": {
     "name": "sweptWing",
+    "pack": "Stock",
     "title": "Swept Wings",
     "mass": 0.275,
     "bulkhead_profiles": [
@@ -21979,6 +22369,7 @@
   },
   "sweptWing1": {
     "name": "sweptWing1",
+    "pack": "Stock",
     "title": "Swept Wing Type A",
     "mass": 0.113,
     "bulkhead_profiles": [
@@ -22016,6 +22407,7 @@
   },
   "sweptWing2": {
     "name": "sweptWing2",
+    "pack": "Stock",
     "title": "Swept Wing Type B",
     "mass": 0.226,
     "bulkhead_profiles": [
@@ -22053,6 +22445,7 @@
   },
   "tailfin": {
     "name": "tailfin",
+    "pack": "Stock",
     "title": "Tail Fin",
     "mass": 0.125,
     "bulkhead_profiles": [
@@ -22090,6 +22483,7 @@
   },
   "telescopicLadder": {
     "name": "telescopicLadder",
+    "pack": "Stock",
     "title": "Kelus Mobility Enhancer",
     "mass": 0.005,
     "bulkhead_profiles": [
@@ -22122,6 +22516,7 @@
   },
   "telescopicLadderBay": {
     "name": "telescopicLadderBay",
+    "pack": "Stock",
     "title": "Kelus-LV Bay Mobility Enhancer",
     "mass": 0.005,
     "bulkhead_profiles": [
@@ -22154,6 +22549,7 @@
   },
   "toroidalAerospike": {
     "name": "toroidalAerospike",
+    "pack": "Stock",
     "title": "T-1 Toroidal Aerospike \"Dart\" Liquid Fuel Engine",
     "mass": 1.0,
     "bulkhead_profiles": [
@@ -22228,6 +22624,7 @@
   },
   "trussAdapter": {
     "name": "trussAdapter",
+    "pack": "Stock",
     "title": "Modular Girder Adapter",
     "mass": 0.25,
     "bulkhead_profiles": [
@@ -22277,6 +22674,7 @@
   },
   "trussPiece1x": {
     "name": "trussPiece1x",
+    "pack": "Stock",
     "title": "Modular Girder Segment",
     "mass": 0.125,
     "bulkhead_profiles": [
@@ -22340,6 +22738,7 @@
   },
   "trussPiece3x": {
     "name": "trussPiece3x",
+    "pack": "Stock",
     "title": "Segment XL",
     "mass": 0.375,
     "bulkhead_profiles": [
@@ -22403,6 +22802,7 @@
   },
   "turboFanEngine": {
     "name": "turboFanEngine",
+    "pack": "Stock",
     "title": "J-X4 \"Whiplash\" Turbo Ramjet Engine",
     "mass": 1.8,
     "bulkhead_profiles": [
@@ -22454,6 +22854,7 @@
   },
   "turboFanSize2": {
     "name": "turboFanSize2",
+    "pack": "Stock",
     "title": "J-90 \"Goliath\" Turbofan Engine",
     "mass": 4.5,
     "bulkhead_profiles": [
@@ -22521,6 +22922,7 @@
   },
   "turboJet": {
     "name": "turboJet",
+    "pack": "Stock",
     "title": "J-404 \"Panther\" Afterburning Turbofan",
     "mass": 1.2,
     "bulkhead_profiles": [
@@ -22572,6 +22974,7 @@
   },
   "vernierEngine": {
     "name": "vernierEngine",
+    "pack": "Stock",
     "title": "Vernor Engine",
     "mass": 0.08,
     "bulkhead_profiles": [
@@ -22604,6 +23007,7 @@
   },
   "wheelMed": {
     "name": "wheelMed",
+    "pack": "Stock",
     "title": "TR-2L Ruggedized Vehicular Wheel",
     "mass": 0.105,
     "bulkhead_profiles": [
@@ -22641,6 +23045,7 @@
   },
   "wingConnector": {
     "name": "wingConnector",
+    "pack": "Stock",
     "title": "Wing Connector Type A",
     "mass": 0.2,
     "bulkhead_profiles": [
@@ -22678,6 +23083,7 @@
   },
   "wingConnector2": {
     "name": "wingConnector2",
+    "pack": "Stock",
     "title": "Wing Connector Type B",
     "mass": 0.2,
     "bulkhead_profiles": [
@@ -22715,6 +23121,7 @@
   },
   "wingConnector3": {
     "name": "wingConnector3",
+    "pack": "Stock",
     "title": "Wing Connector Type C",
     "mass": 0.1,
     "bulkhead_profiles": [
@@ -22752,6 +23159,7 @@
   },
   "wingConnector4": {
     "name": "wingConnector4",
+    "pack": "Stock",
     "title": "Wing Connector Type D",
     "mass": 0.05,
     "bulkhead_profiles": [
@@ -22789,6 +23197,7 @@
   },
   "wingConnector5": {
     "name": "wingConnector5",
+    "pack": "Stock",
     "title": "Wing Connector Type E",
     "mass": 0.05,
     "bulkhead_profiles": [
@@ -22826,6 +23235,7 @@
   },
   "wingShuttleDelta": {
     "name": "wingShuttleDelta",
+    "pack": "Stock",
     "title": "Big-S Delta Wing",
     "mass": 0.5,
     "bulkhead_profiles": [
@@ -22866,6 +23276,7 @@
   },
   "wingShuttleElevon1": {
     "name": "wingShuttleElevon1",
+    "pack": "Stock",
     "title": "Big-S Elevon 1",
     "mass": 0.15,
     "bulkhead_profiles": [
@@ -22903,6 +23314,7 @@
   },
   "wingShuttleElevon2": {
     "name": "wingShuttleElevon2",
+    "pack": "Stock",
     "title": "Big-S Elevon 2",
     "mass": 0.23,
     "bulkhead_profiles": [
@@ -22940,6 +23352,7 @@
   },
   "wingShuttleRudder": {
     "name": "wingShuttleRudder",
+    "pack": "Stock",
     "title": "Big-S Spaceplane Tail Fin",
     "mass": 0.45,
     "bulkhead_profiles": [
@@ -22977,6 +23390,7 @@
   },
   "wingShuttleStrake": {
     "name": "wingShuttleStrake",
+    "pack": "Stock",
     "title": "Big-S Wing Strake",
     "mass": 0.1,
     "bulkhead_profiles": [
@@ -23017,6 +23431,7 @@
   },
   "wingStrake": {
     "name": "wingStrake",
+    "pack": "Stock",
     "title": "Wing Strake",
     "mass": 0.05,
     "bulkhead_profiles": [
@@ -23054,6 +23469,7 @@
   },
   "winglet": {
     "name": "winglet",
+    "pack": "Stock",
     "title": "AV-T1 Winglet",
     "mass": 0.037,
     "bulkhead_profiles": [
@@ -23091,6 +23507,7 @@
   },
   "winglet3": {
     "name": "winglet3",
+    "pack": "Stock",
     "title": "Delta-Deluxe Winglet",
     "mass": 0.078,
     "bulkhead_profiles": [
@@ -23128,6 +23545,7 @@
   },
   "xenonTank": {
     "name": "xenonTank",
+    "pack": "Stock",
     "title": "PB-X150 Xenon Container",
     "mass": 0.024,
     "bulkhead_profiles": [
@@ -23180,6 +23598,7 @@
   },
   "xenonTankLarge": {
     "name": "xenonTankLarge",
+    "pack": "Stock",
     "title": "PB-X750 Xenon Container",
     "mass": 0.19,
     "bulkhead_profiles": [
@@ -23232,6 +23651,7 @@
   },
   "xenonTankRadial": {
     "name": "xenonTankRadial",
+    "pack": "Stock",
     "title": "PB-X50R Xenon Container",
     "mass": 0.0135,
     "bulkhead_profiles": [

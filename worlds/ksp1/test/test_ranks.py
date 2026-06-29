@@ -169,7 +169,8 @@ class TestSRBHomeAwareness(unittest.TestCase):
         self.assertEqual(vac["Clydesdale"], buckets)
 
     def test_only_atm_isp_uses_atm_branch(self) -> None:
-        from worlds.ksp1.parts import PART_DB, SolidBooster
+        from worlds.ksp1.parts import DEFAULT_PART_MANAGER, SolidBooster
+        PART_DB = DEFAULT_PART_MANAGER.parts
         from worlds.ksp1.ranks import _srb
         clyde = next(p for p in PART_DB["Clydesdale"] if isinstance(p, SolidBooster))
         atm_score = _srb(clyde, RankContext(home_has_atmosphere=True))
