@@ -1283,10 +1283,11 @@ def _evaluate_profile(
     # Detect if aero edges destroy fixed solar panels
     body_aero_destroyed: dict[str, bool] = {}  # body -> whether fixed solar destroyed
     post_aero = False
+    home_surface = f"{home.value.lower()}_surface"
     for edge in profile:
-        is_kerbin_reentry = (edge.destination == "kerbin_surface" and
-                             edge.edge_type == EdgeType.ATMO_LANDING_AERO)
-        if edge.needs_heat_shield and not is_kerbin_reentry:
+        is_home_reentry = (edge.destination == home_surface and
+                           edge.edge_type == EdgeType.ATMO_LANDING_AERO)
+        if edge.needs_heat_shield and not is_home_reentry:
             post_aero = True
         if edge.body not in body_aero_destroyed:
             body_aero_destroyed[edge.body] = post_aero
