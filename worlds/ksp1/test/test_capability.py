@@ -908,7 +908,7 @@ class TestInterplanetaryBodies(unittest.TestCase):
             )
 
     def test_outer_bodies_blocked_at_relay_tier_3(self) -> None:
-        # Jool (max sep 6.2 AU) and Eeloo (7.0 AU) both fall in the
+        # Jool (opposition 6.057 AU) and Eeloo (7.626 AU) both fall in the
         # tier-4 band under the opposition-distance relay formula.
         flags = self._full_kit_flags()
         self.assertEqual(flags.relay_tier, 3)
@@ -1414,18 +1414,19 @@ class TestEscapeRelayGate(unittest.TestCase):
         return False
 
     def test_dres_escape_requires_relay_tier_3(self) -> None:
-        # Dres max-separation = 3.65 AU from Kerbin → tier 3 under the
-        # opposition-distance relay formula.
+        # Dres opposition = 4.003 AU from Kerbin → tier 3: an RA-15 relay
+        # (tier 3) closes the link at opposition with a level-3 DSN (max
+        # range 4.50 AU). See _RELAY_TIER_AU_THRESHOLDS.
         self.assertFalse(self._escape_feasible(BodyName.DRES, relay_tier=2))
         self.assertTrue(self._escape_feasible(BodyName.DRES, relay_tier=3))
 
     def test_moho_escape_requires_relay_tier_2(self) -> None:
-        # Moho max-separation = 1.34 AU from Kerbin → tier 2.
+        # Moho opposition = 1.387 AU from Kerbin → tier 2.
         self.assertFalse(self._escape_feasible(BodyName.MOHO, relay_tier=1))
         self.assertTrue(self._escape_feasible(BodyName.MOHO, relay_tier=2))
 
     def test_eeloo_escape_requires_relay_tier_4(self) -> None:
-        # Eeloo max-separation = 7.0 AU from Kerbin → tier 4.
+        # Eeloo opposition = 7.626 AU from Kerbin → tier 4.
         self.assertFalse(self._escape_feasible(BodyName.EELOO, relay_tier=3))
         self.assertTrue(self._escape_feasible(BodyName.EELOO, relay_tier=4))
 

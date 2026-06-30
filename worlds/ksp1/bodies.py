@@ -207,7 +207,12 @@ class Body:
     atm_density_kg_m3: float        # sea-level air density, 0 for vacuum
     can_land: bool
     low_orbit_alt_km: float         # defines "low orbit" for location checks
-    solar_distance_au: float        # Kerbin = 1.0, used for ION/solar logic
+    solar_distance_au: float        # real semi-major axis / Kerbin's (Kerbin = 1.0).
+                                    # Heliocentric Hohmann radius (transfer/capture v∞),
+                                    # ION/solar logic, and relay-tier opposition distance.
+                                    # SMA averages over eccentricity — exact for near-circular
+                                    # bodies; for eccentric ones (Moho 0.20, Eeloo 0.26, Dres
+                                    # 0.145) it models a competently-timed window, not worst case.
     landing_leg_tier: int           # minimum leg tier required for landing
     power_requirement: str          # "solar" | "solar_marginal" | "rtg"
     eva_jetpack_twr: float          # precomputed: 0.5/(0.09375*surface_gravity)
@@ -596,7 +601,7 @@ MOHO = Body(
     surface_gravity=2.70, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=20,
-    solar_distance_au=0.34,
+    solar_distance_au=0.387,
     landing_leg_tier=1,
     power_requirement="solar",
     eva_jetpack_twr=_jetpack_twr(2.70),
@@ -720,13 +725,13 @@ DRES = Body(
     name=BodyName.DRES, parent=None,
     max_terrain_km=5.7,      # wiki: highest points just under 5.7 km
     rotation_period_s=34800.0, soi_radius_km=32832.840,
-    surface_gravity=2.94, has_atmosphere=False,
+    surface_gravity=1.13, has_atmosphere=False,  # wiki: 0.115 g; GM/R² = 1.128
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=25,
-    solar_distance_au=2.65,
+    solar_distance_au=3.003,
     landing_leg_tier=1,
     power_requirement="solar_marginal",
-    eva_jetpack_twr=_jetpack_twr(2.94),
+    eva_jetpack_twr=_jetpack_twr(1.13),
     dv=BodyDeltaV(
         dvGL=430, dvLE=None, dvEI=None, dvK=610,
         dvLI=1290, dvPL=None, dvPE=None, dvPlaneChange=1010,
@@ -747,7 +752,7 @@ JOOL = Body(
     surface_gravity=7.85, has_atmosphere=True,
     atm_pressure_kpa=1519.88, atm_density_kg_m3=10.0,
     can_land=False, low_orbit_alt_km=210,
-    solar_distance_au=5.20,
+    solar_distance_au=5.057,
     landing_leg_tier=0,
     power_requirement="rtg",
     eva_jetpack_twr=_jetpack_twr(7.85),
@@ -777,7 +782,7 @@ LAYTHE = Body(
     surface_gravity=7.85, has_atmosphere=True,
     atm_pressure_kpa=60.795, atm_density_kg_m3=0.73,
     can_land=True, low_orbit_alt_km=60,
-    solar_distance_au=5.20,
+    solar_distance_au=5.057,
     landing_leg_tier=2,
     power_requirement="rtg",
     eva_jetpack_twr=_jetpack_twr(7.85),
@@ -804,7 +809,7 @@ VALL = Body(
     surface_gravity=2.31, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=15,
-    solar_distance_au=5.20,
+    solar_distance_au=5.057,
     landing_leg_tier=1,
     power_requirement="rtg",
     eva_jetpack_twr=_jetpack_twr(2.31),
@@ -829,7 +834,7 @@ TYLO = Body(
     surface_gravity=7.85, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=30,
-    solar_distance_au=5.20,
+    solar_distance_au=5.057,
     landing_leg_tier=2,
     power_requirement="rtg",
     eva_jetpack_twr=_jetpack_twr(7.85),
@@ -854,7 +859,7 @@ BOP = Body(
     surface_gravity=0.589, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=10,
-    solar_distance_au=5.20,
+    solar_distance_au=5.057,
     landing_leg_tier=1,
     power_requirement="rtg",
     eva_jetpack_twr=_jetpack_twr(0.589),
@@ -879,7 +884,7 @@ POL = Body(
     surface_gravity=0.373, has_atmosphere=False,
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=6,
-    solar_distance_au=5.20,
+    solar_distance_au=5.057,
     landing_leg_tier=1,
     power_requirement="rtg",
     eva_jetpack_twr=_jetpack_twr(0.373),
@@ -900,13 +905,13 @@ EELOO = Body(
     name=BodyName.EELOO, parent=None,
     max_terrain_km=3.9,      # wiki: highest points almost 3.9 km
     rotation_period_s=19460.0, soi_radius_km=119082.94,
-    surface_gravity=1.72, has_atmosphere=False,
+    surface_gravity=1.69, has_atmosphere=False,  # wiki: 0.172 g; GM/R² = 1.687
     atm_pressure_kpa=0, atm_density_kg_m3=0,
     can_land=True, low_orbit_alt_km=10,
-    solar_distance_au=6.0,
+    solar_distance_au=6.626,
     landing_leg_tier=1,
     power_requirement="rtg",
-    eva_jetpack_twr=_jetpack_twr(1.72),
+    eva_jetpack_twr=_jetpack_twr(1.69),
     dv=BodyDeltaV(
         dvGL=620, dvLE=None, dvEI=None, dvK=1140,
         dvLI=1370, dvPL=None, dvPE=None, dvPlaneChange=1330,
@@ -1599,6 +1604,36 @@ class MissionBuilder:
         # Return-only edges that converge on home.surface.
         self._add_home_return_paths()
 
+    def _planet_capture_dv(self, body: "Body", base_capture_dv: float) -> float:
+        """Propulsive SOI→low-orbit capture cost (m/s) for ``body``.
+
+        The capture burn is the hyperbolic-arrival insertion
+        ``√(v∞² + 2µ/r) − √(µ/r)``, where ``v∞`` is the heliocentric Hohmann
+        arrival speed for THIS world's home reaching ``body``.  ``v∞`` scales with
+        the home's solar distance — a far home (e.g. Dres → Moho) arrives far
+        faster than Kerbin does and must burn much harder to capture.  Computed
+        straight from physics for every home: accurate to what the player actually
+        flies, never anchored to (and so never floored at) the Kerbin delta-v-map
+        value.  Coplanar Hohmann is itself conservative (the true optimal transfer
+        is never more expensive), so this stays at-or-above the achievable cost.
+
+        ``base_capture_dv`` (``dvLE``/``dvLI``) is kept only for arrivals the
+        heliocentric model does not describe: a moon's tabulated capture is a
+        parent-frame Oberth ejection, and an arrival inside the home's own system
+        is an in-well transfer — both keep their tabulated value.
+        """
+        if body.parent is not None:                 # moon: dvLI is parent-frame Oberth
+            return base_capture_dv
+        root = self.home_body
+        while root.parent is not None:              # moon-home → its root planet
+            root = BODY_BY_NAME[root.parent]
+        if root.name == body.name:                  # arriving in home's own system
+            return base_capture_dv
+        v_inf = planet_transfer_dv(root, body)[1]
+        mu = body.gm
+        r = body.lo_radius_m
+        return math.sqrt(v_inf * v_inf + 2.0 * mu / r) - math.sqrt(mu / r)
+
     def _add_body_trunk(self, body: "Body") -> None:
         """Ascent, escape/capture, landing edges for a single body.
 
@@ -1649,7 +1684,8 @@ class MissionBuilder:
             # Jool" with "prop landing at a moon of Jool" without the
             # scheme constraint blocking it.
             capture_has_aero_alt = body.has_atmosphere and body.parent is None
-            capture_prop = self._edge(soi, lo, self._PV, escape_dv, bn, attitude=True)
+            capture_dv = self._planet_capture_dv(body, escape_dv)
+            capture_prop = self._edge(soi, lo, self._PV, capture_dv, bn, attitude=True)
             self._add_out(capture_prop, scheme="prop" if capture_has_aero_alt else "")
             if capture_has_aero_alt:
                 capture_aero = self._edge(
@@ -2594,14 +2630,19 @@ def parent_chain(body: Body) -> list[str]:
 # the fleeting best case — sizing the antenna for it leaves the player
 # stranded for half the synodic period.
 #
-# Thresholds chosen so Kerbin-home reproduces the original hand-tuned
-# per-body tiers byte-identical (Moho 2, Eve / Duna / Dres 3, Jool /
-# Eeloo 4) while keeping the formula homogeneous for any starting body.
+# The tier-3 ceiling is physics-derived: a tier-3 relay (RA-15, antennaPower
+# 1.5e10) against a level-3 DSN (2.5e11) closes a link out to
+# ``sqrt(1.5e10 * 2.5e11) = 6.12e10 m = 4.50 AU`` of opposition separation.
+# Beyond that the tier-4 antenna (RA-100, 1e11) is required.  With the real
+# semi-major-axis ``solar_distance_au`` values this reproduces the original
+# hand-tuned per-body tiers exactly (Moho 2, Eve / Duna / Dres 3, Jool /
+# Eeloo 4) while staying homogeneous for any starting body.  The lower
+# thresholds remain the original hand-tuned bands.
 _RELAY_TIER_AU_THRESHOLDS: tuple[tuple[float, int], ...] = (
     (0.5, 0),   # negligible separation (unused — home_system bypass)
     (1.3, 1),   # innermost band — unused under stock home distances
-    (1.5, 2),   # Moho (max sep 1.34 AU from Kerbin)
-    (4.0, 3),   # Eve / Gilly (1.72), Duna / Ike (2.52), Dres (3.65)
+    (1.5, 2),   # Moho (opposition 1.387 AU from Kerbin)
+    (4.5, 3),   # RA-15 max range @ DSN L3; Eve (1.72) / Duna (2.52) / Dres (4.003)
 )
 
 

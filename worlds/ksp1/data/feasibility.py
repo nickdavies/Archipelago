@@ -32,7 +32,7 @@ MODEL_INFEASIBLE_LOCATIONS_BY_DIFFICULTY: dict[str, dict[BodyName, frozenset[str
         BodyName.GILLY: frozenset({'Eve Return 1', 'Eve Return 2', 'Eve Return 3', 'Eve Sample Return 1', 'Eve Sample Return 2', 'Eve Sample Return 3'}),
         BodyName.IKE: frozenset({'Eve Return 1', 'Eve Return 2', 'Eve Return 3', 'Eve Sample Return 1', 'Eve Sample Return 2', 'Eve Sample Return 3'}),
         BodyName.KERBIN: frozenset({'Eve Return 1', 'Eve Return 2', 'Eve Return 3', 'Eve Sample Return 1', 'Eve Sample Return 2', 'Eve Sample Return 3', 'Tylo Sample Return 1', 'Tylo Sample Return 2', 'Tylo Sample Return 3'}),
-        BodyName.LAYTHE: frozenset({'Eve Return 1', 'Eve Return 2', 'Eve Return 3', 'Eve Sample Return 1', 'Eve Sample Return 2', 'Eve Sample Return 3'}),
+        BodyName.LAYTHE: frozenset({'Eve Return 1', 'Eve Return 2', 'Eve Return 3', 'Eve Sample Return 1', 'Eve Sample Return 2', 'Eve Sample Return 3', 'Moho Return 1', 'Moho Return 2', 'Moho Return 3', 'Moho Sample Return 1', 'Moho Sample Return 2', 'Moho Sample Return 3'}),
         BodyName.MINMUS: frozenset({'Eve Return 1', 'Eve Return 2', 'Eve Return 3', 'Eve Sample Return 1', 'Eve Sample Return 2', 'Eve Sample Return 3'}),
         BodyName.MOHO: frozenset({'Eve Return 1', 'Eve Return 2', 'Eve Return 3', 'Eve Sample Return 1', 'Eve Sample Return 2', 'Eve Sample Return 3', 'Laythe Return 1', 'Laythe Return 2', 'Laythe Return 3', 'Laythe Sample Return 1', 'Laythe Sample Return 2', 'Laythe Sample Return 3'}),
         BodyName.MUN: frozenset({'Eve Return 1', 'Eve Return 2', 'Eve Return 3', 'Eve Sample Return 1', 'Eve Sample Return 2', 'Eve Sample Return 3'}),
