@@ -8,11 +8,13 @@ from Options import OptionError
 from worlds.AutoWorld import LogicMixin, WebWorld, World
 
 from . import contracts, items, locations, regions, rules
-from .parts import ALL_PACKS, part_manager_for
+from .parts import part_manager_for
 from .ksc_sites import ksc_site_slot_data
 from .rules import GoalSpec, resolve_goal_spec, goal_spec_location_names
 from .capability import CAPABILITY_ITEMS, RocketCapability
-from .data.feasibility import MODEL_INFEASIBLE_LOCATIONS_BY_DIFFICULTY
+from .data.feasibility import (
+    MODEL_INFEASIBLE_BASE, MODEL_INFEASIBLE_DELTAS, BASE_RELEVANT_PACKS,
+)
 from .bodies import (
     ALL_BODIES, BodyName, EdgeType, MissionBuilder, MissionType, RandomOrbitParams,
     effective_physics_profile_name,
@@ -281,8 +283,8 @@ class KSP1World(World):
 
     # AP location names whose mission the dv model can't verify from this
     # world's home, even given a full progressive kit + every part.
-    # Looked up at world-init time from the checked-in per-difficulty
-    # ``MODEL_INFEASIBLE_LOCATIONS_BY_DIFFICULTY`` table (regenerated offline by
+    # Looked up at world-init time from the checked-in base+delta
+    # ``MODEL_INFEASIBLE_BASE`` table (regenerated offline by
     # ``scripts/generate_feasibility.py``).  Completion-condition rules
     # for these locations fall back to the "all-parts collected" proxy
     # because the dv model can't model their ascents (Eve's 8 km/s,
@@ -354,18 +356,21 @@ class KSP1World(World):
         # title-case round-trip rebuilds the canonical ``StrEnum`` value.
         home = BodyName(self.options.starting_body.current_key.title())
         self.mission_builder = MissionBuilder(home=home)
-        # Pack-aware source of truth for which parts this world may use. Phase 1
-        # enables every installed pack (behavior-identical); Phase 2 will derive
-        # the enabled set from the EnabledPartPacks option.
-        self.part_manager = part_manager_for(ALL_PACKS)
+        # Pack-aware source of truth for which parts this world may use. The
+        # enabled optional packs come from the option (Stock is always added by
+        # PartManager); a disabled pack's parts are then absent from the item
+        # pool, capability, the rank table, and the feasibility lookup.
+        self.part_manager = part_manager_for(
+            frozenset(self.options.enabled_part_packs.value))
         self.location_builder = LocationBuilder(home=home)
         # Per-world RankContext for sphere-ladder + item.rank_sig.
-        # ``home_has_atmosphere`` drives the SRB axis scorer; the rest
-        # of the rank table is body-agnostic.
+        # ``home_has_atmosphere`` drives the SRB axis scorer; ``enabled_packs``
+        # scopes the rank table to the parts this seed can actually grant.
         from .ranks import RankContext
         _atmo_homes = {BodyName.KERBIN, BodyName.EVE, BodyName.DUNA, BodyName.LAYTHE}
         self._rank_context = RankContext(
             home_has_atmosphere=(home in _atmo_homes),
+            enabled_packs=self.part_manager.enabled_packs,
             local_needs_conics=self.local_needs_conics,
             local_needs_nodes=self.local_needs_nodes)
 
@@ -393,8 +398,17 @@ class KSP1World(World):
         # spec, contracts).  The offline generator uses a RAW builder (empty
         # ``unachievable``) so the table keeps measuring true maximal capability.
         diff_name = effective_physics_profile_name(self.options)
-        _table_names = MODEL_INFEASIBLE_LOCATIONS_BY_DIFFICULTY.get(
-            diff_name, {}).get(self.mission_builder.home, frozenset())
+        home = self.mission_builder.home
+        # Resolve the model-infeasible table for this seed's enabled
+        # capability-relevant packs: base ⊕ signed delta (delta absent for the
+        # default config and for any pack set that doesn't change feasibility).
+        relevant = tuple(sorted(self.part_manager.capability_relevant_packs()))
+        _table_names = MODEL_INFEASIBLE_BASE.get(diff_name, {}).get(
+            home, frozenset())
+        if relevant != BASE_RELEVANT_PACKS:
+            _add, _remove = MODEL_INFEASIBLE_DELTAS.get(relevant, {}).get(
+                diff_name, {}).get(home, (frozenset(), frozenset()))
+            _table_names = (_table_names | _add) - _remove
         unachievable: set[tuple[BodyName, MissionType]] = {
             (ml.body, EVENT_BY_NAME[ml.event].mission_type)
             for name in _table_names
@@ -721,6 +735,11 @@ class KSP1World(World):
         # comparison (KSC biome prefixes, altitude polling guard, splashdown
         # detection, first-launch / first-landing / first-crash events).
         d["starting_body"] = self.mission_builder.home.value
+        # Part packs this seed was generated with (Stock is always present).
+        # The client validates the optional packs against installed expansions
+        # and warns on a mismatch (enabled-but-not-owned / owned-but-disabled);
+        # it needs no part-level detail — contracts arrive fully resolved.
+        d["enabled_part_packs"] = sorted(self.part_manager.enabled_packs)
         # KSC site row for an alien starting body: the landing coordinate
         # (lat/lon/terrain alt) + map-decal flag where the cloned KSC cluster
         # is placed.  The client materialises the alien KSC from this instead

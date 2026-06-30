@@ -4,6 +4,7 @@ from Options import Choice, ExcludeLocations, ItemsAccessibility, NamedRange, Op
 
 from .bodies import ALL_BODIES, BodyName
 from .contracts import ContractType, NON_GOAL_TYPES
+from .parts.packs import OPTIONAL_PACKS, DEFAULT_ENABLED_OPTIONAL_PACKS
 
 # All landable body names, derived from bodies.py (single source of truth).
 LANDABLE_BODY_NAMES: frozenset[str] = frozenset(
@@ -113,6 +114,15 @@ class FlybyBodies(OptionSet):
     """Bodies to perform a flyby of (custom goal). Leave empty for preset goals."""
     display_name = "Flyby Bodies"
     valid_keys = ORBITABLE_BODY_NAMES
+
+
+class EnabledPartPacks(OptionSet):
+    """Optional part packs to include in the seed. Stock parts are always
+    available; enable the DLC/expansion packs you own here (disable a pack to
+    leave its parts out of the run). Defaults to every shipped optional pack."""
+    display_name = "Enabled Part Packs"
+    valid_keys = frozenset(OPTIONAL_PACKS)
+    default = frozenset(DEFAULT_ENABLED_OPTIONAL_PACKS)
 
 
 class StartingBody(Choice):
@@ -318,7 +328,7 @@ class KSP1ExcludeLocations(ExcludeLocations):
     Empty by default: missions the dv model can't verify from the active
     home at the seed's difficulty (e.g. Eve surface returns) are gated via
     the "all progression items collected" proxy rule (see
-    ``MODEL_INFEASIBLE_LOCATIONS_BY_DIFFICULTY`` in ``data/feasibility.py``).
+    ``MODEL_INFEASIBLE_BASE`` in ``data/feasibility.py``).
     That mechanism already prevents fill failures without taking the
     locations out of the progression pool.
 
@@ -627,3 +637,4 @@ class KSP1Options(PerGameCommonOptions):
     sample_return_bodies: SampleReturnBodies
     orbit_bodies: OrbitBodies
     flyby_bodies: FlybyBodies
+    enabled_part_packs: EnabledPartPacks
