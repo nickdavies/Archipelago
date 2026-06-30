@@ -363,7 +363,13 @@ def format_stage_breakdown(
             if tank_name and tank_name != "none":
                 lines.append(f"      {count}x {titled(tank_name)}")
 
+        # Coalesce identical parts: the optimizer appends equipment from several
+        # sites (fins, decouplers, attitude bundles) so the same part_id can
+        # recur. Sum counts per part_id, preserving first-seen order.
+        coalesced_equip: dict[str, int] = {}
         for count, part_id in stage.equipment:
+            coalesced_equip[part_id] = coalesced_equip.get(part_id, 0) + count
+        for part_id, count in coalesced_equip.items():
             lines.append(f"      {count}x {titled(part_id)}")
 
         # The heat shield the optimizer charged for this stage (it lives in
