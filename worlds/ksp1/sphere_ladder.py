@@ -66,6 +66,7 @@ from .items import (
     PROGRESSIVE_RD_COUNT, PROGRESSIVE_RD_NAME,
     PROGRESSIVE_TRACKING_STATION_NAME, PROGRESSIVE_TRACKING_STATION_COUNT,
     PROGRESSIVE_ASTRONAUT_COMPLEX_NAME, PROGRESSIVE_ASTRONAUT_COMPLEX_COUNT,
+    PROGRESSIVE_MISSION_CONTROL_NAME, PROGRESSIVE_MISSION_CONTROL_COUNT,
 )
 from .parts import (
     CapabilityFlag,
@@ -1018,6 +1019,8 @@ def _pre_pass_for_ranks(
                 ranks.counted(PROGRESSIVE_TRACKING_STATION_NAME),
             PROGRESSIVE_ASTRONAUT_COMPLEX_NAME:
                 ranks.counted(PROGRESSIVE_ASTRONAUT_COMPLEX_NAME),
+            PROGRESSIVE_MISSION_CONTROL_NAME:
+                ranks.counted(PROGRESSIVE_MISSION_CONTROL_NAME),
         }
 
     def cf(name: str, _adm=admitted, _pad=pad_tier, _bl=_building_levels) -> int:
@@ -1035,6 +1038,8 @@ def _pre_pass_for_ranks(
         launch_pad_caps=launch_pad_caps,
         buildings_in_logic=buildings_in_logic,
         home=home,
+        local_needs_conics=ctx.local_needs_conics,
+        local_needs_nodes=ctx.local_needs_nodes,
     )
     # In rank-space mode the progressive binary gate flags
     # (``has_launch_engine``, ``has_vacuum_engine``, ``has_lfo_fuel``,
@@ -1382,19 +1387,32 @@ def minimal_ranks_for(
                 continue
         # Curated-building blockers (buildings_in_logic): bump the building
         # Counted level outside the rank model, mirroring the Pad mass-cap
-        # bump above.  DSN_POWER_INSUFFICIENT -> Tracking Station level,
-        # CANNOT_EVA -> Astronaut Complex level.  Each building's max level
-        # comes from its pooled copy count.
+        # bump above.  DSN_POWER_INSUFFICIENT / conics -> Tracking Station,
+        # CANNOT_EVA -> Astronaut Complex, maneuver nodes -> Mission Control.
+        # Navigation / rendezvous need conics (TS) AND nodes (MC); local-system
+        # transfers need only what the resolved options demand.
         if buildings_in_logic:
+            _TS = (PROGRESSIVE_TRACKING_STATION_NAME,
+                   PROGRESSIVE_TRACKING_STATION_COUNT)
+            _MC = (PROGRESSIVE_MISSION_CONTROL_NAME,
+                   PROGRESSIVE_MISSION_CONTROL_COUNT)
+            _AC = (PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
+                   PROGRESSIVE_ASTRONAUT_COMPLEX_COUNT)
+            _BR = BlockingReason
+            _bumps = [
+                (*_TS, _BR.DSN_POWER_INSUFFICIENT),
+                (*_AC, _BR.CANNOT_EVA),
+                (*_TS, _BR.CANNOT_NAVIGATE_INTERPLANETARY),
+                (*_MC, _BR.CANNOT_NAVIGATE_INTERPLANETARY),
+                (*_TS, _BR.CANNOT_RENDEZVOUS),
+                (*_MC, _BR.CANNOT_RENDEZVOUS),
+            ]
+            if ctx.local_needs_conics or ctx.local_needs_nodes:
+                _bumps.append((*_TS, _BR.CANNOT_NAVIGATE_LOCAL))
+            if ctx.local_needs_nodes:
+                _bumps.append((*_MC, _BR.CANNOT_NAVIGATE_LOCAL))
             building_block = False
-            for kind, cap, reason in (
-                (PROGRESSIVE_TRACKING_STATION_NAME,
-                 PROGRESSIVE_TRACKING_STATION_COUNT,
-                 BlockingReason.DSN_POWER_INSUFFICIENT),
-                (PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
-                 PROGRESSIVE_ASTRONAUT_COMPLEX_COUNT,
-                 BlockingReason.CANNOT_EVA),
-            ):
+            for kind, cap, reason in _bumps:
                 if any(b.reason == reason for b in result.blocking):
                     cur = sig.counted(kind)
                     if cur < cap:
@@ -1607,13 +1625,15 @@ def minimal_ranks_for(
                 Rank(a, max_rank_for(a)) for a in RankAxisKey
             )
             if buildings_in_logic:
-                # Full-admit rescue: max the building levels too, else a
-                # DSN / EVA gate would falsely fail the rescue probe.
+                # Full-admit rescue: max the building levels too, else a DSN /
+                # EVA / navigation gate would falsely fail the rescue probe.
                 max_ranks_for_rescue = (max_ranks_for_rescue
                     .with_counted(PROGRESSIVE_TRACKING_STATION_NAME,
                                   PROGRESSIVE_TRACKING_STATION_COUNT)
                     .with_counted(PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
-                                  PROGRESSIVE_ASTRONAUT_COMPLEX_COUNT))
+                                  PROGRESSIVE_ASTRONAUT_COMPLEX_COUNT)
+                    .with_counted(PROGRESSIVE_MISSION_CONTROL_NAME,
+                                  PROGRESSIVE_MISSION_CONTROL_COUNT))
             rescue_flags = _pre_pass_for_ranks(
                 max_ranks_for_rescue, ctx,
                 start_with_clamps=start_with_clamps,
@@ -2317,18 +2337,20 @@ def _demote_non_rep_parts(
         PROGRESSIVE_SCIENCE_INSTRUMENT_NAME,
         PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
         PROGRESSIVE_TRACKING_STATION_NAME,
+        PROGRESSIVE_MISSION_CONTROL_NAME,
     )
     from .ranks import ItemRankSig
     # The counted progressives whose copies must stay PROGRESSION up to the
     # chain's highest needed level (chain_extras): R&D / Pad / PSI plus the
-    # curated buildings that are pooled + gated this release (Astronaut Complex
-    # and Tracking Station; VAB/SPH ship maxed and aren't pooled).
+    # curated buildings pooled + gated this release (Astronaut Complex, Tracking
+    # Station, Mission Control; VAB/SPH ship maxed and aren't pooled).
     _KEEP_PROGRESSIVE: frozenset[str] = frozenset({
         PROGRESSIVE_RD_NAME,
         PROGRESSIVE_LAUNCH_PAD_NAME,
         PROGRESSIVE_SCIENCE_INSTRUMENT_NAME,
         PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
         PROGRESSIVE_TRACKING_STATION_NAME,
+        PROGRESSIVE_MISSION_CONTROL_NAME,
     })
     ceiling = {r.axis: r.level for r in chain_cumulative.rank_reqs}
     player = world.player
@@ -2526,52 +2548,67 @@ def _mission_needs_travel(info: "_LocationMissionInfo",
 
 def _mission_building_reqs(
     info: "_LocationMissionInfo", *, home: "BodyName", needs_travel: bool,
+    local_needs_conics: bool, local_needs_nodes: bool,
 ) -> tuple[tuple[str, int], ...]:
     """Per-mission curated-building requirements as ``(item_name, level)``.
 
-    Derived from the mission's own physics (whether it needs EVA and — for
-    uncrewed missions — the comms range to its target), mirroring the per-mission
-    pad gate.  Only positive levels are recorded.  (VAB/SPH buildable limits ship
-    maxed this release, so no VAB requirement is recorded — see effects.py.)
+    Inverts the capability gate: a mission's required *abilities*
+    (``effects.buildings_for_capability``) plus its comms need become the
+    building items it depends on, so the sphere-ladder gates those copies at the
+    right sphere and they can't strand.  Only positive levels are recorded.
+    (VAB/SPH ship maxed this release, so no VAB requirement is recorded.)
 
-    * CAN_EVA (Astronaut Complex): level 1 for EVA missions that require travel
-      (``needs_travel`` — a non-empty profile); home-surface walk-off-pad EVA is
-      allowed at AC level 0, matching the empty-profile exemption.
-    * DSN_POWER (Tracking Station): for uncrewed missions that leave the home
-      system, the min DSN level at which the antenna the mission already needs
-      holds the link.  Crewed missions bypass comms (pilot control), so they
-      record no requirement — matching the capability gate.
+    * EVA (Astronaut Complex): away-from-home EVA only — home-body EVA is allowed
+      at AC level 0 (matches the capability gate's home exemption).
+    * Comms/DSN (Tracking Station): uncrewed missions that leave the home system,
+      at the min level the antenna the mission needs already holds the link.
+      ``crewed is not True`` treats an ambiguous mission as possibly-uncrewed
+      (conservative).
+    * Navigation (Tracking Station conics + Mission Control nodes): interplanetary
+      always; home-system (moon) transfers per the resolved options.  Rendezvous
+      (RESCUE) always.  These gate crewed and uncrewed alike.
     """
-    from .effects import Building, Effect, min_building_level_for
+    from .effects import Building, Capability, buildings_for_capability
     from .items import _building_to_item_name
-    from .capability import MISSION_TYPES_REQUIRING_EVA
+    from .capability import (
+        MISSION_TYPES_REQUIRING_EVA, MISSION_TYPES_REQUIRING_RENDEZVOUS,
+    )
+    from .bodies import home_system_bodies, min_relay_tier
 
     name_for = _building_to_item_name()
     reqs: list[tuple[str, int]] = []
 
-    # Astronaut Complex EVA gate.  Home-body EVA (surface + orbit) is allowed at
-    # AC level 0, matching the capability gate's home-only exemption, so only EVA
-    # that leaves the home body records an AC requirement (``info.body != home``).
+    def _record(cap: Capability) -> None:
+        for building, level in buildings_for_capability(
+                cap, local_needs_conics=local_needs_conics,
+                local_needs_nodes=local_needs_nodes):
+            reqs.append((name_for[building], level))
+
+    # Astronaut Complex EVA gate (away-from-home EVA only).
     eva_required = (info.requires_eva if info.requires_eva is not None
                     else info.mission_type in MISSION_TYPES_REQUIRING_EVA)
     if eva_required and needs_travel and info.body != home:
-        _ac_building, ac_level = min_building_level_for(
-            Effect.CAN_EVA, True, home=home)
-        if ac_level > 0:
-            reqs.append((name_for[_ac_building], ac_level))
+        _record(Capability.CAN_EVA)
 
-    # Tracking Station (DSN) comms gate — uncrewed missions only.  ``crewed is
-    # not True`` treats an ambiguous (None) mission as possibly-uncrewed, which
-    # is the conservative choice (records the gate so the unique TS copy can't
-    # strand).  The required level uses the antenna the mission needs anyway
-    # (``min_relay_tier``); home-system targets resolve to level 0 (no gate).
+    # Tracking Station (DSN) comms gate — uncrewed missions only.
     if needs_travel and info.crewed is not True:
         from .comms import min_dsn_level_for
-        from .bodies import min_relay_tier
         ts_level = min_dsn_level_for(
             info.body, home, min_relay_tier(info.body, home))
         if ts_level > 0:
             reqs.append((name_for[Building.TRACKING_STATION], ts_level))
+
+    # Navigation (conics + nodes) — crewed and uncrewed.  Interplanetary targets
+    # (outside the home system) always need it; a home-system moon scales with
+    # the options.  Rendezvous (RESCUE) always needs it.
+    if needs_travel:
+        home_system = home_system_bodies(home)
+        if info.body not in home_system:
+            _record(Capability.CAN_NAVIGATE_INTERPLANETARY)
+        elif info.body != home:
+            _record(Capability.CAN_NAVIGATE_LOCAL)
+    if info.mission_type in MISSION_TYPES_REQUIRING_RENDEZVOUS:
+        _record(Capability.CAN_RENDEZVOUS)
 
     return tuple(reqs)
 
@@ -2703,7 +2740,11 @@ def _install_ladder_rules(
                     if buildings_in_logic:
                         building_reqs = _mission_building_reqs(
                             info, home=bn_home,
-                            needs_travel=_mission_needs_travel(info, mb))
+                            needs_travel=_mission_needs_travel(info, mb),
+                            local_needs_conics=getattr(
+                                world, "local_needs_conics", True),
+                            local_needs_nodes=getattr(
+                                world, "local_needs_nodes", True))
                     break
             if j is None and buildings_in_logic:
                 # Unbracketed mission (beyond the chain's reps-only reach, e.g.
@@ -2713,7 +2754,9 @@ def _install_ladder_rules(
                 # strand at a location that requires a higher level than it.
                 building_reqs = _mission_building_reqs(
                     info, home=bn_home,
-                    needs_travel=_mission_needs_travel(info, mb))
+                    needs_travel=_mission_needs_travel(info, mb),
+                    local_needs_conics=getattr(world, "local_needs_conics", True),
+                    local_needs_nodes=getattr(world, "local_needs_nodes", True))
             bracket_by_mission[mkey] = (j, pad_req, building_reqs)
         # Record per-mission building reqs even for unbracketed missions so the
         # unique-provider building copies never strand behind them.
@@ -3757,7 +3800,9 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
             .with_counted(PROGRESSIVE_TRACKING_STATION_NAME,
                           PROGRESSIVE_TRACKING_STATION_COUNT)
             .with_counted(PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
-                          PROGRESSIVE_ASTRONAUT_COMPLEX_COUNT))
+                          PROGRESSIVE_ASTRONAUT_COMPLEX_COUNT)
+            .with_counted(PROGRESSIVE_MISSION_CONTROL_NAME,
+                          PROGRESSIVE_MISSION_CONTROL_COUNT))
     _max_flags = _pre_pass_for_ranks(
         _max_ranks, ctx,
         start_with_clamps=start_with_clamps,

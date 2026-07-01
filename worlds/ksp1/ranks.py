@@ -91,6 +91,12 @@ class RankContext:
     # installed pack; Phase 2 binds the world's enabled set. The per-context
     # caches key on this, so each distinct pack-set is computed once.
     enabled_packs: frozenset[str] = ALL_PACKS
+    # buildings_in_logic: whether home-system (moon) transfers require patched
+    # conics / maneuver nodes (resolved from the HomeSystem* options + Difficulty).
+    # Threaded through the ladder's capability path; irrelevant when the option
+    # is off (default True is only consulted when buildings_in_logic is on).
+    local_needs_conics: bool = True
+    local_needs_nodes: bool = True
 
 
 # Kerbin baseline.  Used when no per-world context has been bound (tests,

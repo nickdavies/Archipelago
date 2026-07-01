@@ -75,6 +75,33 @@ class Building(StrEnum):
     SPH = "sph"
     TRACKING_STATION = "tracking_station"
     ASTRONAUT_COMPLEX = "astronaut_complex"
+    MISSION_CONTROL = "mission_control"
+
+
+class Capability(StrEnum):
+    """Player *abilities* the capability/rules system gates on.
+
+    The capability system never names a building or a building level — it asks
+    "can the player do X".  ``player_capabilities`` translates a set of facility
+    levels (+ difficulty-resolved options) into these booleans; the sphere-ladder
+    inverts via ``buildings_for_capability`` to decide which building items a
+    mission requires.  (Comms/DSN is the one *quantitative* ability and stays a
+    physical ``dsn_power``, not a boolean — see ``comms.py``.)
+    """
+
+    CAN_EVA = "can_eva"                                    # Astronaut Complex
+    CAN_RENDEZVOUS = "can_rendezvous"                      # conics + nodes
+    CAN_NAVIGATE_LOCAL = "can_navigate_local"              # home-system transfers
+    CAN_NAVIGATE_INTERPLANETARY = "can_navigate_interplanetary"
+
+
+# Facility level (0-indexed = stock level - 1) at which each ability turns on.
+# Stock: EVA-anywhere needs Astronaut Complex L2; patched conics needs Tracking
+# Station L2; maneuver nodes need Mission Control L2 *and* conics.  Nodes without
+# conics is impossible, so navigation/rendezvous need both TS and MC.
+_EVA_AC_LEVEL = 1
+_CONICS_TS_LEVEL = 1
+_NODES_MC_LEVEL = 1
 
 
 # ---------------------------------------------------------------------------
@@ -229,3 +256,59 @@ def min_building_level_for(effect: Effect, value, *, home: BodyName) -> tuple[Bu
         if level_value >= value:
             return (building, level)
     return (building, len(table) - 1)
+
+
+# ---------------------------------------------------------------------------
+# Capability layer: facility levels (+ resolved options) -> player abilities
+# ---------------------------------------------------------------------------
+
+def player_capabilities(
+    levels: dict[Building, int], *,
+    local_needs_conics: bool, local_needs_nodes: bool,
+) -> dict[Capability, bool]:
+    """Translate a set of facility levels into the ability booleans the
+    capability system gates on.
+
+    Buildings absent from ``levels`` default to their turn-on threshold (i.e.
+    ungated — the ability is present), so this is a strict no-op for facilities
+    that ship maxed.  ``local_needs_conics`` / ``local_needs_nodes`` are the
+    difficulty-and-option-resolved requirements for home-system (moon) transfers;
+    rendezvous and interplanetary transfers always need both conics and nodes.
+    """
+    ac = levels.get(Building.ASTRONAUT_COMPLEX, _EVA_AC_LEVEL)
+    ts = levels.get(Building.TRACKING_STATION, _CONICS_TS_LEVEL)
+    mc = levels.get(Building.MISSION_CONTROL, _NODES_MC_LEVEL)
+    conics = ts >= _CONICS_TS_LEVEL
+    nodes = conics and mc >= _NODES_MC_LEVEL
+    can_local = ((not local_needs_conics or conics)
+                 and (not local_needs_nodes or nodes))
+    return {
+        Capability.CAN_EVA: CAN_EVA_BY_LEVEL[_clamp_index(ac, CAN_EVA_BY_LEVEL)],
+        Capability.CAN_RENDEZVOUS: nodes,
+        Capability.CAN_NAVIGATE_INTERPLANETARY: nodes,
+        Capability.CAN_NAVIGATE_LOCAL: can_local,
+    }
+
+
+def buildings_for_capability(
+    cap: Capability, *, local_needs_conics: bool, local_needs_nodes: bool,
+) -> tuple[tuple[Building, int], ...]:
+    """Inverse of ``player_capabilities`` for one ability: the minimal
+    ``(building, level)`` requirements that provide it.  Multi-building abilities
+    (rendezvous / navigation need conics AND nodes) return several; a
+    ``CAN_NAVIGATE_LOCAL`` that the options leave ungated returns ``()``.
+    """
+    conics_req = (Building.TRACKING_STATION, _CONICS_TS_LEVEL)
+    nodes_req = (Building.MISSION_CONTROL, _NODES_MC_LEVEL)
+    if cap is Capability.CAN_EVA:
+        return ((Building.ASTRONAUT_COMPLEX, _EVA_AC_LEVEL),)
+    if cap in (Capability.CAN_RENDEZVOUS, Capability.CAN_NAVIGATE_INTERPLANETARY):
+        return (conics_req, nodes_req)          # nodes imply conics
+    if cap is Capability.CAN_NAVIGATE_LOCAL:
+        reqs: list[tuple[Building, int]] = []
+        if local_needs_nodes:
+            reqs += [conics_req, nodes_req]     # nodes imply conics
+        elif local_needs_conics:
+            reqs.append(conics_req)
+        return tuple(reqs)
+    raise ValueError(f"no building mapping for capability {cap!r}")

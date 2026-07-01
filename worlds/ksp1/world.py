@@ -23,7 +23,7 @@ from .items import (
     ITEM_NAME_TO_ID, PROGRESSIVE_LAUNCH_PAD_CAPS, _FILLER_ITEMS,
     PROGRESSIVE_RD_NAME, PROGRESSIVE_RD_COUNT,
     PROGRESSIVE_VAB_NAME, PROGRESSIVE_TRACKING_STATION_NAME,
-    PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
+    PROGRESSIVE_ASTRONAUT_COMPLEX_NAME, PROGRESSIVE_MISSION_CONTROL_NAME,
 )
 from .locations import (
     ALL_EVENTS, EVENT_BY_NAME, EventName, KSC_BIOMES, KSC_LOCATION_PREFIX,
@@ -199,11 +199,13 @@ _MAX_FACILITY_LEVEL = 2  # stock 0/1/2 (level-3 buildings)
 # the curated building progressives); every other facility stays maxed.  The
 # Launch Pad is gated separately via progressive_launch_pad (its tonnage caps
 # ride their own slot_data key).  VAB/SPH stay maxed this release (their
-# part-count gate is a follow-up), so only the Astronaut Complex (EVA) and the
-# Tracking Station (DSN comms range) are gated.
+# part-count gate is a follow-up), so the gated set is the Astronaut Complex
+# (EVA), the Tracking Station (DSN comms range + patched conics) and Mission
+# Control (maneuver nodes).
 _GATED_FACILITY_IDS: tuple[str, ...] = (
     "SpaceCenter/AstronautComplex",
     "SpaceCenter/TrackingStation",
+    "SpaceCenter/MissionControl",
 )
 
 # item name -> the facility ids it upgrades.  List-valued so one item can drive
@@ -216,6 +218,7 @@ _GATED_FACILITY_IDS: tuple[str, ...] = (
 _FACILITY_ITEM_MAP: dict[str, list[str]] = {
     PROGRESSIVE_ASTRONAUT_COMPLEX_NAME: ["SpaceCenter/AstronautComplex"],
     PROGRESSIVE_TRACKING_STATION_NAME: ["SpaceCenter/TrackingStation"],
+    PROGRESSIVE_MISSION_CONTROL_NAME: ["SpaceCenter/MissionControl"],
     PROGRESSIVE_VAB_NAME: ["SpaceCenter/VehicleAssemblyBuilding",
                            "SpaceCenter/SpaceplaneHangar"],
 }
@@ -295,6 +298,19 @@ class KSP1World(World):
     def generate_early(self) -> None:
         """Resolve goal spec and apply ExcludeLateTechTree."""
         self.capability_cache = {}
+        # Resolve the home-system navigation requirements (HomeSystemConics /
+        # HomeSystemNodes + Difficulty) to plain booleans once — the capability
+        # translation reads these instead of options.  Rendezvous and
+        # interplanetary always need conics+nodes; only local (moon) transfers
+        # scale with these.
+        from .options import (
+            resolve_home_system_conics, resolve_home_system_nodes,
+        )
+        _diff = self.options.difficulty.value
+        self.local_needs_conics: bool = resolve_home_system_conics(
+            self.options.home_system_conics.value, _diff)
+        self.local_needs_nodes: bool = resolve_home_system_nodes(
+            self.options.home_system_nodes.value, _diff)
         # Every pooled item name that some access rule gates on (via
         # ``state.has``/``has_all``).  Populated at rule-construction time
         # through the ``rules.require_item(s)`` chokepoint — building the
@@ -332,7 +348,10 @@ class KSP1World(World):
         # of the rank table is body-agnostic.
         from .ranks import RankContext
         _atmo_homes = {BodyName.KERBIN, BodyName.EVE, BodyName.DUNA, BodyName.LAYTHE}
-        self._rank_context = RankContext(home_has_atmosphere=(home in _atmo_homes))
+        self._rank_context = RankContext(
+            home_has_atmosphere=(home in _atmo_homes),
+            local_needs_conics=self.local_needs_conics,
+            local_needs_nodes=self.local_needs_nodes)
 
         # UT regen: restore options from original generation's slot_data.
         passthrough = getattr(self.multiworld, "re_gen_passthrough", {})

@@ -27,7 +27,7 @@ from .bodies import (
     Body, MissionEdge, MissionBuilder, EdgeType,
     effective_dv, effective_physics_profile_name, home_system_bodies, parent_chain,
 )
-from .comms import DSN_MAX_LEVEL, dsn_required_relay_table
+from .comms import DSN_POWER_MAX, dsn_required_relay_table
 from .parts import (
     DEFAULT_PART_MANAGER, CapabilityFlag, Engine, FuelTank, SolidBooster,
     HeatShield, Parachute, LandingLeg, Decoupler, MiscEquipment,
@@ -130,6 +130,29 @@ MISSION_TYPES_REQUIRING_EVA: frozenset[MissionType] = frozenset({
     MissionType.RESCUE,
 })
 
+# Mission types that require a rendezvous — matching orbits with another vessel.
+# Rescuing a stranded Kerbal is the sole mission type; docking / space-station
+# CONTRACTS also need it and pass ``requires_rendezvous=True`` explicitly (they
+# share the ORBIT base mission type).  Rendezvous needs patched conics + maneuver
+# nodes (Tracking Station + Mission Control), the ``can_rendezvous`` gate.
+MISSION_TYPES_REQUIRING_RENDEZVOUS: frozenset[MissionType] = frozenset({
+    MissionType.RESCUE,
+})
+
+
+# Home-system bodies that are NOT the home itself (its moons for a planet home,
+# or the parent + siblings for a moon home) — the "local" navigation targets.
+# Cached per home; consulted only when the local-nav gate is active.
+_HOME_SYSTEM_MOONS: dict[BodyName, frozenset] = {}
+
+
+def _home_system_moons(home: BodyName) -> frozenset:
+    moons = _HOME_SYSTEM_MOONS.get(home)
+    if moons is None:
+        moons = frozenset(home_system_bodies(home)) - {home}
+        _HOME_SYSTEM_MOONS[home] = moons
+    return moons
+
 
 # Sounding rocket parameters
 _SOUNDING_MIN_TWR: float = 1.1   # minimum sea-level TWR to count as a viable rocket
@@ -227,17 +250,20 @@ class EquipmentFlags:
     # launch mass exceeds this are infeasible.
     launch_pad_mass_cap: float = float("inf")
 
-    # --- Curated-building effects (buildings_in_logic) ---------------------
+    # --- Curated-building abilities (buildings_in_logic) -------------------
     # Each defaults to the MAXED value so that when buildings are NOT in logic
-    # ``_evaluate_profile`` behaves exactly as it did before this feature:
-    #   * ``can_eva=True``    -> no EVA mission is ever gated on the building
-    #   * ``dsn_level=max``   -> the comms gate reduces to the antenna-only check
+    # ``_evaluate_profile`` behaves exactly as it did before this feature (every
+    # ability present, ``dsn_power=max`` reduces the comms gate to antenna-only).
     # When buildings_in_logic is on, ``_pre_pass`` overrides these from the
-    # collected building-progressive counts via the effects translation layer.
+    # collected building-progressive counts via ``effects.player_capabilities``.
+    # The system names player *abilities*, never a building or a building level.
     # (VAB/SPH buildable limits are wired but not gated this release — the
     # facilities ship at max; see effects.py for the forward seam.)
     can_eva: bool = True
-    dsn_level: int = DSN_MAX_LEVEL
+    can_rendezvous: bool = True
+    can_navigate_local: bool = True
+    can_navigate_interplanetary: bool = True
+    dsn_power: float = DSN_POWER_MAX
 
     # Available part lists (populated by pre-pass)
     available_engines: list[Engine] = field(default_factory=list)
@@ -313,9 +339,9 @@ class RocketCapability:
     has_isru: bool = False
     has_docking_port: bool = False
     relay_tier: int = 0
-    # DSN (Tracking Station) level, buildings_in_logic. Defaults to max so the
-    # transmit-science comms check is antenna-only when the option is off.
-    dsn_level: int = DSN_MAX_LEVEL
+    # DSN ground-station power (watts), buildings_in_logic. Defaults to max so
+    # the transmit-science comms check is antenna-only when the option is off.
+    dsn_power: float = DSN_POWER_MAX
     power_profile: str = "none"
     staging_tier: int = 0
     has_launch_clamp: bool = False
@@ -357,6 +383,7 @@ def _capability_fingerprint(state: CollectionState, player: int) -> frozenset[tu
         PROGRESSIVE_SCIENCE_INSTRUMENT_NAME, PROGRESSIVE_PSI_COUNT,
         PROGRESSIVE_TRACKING_STATION_NAME, PROGRESSIVE_TRACKING_STATION_COUNT,
         PROGRESSIVE_ASTRONAUT_COMPLEX_NAME, PROGRESSIVE_ASTRONAUT_COMPLEX_COUNT,
+        PROGRESSIVE_MISSION_CONTROL_NAME, PROGRESSIVE_MISSION_CONTROL_COUNT,
     )
     # VAB/SPH are wired but not capability-gated this release, so they don't
     # appear here (their count would always be 0 and never affect capability).
@@ -366,6 +393,7 @@ def _capability_fingerprint(state: CollectionState, player: int) -> frozenset[tu
         PROGRESSIVE_SCIENCE_INSTRUMENT_NAME: PROGRESSIVE_PSI_COUNT,
         PROGRESSIVE_TRACKING_STATION_NAME: PROGRESSIVE_TRACKING_STATION_COUNT,
         PROGRESSIVE_ASTRONAUT_COMPLEX_NAME: PROGRESSIVE_ASTRONAUT_COMPLEX_COUNT,
+        PROGRESSIVE_MISSION_CONTROL_NAME: PROGRESSIVE_MISSION_CONTROL_COUNT,
     }
     result: list[tuple[str, int]] = []
     for name in CAPABILITY_ITEMS:
@@ -435,7 +463,9 @@ def _pre_pass(item_count_fn: Callable[[str], int],
               progressive_launch_pad: bool = False,
               launch_pad_caps: tuple[float, ...] | None = None,
               buildings_in_logic: bool = False,
-              home: BodyName | None = None) -> EquipmentFlags:
+              home: BodyName | None = None,
+              local_needs_conics: bool = True,
+              local_needs_nodes: bool = True) -> EquipmentFlags:
     """
     Iterate every PART_DB item the player has and build EquipmentFlags.
 
@@ -448,7 +478,7 @@ def _pre_pass(item_count_fn: Callable[[str], int],
     ``buildings_in_logic`` (default off) gates curated facility effects on the
     collected building-progressive counts.  When OFF (the default), the
     building effect fields keep their maxed ``EquipmentFlags`` defaults
-    (``can_eva=True``, ``dsn_level=max``), so evaluation is identical
+    (``can_eva=True``, ``dsn_power=max``), so evaluation is identical
     to before this feature existed — a strict no-op.  ``home`` only matters
     when the option is on (none of the curated building effects are home-scaled
     today, but the translation layer signature requires it).
@@ -469,24 +499,40 @@ def _pre_pass(item_count_fn: Callable[[str], int],
         pad_count = item_count_fn(PROGRESSIVE_LAUNCH_PAD_NAME)
         flags.launch_pad_mass_cap = pad_mass_limit_from_caps(caps, pad_count)
 
-    # Curated-building effects (buildings_in_logic). OFF -> the maxed defaults
-    # stand untouched (strict no-op). ON -> override from the collected counts
-    # of each building progressive, routed through the effects layer.  This
-    # release gates the Astronaut Complex (EVA) and the Tracking Station (DSN
-    # comms range); VAB/SPH stay maxed (their part-count gate is a follow-up).
+    # Curated-building abilities (buildings_in_logic). OFF -> the maxed defaults
+    # stand untouched (strict no-op). ON -> translate the collected building
+    # counts into player abilities via ``effects.player_capabilities``; the
+    # capability system reads only the ability booleans, never the levels.
     if buildings_in_logic:
         from .items import (
             PROGRESSIVE_ASTRONAUT_COMPLEX_NAME, PROGRESSIVE_TRACKING_STATION_NAME,
+            PROGRESSIVE_MISSION_CONTROL_NAME,
         )
-        from .effects import Building, Effect, building_effects
+        from .effects import (
+            Building, Capability, Effect, building_effects, player_capabilities,
+        )
         eva_home = home or BodyName.KERBIN
-        ac_level = item_count_fn(PROGRESSIVE_ASTRONAUT_COMPLEX_NAME)
-        ac_eff = building_effects(Building.ASTRONAUT_COMPLEX, ac_level, home=eva_home)
-        flags.can_eva = ac_eff[Effect.CAN_EVA]
-        # Tracking Station level = DSN ground-station strength; the comms gate
-        # scales the required antenna tier by it (see comms.py).  The item's
-        # count IS the level (0..DSN_MAX_LEVEL), clamped by the gate.
-        flags.dsn_level = item_count_fn(PROGRESSIVE_TRACKING_STATION_NAME)
+        ts_level = item_count_fn(PROGRESSIVE_TRACKING_STATION_NAME)
+        caps = player_capabilities(
+            {
+                Building.ASTRONAUT_COMPLEX:
+                    item_count_fn(PROGRESSIVE_ASTRONAUT_COMPLEX_NAME),
+                Building.TRACKING_STATION: ts_level,
+                Building.MISSION_CONTROL:
+                    item_count_fn(PROGRESSIVE_MISSION_CONTROL_NAME),
+            },
+            local_needs_conics=local_needs_conics,
+            local_needs_nodes=local_needs_nodes,
+        )
+        flags.can_eva = caps[Capability.CAN_EVA]
+        flags.can_rendezvous = caps[Capability.CAN_RENDEZVOUS]
+        flags.can_navigate_local = caps[Capability.CAN_NAVIGATE_LOCAL]
+        flags.can_navigate_interplanetary = caps[Capability.CAN_NAVIGATE_INTERPLANETARY]
+        # Comms/DSN is the one quantitative ability: translate the Tracking
+        # Station level to a physical ground-station power (see comms.py); the
+        # comms gate scales the required antenna tier by it.
+        flags.dsn_power = building_effects(
+            Building.TRACKING_STATION, ts_level, home=eva_home)[Effect.DSN_POWER]
 
     # Process every part in the installed universe; ``item_count_fn`` gates to
     # what the player actually has (so a disabled pack's parts are excluded).
@@ -1179,6 +1225,7 @@ def _evaluate_profile(
     extra_payload_parts: tuple[MiscEquipment, ...] = (),
     run_parallel: bool = True,
     requires_eva: bool = False,
+    requires_rendezvous: bool = False,
 ) -> ProfileResult:
     """
     Run the two-pass evaluation on a single mission profile alternative.
@@ -1253,6 +1300,34 @@ def _evaluate_profile(
             and any(edge.body != home for edge in profile)):
         blocking.append(BlockingInfo(reason=BlockingReason.CANNOT_EVA))
 
+    # Navigation + rendezvous (Tracking Station patched conics + Mission Control
+    # maneuver nodes, buildings_in_logic).  All three abilities default True, so
+    # when buildings aren't in logic none of this fires (the guard is skipped).
+    # These gate crewed AND uncrewed alike — a pilot doesn't remove the need to
+    # plan a transfer.  Interplanetary (a PLANET_TRANSFER edge) and rendezvous
+    # always need conics+nodes; a home-system (moon) transfer scales with the
+    # HomeSystem* options (resolved into ``can_navigate_local``).
+    if not (flags.can_navigate_interplanetary and flags.can_navigate_local
+            and flags.can_rendezvous):
+        interplanetary = any(e.edge_type == EdgeType.PLANET_TRANSFER
+                             for e in profile)
+        if interplanetary:
+            if not flags.can_navigate_interplanetary:
+                blocking.append(BlockingInfo(
+                    reason=BlockingReason.CANNOT_NAVIGATE_INTERPLANETARY,
+                    body=next(e.body for e in profile
+                              if e.edge_type == EdgeType.PLANET_TRANSFER)))
+        elif not flags.can_navigate_local:
+            moon = next((e.body for e in profile
+                         if e.body in _home_system_moons(home)), None)
+            if moon is not None:
+                blocking.append(BlockingInfo(
+                    reason=BlockingReason.CANNOT_NAVIGATE_LOCAL, body=moon))
+        if (not flags.can_rendezvous
+                and (requires_rendezvous
+                     or mission_type in MISSION_TYPES_REQUIRING_RENDEZVOUS)):
+            blocking.append(BlockingInfo(reason=BlockingReason.CANNOT_RENDEZVOUS))
+
     # Heat shield
     if has_aero_edge and not flags.has_heat_shield:
         blocking.append(BlockingInfo(reason=BlockingReason.NO_HEAT_SHIELD))
@@ -1302,15 +1377,15 @@ def _evaluate_profile(
     # Crewed missions skip the gate: a pilot in a manned capsule provides
     # control authority directly with no radio link to home.
     #
-    # DSN (Tracking Station, buildings_in_logic) rides on top: below max DSN the
-    # ground station is weaker, so the antenna needs a higher tier to hold the
-    # same link.  ``dsn_level`` defaults to max (option off) -> ``dsn_table`` is
-    # None -> antenna-only check, byte-identical to before.  The shortfall is
+    # DSN (Tracking Station, buildings_in_logic) rides on top: below max power
+    # the ground station is weaker, so the antenna needs a higher tier to hold
+    # the same link.  ``dsn_power`` defaults to max (option off) -> ``dsn_table``
+    # is None -> antenna-only check, byte-identical to before.  The shortfall is
     # always charged to the Tracking Station (never the antenna), because a
-    # max-DSN + ``edge.relay_tier`` antenna reaches by construction.
+    # max-power + ``edge.relay_tier`` antenna reaches by construction.
     if not is_crewed:
-        dsn_table = (dsn_required_relay_table(home, flags.dsn_level)
-                     if flags.dsn_level < DSN_MAX_LEVEL else None)
+        dsn_table = (dsn_required_relay_table(home, flags.dsn_power)
+                     if flags.dsn_power < DSN_POWER_MAX else None)
         for edge in profile:
             required = edge.relay_tier
             if flags.relay_tier < required:
@@ -2471,6 +2546,7 @@ def evaluate_mission_detailed(
     extra_payload_parts: tuple[MiscEquipment, ...] = (),
     mission_transform: Optional[Callable[[list], list]] = None,
     requires_eva: bool | None = None,
+    requires_rendezvous: bool | None = None,
     run_parallel: bool = True,
 ) -> ProfileResult:
     """
@@ -2608,6 +2684,10 @@ def evaluate_mission_detailed(
     # EVA requirement: explicit override (EVA-in-orbit), else derived from type.
     eva_required = (mission_type in MISSION_TYPES_REQUIRING_EVA
                     if requires_eva is None else requires_eva)
+    # Rendezvous requirement: explicit override (docking/station contracts),
+    # else derived from type (RESCUE).
+    rendezvous_required = (mission_type in MISSION_TYPES_REQUIRING_RENDEZVOUS
+                           if requires_rendezvous is None else requires_rendezvous)
 
     # ``run_parallel`` controls whether the exact asparagus (parallel-staged)
     # build is searched.  The bumper's GUIDANCE trials pass run_parallel=False:
@@ -2626,7 +2706,8 @@ def evaluate_mission_detailed(
                                        home=mission_builder.home,
                                        extra_payload_parts=extra_payload_parts,
                                        run_parallel=run_parallel,
-                                       requires_eva=eva_required)
+                                       requires_eva=eva_required,
+                                       requires_rendezvous=rendezvous_required)
             if result.feasible:
                 return result
             for b in result.blocking:
@@ -2769,6 +2850,8 @@ def compute_capability_from_items(
     progressive_launch_pad: bool = False,
     contract_specs: tuple = (),
     buildings_in_logic: bool = False,
+    local_needs_conics: bool = True,
+    local_needs_nodes: bool = True,
 ) -> tuple[RocketCapability, EquipmentFlags]:
     """Compute capability without a CollectionState. For CLI/external tools.
 
@@ -2783,7 +2866,9 @@ def compute_capability_from_items(
                       progressive_launch_pad,
                       launch_pad_caps=mission_builder.launch_pad_caps,
                       buildings_in_logic=buildings_in_logic,
-                      home=mission_builder.home)
+                      home=mission_builder.home,
+                      local_needs_conics=local_needs_conics,
+                      local_needs_nodes=local_needs_nodes)
     # Lazy: bodies are assessed on first query (AP fill rules touch only
     # a few bodies per state; eager _assess_bodies evaluated all 17).
     body_profiles = _LazyBodyProfiles(flags, diff, mission_builder)
@@ -2811,7 +2896,7 @@ def compute_capability_from_items(
         has_docking_port=flags.has_docking_port,
         sounding_altitude_km=sounding_km,
         relay_tier=flags.relay_tier,
-        dsn_level=flags.dsn_level,
+        dsn_power=flags.dsn_power,
         power_profile=power_str,
         staging_tier=flags.staging_tier,
         has_launch_clamp=flags.has_launch_clamp,
@@ -2846,6 +2931,8 @@ def _compute_capability(state: CollectionState, player: int) -> RocketCapability
         contract_specs=(*getattr(world, "contract_specs", ()),
                         *getattr(world, "goal_contract_specs", ())),
         buildings_in_logic=bool(options.buildings_in_logic.value),
+        local_needs_conics=getattr(world, "local_needs_conics", True),
+        local_needs_nodes=getattr(world, "local_needs_nodes", True),
     )
     return cap
 
@@ -2869,6 +2956,8 @@ def cheap_flags(state: CollectionState, player: int) -> EquipmentFlags:
         launch_pad_caps=world.mission_builder.launch_pad_caps,
         buildings_in_logic=bool(options.buildings_in_logic.value),
         home=world.mission_builder.home,
+        local_needs_conics=getattr(world, "local_needs_conics", True),
+        local_needs_nodes=getattr(world, "local_needs_nodes", True),
     )
 
 

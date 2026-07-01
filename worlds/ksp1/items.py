@@ -172,11 +172,14 @@ PROGRESSIVE_SCIENCE_INSTRUMENT_NAME: str = "Progressive Science Instrument"
 PROGRESSIVE_VAB_NAME: str = "Progressive VAB"
 PROGRESSIVE_TRACKING_STATION_NAME: str = "Progressive Tracking Station"
 PROGRESSIVE_ASTRONAUT_COMPLEX_NAME: str = "Progressive Astronaut Complex"
+PROGRESSIVE_MISSION_CONTROL_NAME: str = "Progressive Mission Control"
 
-# Number of pooled copies per building (stock = 2 upgrade levels).
+# Number of pooled copies per building (stock = 2 upgrade levels).  Mission
+# Control only models the maneuver-nodes level (stock L2 = our L1), so 1 copy.
 PROGRESSIVE_VAB_COUNT: int = 2
 PROGRESSIVE_TRACKING_STATION_COUNT: int = 2
 PROGRESSIVE_ASTRONAUT_COMPLEX_COUNT: int = 2
+PROGRESSIVE_MISSION_CONTROL_COUNT: int = 1
 
 # Bridge: which AP progressive item supplies each curated ``Building``.  The
 # effects layer (``effects.min_building_level_for``) returns a ``Building`` +
@@ -192,6 +195,7 @@ def _building_to_item_name() -> dict:
         Building.SPH: PROGRESSIVE_VAB_NAME,  # SPH folds into VAB (vessel limits)
         Building.TRACKING_STATION: PROGRESSIVE_TRACKING_STATION_NAME,
         Building.ASTRONAUT_COMPLEX: PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
+        Building.MISSION_CONTROL: PROGRESSIVE_MISSION_CONTROL_NAME,
         Building.LAUNCH_PAD: PROGRESSIVE_LAUNCH_PAD_NAME,
     }
 
@@ -232,6 +236,7 @@ _PROGRESSIVE_ITEMS: dict[str, tuple[int, ItemClassification]] = {
     PROGRESSIVE_VAB_NAME:               (70, ItemClassification.progression),
     PROGRESSIVE_TRACKING_STATION_NAME:  (71, ItemClassification.progression),
     PROGRESSIVE_ASTRONAUT_COMPLEX_NAME: (72, ItemClassification.progression),
+    PROGRESSIVE_MISSION_CONTROL_NAME:   (73, ItemClassification.progression),
 }
 
 PROGRESSIVE_RD_COUNT: int = 3
@@ -402,6 +407,8 @@ def create_all_items(world: KSP1World) -> None:
              PROGRESSIVE_TRACKING_STATION_COUNT),
             (PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
              PROGRESSIVE_ASTRONAUT_COMPLEX_COUNT),
+            (PROGRESSIVE_MISSION_CONTROL_NAME,
+             PROGRESSIVE_MISSION_CONTROL_COUNT),
         ):
             for tier in range(1, count + 1):
                 item = create_item(world, name)

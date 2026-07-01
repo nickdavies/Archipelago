@@ -394,16 +394,84 @@ class BuildingsInLogic(Toggle):
       - **Astronaut Complex** gates EVA.  Until upgraded, missions that need a
         Kerbal outside the craft off-home (flags, surface samples, rescues) are
         out of logic; home-pad EVA still works.
-      - **Tracking Station** gates the Deep Space Network comms range.  A weaker
-        DSN needs a stronger antenna to hold a link, so far *uncrewed* missions
-        and far science *transmission* require upgrading it.  Crewed missions
-        (pilot control) and home-system comms are unaffected.
+      - **Tracking Station** gates the Deep Space Network comms range (a weaker
+        DSN needs a stronger antenna, so far uncrewed missions and far science
+        transmission require upgrading it) *and* patched conics (L2), a
+        prerequisite for navigation.
+      - **Mission Control** gates maneuver nodes (L2) — with conics, this is what
+        lets you plan rendezvous and transfers.  Rendezvous (rescue, docking) and
+        interplanetary transfers need both; home-system (moon) transfers scale
+        with difficulty (see ``HomeSystemConics`` / ``HomeSystemNodes``).
 
     The VAB/SPH buildable limits are wired end-to-end but ship maxed this
     release; their part-count gate is a follow-up.
     """
     display_name = "Buildings In Logic"
     default = 0
+
+
+class HomeSystemConics(Choice):
+    """Whether home-system (moon) transfers require patched conics.
+
+    Patched conics (Tracking Station L2) let you see an encounter before you
+    commit the burn.  Interplanetary transfers and rendezvous always need them;
+    this option only covers transfers to the home body's own moons, which a
+    skilled pilot can eyeball.  Only matters when ``buildings_in_logic`` is on.
+
+    auto         -- follow Difficulty (casual: required, normal: required,
+                    expert: not required).  The default.
+    required     -- home-system transfers always need conics.
+    not_required -- home-system transfers never need conics.
+    """
+    display_name = "Home System Conics"
+    option_auto = 0
+    option_required = 1
+    option_not_required = 2
+    default = option_auto
+
+
+class HomeSystemNodes(Choice):
+    """Whether home-system (moon) transfers require maneuver nodes.
+
+    Maneuver nodes (Mission Control L2, plus conics) let you plan a precise burn.
+    Interplanetary transfers and rendezvous always need them; this option only
+    covers transfers to the home body's own moons.  Only matters when
+    ``buildings_in_logic`` is on.
+
+    auto         -- follow Difficulty (casual: required, normal: not required,
+                    expert: not required).  The default.
+    required     -- home-system transfers always need nodes (and conics).
+    not_required -- home-system transfers never need nodes.
+    """
+    display_name = "Home System Nodes"
+    option_auto = 0
+    option_required = 1
+    option_not_required = 2
+    default = option_auto
+
+
+# Difficulty (0=casual, 1=normal, 2=expert) -> whether a home-system transfer
+# needs conics / nodes when the option is left on ``auto``.
+_HOME_CONICS_AUTO: tuple[bool, ...] = (True, True, False)
+_HOME_NODES_AUTO: tuple[bool, ...] = (True, False, False)
+
+
+def resolve_home_system_conics(option_value: int, difficulty: int) -> bool:
+    """Resolve ``HomeSystemConics`` (+ Difficulty) to a single requirement bool."""
+    if option_value == HomeSystemConics.option_required:
+        return True
+    if option_value == HomeSystemConics.option_not_required:
+        return False
+    return _HOME_CONICS_AUTO[difficulty]
+
+
+def resolve_home_system_nodes(option_value: int, difficulty: int) -> bool:
+    """Resolve ``HomeSystemNodes`` (+ Difficulty) to a single requirement bool."""
+    if option_value == HomeSystemNodes.option_required:
+        return True
+    if option_value == HomeSystemNodes.option_not_required:
+        return False
+    return _HOME_NODES_AUTO[difficulty]
 
 
 class ContractTypeWeights(OptionDict):
@@ -545,6 +613,8 @@ class KSP1Options(PerGameCommonOptions):
     exclude_late_tech_tree: ExcludeLateTechTree
     progressive_launch_pad: ProgressiveLaunchPad
     buildings_in_logic: BuildingsInLogic
+    home_system_conics: HomeSystemConics
+    home_system_nodes: HomeSystemNodes
     contract_type_weights: ContractTypeWeights
     contracts_available: ContractsAvailable
     contracts_required_for_goal: ContractsRequiredForGoal

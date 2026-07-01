@@ -58,6 +58,11 @@ class BlockingReason(str, Enum):
     # --- Curated buildings (buildings_in_logic) -------------------------
     # EVA required but the Astronaut Complex isn't upgraded enough.
     CANNOT_EVA = "cannot_eva"
+    # Navigation / rendezvous: patched conics (Tracking Station) and maneuver
+    # nodes (Mission Control) aren't upgraded enough for the manoeuvre.
+    CANNOT_RENDEZVOUS = "cannot_rendezvous"
+    CANNOT_NAVIGATE_LOCAL = "cannot_navigate_local"
+    CANNOT_NAVIGATE_INTERPLANETARY = "cannot_navigate_interplanetary"
 
     # --- Sounding / altitude --------------------------------------------
     SOUNDING_ALTITUDE_TOO_LOW = "sounding_altitude_too_low"
@@ -233,6 +238,12 @@ class BlockingInfo:
                     f"cap {self.mass_cap:.0f}t")
         if r == BlockingReason.CANNOT_EVA:
             return "Astronaut Complex not upgraded enough for EVA"
+        if r == BlockingReason.CANNOT_RENDEZVOUS:
+            return "no rendezvous (needs patched conics + maneuver nodes)"
+        if r == BlockingReason.CANNOT_NAVIGATE_LOCAL:
+            return f"no navigation for local transfer to {self.body}"
+        if r == BlockingReason.CANNOT_NAVIGATE_INTERPLANETARY:
+            return f"no navigation for interplanetary transfer to {self.body}"
         # Sounding -----------------------------------------------------
         if r == BlockingReason.SOUNDING_ALTITUDE_TOO_LOW:
             base = (f"sounding altitude {self.altitude_km:.1f} km < "
