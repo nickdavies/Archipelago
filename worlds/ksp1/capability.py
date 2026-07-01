@@ -27,6 +27,7 @@ from .bodies import (
     Body, MissionEdge, MissionBuilder, EdgeType,
     effective_dv, effective_physics_profile_name, home_system_bodies, parent_chain,
 )
+from .comms import DSN_MAX_LEVEL, dsn_required_relay_table
 from .parts import (
     DEFAULT_PART_MANAGER, CapabilityFlag, Engine, FuelTank, SolidBooster,
     HeatShield, Parachute, LandingLeg, Decoupler, MiscEquipment,
@@ -117,13 +118,16 @@ _FUEL_LINE_MASS: float = DEFAULT_PART_MANAGER.fuel_line_mass
 _MIN_EVA_JETPACK_TWR: float = 1.05
 
 # Mission types that inherently require a Kerbal EVA (walk out of the craft):
-# planting a flag and taking a surface sample both need a kerbal outside.  This
-# drives the curated Astronaut-Complex ``can_eva`` gate (buildings_in_logic).
+# planting a flag, taking a surface sample, and rescuing a stranded kerbal all
+# need a kerbal outside the craft.  This drives the curated Astronaut-Complex
+# ``can_eva`` gate (buildings_in_logic), for both mission locations and the
+# contracts that share these base mission types (flag / sample / rescue).
 # EVA-in-orbit shares the ORBIT mission_type, so it can't be inferred from the
 # type alone — its caller passes ``requires_eva=True`` explicitly.
 MISSION_TYPES_REQUIRING_EVA: frozenset[MissionType] = frozenset({
     MissionType.FLAG_PLANT,
     MissionType.SAMPLE_RETURN,
+    MissionType.RESCUE,
 })
 
 
@@ -226,12 +230,14 @@ class EquipmentFlags:
     # --- Curated-building effects (buildings_in_logic) ---------------------
     # Each defaults to the MAXED value so that when buildings are NOT in logic
     # ``_evaluate_profile`` behaves exactly as it did before this feature:
-    #   * ``can_eva=True``  -> no EVA mission is ever gated on the building
-    #   * ``vessel_mass_limit=inf`` -> no mission is gated on total vessel mass
+    #   * ``can_eva=True``    -> no EVA mission is ever gated on the building
+    #   * ``dsn_level=max``   -> the comms gate reduces to the antenna-only check
     # When buildings_in_logic is on, ``_pre_pass`` overrides these from the
     # collected building-progressive counts via the effects translation layer.
+    # (VAB/SPH buildable limits are wired but not gated this release — the
+    # facilities ship at max; see effects.py for the forward seam.)
     can_eva: bool = True
-    vessel_mass_limit: float = float("inf")
+    dsn_level: int = DSN_MAX_LEVEL
 
     # Available part lists (populated by pre-pass)
     available_engines: list[Engine] = field(default_factory=list)
@@ -307,6 +313,9 @@ class RocketCapability:
     has_isru: bool = False
     has_docking_port: bool = False
     relay_tier: int = 0
+    # DSN (Tracking Station) level, buildings_in_logic. Defaults to max so the
+    # transmit-science comms check is antenna-only when the option is off.
+    dsn_level: int = DSN_MAX_LEVEL
     power_profile: str = "none"
     staging_tier: int = 0
     has_launch_clamp: bool = False
@@ -346,15 +355,15 @@ def _capability_fingerprint(state: CollectionState, player: int) -> frozenset[tu
         PROGRESSIVE_LAUNCH_PAD_NAME, PROGRESSIVE_LAUNCH_PAD_COUNT,
         PROGRESSIVE_RD_NAME, PROGRESSIVE_RD_COUNT,
         PROGRESSIVE_SCIENCE_INSTRUMENT_NAME, PROGRESSIVE_PSI_COUNT,
-        PROGRESSIVE_VAB_NAME, PROGRESSIVE_VAB_COUNT,
         PROGRESSIVE_TRACKING_STATION_NAME, PROGRESSIVE_TRACKING_STATION_COUNT,
         PROGRESSIVE_ASTRONAUT_COMPLEX_NAME, PROGRESSIVE_ASTRONAUT_COMPLEX_COUNT,
     )
+    # VAB/SPH are wired but not capability-gated this release, so they don't
+    # appear here (their count would always be 0 and never affect capability).
     _COUNTED = {
         PROGRESSIVE_LAUNCH_PAD_NAME: PROGRESSIVE_LAUNCH_PAD_COUNT,
         PROGRESSIVE_RD_NAME: PROGRESSIVE_RD_COUNT,
         PROGRESSIVE_SCIENCE_INSTRUMENT_NAME: PROGRESSIVE_PSI_COUNT,
-        PROGRESSIVE_VAB_NAME: PROGRESSIVE_VAB_COUNT,
         PROGRESSIVE_TRACKING_STATION_NAME: PROGRESSIVE_TRACKING_STATION_COUNT,
         PROGRESSIVE_ASTRONAUT_COMPLEX_NAME: PROGRESSIVE_ASTRONAUT_COMPLEX_COUNT,
     }
@@ -439,7 +448,7 @@ def _pre_pass(item_count_fn: Callable[[str], int],
     ``buildings_in_logic`` (default off) gates curated facility effects on the
     collected building-progressive counts.  When OFF (the default), the
     building effect fields keep their maxed ``EquipmentFlags`` defaults
-    (``can_eva=True``, ``vessel_mass_limit=inf``), so evaluation is identical
+    (``can_eva=True``, ``dsn_level=max``), so evaluation is identical
     to before this feature existed — a strict no-op.  ``home`` only matters
     when the option is on (none of the curated building effects are home-scaled
     today, but the translation layer signature requires it).
@@ -462,21 +471,22 @@ def _pre_pass(item_count_fn: Callable[[str], int],
 
     # Curated-building effects (buildings_in_logic). OFF -> the maxed defaults
     # stand untouched (strict no-op). ON -> override from the collected counts
-    # of each building progressive, routed through the effects layer.
+    # of each building progressive, routed through the effects layer.  This
+    # release gates the Astronaut Complex (EVA) and the Tracking Station (DSN
+    # comms range); VAB/SPH stay maxed (their part-count gate is a follow-up).
     if buildings_in_logic:
         from .items import (
-            PROGRESSIVE_VAB_NAME, PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
+            PROGRESSIVE_ASTRONAUT_COMPLEX_NAME, PROGRESSIVE_TRACKING_STATION_NAME,
         )
         from .effects import Building, Effect, building_effects
         eva_home = home or BodyName.KERBIN
-        vab_level = item_count_fn(PROGRESSIVE_VAB_NAME)
         ac_level = item_count_fn(PROGRESSIVE_ASTRONAUT_COMPLEX_NAME)
-        vab_eff = building_effects(Building.VAB, vab_level, home=eva_home)
         ac_eff = building_effects(Building.ASTRONAUT_COMPLEX, ac_level, home=eva_home)
-        flags.vessel_mass_limit = vab_eff[Effect.VESSEL_MASS_LIMIT]
         flags.can_eva = ac_eff[Effect.CAN_EVA]
-        # Tracking Station / DSN_POWER is a DEFERRED seam (relay_tier already
-        # gates comms); the item exists for pacing but is not read here.
+        # Tracking Station level = DSN ground-station strength; the comms gate
+        # scales the required antenna tier by it (see comms.py).  The item's
+        # count IS the level (0..DSN_MAX_LEVEL), clamped by the gate.
+        flags.dsn_level = item_count_fn(PROGRESSIVE_TRACKING_STATION_NAME)
 
     # Process every part in the installed universe; ``item_count_fn`` gates to
     # what the player actually has (so a disabled pack's parts are excluded).
@@ -1232,11 +1242,15 @@ def _evaluate_profile(
         blocking.append(BlockingInfo(reason=BlockingReason.NO_LADDER))
 
     # EVA (Astronaut Complex, buildings_in_logic).  ``flags.can_eva`` defaults
-    # True, so when buildings aren't in logic this never fires.  Home-surface
-    # EVA (empty profile = Kerbal walks off the pad: Kerbin flag/sample) is
-    # allowed at AC level 0 in stock KSP, so we only gate EVA missions that
-    # require travel (a non-empty profile).
-    if requires_eva and profile and not flags.can_eva:
+    # True, so when buildings aren't in logic this never fires.  Stock AC level 0
+    # permits EVA in the HOME body's vicinity — its surface AND its orbit — so
+    # any EVA that never leaves the home body is allowed: an empty profile (walk
+    # off the pad: home flag/sample) or an all-home profile (home-orbit EVA).
+    # EVA anywhere else needs the upgrade — home's moons have their own SOI, and
+    # other planets are farther still.  Gating home-orbit EVA would also strand
+    # bootstrap items placed on those early home-orbit locations behind the AC.
+    if (requires_eva and not flags.can_eva
+            and any(edge.body != home for edge in profile)):
         blocking.append(BlockingInfo(reason=BlockingReason.CANNOT_EVA))
 
     # Heat shield
@@ -1287,7 +1301,16 @@ def _evaluate_profile(
     #
     # Crewed missions skip the gate: a pilot in a manned capsule provides
     # control authority directly with no radio link to home.
+    #
+    # DSN (Tracking Station, buildings_in_logic) rides on top: below max DSN the
+    # ground station is weaker, so the antenna needs a higher tier to hold the
+    # same link.  ``dsn_level`` defaults to max (option off) -> ``dsn_table`` is
+    # None -> antenna-only check, byte-identical to before.  The shortfall is
+    # always charged to the Tracking Station (never the antenna), because a
+    # max-DSN + ``edge.relay_tier`` antenna reaches by construction.
     if not is_crewed:
+        dsn_table = (dsn_required_relay_table(home, flags.dsn_level)
+                     if flags.dsn_level < DSN_MAX_LEVEL else None)
         for edge in profile:
             required = edge.relay_tier
             if flags.relay_tier < required:
@@ -1298,6 +1321,14 @@ def _evaluate_profile(
                     relay_available=flags.relay_tier,
                 ))
                 break  # one relay failure is sufficient
+            if dsn_table is not None and flags.relay_tier < dsn_table[edge.body]:
+                blocking.append(BlockingInfo(
+                    reason=BlockingReason.DSN_POWER_INSUFFICIENT,
+                    body=edge.body,
+                    relay_needed=dsn_table[edge.body],
+                    relay_available=flags.relay_tier,
+                ))
+                break  # one comms failure is sufficient
 
     # Propulsion gate: bail if the player has no engines or fuel at all.
     # Progressive flags are set by _pre_pass; also check actual part lists
@@ -1785,20 +1816,6 @@ def _evaluate_profile(
                 reason=BlockingReason.LAUNCH_MASS_EXCEEDED,
                 mass_actual=payload,
                 mass_cap=flags.launch_pad_mass_cap,
-            )],
-        )
-    # VAB/SPH buildable-mass cap (buildings_in_logic).  ``vessel_mass_limit``
-    # defaults to inf, so when buildings aren't in logic this never fires.  The
-    # total launch (vessel) mass is the relevant quantity — same metric KSP's
-    # VAB cap applies to.
-    if payload > flags.vessel_mass_limit:
-        return ProfileResult(
-            feasible=False,
-            launch_mass=payload,
-            blocking=[BlockingInfo(
-                reason=BlockingReason.VESSEL_MASS_EXCEEDED,
-                mass_actual=payload,
-                mass_cap=flags.vessel_mass_limit,
             )],
         )
     reversed_stages = list(reversed(stage_results_list))
@@ -2794,6 +2811,7 @@ def compute_capability_from_items(
         has_docking_port=flags.has_docking_port,
         sounding_altitude_km=sounding_km,
         relay_tier=flags.relay_tier,
+        dsn_level=flags.dsn_level,
         power_profile=power_str,
         staging_tier=flags.staging_tier,
         has_launch_clamp=flags.has_launch_clamp,

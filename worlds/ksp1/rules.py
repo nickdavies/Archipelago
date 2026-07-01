@@ -26,6 +26,7 @@ from .bodies import (
     ALL_BODIES, BODY_BY_NAME, BodyName, MissionType,
     home_system_bodies, relay_tier_table_for, science_budget,
 )
+from .comms import DSN_MAX_LEVEL, dsn_required_relay_table
 from .capability import get_capability, cheap_flags, _compute_sounding_altitude
 from .items import ITEM_TABLE, PROGRESSIVE_RD_NAME, SCIENCE_PACK_NAMES
 from .locations import (
@@ -183,7 +184,12 @@ def bankable_science(cap, psi_tier: int, home: BodyName,
     bodies already proven reachable at an earlier sphere.  Instrument and
     relay flags still come from ``cap`` (cheap, flag-level).
     """
-    relay_table = relay_tier_table_for(home)
+    # Transmitting science needs a comms link, which the Tracking Station (DSN)
+    # gates when buildings_in_logic is on.  Below max DSN the antenna needs a
+    # higher tier to reach; at max DSN (option off) this is the plain
+    # antenna-only table — byte-identical to before.
+    relay_table = (dsn_required_relay_table(home, cap.dsn_level)
+                   if cap.dsn_level < DSN_MAX_LEVEL else relay_tier_table_for(home))
     total = 0.0
     for body in ALL_BODIES:
         if access is not None:
@@ -229,7 +235,9 @@ def _cheap_bankable_science(
     reps_map = world._science_body_event_reps
     flags = cheap_flags(state, player)
     psi_tier = state.count("Progressive Science Instrument", player)
-    relay_table = relay_tier_table_for(home)
+    # DSN-aware transmit gate (see bankable_science); max DSN -> plain table.
+    relay_table = (dsn_required_relay_table(home, flags.dsn_level)
+                   if flags.dsn_level < DSN_MAX_LEVEL else relay_tier_table_for(home))
     total = 0.0
     for body in ALL_BODIES:
         orbit = reps_map.get((body.name, EventName.ORBIT))

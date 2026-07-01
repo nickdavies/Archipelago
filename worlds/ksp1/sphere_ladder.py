@@ -64,7 +64,7 @@ from .contracts import (
 from .items import (
     PROGRESSIVE_LAUNCH_PAD_COUNT, PROGRESSIVE_LAUNCH_PAD_NAME,
     PROGRESSIVE_RD_COUNT, PROGRESSIVE_RD_NAME,
-    PROGRESSIVE_VAB_NAME, PROGRESSIVE_VAB_COUNT,
+    PROGRESSIVE_TRACKING_STATION_NAME, PROGRESSIVE_TRACKING_STATION_COUNT,
     PROGRESSIVE_ASTRONAUT_COMPLEX_NAME, PROGRESSIVE_ASTRONAUT_COMPLEX_COUNT,
 )
 from .parts import (
@@ -1014,7 +1014,8 @@ def _pre_pass_for_ranks(
     _building_levels: dict[str, int] = {}
     if buildings_in_logic:
         _building_levels = {
-            PROGRESSIVE_VAB_NAME: ranks.counted(PROGRESSIVE_VAB_NAME),
+            PROGRESSIVE_TRACKING_STATION_NAME:
+                ranks.counted(PROGRESSIVE_TRACKING_STATION_NAME),
             PROGRESSIVE_ASTRONAUT_COMPLEX_NAME:
                 ranks.counted(PROGRESSIVE_ASTRONAUT_COMPLEX_NAME),
         }
@@ -1381,14 +1382,15 @@ def minimal_ranks_for(
                 continue
         # Curated-building blockers (buildings_in_logic): bump the building
         # Counted level outside the rank model, mirroring the Pad mass-cap
-        # bump above.  VESSEL_MASS_EXCEEDED -> VAB level, CANNOT_EVA ->
-        # Astronaut Complex level.  Each building's max level comes from its
-        # pooled copy count.
+        # bump above.  DSN_POWER_INSUFFICIENT -> Tracking Station level,
+        # CANNOT_EVA -> Astronaut Complex level.  Each building's max level
+        # comes from its pooled copy count.
         if buildings_in_logic:
             building_block = False
             for kind, cap, reason in (
-                (PROGRESSIVE_VAB_NAME, PROGRESSIVE_VAB_COUNT,
-                 BlockingReason.VESSEL_MASS_EXCEEDED),
+                (PROGRESSIVE_TRACKING_STATION_NAME,
+                 PROGRESSIVE_TRACKING_STATION_COUNT,
+                 BlockingReason.DSN_POWER_INSUFFICIENT),
                 (PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
                  PROGRESSIVE_ASTRONAUT_COMPLEX_COUNT,
                  BlockingReason.CANNOT_EVA),
@@ -1606,9 +1608,10 @@ def minimal_ranks_for(
             )
             if buildings_in_logic:
                 # Full-admit rescue: max the building levels too, else a
-                # vessel-mass / EVA gate would falsely fail the rescue probe.
+                # DSN / EVA gate would falsely fail the rescue probe.
                 max_ranks_for_rescue = (max_ranks_for_rescue
-                    .with_counted(PROGRESSIVE_VAB_NAME, PROGRESSIVE_VAB_COUNT)
+                    .with_counted(PROGRESSIVE_TRACKING_STATION_NAME,
+                                  PROGRESSIVE_TRACKING_STATION_COUNT)
                     .with_counted(PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
                                   PROGRESSIVE_ASTRONAUT_COMPLEX_COUNT))
             rescue_flags = _pre_pass_for_ranks(
@@ -2312,19 +2315,18 @@ def _demote_non_rep_parts(
     from .items import (
         PROGRESSIVE_RD_NAME, PROGRESSIVE_LAUNCH_PAD_NAME,
         PROGRESSIVE_SCIENCE_INSTRUMENT_NAME,
-        PROGRESSIVE_VAB_NAME, PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
+        PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
         PROGRESSIVE_TRACKING_STATION_NAME,
     )
     from .ranks import ItemRankSig
     # The counted progressives whose copies must stay PROGRESSION up to the
     # chain's highest needed level (chain_extras): R&D / Pad / PSI plus the
-    # curated buildings (only pooled when buildings_in_logic is on; absent from
-    # the pool otherwise, so naming them here is a harmless no-op when off).
+    # curated buildings that are pooled + gated this release (Astronaut Complex
+    # and Tracking Station; VAB/SPH ship maxed and aren't pooled).
     _KEEP_PROGRESSIVE: frozenset[str] = frozenset({
         PROGRESSIVE_RD_NAME,
         PROGRESSIVE_LAUNCH_PAD_NAME,
         PROGRESSIVE_SCIENCE_INSTRUMENT_NAME,
-        PROGRESSIVE_VAB_NAME,
         PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
         PROGRESSIVE_TRACKING_STATION_NAME,
     })
@@ -2523,44 +2525,53 @@ def _mission_needs_travel(info: "_LocationMissionInfo",
 
 
 def _mission_building_reqs(
-    info: "_LocationMissionInfo", launch_mass: float, *, home: "BodyName",
-    needs_travel: bool,
+    info: "_LocationMissionInfo", *, home: "BodyName", needs_travel: bool,
 ) -> tuple[tuple[str, int], ...]:
     """Per-mission curated-building requirements as ``(item_name, level)``.
 
-    Derived from the mission's own physics (its launch mass + whether it needs
-    EVA), mirroring the per-mission pad gate.  Each curated effect is inverted
-    to the minimum building level via ``effects.min_building_level_for`` and
-    mapped to its AP progressive item name.  Only positive levels are recorded.
+    Derived from the mission's own physics (whether it needs EVA and — for
+    uncrewed missions — the comms range to its target), mirroring the per-mission
+    pad gate.  Only positive levels are recorded.  (VAB/SPH buildable limits ship
+    maxed this release, so no VAB requirement is recorded — see effects.py.)
 
-    * VESSEL_MASS_LIMIT (VAB): the lightest VAB level whose buildable-mass cap
-      fits this mission's launch mass.
     * CAN_EVA (Astronaut Complex): level 1 for EVA missions that require travel
       (``needs_travel`` — a non-empty profile); home-surface walk-off-pad EVA is
       allowed at AC level 0, matching the empty-profile exemption.
+    * DSN_POWER (Tracking Station): for uncrewed missions that leave the home
+      system, the min DSN level at which the antenna the mission already needs
+      holds the link.  Crewed missions bypass comms (pilot control), so they
+      record no requirement — matching the capability gate.
     """
-    from .effects import Effect, min_building_level_for
+    from .effects import Building, Effect, min_building_level_for
     from .items import _building_to_item_name
     from .capability import MISSION_TYPES_REQUIRING_EVA
 
     name_for = _building_to_item_name()
     reqs: list[tuple[str, int]] = []
 
-    # VAB vessel-mass cap (only meaningful for missions that fly).
-    if needs_travel:
-        _vab_building, vab_level = min_building_level_for(
-            Effect.VESSEL_MASS_LIMIT, launch_mass, home=home)
-        if vab_level > 0:
-            reqs.append((name_for[_vab_building], vab_level))
-
-    # Astronaut Complex EVA gate.
+    # Astronaut Complex EVA gate.  Home-body EVA (surface + orbit) is allowed at
+    # AC level 0, matching the capability gate's home-only exemption, so only EVA
+    # that leaves the home body records an AC requirement (``info.body != home``).
     eva_required = (info.requires_eva if info.requires_eva is not None
                     else info.mission_type in MISSION_TYPES_REQUIRING_EVA)
-    if eva_required and needs_travel:
+    if eva_required and needs_travel and info.body != home:
         _ac_building, ac_level = min_building_level_for(
             Effect.CAN_EVA, True, home=home)
         if ac_level > 0:
             reqs.append((name_for[_ac_building], ac_level))
+
+    # Tracking Station (DSN) comms gate — uncrewed missions only.  ``crewed is
+    # not True`` treats an ambiguous (None) mission as possibly-uncrewed, which
+    # is the conservative choice (records the gate so the unique TS copy can't
+    # strand).  The required level uses the antenna the mission needs anyway
+    # (``min_relay_tier``); home-system targets resolve to level 0 (no gate).
+    if needs_travel and info.crewed is not True:
+        from .comms import min_dsn_level_for
+        from .bodies import min_relay_tier
+        ts_level = min_dsn_level_for(
+            info.body, home, min_relay_tier(info.body, home))
+        if ts_level > 0:
+            reqs.append((name_for[Building.TRACKING_STATION], ts_level))
 
     return tuple(reqs)
 
@@ -2691,25 +2702,18 @@ def _install_ladder_rules(
                     # mission's physics at the bracket sphere.
                     if buildings_in_logic:
                         building_reqs = _mission_building_reqs(
-                            info, r.launch_mass, home=bn_home,
+                            info, home=bn_home,
                             needs_travel=_mission_needs_travel(info, mb))
                     break
             if j is None and buildings_in_logic:
                 # Unbracketed mission (beyond the chain's reps-only reach, e.g.
-                # a far body's EVA for a near goal).  It still needs its
-                # building gate recorded so a unique-provider building copy
-                # can't strand at a location that requires a higher building
-                # level than the copy supplies.  Evaluate at the maximal chain
-                # kit (last sphere with flags) to read its true gate.
-                last_flags = next(
-                    (s.flags for s in reversed(spheres) if s.flags is not None),
-                    None)
-                if last_flags is not None:
-                    r2 = _evaluate(last_flags, info, diff, mb)
-                    mass = r2.launch_mass if r2.feasible else float("inf")
-                    building_reqs = _mission_building_reqs(
-                        info, mass, home=bn_home,
-                        needs_travel=_mission_needs_travel(info, mb))
+                # a far body's EVA for a near goal).  Its building gate (EVA +
+                # DSN) depends only on the target and mission type, not the kit,
+                # so record it directly so a unique-provider TS/AC copy can't
+                # strand at a location that requires a higher level than it.
+                building_reqs = _mission_building_reqs(
+                    info, home=bn_home,
+                    needs_travel=_mission_needs_travel(info, mb))
             bracket_by_mission[mkey] = (j, pad_req, building_reqs)
         # Record per-mission building reqs even for unbracketed missions so the
         # unique-provider building copies never strand behind them.
@@ -3750,7 +3754,8 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
         # Full-admit max: max the building levels too so the intrinsic
         # per-location query isn't false-failed by a building gate.
         _max_ranks = (_max_ranks
-            .with_counted(PROGRESSIVE_VAB_NAME, PROGRESSIVE_VAB_COUNT)
+            .with_counted(PROGRESSIVE_TRACKING_STATION_NAME,
+                          PROGRESSIVE_TRACKING_STATION_COUNT)
             .with_counted(PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
                           PROGRESSIVE_ASTRONAUT_COMPLEX_COUNT))
     _max_flags = _pre_pass_for_ranks(

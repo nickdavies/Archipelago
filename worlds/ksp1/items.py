@@ -162,12 +162,13 @@ PROGRESSIVE_SCIENCE_INSTRUMENT_NAME: str = "Progressive Science Instrument"
 # when the option is on; otherwise these names are never created and the world
 # is byte-for-byte unchanged.  Each maps to a curated capability effect via
 # ``effects.building_effects``:
-#   * VAB              -> vessel buildable-mass cap (Effect.VESSEL_MASS_LIMIT)
-#   * Astronaut Complex-> free EVA               (Effect.CAN_EVA)
-#   * Tracking Station -> DSN power (DEFERRED seam — relay_tier already gates
-#                          comms, so this item is NOT wired into capability yet)
-# Stock KSP has 2 upgrade levels per facility (base 0 -> 1 -> 2), so each gets
-# 2 copies (levels 1 and 2 on top of base level 0).
+#   * Astronaut Complex -> free EVA         (Effect.CAN_EVA)
+#   * Tracking Station  -> DSN comms range  (Effect.DSN_POWER; see comms.py)
+# VAB/SPH (Effect.VESSEL_MASS_LIMIT) are kept in the client/server wire but ship
+# MAXED this release — the item below is NOT pooled and NOT capability-gated —
+# so a future VAB->part-count gate is a server-only change (no breaking client
+# change).  Stock KSP has 2 upgrade levels per facility (base 0 -> 1 -> 2), so
+# each gets 2 copies (levels 1 and 2 on top of base level 0).
 PROGRESSIVE_VAB_NAME: str = "Progressive VAB"
 PROGRESSIVE_TRACKING_STATION_NAME: str = "Progressive Tracking Station"
 PROGRESSIVE_ASTRONAUT_COMPLEX_NAME: str = "Progressive Astronaut Complex"
@@ -397,7 +398,6 @@ def create_all_items(world: KSP1World) -> None:
     # copy at the sphere that first needs building level N.
     if world.options.buildings_in_logic:
         for name, count in (
-            (PROGRESSIVE_VAB_NAME, PROGRESSIVE_VAB_COUNT),
             (PROGRESSIVE_TRACKING_STATION_NAME,
              PROGRESSIVE_TRACKING_STATION_COUNT),
             (PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,

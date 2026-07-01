@@ -22,6 +22,8 @@ from .bodies import (
 from .items import (
     ITEM_NAME_TO_ID, PROGRESSIVE_LAUNCH_PAD_CAPS, _FILLER_ITEMS,
     PROGRESSIVE_RD_NAME, PROGRESSIVE_RD_COUNT,
+    PROGRESSIVE_VAB_NAME, PROGRESSIVE_TRACKING_STATION_NAME,
+    PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
 )
 from .locations import (
     ALL_EVENTS, EVENT_BY_NAME, EventName, KSC_BIOMES, KSC_LOCATION_PREFIX,
@@ -196,14 +198,27 @@ _MAX_FACILITY_LEVEL = 2  # stock 0/1/2 (level-3 buildings)
 # option is on these START at level 0 (the player upgrades them by collecting
 # the curated building progressives); every other facility stays maxed.  The
 # Launch Pad is gated separately via progressive_launch_pad (its tonnage caps
-# ride their own slot_data key), so it is NOT listed here.  Tracking Station is
-# omitted: its DSN effect is a deferred seam (relay_tier already gates comms),
-# so it must not change today's maxed behavior.
+# ride their own slot_data key).  VAB/SPH stay maxed this release (their
+# part-count gate is a follow-up), so only the Astronaut Complex (EVA) and the
+# Tracking Station (DSN comms range) are gated.
 _GATED_FACILITY_IDS: tuple[str, ...] = (
-    "SpaceCenter/VehicleAssemblyBuilding",
-    "SpaceCenter/SpaceplaneHangar",
     "SpaceCenter/AstronautComplex",
+    "SpaceCenter/TrackingStation",
 )
+
+# item name -> the facility ids it upgrades.  List-valued so one item can drive
+# several facilities.  Emitted in slot_data (``career.facility_item_map``) so the
+# dumb client actuates building unlocks generically instead of hardcoding names —
+# adding a future building is then a server-only change.  The VAB entry is latent
+# this release (the item isn't pooled and VAB/SPH ship maxed); it drives both VAB
+# and SPH (shared vessel limits in the model) and is present so shipping a
+# VAB->part-count gate later needs no client change.
+_FACILITY_ITEM_MAP: dict[str, list[str]] = {
+    PROGRESSIVE_ASTRONAUT_COMPLEX_NAME: ["SpaceCenter/AstronautComplex"],
+    PROGRESSIVE_TRACKING_STATION_NAME: ["SpaceCenter/TrackingStation"],
+    PROGRESSIVE_VAB_NAME: ["SpaceCenter/VehicleAssemblyBuilding",
+                           "SpaceCenter/SpaceplaneHangar"],
+}
 
 
 class KSP1World(World):
@@ -280,19 +295,6 @@ class KSP1World(World):
     def generate_early(self) -> None:
         """Resolve goal spec and apply ExcludeLateTechTree."""
         self.capability_cache = {}
-        # buildings_in_logic is known-broken: the client can't actuate the
-        # Astronaut-Complex / SPH unlocks (item-name mismatch + no Progressive
-        # SPH item), so an enabled run soft-locks EVA-gated progression.  The
-        # option is hidden (Visibility.none), but a stale yaml that still sets
-        # it would otherwise regenerate into the broken state — force it off
-        # here so that can't happen.  Remove this guard once the client/server
-        # facility names are aligned and a Progressive SPH item is pooled.
-        if self.options.buildings_in_logic.value:
-            import logging
-            logging.warning(
-                "KSP1 (player %s): 'buildings_in_logic' is known-broken and "
-                "has been force-disabled for this seed.", self.player)
-            self.options.buildings_in_logic.value = 0
         # Every pooled item name that some access rule gates on (via
         # ``state.has``/``has_all``).  Populated at rule-construction time
         # through the ``rules.require_item(s)`` chokepoint — building the
@@ -756,20 +758,21 @@ class KSP1World(World):
 
         # Hacked-career directives — server→client, always emitted, actuated
         # verbatim by the dumb client. Career replaces the prior game mode; the
-        # client rejects non-Career saves. Per-building start levels let real
-        # facility progression be reintroduced piecemeal later.
+        # client rejects non-Career saves.
         #
         # buildings_in_logic OFF (default): every facility maxed — today's
-        # behavior, byte-for-byte.  ON: the curated-gated facilities START at
-        # level 0 so the player upgrades them via the AP building progressives;
-        # ungated facilities stay maxed.  (Client actuation of the start level
-        # is fast-follow; this just emits the server-authoritative value.)
+        # behavior, byte-for-byte.  ON: the curated-gated facilities (Astronaut
+        # Complex, Tracking Station) START at level 0 so the player upgrades them
+        # via the AP building progressives; ungated facilities stay maxed.  The
+        # client actuates both the start level and the per-item upgrades, the
+        # latter keyed by ``facility_item_map``.
         building_levels = {b: _MAX_FACILITY_LEVEL for b in _FACILITY_IDS}
         if self.options.buildings_in_logic:
             for b in _GATED_FACILITY_IDS:
                 building_levels[b] = 0
         d["career"] = {
             "building_levels": building_levels,
+            "facility_item_map": _FACILITY_ITEM_MAP,
             "infinite_funds": True,
             "infinite_reputation": True,
             "unlimited_contracts": True,

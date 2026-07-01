@@ -2630,23 +2630,50 @@ def parent_chain(body: Body) -> list[str]:
 # the fleeting best case — sizing the antenna for it leaves the player
 # stranded for half the synodic period.
 #
-# The tier-3 ceiling is physics-derived: a tier-3 relay (RA-15, antennaPower
-# 1.5e10) against a level-3 DSN (2.5e11) closes a link out to
-# ``sqrt(1.5e10 * 2.5e11) = 6.12e10 m = 4.50 AU`` of opposition separation.
-# Beyond that the tier-4 antenna (RA-100, 1e11) is required.  With the real
-# semi-major-axis ``solar_distance_au`` values this reproduces the original
-# hand-tuned per-body tiers exactly (Moho 2, Eve / Duna / Dres 3, Jool /
-# Eeloo 4) while staying homogeneous for any starting body.  The lower
-# thresholds remain the original hand-tuned bands.
+# The tier ceilings are physics-derived: a relay of antennaPower ``P_a`` against
+# a level-3 DSN (2.5e11) closes a link out to ``sqrt(P_a * 2.5e11)`` metres.
+# Tier 3 (RA-15, 1.5e10): ``sqrt(1.5e10 * 2.5e11) = 6.12e10 m = 4.50 AU``.
+# Tier 4 (RA-100, 1e11):  ``sqrt(1e11   * 2.5e11) = 1.581e11 m = 11.63 AU``.
+# With the real semi-major-axis ``solar_distance_au`` values this reproduces the
+# original hand-tuned per-body tiers exactly (Moho 2, Eve / Duna / Dres 3, Jool /
+# Eeloo 4) while staying homogeneous for any starting body.  The lower thresholds
+# remain the original hand-tuned bands.
+#
+# The tier-4 ceiling matters for the DSN model (``comms.py``): with a below-max
+# Tracking Station the separation is scaled up, and a scaled separation beyond
+# 11.63 AU means *no antenna* can hold the link at that DSN — the ``uncapped``
+# lookup returns tier 5 so the gate charges a Tracking-Station upgrade instead of
+# falsely reporting the body reachable.  The plain (capped) lookup keeps its old
+# ``return 4`` for the antenna gate, so the option-off path is byte-identical.
 _RELAY_TIER_AU_THRESHOLDS: tuple[tuple[float, int], ...] = (
-    (0.5, 0),   # negligible separation (unused — home_system bypass)
-    (1.3, 1),   # innermost band — unused under stock home distances
-    (1.5, 2),   # Moho (opposition 1.387 AU from Kerbin)
-    (4.5, 3),   # RA-15 max range @ DSN L3; Eve (1.72) / Duna (2.52) / Dres (4.003)
+    (0.5, 0),    # negligible separation (unused — home_system bypass)
+    (1.3, 1),    # innermost band — unused under stock home distances
+    (1.5, 2),    # Moho (opposition 1.387 AU from Kerbin)
+    (4.5, 3),    # RA-15 max range @ DSN L3; Eve (1.72) / Duna (2.52) / Dres (4.003)
+    (11.63, 4),  # RA-100 max range @ DSN L3; boundary for "no antenna reaches"
 )
 
 
-def min_relay_tier(body: BodyName, home: BodyName) -> int:
+def relay_tier_for_separation_au(sep_au: float, uncapped: bool = False) -> int:
+    """Antenna tier needed to hold a link across ``sep_au`` of heliocentric
+    separation at a *maxed* DSN ground station.  Extracted so the DSN model
+    (``comms.py``) can reuse the exact threshold table with a scaled
+    separation.  See ``_RELAY_TIER_AU_THRESHOLDS``.
+
+    ``uncapped`` (default False) controls the beyond-tier-4 fallback.  The
+    antenna gate caps at 4 (the highest real antenna) — its old behavior.  The
+    DSN model passes ``uncapped=True`` so a scaled separation past tier-4's
+    11.63 AU reach returns 5, meaning "no antenna reaches at this DSN" — the
+    gate then demands a Tracking-Station upgrade rather than falsely passing.
+    """
+    for threshold, tier in _RELAY_TIER_AU_THRESHOLDS:
+        if sep_au < threshold:
+            return tier
+    return 5 if uncapped else 4
+
+
+def min_relay_tier(body: BodyName, home: BodyName, sep_scale: float = 1.0,
+                   uncapped: bool = False) -> int:
     """Minimum relay tier required to keep a link between ``body`` and
     ``home``.
 
@@ -2657,6 +2684,12 @@ def min_relay_tier(body: BodyName, home: BodyName) -> int:
     heliocentric separation (``r_target + r_home``), which is what the
     antenna must hold for the half-synodic period when the bodies sit
     on opposite sides of the sun.
+
+    ``sep_scale`` (default 1.0) multiplies the heliocentric separation before
+    the tier lookup.  The thresholds are derived at a maxed DSN; a below-max
+    DSN shrinks reach, which the DSN model (``comms.py``) expresses as
+    ``sep_scale > 1.0`` (a farther *effective* separation → a higher required
+    tier).  ``sep_scale == 1.0`` reproduces the maxed-DSN behavior exactly.
 
     Returns 0..4.  See ``_RELAY_TIER_AU_THRESHOLDS``.
 
@@ -2669,10 +2702,7 @@ def min_relay_tier(body: BodyName, home: BodyName) -> int:
         return 0
     max_sep_au = (BODY_BY_NAME[body].solar_distance_au
                   + BODY_BY_NAME[home].solar_distance_au)
-    for threshold, tier in _RELAY_TIER_AU_THRESHOLDS:
-        if max_sep_au < threshold:
-            return tier
-    return 4
+    return relay_tier_for_separation_au(max_sep_au * sep_scale, uncapped)
 
 
 # Per-home precomputed relay-tier tables.  The inner dict is keyed by

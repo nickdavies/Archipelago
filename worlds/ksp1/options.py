@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from Options import Choice, ExcludeLocations, ItemsAccessibility, NamedRange, OptionDict, OptionSet, PerGameCommonOptions, Range, Toggle, Visibility
+from Options import Choice, ExcludeLocations, ItemsAccessibility, NamedRange, OptionDict, OptionSet, PerGameCommonOptions, Range, Toggle
 
 from .bodies import ALL_BODIES, BodyName
 from .contracts import ContractType, NON_GOAL_TYPES
@@ -385,29 +385,25 @@ class ProgressiveLaunchPad(Toggle):
 
 class BuildingsInLogic(Toggle):
     """
-    BROKEN — do not enable.  Hidden and force-disabled as of 0.6.1.
+    Gate capability-driving KSP facilities as in-logic progression.
 
-    Intended to gate curated KSP facilities (VAB/SPH, Astronaut Complex) as
-    in-logic progression: when on, those facilities start at level 0 and the
-    player upgrades them by collecting building progressives.  The server side
-    is wired, but the client cannot actuate two of the three gates:
+    When off (default), all facilities are maxed — the classic behavior, no
+    facility gates anything.  When on, the curated facilities start at level 0
+    and the player upgrades them by collecting building progressives:
 
-      - The unlock items are pooled as "Progressive Astronaut Complex" /
-        "Progressive Tracking Station" (with spaces) but the client's
-        facility map keys are "Progressive AstronautComplex" /
-        "Progressive TrackingStation" (no space) — so the client silently
-        ignores them and never raises the cap.
-      - No "Progressive SPH" item is pooled at all, yet SPH is gated to 0.
+      - **Astronaut Complex** gates EVA.  Until upgraded, missions that need a
+        Kerbal outside the craft off-home (flags, surface samples, rescues) are
+        out of logic; home-pad EVA still works.
+      - **Tracking Station** gates the Deep Space Network comms range.  A weaker
+        DSN needs a stronger antenna to hold a link, so far *uncrewed* missions
+        and far science *transmission* require upgrading it.  Crewed missions
+        (pilot control) and home-system comms are unaffected.
 
-    Net effect when enabled: the Astronaut Complex and SPH lock to level 0
-    with no way to unlock them, soft-locking EVA-gated progression.  Force-
-    disabled in ``KSP1World.generate_early`` and hidden from templates until
-    the client/server facility names are aligned and a Progressive SPH item
-    is added.  The wiring is left intact for that fix.
+    The VAB/SPH buildable limits are wired end-to-end but ship maxed this
+    release; their part-count gate is a follow-up.
     """
     display_name = "Buildings In Logic"
     default = 0
-    visibility = Visibility.none
 
 
 class ContractTypeWeights(OptionDict):

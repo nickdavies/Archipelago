@@ -48,13 +48,14 @@ class BlockingReason(str, Enum):
     INSUFFICIENT_POWER_SOLAR_OK = "insufficient_power_solar_ok"
     INSUFFICIENT_POWER_NEEDS_RTG = "insufficient_power_needs_rtg"
     RELAY_TIER_TOO_LOW = "relay_tier_too_low"
+    # Antenna + Tracking Station (DSN) can't hold the link: the Deep Space
+    # Network level is too low for the available antenna tier to reach the body.
+    DSN_POWER_INSUFFICIENT = "dsn_power_insufficient"
 
     # --- Mass / pad -----------------------------------------------------
     LAUNCH_MASS_EXCEEDED = "launch_mass_exceeded"
 
     # --- Curated buildings (buildings_in_logic) -------------------------
-    # Total vessel mass exceeds the VAB/SPH buildable-mass cap.
-    VESSEL_MASS_EXCEEDED = "vessel_mass_exceeded"
     # EVA required but the Astronaut Complex isn't upgraded enough.
     CANNOT_EVA = "cannot_eva"
 
@@ -222,12 +223,13 @@ class BlockingInfo:
         if r == BlockingReason.RELAY_TIER_TOO_LOW:
             return (f"relay tier too low for {self.body}: "
                     f"need {self.relay_needed}, have {self.relay_available}")
+        if r == BlockingReason.DSN_POWER_INSUFFICIENT:
+            return (f"Tracking Station (DSN) too low for {self.body}: "
+                    f"needs antenna tier {self.relay_needed} at this DSN, "
+                    f"have {self.relay_available}")
         # Mass ---------------------------------------------------------
         if r == BlockingReason.LAUNCH_MASS_EXCEEDED:
             return (f"launch mass {self.mass_actual:.0f}t exceeds launch pad "
-                    f"cap {self.mass_cap:.0f}t")
-        if r == BlockingReason.VESSEL_MASS_EXCEEDED:
-            return (f"vessel mass {self.mass_actual:.0f}t exceeds VAB/SPH "
                     f"cap {self.mass_cap:.0f}t")
         if r == BlockingReason.CANNOT_EVA:
             return "Astronaut Complex not upgraded enough for EVA"
