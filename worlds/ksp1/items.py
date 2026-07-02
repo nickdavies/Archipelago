@@ -196,6 +196,9 @@ def _building_to_item_name() -> dict:
         Building.TRACKING_STATION: PROGRESSIVE_TRACKING_STATION_NAME,
         Building.ASTRONAUT_COMPLEX: PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
         Building.MISSION_CONTROL: PROGRESSIVE_MISSION_CONTROL_NAME,
+        # R&D facility rides the existing Progressive R&D item (no separate item);
+        # the requirement level is an R&D *count* threshold, not a facility level.
+        Building.RESEARCH_AND_DEVELOPMENT: PROGRESSIVE_RD_NAME,
         Building.LAUNCH_PAD: PROGRESSIVE_LAUNCH_PAD_NAME,
     }
 
@@ -239,7 +242,7 @@ _PROGRESSIVE_ITEMS: dict[str, tuple[int, ItemClassification]] = {
     PROGRESSIVE_MISSION_CONTROL_NAME:   (73, ItemClassification.progression),
 }
 
-PROGRESSIVE_RD_COUNT: int = 3
+PROGRESSIVE_RD_COUNT: int = 5   # must equal tech_tree.MAX_RD_BAND
 PROGRESSIVE_PSI_COUNT: int = 3
 
 # Contract items: a large dedicated block at offset 10_000+ (well clear of the

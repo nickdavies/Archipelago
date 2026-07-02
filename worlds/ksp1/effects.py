@@ -76,6 +76,7 @@ class Building(StrEnum):
     TRACKING_STATION = "tracking_station"
     ASTRONAUT_COMPLEX = "astronaut_complex"
     MISSION_CONTROL = "mission_control"
+    RESEARCH_AND_DEVELOPMENT = "research_and_development"
 
 
 class Capability(StrEnum):
@@ -90,6 +91,7 @@ class Capability(StrEnum):
     """
 
     CAN_EVA = "can_eva"                                    # Astronaut Complex
+    CAN_COLLECT_SAMPLES = "can_collect_samples"            # R&D facility (samples)
     CAN_RENDEZVOUS = "can_rendezvous"                      # conics + nodes
     CAN_NAVIGATE_LOCAL = "can_navigate_local"              # home-system transfers
     CAN_NAVIGATE_INTERPLANETARY = "can_navigate_interplanetary"
@@ -102,6 +104,15 @@ class Capability(StrEnum):
 _EVA_AC_LEVEL = 1
 _CONICS_TS_LEVEL = 1
 _NODES_MC_LEVEL = 1
+
+# R&D facility: surface samples require facility level 2 (even on the home body).
+# We don't add a separate item — the facility level rides the Progressive R&D
+# count (which also gates tech bands): samples at count 2 (facility L2), full at
+# count 5 (facility L3, cosmetic here — we don't gate part costs).  So the
+# "level" carried for RESEARCH_AND_DEVELOPMENT in a levels dict is the raw R&D
+# count, and the samples ability compares it against this threshold.
+RD_FACILITY_SAMPLES_COUNT = 2
+RD_FACILITY_TOP_COUNT = 5
 
 
 # ---------------------------------------------------------------------------
@@ -278,12 +289,14 @@ def player_capabilities(
     ac = levels.get(Building.ASTRONAUT_COMPLEX, _EVA_AC_LEVEL)
     ts = levels.get(Building.TRACKING_STATION, _CONICS_TS_LEVEL)
     mc = levels.get(Building.MISSION_CONTROL, _NODES_MC_LEVEL)
+    rd = levels.get(Building.RESEARCH_AND_DEVELOPMENT, RD_FACILITY_SAMPLES_COUNT)
     conics = ts >= _CONICS_TS_LEVEL
     nodes = conics and mc >= _NODES_MC_LEVEL
     can_local = ((not local_needs_conics or conics)
                  and (not local_needs_nodes or nodes))
     return {
         Capability.CAN_EVA: CAN_EVA_BY_LEVEL[_clamp_index(ac, CAN_EVA_BY_LEVEL)],
+        Capability.CAN_COLLECT_SAMPLES: rd >= RD_FACILITY_SAMPLES_COUNT,
         Capability.CAN_RENDEZVOUS: nodes,
         Capability.CAN_NAVIGATE_INTERPLANETARY: nodes,
         Capability.CAN_NAVIGATE_LOCAL: can_local,
@@ -302,6 +315,9 @@ def buildings_for_capability(
     nodes_req = (Building.MISSION_CONTROL, _NODES_MC_LEVEL)
     if cap is Capability.CAN_EVA:
         return ((Building.ASTRONAUT_COMPLEX, _EVA_AC_LEVEL),)
+    if cap is Capability.CAN_COLLECT_SAMPLES:
+        # The "level" is the Progressive R&D count threshold (no separate item).
+        return ((Building.RESEARCH_AND_DEVELOPMENT, RD_FACILITY_SAMPLES_COUNT),)
     if cap in (Capability.CAN_RENDEZVOUS, Capability.CAN_NAVIGATE_INTERPLANETARY):
         return (conics_req, nodes_req)          # nodes imply conics
     if cap is Capability.CAN_NAVIGATE_LOCAL:

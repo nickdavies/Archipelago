@@ -139,6 +139,13 @@ MISSION_TYPES_REQUIRING_RENDEZVOUS: frozenset[MissionType] = frozenset({
     MissionType.RESCUE,
 })
 
+# Mission types that take a surface sample (a Kerbal collecting surface material)
+# — sample returns.  In stock KSP this needs the R&D facility at level 2, even on
+# the home body, so it gates on ``can_collect_samples`` regardless of travel.
+MISSION_TYPES_REQUIRING_SAMPLES: frozenset[MissionType] = frozenset({
+    MissionType.SAMPLE_RETURN,
+})
+
 
 # Home-system bodies that are NOT the home itself (its moons for a planet home,
 # or the parent + siblings for a moon home) — the "local" navigation targets.
@@ -260,6 +267,7 @@ class EquipmentFlags:
     # (VAB/SPH buildable limits are wired but not gated this release — the
     # facilities ship at max; see effects.py for the forward seam.)
     can_eva: bool = True
+    can_collect_samples: bool = True
     can_rendezvous: bool = True
     can_navigate_local: bool = True
     can_navigate_interplanetary: bool = True
@@ -506,7 +514,7 @@ def _pre_pass(item_count_fn: Callable[[str], int],
     if buildings_in_logic:
         from .items import (
             PROGRESSIVE_ASTRONAUT_COMPLEX_NAME, PROGRESSIVE_TRACKING_STATION_NAME,
-            PROGRESSIVE_MISSION_CONTROL_NAME,
+            PROGRESSIVE_MISSION_CONTROL_NAME, PROGRESSIVE_RD_NAME,
         )
         from .effects import (
             Building, Capability, Effect, building_effects, player_capabilities,
@@ -520,11 +528,15 @@ def _pre_pass(item_count_fn: Callable[[str], int],
                 Building.TRACKING_STATION: ts_level,
                 Building.MISSION_CONTROL:
                     item_count_fn(PROGRESSIVE_MISSION_CONTROL_NAME),
+                # R&D facility rides the Progressive R&D count (samples gate).
+                Building.RESEARCH_AND_DEVELOPMENT:
+                    item_count_fn(PROGRESSIVE_RD_NAME),
             },
             local_needs_conics=local_needs_conics,
             local_needs_nodes=local_needs_nodes,
         )
         flags.can_eva = caps[Capability.CAN_EVA]
+        flags.can_collect_samples = caps[Capability.CAN_COLLECT_SAMPLES]
         flags.can_rendezvous = caps[Capability.CAN_RENDEZVOUS]
         flags.can_navigate_local = caps[Capability.CAN_NAVIGATE_LOCAL]
         flags.can_navigate_interplanetary = caps[Capability.CAN_NAVIGATE_INTERPLANETARY]
@@ -1226,6 +1238,7 @@ def _evaluate_profile(
     run_parallel: bool = True,
     requires_eva: bool = False,
     requires_rendezvous: bool = False,
+    requires_samples: bool = False,
 ) -> ProfileResult:
     """
     Run the two-pass evaluation on a single mission profile alternative.
@@ -1299,6 +1312,13 @@ def _evaluate_profile(
     if (requires_eva and not flags.can_eva
             and any(edge.body != home for edge in profile)):
         blocking.append(BlockingInfo(reason=BlockingReason.CANNOT_EVA))
+
+    # Surface samples (R&D facility, buildings_in_logic).  Needs the facility
+    # upgraded even on the home body (stock), so unlike EVA there is no home
+    # exemption — the gate fires regardless of travel.  ``can_collect_samples``
+    # defaults True, so it never fires when buildings aren't in logic.
+    if requires_samples and not flags.can_collect_samples:
+        blocking.append(BlockingInfo(reason=BlockingReason.CANNOT_COLLECT_SAMPLES))
 
     # Navigation + rendezvous (Tracking Station patched conics + Mission Control
     # maneuver nodes, buildings_in_logic).  All three abilities default True, so
@@ -2547,6 +2567,7 @@ def evaluate_mission_detailed(
     mission_transform: Optional[Callable[[list], list]] = None,
     requires_eva: bool | None = None,
     requires_rendezvous: bool | None = None,
+    requires_samples: bool | None = None,
     run_parallel: bool = True,
 ) -> ProfileResult:
     """
@@ -2688,6 +2709,9 @@ def evaluate_mission_detailed(
     # else derived from type (RESCUE).
     rendezvous_required = (mission_type in MISSION_TYPES_REQUIRING_RENDEZVOUS
                            if requires_rendezvous is None else requires_rendezvous)
+    # Surface-sample requirement (R&D facility), derived from type (SAMPLE_RETURN).
+    samples_required = (mission_type in MISSION_TYPES_REQUIRING_SAMPLES
+                        if requires_samples is None else requires_samples)
 
     # ``run_parallel`` controls whether the exact asparagus (parallel-staged)
     # build is searched.  The bumper's GUIDANCE trials pass run_parallel=False:
@@ -2707,7 +2731,8 @@ def evaluate_mission_detailed(
                                        extra_payload_parts=extra_payload_parts,
                                        run_parallel=run_parallel,
                                        requires_eva=eva_required,
-                                       requires_rendezvous=rendezvous_required)
+                                       requires_rendezvous=rendezvous_required,
+                                       requires_samples=samples_required)
             if result.feasible:
                 return result
             for b in result.blocking:

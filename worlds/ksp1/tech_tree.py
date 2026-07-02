@@ -66,11 +66,15 @@ for _tier in range(1, MAX_TIER + 1):
 
 TOTAL_TECH_COST: int = _CUMULATIVE[MAX_TIER]
 
-# Progressive R&D bands — pairs of tiers locked behind the same R&D item.
+# Progressive R&D bands — each R&D item unlocks the next band of tiers.  Five
+# layers (count 0..5): a light early game (tiers 1-4 at band 0-1), then one R&D
+# per tier up top where the tree fans out and science costs climb.  The R&D
+# *facility* level (surface samples) rides these same counts — see
+# ``effects.RD_FACILITY_LEVEL_BY_COUNT``.
 TIER_TO_BAND: dict[int, int] = {
-    1: 0, 2: 0, 3: 1, 4: 1, 5: 2, 6: 2, 7: 3, 8: 3,
+    1: 0, 2: 0, 3: 1, 4: 1, 5: 2, 6: 3, 7: 4, 8: 5,
 }
-MAX_RD_BAND: int = 3
+MAX_RD_BAND: int = 5
 
 
 def cumulative_tier_cost(tier: int) -> int:

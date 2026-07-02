@@ -58,6 +58,8 @@ class BlockingReason(str, Enum):
     # --- Curated buildings (buildings_in_logic) -------------------------
     # EVA required but the Astronaut Complex isn't upgraded enough.
     CANNOT_EVA = "cannot_eva"
+    # Surface sample required but the R&D facility isn't upgraded enough.
+    CANNOT_COLLECT_SAMPLES = "cannot_collect_samples"
     # Navigation / rendezvous: patched conics (Tracking Station) and maneuver
     # nodes (Mission Control) aren't upgraded enough for the manoeuvre.
     CANNOT_RENDEZVOUS = "cannot_rendezvous"
@@ -238,6 +240,8 @@ class BlockingInfo:
                     f"cap {self.mass_cap:.0f}t")
         if r == BlockingReason.CANNOT_EVA:
             return "Astronaut Complex not upgraded enough for EVA"
+        if r == BlockingReason.CANNOT_COLLECT_SAMPLES:
+            return "R&D facility not upgraded enough for surface samples"
         if r == BlockingReason.CANNOT_RENDEZVOUS:
             return "no rendezvous (needs patched conics + maneuver nodes)"
         if r == BlockingReason.CANNOT_NAVIGATE_LOCAL:

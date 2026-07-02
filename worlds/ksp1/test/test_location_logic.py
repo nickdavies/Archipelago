@@ -32,6 +32,7 @@ from worlds.ksp1.locations import (
     MissionType,
 )
 from worlds.ksp1.bodies import ALL_BODIES, BodyName
+from worlds.ksp1.comms import DSN_POWER_MAX
 from worlds.ksp1.items import PROGRESSIVE_RD_NAME
 from worlds.ksp1.tech_tree import TECH_NODES, TIER_TO_BAND
 from worlds.ksp1.test.base import KSP1TestBase as _SharedKSP1TestBase
@@ -85,6 +86,7 @@ def _make_zero_cap() -> MagicMock:
     cap.staging_tier = 0
     cap.sounding_altitude_km = 0.0
     cap.relay_tier = 0
+    cap.dsn_power = DSN_POWER_MAX   # option-off: transmit gate is antenna-only
     return cap
 
 

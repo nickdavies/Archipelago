@@ -1021,6 +1021,8 @@ def _pre_pass_for_ranks(
                 ranks.counted(PROGRESSIVE_ASTRONAUT_COMPLEX_NAME),
             PROGRESSIVE_MISSION_CONTROL_NAME:
                 ranks.counted(PROGRESSIVE_MISSION_CONTROL_NAME),
+            # R&D count drives the surface-sample gate (facility level).
+            PROGRESSIVE_RD_NAME: ranks.counted(PROGRESSIVE_RD_NAME),
         }
 
     def cf(name: str, _adm=admitted, _pad=pad_tier, _bl=_building_levels) -> int:
@@ -1398,10 +1400,12 @@ def minimal_ranks_for(
                    PROGRESSIVE_MISSION_CONTROL_COUNT)
             _AC = (PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
                    PROGRESSIVE_ASTRONAUT_COMPLEX_COUNT)
+            _RD = (PROGRESSIVE_RD_NAME, PROGRESSIVE_RD_COUNT)
             _BR = BlockingReason
             _bumps = [
                 (*_TS, _BR.DSN_POWER_INSUFFICIENT),
                 (*_AC, _BR.CANNOT_EVA),
+                (*_RD, _BR.CANNOT_COLLECT_SAMPLES),
                 (*_TS, _BR.CANNOT_NAVIGATE_INTERPLANETARY),
                 (*_MC, _BR.CANNOT_NAVIGATE_INTERPLANETARY),
                 (*_TS, _BR.CANNOT_RENDEZVOUS),
@@ -1633,7 +1637,8 @@ def minimal_ranks_for(
                     .with_counted(PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
                                   PROGRESSIVE_ASTRONAUT_COMPLEX_COUNT)
                     .with_counted(PROGRESSIVE_MISSION_CONTROL_NAME,
-                                  PROGRESSIVE_MISSION_CONTROL_COUNT))
+                                  PROGRESSIVE_MISSION_CONTROL_COUNT)
+                    .with_counted(PROGRESSIVE_RD_NAME, PROGRESSIVE_RD_COUNT))
             rescue_flags = _pre_pass_for_ranks(
                 max_ranks_for_rescue, ctx,
                 start_with_clamps=start_with_clamps,
@@ -2112,7 +2117,7 @@ def _predictable_spheres(world: "KSP1World") -> list[tuple[str, str]]:
 # ``minimal_ranks_for`` builds the physics part.  Result: chain_required
 # carries them through, Rule B distributes copies by sphere ordering.
 _TECH_ANCHOR_INJECT = {
-    PROGRESSIVE_RD_NAME: 3,                   # = MAX_RD_BAND
+    PROGRESSIVE_RD_NAME: PROGRESSIVE_RD_COUNT,   # = MAX_RD_BAND
     "Progressive Science Instrument": 3,
 }
 
@@ -2572,6 +2577,7 @@ def _mission_building_reqs(
     from .items import _building_to_item_name
     from .capability import (
         MISSION_TYPES_REQUIRING_EVA, MISSION_TYPES_REQUIRING_RENDEZVOUS,
+        MISSION_TYPES_REQUIRING_SAMPLES,
     )
     from .bodies import home_system_bodies, min_relay_tier
 
@@ -2589,6 +2595,10 @@ def _mission_building_reqs(
                     else info.mission_type in MISSION_TYPES_REQUIRING_EVA)
     if eva_required and needs_travel and info.body != home:
         _record(Capability.CAN_EVA)
+
+    # Surface samples (R&D facility) — home and off-home, so no travel condition.
+    if info.mission_type in MISSION_TYPES_REQUIRING_SAMPLES:
+        _record(Capability.CAN_COLLECT_SAMPLES)
 
     # Tracking Station (DSN) comms gate — uncrewed missions only.
     if needs_travel and info.crewed is not True:
@@ -3802,7 +3812,8 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
             .with_counted(PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
                           PROGRESSIVE_ASTRONAUT_COMPLEX_COUNT)
             .with_counted(PROGRESSIVE_MISSION_CONTROL_NAME,
-                          PROGRESSIVE_MISSION_CONTROL_COUNT))
+                          PROGRESSIVE_MISSION_CONTROL_COUNT)
+            .with_counted(PROGRESSIVE_RD_NAME, PROGRESSIVE_RD_COUNT))
     _max_flags = _pre_pass_for_ranks(
         _max_ranks, ctx,
         start_with_clamps=start_with_clamps,
