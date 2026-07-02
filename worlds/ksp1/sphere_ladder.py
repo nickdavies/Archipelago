@@ -700,6 +700,9 @@ _RANK_BUMP_TABLE: dict[BlockingReason, tuple[RankAxisKey, ...]] = {
     ),
     BlockingReason.STAGING_TIER_INSUFFICIENT: (RankAxisKey.STACK_DECOUPLER,),
     BlockingReason.NO_HEAT_SHIELD: (RankAxisKey.HEAT_SHIELD,),
+    # No owned shield covers any owned pod on a passive aero entry: a larger
+    # shield always closes it (higher rank = larger; 3.75m covers every pod).
+    BlockingReason.HEAT_SHIELD_TOO_SMALL: (RankAxisKey.HEAT_SHIELD,),
     BlockingReason.RELAY_TIER_TOO_LOW: (RankAxisKey.RELAY,),
     BlockingReason.INSUFFICIENT_POWER_SOLAR_OK: (RankAxisKey.SOLAR,),
     # RTG is a discrete unlock today; not modeled on a rank axis (Phase 2).

@@ -224,6 +224,12 @@ class EquipmentFlags:
     best_heat_shield: Optional[HeatShield] = None
     lightest_capsule: Optional[MiscEquipment] = None
     lightest_probe: Optional[MiscEquipment] = None
+    # Full pod inventories: passive aero-entry profiles pick the pod TOGETHER
+    # with its covering heat shield (cheapest pair), which needs the whole set
+    # — the lightest pod may be wider than every owned shield while a heavier
+    # narrow pod flies fine.
+    available_capsules: list[MiscEquipment] = field(default_factory=list)
+    available_probes: list[MiscEquipment] = field(default_factory=list)
 
     # Support equipment — part references per category
     lightest_relay: dict[int, MiscEquipment] = field(default_factory=dict)  # tier → part
@@ -752,17 +758,19 @@ def _apply_misc(flags: EquipmentFlags, part: MiscEquipment, count: int) -> None:
     for flag in part.provides:
         if flag == CF.PROBE_CORE:
             flags.has_probe_core = True
+            flags.available_probes.append(part)
             if flags.lightest_probe is None or part.mass < flags.lightest_probe.mass:
                 flags.lightest_probe = part
         elif flag == CF.CAPSULE:
             flags.has_capsule = True
+            flags.available_capsules.append(part)
             if flags.lightest_capsule is None or part.mass < flags.lightest_capsule.mass:
                 flags.lightest_capsule = part
         elif flag == CF.REACTION_WHEEL:
             flags.has_reaction_wheels = True
             # Standalone wheel module = provides reaction_wheel without also
             # providing probe_core or capsule. (Probes/capsules that include
-            # a wheel are handled by `_terminal_has_built_in_wheels`; they
+            # a wheel are handled by `_pod_has_built_in_wheels`; they
             # cover every stage automatically.)
             if (CF.PROBE_CORE not in part.provides
                     and CF.CAPSULE not in part.provides):
@@ -945,6 +953,10 @@ class ProfileResult:
     blocking: list[BlockingInfo] = field(default_factory=list)
     # Command module + support equipment for the terminal stage: [(count, part_id), ...]
     terminal_parts: list[tuple[int, str]] = field(default_factory=list)
+    # The flown pod.  On passive aero-entry profiles this is pair-picked with
+    # its covering shield and may differ from the global lightest pick; the
+    # kit must record it or a re-eval of the kit can't reproduce feasibility.
+    terminal_pod_name: str = ""
     # Complete structured kit (populated on feasible results, see KitUsed).
     kit_used: Optional[KitUsed] = None
     # Best-effort partial rocket captured when the result is INFEASIBLE:
@@ -975,7 +987,8 @@ _SOLAR_LARGE_PART: Optional[str] = DEFAULT_PART_MANAGER.lightest_providing(
 
 def _build_kit_used(flags: EquipmentFlags,
                     stage_results: list[StageResult],
-                    terminal_parts: list[tuple[int, str]]) -> KitUsed:
+                    terminal_parts: list[tuple[int, str]],
+                    terminal_pod_name: str = "") -> KitUsed:
     """Assemble the full structured kit the optimizer relied on.
 
     See ``KitUsed`` for the categorization.  Called only at the two
@@ -1000,6 +1013,15 @@ def _build_kit_used(flags: EquipmentFlags,
         kit.capsule = flags.lightest_capsule.name
     if flags.lightest_probe:
         kit.probe_core = flags.lightest_probe.name
+    # The FLOWN pod overrides the lightest pick: on passive aero-entry
+    # profiles it is pair-picked with its covering shield and may be a
+    # heavier-but-narrower pod.  Recording the lightest instead would leave
+    # the kit unable to reproduce the feasibility claim on re-eval.
+    if terminal_pod_name:
+        if any(p.name == terminal_pod_name for p in flags.available_capsules):
+            kit.capsule = terminal_pod_name
+        elif any(p.name == terminal_pod_name for p in flags.available_probes):
+            kit.probe_core = terminal_pod_name
     if flags.best_chute:
         kit.parachute = flags.best_chute.name
     # Heat shields: capture the exact shield each stage charged (lightest
@@ -1077,7 +1099,8 @@ def build_kit_for_result(flags: EquipmentFlags,
     longer builds the kit eagerly."""
     if not result.feasible:
         return None
-    return _build_kit_used(flags, result.stage_results, result.terminal_parts)
+    return _build_kit_used(flags, result.stage_results, result.terminal_parts,
+                           result.terminal_pod_name)
 
 
 def _has_attitude_control(flags: EquipmentFlags) -> bool:
@@ -1107,22 +1130,46 @@ _TERMINAL_PARTS_WITH_INTERNAL_MONOPROP: frozenset[str] = frozenset({
 })
 
 
-def _terminal_part(flags: EquipmentFlags, is_crewed: bool) -> Optional[MiscEquipment]:
-    return flags.lightest_capsule if is_crewed else flags.lightest_probe
+def _pod_has_built_in_wheels(pod: Optional[MiscEquipment]) -> bool:
+    return pod is not None and CapabilityFlag.REACTION_WHEEL in pod.provides
 
 
-def _terminal_has_built_in_wheels(flags: EquipmentFlags, is_crewed: bool) -> bool:
-    part = _terminal_part(flags, is_crewed)
-    if part is None:
-        return False
-    return CapabilityFlag.REACTION_WHEEL in part.provides
+def _pod_has_built_in_monoprop(pod: Optional[MiscEquipment]) -> bool:
+    return pod is not None and pod.name in _TERMINAL_PARTS_WITH_INTERNAL_MONOPROP
 
 
-def _terminal_has_built_in_monoprop(flags: EquipmentFlags, is_crewed: bool) -> bool:
-    part = _terminal_part(flags, is_crewed)
-    if part is None:
-        return False
-    return part.name in _TERMINAL_PARTS_WITH_INTERNAL_MONOPROP
+def _passive_entry_pod_and_shield(
+    pods: list[MiscEquipment],
+    heat_shields: list[HeatShield],
+    n_entries: int,
+) -> Optional[tuple[MiscEquipment, HeatShield]]:
+    """Cheapest (pod, covering shield) pair for a profile with ``n_entries``
+    passive aero entries, or None when no owned shield covers any owned pod.
+
+    The reentry shield must COVER the command module it protects; flying a
+    smaller shield is not modelled (the pod burns).  Picking the pod and the
+    shield *together* — minimising pod.mass + n_entries * shield.mass over the
+    owned set — keeps the model monotone: the part DB has capsules that are
+    lighter but WIDER than others (cupola: 0.94t/2.5m), so a fixed
+    lightest-pod pick would let acquiring one flip a covered pod to an
+    uncoverable one and lose the mission (the bug-092 shape).  A pure min over
+    a growing candidate set can only improve.  Both masses are real flown
+    parts, so the charge stays conservative.
+    """
+    best: Optional[tuple[MiscEquipment, HeatShield]] = None
+    best_key: tuple[float, float, str] = (float("inf"), float("inf"), "")
+    for pod in pods:
+        shield = None
+        for hs in heat_shields:
+            if hs.size_class >= pod.size_class and (
+                    shield is None or hs.mass < shield.mass):
+                shield = hs
+        if shield is None:
+            continue
+        key = (pod.mass + n_entries * shield.mass, pod.mass, pod.name)
+        if key < best_key:
+            best_key, best = key, (pod, shield)
+    return best
 
 
 @dataclass(frozen=True)
@@ -1146,7 +1193,7 @@ _PER_STAGE_ATTITUDE_ENABLED: bool = True
 
 
 def _attitude_bundle_for_stage(
-    flags: EquipmentFlags, is_crewed: bool,
+    flags: EquipmentFlags, terminal_pod: Optional[MiscEquipment],
 ) -> Optional[AttitudeBundle]:
     """Pick the lightest concrete on-stage attitude bundle from real PART_DB
     parts. Returns None if no on-stage source is available.
@@ -1172,7 +1219,7 @@ def _attitude_bundle_for_stage(
         rcs_parts: list[tuple[int, str]] = [(4, t.name)]
         rcs_mass = 4 * t.mass
         rcs_skip = False
-        if not _terminal_has_built_in_monoprop(flags, is_crewed):
+        if not _pod_has_built_in_monoprop(terminal_pod):
             tank = flags.lightest_monoprop_tank
             if tank is None:
                 # Can't fly an RCS bundle without monopropellant — skip.
@@ -1497,6 +1544,37 @@ def _evaluate_profile(
             stages_available=flags.staging_tier,
         ))
 
+    # Passive aero entries (chute + shield do all the work) must fly a shield
+    # that COVERS the pod — see ``_passive_entry_pod_and_shield``.  Pick the
+    # (pod, shield) pair here so the terminal payload below carries the chosen
+    # pod's mass through every stage; when no owned shield covers any owned
+    # pod the profile is infeasible outright.
+    passive_pod: Optional[MiscEquipment] = None
+    passive_pod_shield: Optional[HeatShield] = None
+    passive_entry_groups = [
+        g for g in groups
+        if all(e.edge_type == EdgeType.ATMO_LANDING_AERO for e in g)
+        and any(e.needs_heat_shield for e in g)
+    ]
+    if passive_entry_groups:
+        pods = flags.available_capsules if is_crewed else flags.available_probes
+        # Empty pods / shields are already blocked by the NO_CAPSULE /
+        # NO_PROBE_CORE / NO_HEAT_SHIELD gates above — only report the more
+        # specific "too small" when both exist and no pair covers.
+        if pods and flags.available_heat_shields:
+            pair = _passive_entry_pod_and_shield(
+                pods, flags.available_heat_shields, len(passive_entry_groups))
+            if pair is None:
+                blocking.append(BlockingInfo(
+                    reason=BlockingReason.HEAT_SHIELD_TOO_SMALL,
+                    body=passive_entry_groups[0][0].body,
+                    size_needed=min(p.size_class for p in pods),
+                    size_available=max(
+                        hs.size_class for hs in flags.available_heat_shields),
+                ))
+            else:
+                passive_pod, passive_pod_shield = pair
+
     # Return all collected pre-check failures before attempting optimization.
     if blocking:
         return ProfileResult(False, blocking=blocking)
@@ -1505,13 +1583,13 @@ def _evaluate_profile(
     # Backward pass — compute masses from destination back to Kerbin
     # ------------------------------------------------------------------
 
-    # Terminal payload mass
-    if is_crewed:
-        capsule_mass = flags.lightest_capsule.mass if flags.lightest_capsule else 0.0
-        terminal_mass = max(capsule_mass, 0.08)  # min capsule
-    else:
-        probe_mass = flags.lightest_probe.mass if flags.lightest_probe else 0.0
-        terminal_mass = max(probe_mass, 0.04)    # min probe
+    # Terminal payload mass — the flown pod.  On passive aero-entry profiles
+    # this is the pod pair-picked with its covering shield above; otherwise
+    # the lightest pod of the required kind.
+    terminal_pod = passive_pod if passive_pod is not None else (
+        flags.lightest_capsule if is_crewed else flags.lightest_probe)
+    pod_mass = terminal_pod.mass if terminal_pod else 0.0
+    terminal_mass = max(pod_mass, 0.08 if is_crewed else 0.04)
 
     # Add equipment mass for the terminal stage
     # (legs, ladder, heat shield on the last edge in the profile)
@@ -1538,10 +1616,10 @@ def _evaluate_profile(
     )
     global_attitude_bundle: Optional[AttitudeBundle] = None
     global_attitude_force_gimbal: bool = False
-    attitude_covered_by_terminal = _terminal_has_built_in_wheels(flags, is_crewed)
+    attitude_covered_by_terminal = _pod_has_built_in_wheels(terminal_pod)
     if _PER_STAGE_ATTITUDE_ENABLED and attitude_has_any:
         if not attitude_covered_by_terminal:
-            global_attitude_bundle = _attitude_bundle_for_stage(flags, is_crewed)
+            global_attitude_bundle = _attitude_bundle_for_stage(flags, terminal_pod)
             if global_attitude_bundle is None:
                 # No wheel/RCS source anywhere — every attitude-requiring stage
                 # must pick a gimballed engine/SRB to self-provide control.
@@ -1689,19 +1767,15 @@ def _evaluate_profile(
                 )
                 if chute_id and chute_count > 0:
                     stage_equipment.append((chute_count, chute_id))
-            # Size the reentry shield to the widest part it protects — the
-            # command pod (capsule/probe).  Lightest shield that COVERS the pod
-            # diameter; if none is big enough, the largest available.  (Legs are
-            # already folded into ``stage_payload`` via ``equip_mass``.)
-            passive_shield = None
-            if needs_hs and heat_shields_arg:
-                _term = _terminal_part(flags, is_crewed)
-                _term_dia = _term.size_class if _term else 0.0
-                _covering = [hs for hs in heat_shields_arg if hs[0] >= _term_dia]
-                passive_shield = (min(_covering, key=lambda x: x[1])
-                                  if _covering
-                                  else max(heat_shields_arg, key=lambda x: x[0]))
-            passive_shield_mass = passive_shield[1] if passive_shield else 0.0
+            # The reentry shield COVERS the pod it protects: it was pair-picked
+            # with the pod in the pre-check (a profile with no coverable pod
+            # never reaches this point), so charge exactly that shield.  (Legs
+            # are already folded into ``stage_payload`` via ``equip_mass``.)
+            passive_shield_mass = 0.0
+            passive_shield_name: Optional[str] = None
+            if needs_hs and passive_pod_shield is not None:
+                passive_shield_mass = passive_pod_shield.mass
+                passive_shield_name = passive_pod_shield.name
             passive_mass = stage_payload + passive_shield_mass
             stage_results_list.append(StageResult(
                 delta_v=0.0,
@@ -1716,7 +1790,7 @@ def _evaluate_profile(
                 engine_name="none",
                 tank_manifest=(),
                 equipment=stage_equipment,
-                heat_shield_name=passive_shield[2] if passive_shield else None,
+                heat_shield_name=passive_shield_name,
             ))
             stage_group_list.append(flight_idx)
             payload = passive_mass
@@ -1909,10 +1983,8 @@ def _evaluate_profile(
 
     # Build terminal parts list (command module + support equipment)
     terminal_parts: list[tuple[int, str]] = []
-    if is_crewed and flags.lightest_capsule:
-        terminal_parts.append((1, flags.lightest_capsule.name))
-    elif not is_crewed and flags.lightest_probe:
-        terminal_parts.append((1, flags.lightest_probe.name))
+    if terminal_pod is not None:
+        terminal_parts.append((1, terminal_pod.name))
     support_mass, support_parts = _support_equipment_mass(flags, profile, home=home)
     terminal_parts.extend(support_parts)
     # Contract equipment is part of the delivered terminal payload — list it on
@@ -1937,6 +2009,7 @@ def _evaluate_profile(
         edge_groups=groups,
         stage_group_indices=list(reversed(stage_group_list)),
         terminal_parts=terminal_parts,
+        terminal_pod_name=terminal_pod.name if terminal_pod else "",
         # kit_used is NOT built here — it's expensive and only two call
         # sites consume it.  They call ``build_kit_for_result`` explicitly.
     )

@@ -39,6 +39,10 @@ class BlockingReason(str, Enum):
     LANDING_LEGS_MISSING = "landing_legs_missing"
     NO_LADDER = "no_ladder"
     NO_HEAT_SHIELD = "no_heat_shield"
+    # A shield exists but none covers any owned command module: a passive
+    # reentry behind an undersized shield exposes the pod, so the profile is
+    # infeasible (never "fly the largest available anyway").
+    HEAT_SHIELD_TOO_SMALL = "heat_shield_too_small"
     NO_PARACHUTE = "no_parachute"
     PARACHUTE_TERMINAL_VELOCITY = "parachute_terminal_velocity"
     NO_SAFE_DESCENT = "no_safe_descent"                # chute OR throttleable
@@ -156,6 +160,10 @@ class BlockingInfo:
     relay_available: int = 0
     leg_tier_needed: int = 0
     leg_tier_available: int = 0
+    # Diameters (m) for HEAT_SHIELD_TOO_SMALL: the narrowest pod that must be
+    # covered vs. the largest shield owned.
+    size_needed: float = 0.0
+    size_available: float = 0.0
     after_aero: bool = False
     mass_actual: float = 0.0     # tonnes
     mass_cap: float = 0.0        # tonnes
@@ -214,6 +222,10 @@ class BlockingInfo:
             return "need ladder for sample return"
         if r == BlockingReason.NO_HEAT_SHIELD:
             return "no heat shield for aero edge"
+        if r == BlockingReason.HEAT_SHIELD_TOO_SMALL:
+            return (f"no heat shield covers a command module "
+                    f"(narrowest pod {self.size_needed:.2f}m, largest shield "
+                    f"{self.size_available:.2f}m)")
         if r == BlockingReason.NO_PARACHUTE:
             return "no parachutes for aero landing"
         if r == BlockingReason.PARACHUTE_TERMINAL_VELOCITY:

@@ -72,6 +72,7 @@ _JUMBO_64 = _part("Rockomax64.BW")
 _S3_3600 = _part("Size3SmallTank")
 
 # Heat Shields
+_SHIELD_0625 = _part("HeatShield0")
 _SHIELD_125 = _part("HeatShield1")
 _SHIELD_25 = _part("HeatShield2")
 
@@ -127,9 +128,11 @@ def _make_flags(
     if probe_core:
         flags.has_probe_core = True
         flags.lightest_probe = _PROBE_CORE
+        flags.available_probes.append(_PROBE_CORE)
     if capsule:
         flags.has_capsule = True
         flags.lightest_capsule = _COMMAND_POD
+        flags.available_capsules.append(_COMMAND_POD)
 
     if reaction_wheels:
         flags.has_reaction_wheels = True
@@ -1492,7 +1495,7 @@ class TestAttitudeBundleManifestReconciles(unittest.TestCase):
         flags.has_reaction_wheels = True
         flags.lightest_reaction_wheel = sas
 
-        bundle = _attitude_bundle_for_stage(flags, is_crewed=False)
+        bundle = _attitude_bundle_for_stage(flags, terminal_pod=stayputnik)
         self.assertIsNotNone(bundle)
         self.assertEqual(bundle.parts, ((1, "sasModule"),))
         self.assertAlmostEqual(bundle.mass, sas.mass, places=6)
@@ -1513,7 +1516,7 @@ class TestAttitudeBundleManifestReconciles(unittest.TestCase):
         flags.lightest_monoprop_tank = tank
         flags.available_tanks.append(tank)
 
-        bundle = _attitude_bundle_for_stage(flags, is_crewed=False)
+        bundle = _attitude_bundle_for_stage(flags, terminal_pod=stayputnik)
         self.assertIsNotNone(bundle)
         self.assertEqual(set(bundle.parts), {(4, "RCSLinearSmall"), (1, "monopropMiniSphere")})
         expected = 4 * rcs.mass + tank.dry_mass + tank.fuel_mass
@@ -1532,7 +1535,7 @@ class TestAttitudeBundleManifestReconciles(unittest.TestCase):
         flags.has_rcs = True
         flags.lightest_rcs_thruster = rcs
 
-        bundle = _attitude_bundle_for_stage(flags, is_crewed=True)
+        bundle = _attitude_bundle_for_stage(flags, terminal_pod=pod)
         self.assertIsNotNone(bundle)
         self.assertEqual(bundle.parts, ((4, "RCSLinearSmall"),))
         self.assertAlmostEqual(bundle.mass, 4 * rcs.mass, places=6)
@@ -1782,6 +1785,89 @@ class TestControlSurchargeMonotonicity(unittest.TestCase):
             with_fins.launch_mass, base.launch_mass * 1.0001,
             "granting fins made the orbit build heavier — aero steering must "
             "be a per-candidate option, never a mandated charge")
+
+
+class TestPassiveEntryShieldCovering(unittest.TestCase):
+    """A passive reentry must fly a shield that COVERS the pod it protects.
+
+    The old model fell back to "the largest available" when no shield was big
+    enough — an under-shielded craft that dies on entry in real play, and
+    lighter than the honest build, so owning the correctly-sized shield could
+    LOSE a mission at a capacity cliff (bug 092 family).  The pod and shield
+    are pair-picked together (cheapest pod.mass + shield.mass over the owned
+    set) because the part DB has capsules that are lighter but WIDER than
+    others (cupola: 0.94t/2.5m) — a fixed lightest-pod pick would let
+    acquiring one flip a covered pod to an uncoverable one.
+    """
+
+    def _kit(self, capsules, shields):
+        flags = _make_flags(
+            engines=[_SWIVEL, _MAINSAIL, _TERRIER],
+            tanks=[_FL_T400, _FL_T800, _X200_32, _JUMBO_64],
+            probe_core=True, solar=True, rtg=True,
+            heat_shields=shields, parachutes=[_MK16, _MK2R],
+            legs=[_LT1], relay_tier=4,
+            launch_clamp=True, staging_tier=2,
+            decoupler_stack=True, fuel_lines=True, decoupler_radial=True,
+        )
+        for pod in capsules:
+            flags.has_capsule = True
+            flags.available_capsules.append(pod)
+            if (flags.lightest_capsule is None
+                    or pod.mass < flags.lightest_capsule.mass):
+                flags.lightest_capsule = pod
+        return flags
+
+    def _mun_sample_return(self, flags, crewed=True):
+        from worlds.ksp1.capability import evaluate_mission_detailed
+        return evaluate_mission_detailed(
+            flags, _normal_diff(), BodyName.MUN, MissionType.SAMPLE_RETURN,
+            crewed, MISSION_BUILDER)
+
+    def test_undersized_shield_blocks_crewed_return(self) -> None:
+        from worlds.ksp1.capability_reasons import BlockingReason
+        # 0.625m shield cannot cover the 1.25m pod on the Kerbin reentry.
+        r = self._mun_sample_return(self._kit([_COMMAND_POD], [_SHIELD_0625]))
+        self.assertFalse(r.feasible,
+                         "a 0.625m shield must not fly a 1.25m pod through "
+                         "reentry — the undersized-fallback is back")
+        self.assertIn(BlockingReason.HEAT_SHIELD_TOO_SMALL,
+                      {b.reason for b in r.blocking})
+
+    def test_covering_shield_restores_and_bigger_never_hurts(self) -> None:
+        covered = self._mun_sample_return(
+            self._kit([_COMMAND_POD], [_SHIELD_0625, _SHIELD_125]))
+        self.assertTrue(covered.feasible)
+        bigger = self._mun_sample_return(
+            self._kit([_COMMAND_POD], [_SHIELD_0625, _SHIELD_125, _SHIELD_25]))
+        self.assertTrue(bigger.feasible,
+                        "granting a larger shield lost the mission")
+        self.assertLessEqual(
+            bigger.launch_mass, covered.launch_mass * 1.0001,
+            "granting a larger shield made the build heavier — the covering "
+            "pick must stay the lightest sufficient shield")
+
+    def test_undersized_shield_still_covers_a_probe(self) -> None:
+        # The 0.625m probe core IS covered by the 0.625m shield: the covering
+        # rule blocks pods it can't protect, not small craft it can.
+        r = self._mun_sample_return(
+            self._kit([_COMMAND_POD], [_SHIELD_0625]), crewed=False)
+        self.assertTrue(r.feasible)
+
+    def test_lighter_but_wider_pod_never_loses_the_mission(self) -> None:
+        mark2 = _part("Mark2Cockpit")   # 1.0t / 1.25m — covered by _SHIELD_125
+        cupola = _part("cupola")        # 0.94t / 2.5m — lighter, uncoverable
+        self.assertLess(cupola.mass, mark2.mass)
+        self.assertGreater(cupola.size_class, _SHIELD_125.size_class)
+        base = self._mun_sample_return(self._kit([mark2], [_SHIELD_125]))
+        self.assertTrue(base.feasible)
+        plus = self._mun_sample_return(self._kit([mark2, cupola], [_SHIELD_125]))
+        self.assertTrue(plus.feasible,
+                        "acquiring a lighter-but-wider capsule lost the "
+                        "mission — the pod must be pair-picked with its "
+                        "covering shield, not fixed to the lightest")
+        self.assertLessEqual(plus.launch_mass, base.launch_mass * 1.0001)
+        self.assertEqual(plus.terminal_pod_name, mark2.name)
 
 
 if __name__ == "__main__":
