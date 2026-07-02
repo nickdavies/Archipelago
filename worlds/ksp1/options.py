@@ -397,9 +397,9 @@ class BuildingsInLogic(Toggle):
     """
     Gate capability-driving KSP facilities as in-logic progression.
 
-    When off (default), all facilities are maxed — the classic behavior, no
-    facility gates anything.  When on, the curated facilities start at level 0
-    and the player upgrades them by collecting building progressives:
+    When on (default), the curated facilities start at level 0 and the player
+    upgrades them by collecting building progressives.  When off, all facilities
+    are maxed similar to science sandbox, no facility gates anything:
 
       - **Astronaut Complex** gates EVA.  Until upgraded, missions that need a
         Kerbal outside the craft off-home (flags, surface samples, rescues) are
@@ -417,7 +417,7 @@ class BuildingsInLogic(Toggle):
     release; their part-count gate is a follow-up.
     """
     display_name = "Buildings In Logic"
-    default = 0
+    default = 1
 
 
 class HomeSystemConics(Choice):
