@@ -14,12 +14,16 @@ from bisect import bisect_left
 from dataclasses import dataclass, field
 from typing import Optional
 
-from .parts import (
+from ..parts import (
     Engine, FuelTank, SolidBooster, MultiMount,
     MAX_RADIAL_ENGINES,
 )
-from .part_geometry import PartRole
-from .capability_reasons import StageDiagnostic, StageFailure
+from ..part_geometry import PartRole
+from ..capability_reasons import StageDiagnostic, StageFailure
+
+# Atmospheric-descent physics (entry bleed, chute ladder, touchdown bounds)
+# lives in the aero submodule; exposed as rocket_math.aero.
+from . import aero  # noqa: E402,F401  (import at end of header block is deliberate)
 
 G0: float = 9.80665  # standard gravity, m/s²
 
@@ -2027,12 +2031,11 @@ def merge_edge_groups(
     Merge a list of MissionEdge objects into a single MergedEdgeGroup.
     Constraints are the union (strictest) of all constituent edges.
     """
-    from .bodies import EdgeType
+    from ..bodies import EdgeType
 
     atmo_types = {
         EdgeType.ATMOSPHERIC_ASCENT,
-        EdgeType.ATMO_LANDING_PROPULSIVE,
-        EdgeType.ATMO_LANDING_AERO,
+        EdgeType.ATMO_LANDING,
         EdgeType.AEROBRAKE_CAPTURE,
     }
 

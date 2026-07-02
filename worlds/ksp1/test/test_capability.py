@@ -26,9 +26,9 @@ from worlds.ksp1.locations import EventName
 from worlds.ksp1.capability import (
     BodyAccessProfile, EquipmentFlags,
     _evaluate_profile, _assess_bodies, _assess_one_body,
-    _try_profiles, _try_profiles_reason, _required_chute_count, _required_power_source,
+    _try_profiles, _try_profiles_reason, _solve_atmo_landing, _required_power_source,
     _inject_ladder, _compute_sounding_altitude,
-    _group_edges,
+    _group_edges, _MAX_SAFE_LANDING_SPEED,
 )
 from worlds.ksp1.parts import (
     DEFAULT_PART_MANAGER, Engine, FuelTank, SolidBooster, MultiMount,
@@ -124,6 +124,9 @@ def _make_flags(
     flags.available_engines = list(engines or [])
     flags.available_srbs = list(srbs or [])
     flags.available_tanks = list(tanks or [])
+    # Mirror _pre_pass: the staged-landing mix reads has_throttleable_engine to
+    # decide whether a propulsive descent-finish is available.
+    flags.has_throttleable_engine = any(e.throttleable for e in flags.available_engines)
 
     if probe_core:
         flags.has_probe_core = True
@@ -148,18 +151,21 @@ def _make_flags(
 
     parachutes = parachutes or []
     for p in parachutes:
-        if not p.is_drogue:
-            flags.has_parachutes = True
-            flags.available_parachutes.append(p)
-    # Mirror _pre_pass: pick the best overall + best-of-each-kind chutes up front
-    # so the landing solver reads them directly.
+        flags.has_parachutes = True
+        flags.available_parachutes.append(p)
+    # Mirror _pre_pass: pick the best overall + role-aware best-of-kind chutes
+    # (main/drogue × radial/inline) so the staged-descent mix evaluator reads
+    # them directly.
     if flags.available_parachutes:
         _key = lambda p: p.mass / max(p.drag_area, 1e-3)
         flags.best_chute = min(flags.available_parachutes, key=_key)
-        _rad = [p for p in flags.available_parachutes if p.is_radial]
-        _inl = [p for p in flags.available_parachutes if not p.is_radial]
-        flags.best_radial_chute = min(_rad, key=_key) if _rad else None
-        flags.best_inline_chute = min(_inl, key=_key) if _inl else None
+        def _best(pred):
+            cs = [p for p in flags.available_parachutes if pred(p)]
+            return min(cs, key=_key) if cs else None
+        flags.best_radial_main = _best(lambda p: p.is_radial and not p.is_drogue)
+        flags.best_inline_main = _best(lambda p: not p.is_radial and not p.is_drogue)
+        flags.best_radial_drogue = _best(lambda p: p.is_radial and p.is_drogue)
+        flags.best_inline_drogue = _best(lambda p: not p.is_radial and p.is_drogue)
 
     legs = legs or []
     for leg in legs:
@@ -363,15 +369,19 @@ class TestParachuteGate(unittest.TestCase):
         flags.available_parachutes = [_MK16, _MK16, _MK16]
         # set explicitly since we bypassed _make_flags's parachutes= path
         flags.best_chute = _MK16
-        flags.best_inline_chute = _MK16  # _MK16 is an inline chute
+        flags.best_inline_main = _MK16  # _MK16 is an inline main chute
         return flags
 
-    def test_mun_return_fails_without_parachutes(self) -> None:
-        # No parachutes: fails at the broad gate check (ATMO_LANDING_AERO present)
+    def test_mun_return_fails_without_shield(self) -> None:
+        # A staged reentry always needs a heat shield; strip it and the return
+        # fails at the NO_HEAT_SHIELD gate even though engines are present.
         flags = self._return_flags_no_chutes()
+        flags.has_heat_shield = False
+        flags.available_heat_shields = []
+        flags.best_heat_shield = None
         profiles = MISSION_PROFILES.get((BodyName.MUN, MissionType.RETURN), [])
         ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.RETURN, crewed=False, home=BodyName.KERBIN)
-        self.assertFalse(ok, "Mun return should fail without parachutes")
+        self.assertFalse(ok, "Mun return should fail without a heat shield")
 
     def test_mun_return_succeeds_with_parachutes(self) -> None:
         # A 0-margin profile makes the dv/TWR budget tractable while keeping the
@@ -385,46 +395,106 @@ class TestParachuteGate(unittest.TestCase):
         self.assertTrue(ok, "Mun return should succeed with parachutes at 0-margin difficulty")
 
 
-class TestParachuteCalculation(unittest.TestCase):
-    """Test the required_chute_count helper."""
+class TestStagedLandingMix(unittest.TestCase):
+    """The staged-descent mix evaluator (_solve_atmo_landing).  Detailed
+    physics and the per-body expectation table live in test_atmo_landing.py;
+    these check the capability-layer wiring (best-of-kind selection, shield
+    coverage, passive-vs-burn, feasibility)."""
 
-    def test_one_inline_chute_lands_light_craft_on_kerbin(self) -> None:
-        # The single inline (stack-top) chute we assume lands a light craft on
-        # Kerbin's thick atmosphere.
+    def _solve(self, payload, body, flags, diff=None, v_entry=None, pod_size=1.25):
+        diff = diff or _normal_diff()
+        v_entry = v_entry if v_entry is not None else body.lo_circular_velocity
+        twr = max(1.3, diff.min_twr_atmo)
+        # Mirror the pre-check covering pair-pick: lightest shield covering the
+        # pod (no undersized fallback), or None.
+        covering = [hs for hs in flags.available_heat_shields
+                    if hs.size_class >= pod_size]
+        coverage = min(covering, key=lambda h: h.mass) if covering else None
+        return _solve_atmo_landing(payload, body, flags, diff,
+                                   twr_floor=twr, v_entry=v_entry,
+                                   dvGL_cap=body.dv.dvGL or 0.0,
+                                   coverage_shield=coverage, pod_size=pod_size)
+
+    def test_light_pod_one_chute_passive_on_kerbin(self) -> None:
+        flags = _make_flags(heat_shields=[_part("HeatShield1")], parachutes=[_MK16])
+        mix = self._solve(0.9, BODY_BY_NAME[BodyName.KERBIN], flags)
+        self.assertTrue(mix.feasible)
+        self.assertFalse(mix.needs_burn, "a light pod on one Mk16 lands passively")
+
+    def test_radial_chutes_land_medium_craft(self) -> None:
+        # A medium craft lands passively on radial mains (they scale super-
+        # linearly in symmetry).
+        flags = _make_flags(heat_shields=[_part("HeatShield1")], parachutes=[_MK2R])
+        mix = self._solve(1.5, BODY_BY_NAME[BodyName.KERBIN], flags)
+        self.assertTrue(mix.feasible)
+        self.assertFalse(mix.needs_burn)
+        total = sum(n for n, _ in mix.equipment)
+        self.assertGreater(total, 1, "1.5 t needs multiple radial chutes")
+
+    def test_heavy_chute_only_craft_needs_drogue_or_engine(self) -> None:
+        # A heavy craft on radial MAINS alone (no drogue, no engine) stays too
+        # fast for the mains to deploy safely -> infeasible.  Adding a drogue
+        # (high-q bridge) makes it land passively; that is the enabler pattern.
+        kerbin = BODY_BY_NAME[BodyName.KERBIN]
+        mains_only = _make_flags(heat_shields=[_part("HeatShield1")],
+                                 parachutes=[_MK2R])
+        self.assertFalse(self._solve(3.0, kerbin, mains_only).feasible)
+        with_drogue = _make_flags(heat_shields=[_part("HeatShield1")],
+                                  parachutes=[_MK2R, _part("radialDrogue")])
+        rescued = self._solve(3.0, kerbin, with_drogue)
+        self.assertTrue(rescued.feasible)
+        self.assertFalse(rescued.needs_burn, "a drogue lets the mains land it passively")
+
+    def test_no_engine_no_enough_chutes_is_infeasible(self) -> None:
+        # A heavy craft, one inline chute (capped at 1), no throttleable engine:
+        # drag can't reach safe speed and there's no burn to finish.
+        flags = _make_flags(heat_shields=[_part("HeatShield1")], parachutes=[_MK16])
+        mix = self._solve(20.0, BODY_BY_NAME[BodyName.KERBIN], flags)
+        self.assertFalse(mix.feasible)
+        self.assertGreater(mix.residual_speed, _MAX_SAFE_LANDING_SPEED)
+
+    def test_engine_finishes_when_chutes_insufficient(self) -> None:
+        # Same heavy craft but WITH a throttleable engine + fuel: the descent
+        # finishes propulsively instead of failing (the partial-propulsive path).
+        flags = _make_flags(
+            engines=[_SWIVEL], tanks=[_FL_T800],
+            heat_shields=[_part("HeatShield1")], parachutes=[_MK16],
+        )
+        mix = self._solve(20.0, BODY_BY_NAME[BodyName.KERBIN], flags)
+        self.assertTrue(mix.feasible)
+        self.assertTrue(mix.needs_burn)
+        self.assertGreater(mix.burn_dv, 0.0)
+
+    def test_burn_never_exceeds_dvGL_cap(self) -> None:
+        kerbin = BODY_BY_NAME[BodyName.KERBIN]
+        flags = _make_flags(engines=[_SWIVEL], tanks=[_FL_T800],
+                            heat_shields=[_part("HeatShield1")])
+        mix = self._solve(50.0, kerbin, flags)
+        if mix.feasible and mix.needs_burn:
+            self.assertLessEqual(mix.burn_dv, kerbin.dv.dvGL + 1e-6)
+
+    def test_no_shield_returns_infeasible_mix(self) -> None:
+        # The broad NO_HEAT_SHIELD gate fires upstream; the mix itself also
+        # refuses (no coverage shield to survive reentry heating).
         flags = _make_flags(parachutes=[_MK16])
-        kerbin = BODY_BY_NAME[BodyName.KERBIN]
-        n = _required_chute_count(1.0, kerbin, flags, _normal_diff())
-        self.assertEqual(n, 1, "1 t on Kerbin should land under a single inline chute")
+        mix = self._solve(1.0, BODY_BY_NAME[BodyName.KERBIN], flags)
+        self.assertFalse(mix.feasible)
 
-    def test_inline_chutes_capped_at_one(self) -> None:
-        # Inline chutes can't be stacked past _MAX_INLINE_CHUTES (1): a craft
-        # needing more than one inline chute is infeasible on inline-only kit,
-        # even though several _MK16 are nominally "available".
-        flags = _make_flags(parachutes=[_MK16, _MK16, _MK16, _MK16])
-        kerbin = BODY_BY_NAME[BodyName.KERBIN]
-        n = _required_chute_count(3.0, kerbin, flags, _normal_diff())
-        self.assertEqual(n, -1, "3 t needs >1 inline chute; inline is capped at 1")
-
-    def test_radial_chutes_scale(self) -> None:
-        # Radial chutes surface-mount around the body, so the same 3 t craft
-        # lands once a radial chute is available (count scales past 1).
-        flags = _make_flags(parachutes=[_MK2R])
-        kerbin = BODY_BY_NAME[BodyName.KERBIN]
-        n = _required_chute_count(3.0, kerbin, flags, _normal_diff())
-        self.assertGreater(n, 1, "3 t on Kerbin needs multiple radial chutes")
-
-    def test_vacuum_body_needs_no_chutes(self) -> None:
-        flags = _make_flags(parachutes=[])
-        mun = BODY_BY_NAME[BodyName.MUN]
-        n = _required_chute_count(3.0, mun, flags, _normal_diff())
-        self.assertEqual(n, 0, "Mun has no atmosphere, no chutes needed")
-
-    def test_insufficient_chutes_returns_minus_one(self) -> None:
-        # Give 0 parachutes, land a very heavy craft on Kerbin
-        flags = _make_flags()  # no parachutes
-        kerbin = BODY_BY_NAME[BodyName.KERBIN]
-        n = _required_chute_count(100.0, kerbin, flags, _normal_diff())
-        self.assertEqual(n, -1, "Should return -1 when no chutes available")
+    def test_drogue_reduces_or_removes_burn(self) -> None:
+        # Adding a drogue to a thin-atmo landing kit must never INCREASE the
+        # burn (monotonicity: more drag → less propulsive shortfall).
+        duna = BODY_BY_NAME[BodyName.DUNA]
+        base = _make_flags(engines=[_SWIVEL], tanks=[_FL_T800],
+                           heat_shields=[_part("HeatShield1")], parachutes=[_MK2R])
+        with_drogue = _make_flags(
+            engines=[_SWIVEL], tanks=[_FL_T800],
+            heat_shields=[_part("HeatShield1")],
+            parachutes=[_MK2R, _part("radialDrogue")],
+        )
+        m0 = self._solve(8.0, duna, base)
+        m1 = self._solve(8.0, duna, with_drogue)
+        self.assertTrue(m0.feasible and m1.feasible)
+        self.assertLessEqual(m1.burn_dv, m0.burn_dv + 1e-6)
 
 
 class TestCrewedVsUnmanned(unittest.TestCase):
@@ -1307,10 +1377,11 @@ class TestEngineMounting(unittest.TestCase):
 
 class TestAeroLandingPassiveStage(unittest.TestCase):
     """
-    Bug 057: aero-landing stages should be passive (no engines, no fuel).
+    Bug 057: a passive aero landing (drag alone reaches safe touchdown) must
+    produce an engine-free stage.
 
-    The ATMO_LANDING_AERO edge represents atmospheric drag + parachutes,
-    not a propulsive burn.  The optimizer must not add engines to these stages.
+    When the staged-descent mix lands the craft on parachutes + heat shield
+    with no propulsive finish, the ATMO_LANDING stage carries no engines/fuel.
     """
 
     def _return_flags(self) -> EquipmentFlags:
@@ -1632,14 +1703,18 @@ class TestPowerChargeMonotonic(unittest.TestCase):
     def _mun_return_kit(self, rtg: bool = False) -> EquipmentFlags:
         f = EquipmentFlags()
         f.available_engines = [_TERRIER, _SWIVEL, _MAINSAIL]
+        f.has_throttleable_engine = True  # mirror _pre_pass (all three throttle)
         f.available_tanks = [_FL_T400, _FL_T800, _X200_32, _JUMBO_64]
         f.has_probe_core = True
         f.lightest_probe = _part("roverBody.v2")
+        f.available_probes = [f.lightest_probe]  # covering pair-pick reads the list
         f.has_reaction_wheels = True
         f.staging_tier = 2
         f.available_decouplers = [_TR18A, _TT38K]
         f.has_launch_clamp = True
-        hs = _part("HeatShield0")
+        # A 1.25m probe needs a shield that COVERS it (the merged covering rule
+        # rejects the old undersized fallback) — HeatShield1 is the 1.25m shield.
+        hs = _part("HeatShield1")
         f.has_heat_shield = True
         f.available_heat_shields = [hs]
         f.best_heat_shield = hs
@@ -1649,8 +1724,7 @@ class TestPowerChargeMonotonic(unittest.TestCase):
         f.has_parachutes = True
         f.available_parachutes = [drogue]
         f.best_chute = drogue
-        f.best_inline_chute = drogue
-        f.best_radial_chute = None
+        f.best_inline_drogue = drogue
         f.has_solar = True
         f.lightest_solar = _OX_STAT
         if rtg:

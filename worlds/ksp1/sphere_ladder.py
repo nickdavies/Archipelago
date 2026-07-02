@@ -672,12 +672,13 @@ _RANK_BUMP_TABLE: dict[BlockingReason, tuple[RankAxisKey, ...]] = {
     #   * LANDING_LEG / RELAY / SOLAR / SAS are pure mass with no dv or profile
     #     effect; they reach the kit via their own pre-check blockers
     #     (LANDING_LEGS_MISSING, RELAY_TIER_TOO_LOW, ...).
-    #   * HEAT_SHIELD / PARACHUTE *do* cut dv (they unlock the cheap
-    #     ATMO_LANDING_AERO profile, dv=100 m/s, over a propulsive landing —
-    #     bodies.py:1266) — but the capability surfaces that precisely: it returns
-    #     the UNION of blockers across all profile alternatives (capability.py:
-    #     2586), emitting NO_HEAT_SHIELD / NO_PARACHUTE when an aero profile is the
-    #     cheaper unlock, which map to those axes.
+    #   * HEAT_SHIELD / PARACHUTE *do* cut the landing burn (more drag → the
+    #     staged descent needs less propulsive finish, or none — a fully passive
+    #     landing).  The capability surfaces this precisely: a landing that can
+    #     neither reach safe touchdown on drag nor finish on a burn returns
+    #     ATMO_DESCENT_INFEASIBLE, mapped below to the drag axes so the bumper
+    #     adds chutes / a draggier shield to make it passive; a burn-stage
+    #     shortfall surfaces separately as NO_VIABLE_STAGE with its own axes.
     # Trialing all six here instead was ~44% of all bumper trials, ~94% no-ops
     # (KSP_BUMP_STATS): each candidate costs a full serial FOS, and equipment can
     # never close a stage failure.
@@ -712,8 +713,12 @@ _RANK_BUMP_TABLE: dict[BlockingReason, tuple[RankAxisKey, ...]] = {
     BlockingReason.NO_COMMAND_MODULE: (
         RankAxisKey.CAPSULE, RankAxisKey.PROBE_SAS,
     ),
-    BlockingReason.PARACHUTE_TERMINAL_VELOCITY: (RankAxisKey.PARACHUTE,),
-    BlockingReason.NO_PARACHUTE: (RankAxisKey.PARACHUTE,),
+    # No feasible descent: add drag (more chutes, or the draggier/inflatable
+    # shield) so the staged descent lands passively — or reduces the burn to
+    # what the kit's engine can finish.
+    BlockingReason.ATMO_DESCENT_INFEASIBLE: (
+        RankAxisKey.PARACHUTE, RankAxisKey.HEAT_SHIELD,
+    ),
     BlockingReason.NO_SAFE_DESCENT: (RankAxisKey.PARACHUTE,),
     BlockingReason.CAPSULE_SOUNDING_INCOMPLETE: (
         RankAxisKey.PARACHUTE, RankAxisKey.STACK_DECOUPLER,

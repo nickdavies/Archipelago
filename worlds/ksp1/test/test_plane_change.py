@@ -11,7 +11,7 @@ aerobrake / prop-land from there (the final inclination never matters).
 
 Note this is NOT "destination == home" (Moho -> Kerbin still pays: it is an
 interplanetary encounter, Kerbin is not Moho's parent) and NOT gated on
-atmosphere (that only changes the *descent* edge: ATMO_LANDING_AERO vs
+atmosphere (that only changes the *descent* edge: ATMO_LANDING vs
 VACUUM_LANDING).  The rule is purely the parent relationship of the two
 endpoint bodies.
 

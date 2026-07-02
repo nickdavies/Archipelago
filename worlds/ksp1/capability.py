@@ -44,6 +44,7 @@ from .rocket_math import (
     terminal_velocity,
     FILL_LEVELS, merge_edge_groups,
 )
+from .rocket_math import aero
 
 if TYPE_CHECKING:
     from .world import KSP1World
@@ -291,13 +292,21 @@ class EquipmentFlags:
     available_heat_shields: list[HeatShield] = field(default_factory=list)
     available_parachutes: list[Parachute] = field(default_factory=list)
     # Best (lowest mass-per-drag-area) chute, picked once at ``_pre_pass`` time
-    # so the per-call landing solver never ``min(...)``s.  ``best_chute`` is the
-    # overall best (display/kit); ``best_radial_chute`` / ``best_inline_chute``
-    # are the best of each kind for ``_landing_chute_solution`` (radial chutes
-    # scale, inline are capped).  ``None`` when no chute of that kind is held.
+    # so the staged-descent mix evaluator never ``min(...)``s in the hot path.
+    # ``best_chute`` is the overall best (display/kit).  The four role slots are
+    # main (touchdown) vs drogue (high-q bridge) × radial (scales in symmetry)
+    # vs inline (one attach point) — the mix builder combines them.  ``None``
+    # when no chute of that role is held.
     best_chute: Optional[Parachute] = None
-    best_radial_chute: Optional[Parachute] = None
-    best_inline_chute: Optional[Parachute] = None
+    best_radial_main: Optional[Parachute] = None
+    best_inline_main: Optional[Parachute] = None
+    best_radial_drogue: Optional[Parachute] = None
+    best_inline_drogue: Optional[Parachute] = None
+    # Heaviest-drag shield (the inflatable when owned) — the bleed enabler for
+    # thin atmospheres.  Distinct from ``best_heat_shield`` (largest size_class,
+    # the coverage pick).  Only used as its OWN candidate mix, so owning it
+    # never displaces a lighter mains-only landing.
+    best_drag_shield: Optional[HeatShield] = None
     available_landing_legs: list[LandingLeg] = field(default_factory=list)
 
     # Multi-mount adapters/plates available to the player
@@ -585,22 +594,30 @@ def _pre_pass(item_count_fn: Callable[[str], int],
     # Derive relay tier from available relays
     flags.relay_tier = _compute_relay_tier(flags)
 
-    # Pick the asymptote-best parachute once.  Lowest mass-per-drag-area
-    # wins (see ``_required_chute_count`` doc).  Drogues are included —
-    # the physics-accurate landing check (``_required_chute_count``)
-    # already handles "drag insufficient even with all chutes" by
-    # returning -1; the boolean ``has_parachutes`` was a redundant
-    # shortcut that surprised the bumper into picking a non-drogue rep
-    # at higher ranks when a drogue-only kit could land with enough copies.
+    # Pick the best parachute per role once.  Lowest mass-per-drag-area wins;
+    # the staged-descent mix evaluator (``_solve_atmo_landing``) combines mains
+    # (touchdown braking) and drogues (high-q bridge) and finishes any residual
+    # propulsively, so a drogue-only or chute-light kit is no longer a hard
+    # fail — the burn covers the gap.
     if flags.available_parachutes:
         _chute_key = lambda p: p.mass / max(p.drag_area, 1e-3)
         flags.best_chute = min(flags.available_parachutes, key=_chute_key)
-        # Best of each kind, picked once here so the per-call landing solver is
-        # just two early-exit loops (no list-comp / min in the hot path).
-        _radial = [c for c in flags.available_parachutes if c.is_radial]
-        _inline = [c for c in flags.available_parachutes if not c.is_radial]
-        flags.best_radial_chute = min(_radial, key=_chute_key) if _radial else None
-        flags.best_inline_chute = min(_inline, key=_chute_key) if _inline else None
+        # Role-aware best-of-kind, picked once here so the staged-descent mix
+        # evaluator reads slots instead of scanning.  Split main vs drogue
+        # (drogues bridge the high-speed gap; mains do the low-speed braking)
+        # and radial vs inline (attach-geometry scaling differs).
+        def _best(pred):
+            cands = [c for c in flags.available_parachutes if pred(c)]
+            return min(cands, key=_chute_key) if cands else None
+        flags.best_radial_main = _best(lambda c: c.is_radial and not c.is_drogue)
+        flags.best_inline_main = _best(lambda c: not c.is_radial and not c.is_drogue)
+        flags.best_radial_drogue = _best(lambda c: c.is_radial and c.is_drogue)
+        flags.best_inline_drogue = _best(lambda c: not c.is_radial and c.is_drogue)
+
+    # Heaviest-drag shield for the bleed-enabler mix (the inflatable when owned).
+    if flags.available_heat_shields:
+        flags.best_drag_shield = max(flags.available_heat_shields,
+                                     key=lambda hs: hs.drag_area)
 
     # (lightest_probe=None when no probe found — gate blocks before use)
 
@@ -696,13 +713,11 @@ def _add_part_to_flags(flags: EquipmentFlags, part, count: int) -> None:
             flags.best_heat_shield = part
 
     elif isinstance(part, Parachute):
-        # Record every collected chute; the landing check (``_required_chute_count``
-        # → ``_landing_chute_solution``) picks the best part per kind and applies
-        # the radial-vs-inline attach-point caps.  The old code kept only the
-        # FIRST inline chute in PART_DB order (``parachuteDrogue``), which
-        # shadowed a strictly-better inline chute (``parachuteSingle``) — owning a
-        # drogue then made thin-atmo (Duna) landings spuriously fail with a usable
-        # chute in hand.
+        # Record every collected chute; ``_pre_pass`` picks the best part per
+        # role (main/drogue × radial/inline) and the staged-descent evaluator
+        # (``_solve_atmo_landing``) applies the attach-point caps and combines
+        # roles.  Count is irrelevant to selection (best-of-kind), but kept for
+        # parity with other part axes.
         flags.has_parachutes = True
         flags.available_parachutes.extend([part] * count)
 
@@ -1314,9 +1329,8 @@ def _evaluate_profile(
     has_aero_edge = any(e.needs_heat_shield for e in profile)
     has_atmo_ascent = any(e.edge_type == EdgeType.ATMOSPHERIC_ASCENT for e in profile)
     has_vacuum_land = any(e.edge_type == EdgeType.VACUUM_LANDING for e in profile)
-    has_atmo_land_aero = any(e.edge_type == EdgeType.ATMO_LANDING_AERO for e in profile)
-    has_land = has_vacuum_land or has_atmo_land_aero or \
-               any(e.edge_type == EdgeType.ATMO_LANDING_PROPULSIVE for e in profile)
+    has_atmo_land = any(e.edge_type == EdgeType.ATMO_LANDING for e in profile)
+    has_land = has_vacuum_land or has_atmo_land
     needs_legs = any(e.needs_landing_legs for e in profile)
     needs_ladder = any(e.needs_ladder for e in profile)
 
@@ -1400,23 +1414,25 @@ def _evaluate_profile(
                      or mission_type in MISSION_TYPES_REQUIRING_RENDEZVOUS)):
             blocking.append(BlockingInfo(reason=BlockingReason.CANNOT_RENDEZVOUS))
 
-    # Heat shield
+    # Heat shield — required for any aero edge (reentry heating).  A staged
+    # atmospheric landing always carries one; the exotic fully-propulsive
+    # descent that could skip it is a deliberate conservative omission (see
+    # _solve_atmo_landing).  No separate parachute gate: chutes are optional now
+    # — a shield + throttleable-engine landing finishes the descent propulsively
+    # (the mix evaluator decides, emitting ATMO_DESCENT_INFEASIBLE if neither
+    # drag nor a burn can land the craft).
     if has_aero_edge and not flags.has_heat_shield:
         blocking.append(BlockingInfo(reason=BlockingReason.NO_HEAT_SHIELD))
-
-    # Parachutes (broad check: any parachutes at all for aero landing)
-    if has_atmo_land_aero and not flags.has_parachutes:
-        blocking.append(BlockingInfo(reason=BlockingReason.NO_PARACHUTE))
 
     # Power: check each unique body in the profile
     # Detect if aero edges destroy fixed solar panels
     body_aero_destroyed: dict[str, bool] = {}  # body -> whether fixed solar destroyed
     post_aero = False
-    home_surface = f"{home.value.lower()}_surface"
     for edge in profile:
-        is_home_reentry = (edge.destination == home_surface and
-                           edge.edge_type == EdgeType.ATMO_LANDING_AERO)
-        if edge.needs_heat_shield and not is_home_reentry:
+        # The home-recovery descent (is_recovery) is the final leg; solar loss
+        # there needs no further power.  Any OTHER aero edge leaves the craft
+        # potentially panel-less for the rest of the mission.
+        if edge.needs_heat_shield and not edge.is_recovery:
             post_aero = True
         if edge.body not in body_aero_destroyed:
             body_aero_destroyed[edge.body] = post_aero
@@ -1500,7 +1516,12 @@ def _evaluate_profile(
         propulsion.append(BlockingInfo(reason=r, edge_type=et_name))
     for edge in profile:
         et = edge.edge_type
-        if et == _ET.ATMOSPHERIC_ASCENT or et == _ET.ATMO_LANDING_PROPULSIVE:
+        # ATMO_LANDING is NOT statically propulsive: a passive chute descent
+        # needs no engine at all.  Whether a landing burn (and thus an engine)
+        # is required is decided by _solve_atmo_landing per kit, which raises
+        # ATMO_DESCENT_INFEASIBLE if a burn is needed but unavailable — so it is
+        # deliberately absent from both propulsion branches here.
+        if et == _ET.ATMOSPHERIC_ASCENT:
             if not has_launch_engine:
                 _add_prop(BlockingReason.NO_LAUNCH_ENGINE, et.name)
             if not has_any_fuel:
@@ -1553,7 +1574,7 @@ def _evaluate_profile(
     passive_pod_shield: Optional[HeatShield] = None
     passive_entry_groups = [
         g for g in groups
-        if all(e.edge_type == EdgeType.ATMO_LANDING_AERO for e in g)
+        if all(e.edge_type == EdgeType.ATMO_LANDING for e in g)
         and any(e.needs_heat_shield for e in g)
     ]
     if passive_entry_groups:
@@ -1643,22 +1664,72 @@ def _evaluate_profile(
             flags.available_engines, solar_au, flags
         )
 
+        from .bodies import EdgeType as ET
+
+        # Staged atmospheric-landing mix for this group (if any).  Decided from
+        # the running ``payload`` (the delivered surface mass — everything above
+        # this stage), so it must be computed before req_dv / in_atmo / min_twr.
+        # A passive mix skips the optimizer (synthetic stage below); a burn mix
+        # folds its dv into req_dv and imposes atmo ISP + TWR floor + throttle.
+        atmo_land_edges = [e for e in group if e.edge_type == ET.ATMO_LANDING]
+        landing_mix: Optional[LandingMix] = None
+        landing_needs_burn = False
+        landing_burn_dv = 0.0
+        _landing_twr_floor = max(1.3, diff.min_twr_atmo)
+        if atmo_land_edges:
+            _land_edge = atmo_land_edges[0]
+            _land_body = BODY_BY_NAME[_land_edge.body]
+            # Coverage shield + pod come from the pod/shield pair-pick above
+            # (part-packs' covering rule: no undersized fallback — a profile
+            # with no covering shield was already blocked HEAT_SHIELD_TOO_SMALL).
+            landing_mix = _solve_atmo_landing(
+                payload, _land_body, flags, diff,
+                twr_floor=_landing_twr_floor,
+                v_entry=_land_edge.entry_speed,
+                dvGL_cap=_land_body.dv.dvGL or 0.0,
+                coverage_shield=passive_pod_shield,
+                pod_size=terminal_pod.size_class if terminal_pod else 0.0,
+            )
+            if not landing_mix.feasible:
+                return ProfileResult(False, launch_mass=payload, blocking=[BlockingInfo(
+                    reason=BlockingReason.ATMO_DESCENT_INFEASIBLE,
+                    body=_land_body.name,
+                    dv_needed=landing_mix.burn_dv,
+                    residual_speed=landing_mix.residual_speed,
+                )])
+            landing_needs_burn = landing_mix.needs_burn
+            if landing_needs_burn:
+                # A burn landing needs active attitude control (the old
+                # propulsive-landing edge demanded it); a passive chute descent
+                # does NOT, so this gate is conditional on the mix, not the edge.
+                if not _has_attitude_control(flags):
+                    return ProfileResult(False, launch_mass=payload, blocking=[
+                        BlockingInfo(reason=BlockingReason.NO_ATTITUDE_CONTROL)])
+                landing_burn_dv = landing_mix.burn_dv
+
         # Compute effective dv with difficulty margins
         base_dv = sum(e.base_dv for e in group)
         pc_dv = sum(e.plane_change_dv for e in group)
-        req_dv = effective_dv(base_dv, diff, plane_change_dv=pc_dv)
+        # Landing edges carry base_dv=0; a pure landing group must not pick up
+        # the spurious fixed_margin floor that effective_dv(0) would add.
+        if atmo_land_edges and base_dv <= 1e-9:
+            req_dv = 0.0
+        else:
+            req_dv = effective_dv(base_dv, diff, plane_change_dv=pc_dv)
+        # The landing burn gets percent_margin only (no fixed_margin): the burn
+        # factors already embed the loss margins, and a fixed 100-200 m/s adder
+        # would swamp a ~30 m/s finish burn (design decision).
+        req_dv += landing_burn_dv * (1.0 + diff.percent_margin)
 
-        # Group-level constraints (union = strictest)
-        from .bodies import EdgeType as ET
-        # Only propulsive burns force atmospheric ISP and higher TWR floors.
-        # Aerocapture (passive drag) and aero landings (parachutes) are not
-        # engine-powered, so they must not contaminate the ISP selection for
-        # the rest of the group (e.g. vacuum interplanetary burns).
+        # Group-level constraints (union = strictest).  Only propulsive burns
+        # force atmospheric ISP and higher TWR floors — a passive aero landing
+        # or aerocapture is not engine-powered, so it must not contaminate the
+        # ISP selection for the rest of the group (e.g. vacuum burns).  A burn
+        # LANDING, however, IS atmospheric propulsion.
         atmo_types = {
             ET.ATMOSPHERIC_ASCENT,
-            ET.ATMO_LANDING_PROPULSIVE,
         }
-        in_atmo = any(e.edge_type in atmo_types for e in group)
+        in_atmo = any(e.edge_type in atmo_types for e in group) or landing_needs_burn
 
         # Per-edge TWR → acceleration conversion to handle merged groups that
         # span bodies with very different gravities.  A Gilly VL min_twr=1.2
@@ -1669,9 +1740,12 @@ def _evaluate_profile(
                 _g_e = BODY_BY_NAME[_e.body].surface_gravity
                 _floor = diff.min_twr_atmo if _e.edge_type in atmo_types else diff.min_twr_vac
                 _min_accel = max(_min_accel, max(_e.min_twr, _floor) * _g_e)
+        if landing_needs_burn:
+            _lg = BODY_BY_NAME[atmo_land_edges[0].body].surface_gravity
+            _min_accel = max(_min_accel, _landing_twr_floor * _lg)
         min_twr = _min_accel / body.surface_gravity if body.surface_gravity > 0 else 0.0
 
-        req_throttle = any(e.requires_throttleable for e in group)
+        req_throttle = any(e.requires_throttleable for e in group) or landing_needs_burn
         needs_hs = any(e.needs_heat_shield for e in group)
         needs_legs_g = any(e.needs_landing_legs for e in group)
 
@@ -1688,6 +1762,25 @@ def _evaluate_profile(
             equip_mass += leg_mass
             if leg_id:
                 stage_equipment.append((_LANDING_LEG_COUNT, leg_id))
+        # Staged atmospheric landing: the whole descent kit (coverage shield +
+        # chutes) is fixed PAYLOAD mass on this stage.  The shield protects the
+        # pod during the aero bleed and is jettisoned before any touchdown burn,
+        # so it is NOT an optimizer heat-shield the landing engine must fit
+        # under (the engine fires post-entry) — the mix already sized it to the
+        # pod, so drop needs_hs here.  Ascent / aerocapture stages keep the real
+        # per-engine shield model.
+        landing_shield_name: Optional[str] = None
+        if landing_mix is not None:
+            needs_hs = False
+            equip_mass += landing_mix.hardware_mass
+            stage_equipment.extend(landing_mix.equipment)
+            if landing_mix.shield is not None:
+                landing_shield_name = landing_mix.shield[2]
+                # A burn-landing's stage comes from the optimizer (no shield of
+                # its own), so put the coverage shield on the manifest here; the
+                # passive branch reports it via heat_shield_name instead.
+                if landing_mix.needs_burn:
+                    stage_equipment.append((1, landing_shield_name))
         # Heat-shield options the optimizer may charge (per-engine lightest
         # covering shield).  Empty when this stage needs no shield.
         heat_shields_arg: tuple[tuple[float, float, str], ...] = ()
@@ -1739,44 +1832,12 @@ def _evaluate_profile(
                 and not needs_gimbal_engine):
             needs_gimbal_engine = True
 
-        # Parachute consumption check for aero landing edges in this group.
-        # Use the landing edge's actual body (not the group's first body) since
-        # groups may be merged across bodies.  The heat shield is jettisoned
-        # during aero-braking before parachutes deploy, so it is excluded from
-        # the chute landing-mass estimate.
-        aero_land_edges = [e for e in group if e.edge_type == ET.ATMO_LANDING_AERO]
-        if aero_land_edges:
-            for _aero_e in aero_land_edges:
-                _aero_body = BODY_BY_NAME[_aero_e.body]
-                needed = _required_chute_count(payload, _aero_body, flags, diff)
-                if needed < 0:
-                    # Surface partial-mass-attempt for the bumper scorer.
-                    return ProfileResult(False, launch_mass=payload, blocking=[BlockingInfo(
-                        reason=BlockingReason.PARACHUTE_TERMINAL_VELOCITY,
-                        body=_aero_body.name,
-                    )])
-
-        # Aero-landing groups are passive — heat shield + parachutes do all
-        # the work.  Skip the engine optimizer entirely.
-        if all(e.edge_type == ET.ATMO_LANDING_AERO for e in group):
-            # Add chutes to the manifest
-            for _aero_e in aero_land_edges:
-                _aero_body = BODY_BY_NAME[_aero_e.body]
-                chute_count, chute_id = _best_chute_for_body(
-                    payload, _aero_body, flags, diff,
-                )
-                if chute_id and chute_count > 0:
-                    stage_equipment.append((chute_count, chute_id))
-            # The reentry shield COVERS the pod it protects: it was pair-picked
-            # with the pod in the pre-check (a profile with no coverable pod
-            # never reaches this point), so charge exactly that shield.  (Legs
-            # are already folded into ``stage_payload`` via ``equip_mass``.)
-            passive_shield_mass = 0.0
-            passive_shield_name: Optional[str] = None
-            if needs_hs and passive_pod_shield is not None:
-                passive_shield_mass = passive_pod_shield.mass
-                passive_shield_name = passive_pod_shield.name
-            passive_mass = stage_payload + passive_shield_mass
+        if landing_mix is not None and not landing_mix.needs_burn:
+            # Passive descent: drag alone reaches a safe touchdown, so this is a
+            # synthetic zero-dv stage (no engine optimizer).  The whole descent
+            # kit (shield + chutes) is already folded into stage_payload via
+            # equip_mass and onto stage_equipment above.
+            passive_mass = stage_payload
             stage_results_list.append(StageResult(
                 delta_v=0.0,
                 twr_at_ignition=0.0,
@@ -1790,7 +1851,7 @@ def _evaluate_profile(
                 engine_name="none",
                 tank_manifest=(),
                 equipment=stage_equipment,
-                heat_shield_name=passive_shield_name,
+                heat_shield_name=landing_shield_name,
             ))
             stage_group_list.append(flight_idx)
             payload = passive_mass
@@ -1943,15 +2004,9 @@ def _evaluate_profile(
                 stage_diag=stage_diag,
             )], partial_stages=list(stage_results_list))
 
-        # Chutes for aero-landing edges in mixed groups
-        if aero_land_edges:
-            for _aero_e in aero_land_edges:
-                _aero_body = BODY_BY_NAME[_aero_e.body]
-                chute_count, chute_id = _best_chute_for_body(
-                    payload, _aero_body, flags, diff,
-                )
-                if chute_id and chute_count > 0:
-                    stage_equipment.append((chute_count, chute_id))
+        # (Landing-mix chutes were added to stage_equipment before the passive
+        # branch above; a burn-landing group falls through to here with them
+        # already on the manifest and the burn folded into req_dv.)
 
         # Ladder
         if any(e.needs_ladder for e in group) and flags.lightest_ladder:
@@ -2049,14 +2104,12 @@ def _group_edges(profile: list[MissionEdge], staging_tier: int) -> list[list[Mis
             continue
 
         # Split before any landing edge
-        if nxt.edge_type in (ET.VACUUM_LANDING, ET.ATMO_LANDING_PROPULSIVE,
-                              ET.ATMO_LANDING_AERO):
+        if nxt.edge_type in (ET.VACUUM_LANDING, ET.ATMO_LANDING):
             splits.append(i)
             continue
 
         # Split after any landing edge (ascent from surface is separate)
-        if cur.edge_type in (ET.VACUUM_LANDING, ET.ATMO_LANDING_PROPULSIVE,
-                              ET.ATMO_LANDING_AERO):
+        if cur.edge_type in (ET.VACUUM_LANDING, ET.ATMO_LANDING):
             splits.append(i)
             continue
 
@@ -2083,7 +2136,10 @@ def _group_edges(profile: list[MissionEdge], staging_tier: int) -> list[list[Mis
         max_stages = len(groups)
 
     # Constraint-aware merging: skip incompatible pairs when forced to merge.
-    atmo_types = {ET.ATMOSPHERIC_ASCENT, ET.ATMO_LANDING_PROPULSIVE}
+    # ATMO_LANDING is treated as atmospheric here (a landing that needs a burn
+    # is atmospheric propulsion) so a forced merge never puts it with a vacuum
+    # burn and contaminates ISP; landing is normally its own group anyway.
+    atmo_types = {ET.ATMOSPHERIC_ASCENT, ET.ATMO_LANDING}
 
     def _can_merge(a: list[MissionEdge], b: list[MissionEdge]) -> bool:
         """Groups are compatible for merging if they share physics regime."""
@@ -2140,15 +2196,12 @@ def _required_power_source(
     inflated the terminal payload and could push it past the parachute limit —
     a strictly larger kit losing a mission (the bug-092 non-monotonicity).
     """
-    home_surface = f"{home.value.lower()}_surface"
     post_aero = False
     needs_rtg = needs_retractable = needs_solar = False
     for edge in profile:
-        # Mirror the forward gate: a heat-shield edge that is NOT the home
-        # parachute recovery destroys fixed solar for every later leg.
-        if edge.needs_heat_shield and not (
-                edge.edge_type == EdgeType.ATMO_LANDING_AERO
-                and edge.destination == home_surface):
+        # Mirror the forward gate: a heat-shield edge that is NOT the final home
+        # recovery destroys fixed solar for every later leg.
+        if edge.needs_heat_shield and not edge.is_recovery:
             post_aero = True
         body = BODY_BY_NAME.get(edge.body)
         if body is None:
@@ -2259,31 +2312,6 @@ def _leg_mass_for_tier(
     return 0.0, ""
 
 
-def _required_chute_count(
-    landing_mass: float,
-    body: Body,
-    flags: EquipmentFlags,
-    diff: DifficultyProfile,
-) -> int:
-    """Number of parachutes needed to land ``landing_mass`` at terminal
-    velocity ≤ ``_MAX_SAFE_LANDING_SPEED``, or ``-1`` if no available chute set
-    can.  0 on vacuum bodies (no chutes needed).
-
-    Delegates to :func:`_landing_chute_solution`, which tries the best radial
-    chute (drag area ∝ n^1.5, symmetric placement — scales heavily, capped at
-    ``_MAX_RADIAL_CHUTES``) and the best inline chute (drag ∝ n, capped at
-    ``_MAX_INLINE_CHUTES`` = 1 stack node), and takes whichever lands the craft
-    in the fewest chutes.  A thin-atmo landing (e.g. Duna) is therefore
-    radial-driven: one inline chute can't slow a heavy craft, but a realistic
-    number of symmetric radial chutes can.
-
-    Aero landings are modelled as parachute-only here; the propulsive
-    alternative (``ATMO_LANDING_PROPULSIVE``) is a separate profile scheme.
-    See ``bugs/084-no-mixed-parachute-and-engine-landing.md``.
-    """
-    return _landing_chute_solution(landing_mass, body, flags, diff)[0]
-
-
 def _radial_drag_multiplier(n: int) -> float:
     """Effective drag-area multiplier (in single-chute units) for ``n`` radial
     chutes.  KSP scales a radial chute group placed IN SYMMETRY super-linearly
@@ -2305,55 +2333,262 @@ def _radial_drag_multiplier(n: int) -> float:
     return full * (g ** 1.5) + rem ** 1.5
 
 
-def _landing_chute_solution(
-    landing_mass: float, body: Body, flags: EquipmentFlags,
-    diff: DifficultyProfile,
-) -> tuple[int, Optional[Parachute]]:
-    """Return ``(count, chute)`` for the cheapest chute set that lands
-    ``landing_mass`` at a safe speed, or ``(-1, None)`` if none can; ``(0, None)``
-    on vacuum bodies.
+# Chute-count search ceilings per role (attach-geometry bounds, see
+# _MAX_RADIAL_CHUTES / _MAX_INLINE_CHUTES).  Drogues share the same geometry
+# limits as mains of their kind.
+_CHUTE_COUNT_CAPS: dict[bool, int] = {True: _MAX_RADIAL_CHUTES, False: _MAX_INLINE_CHUTES}
 
-    Radial chutes scale super-linearly (``_radial_drag_multiplier``, symmetric
-    groups) up to ``_MAX_RADIAL_CHUTES``; inline (stack-node) chutes add linearly
-    and are limited to ``_MAX_INLINE_CHUTES`` attach points.  The best part of
-    each kind is precomputed in ``_pre_pass`` (``best_radial_chute`` /
-    ``best_inline_chute``) so this hot-path solver only runs the two early-exit
-    loops; the kind that lands the craft in the fewest chutes wins.  Pessimistic:
-    the chutes' own mass is added to the landing mass (golden rule).
+# Max upward probe steps when the closed-form terminal seed needs a burn: the
+# seed can under-shoot the true passive boundary by a chute or two (piecewise
+# radial multiplier + settle floor), so probe a bounded distance above it before
+# concluding the craft is deploy-limited (no passive count exists).
+_PASSIVE_PROBE_STEPS: int = 4
+
+# Representative chemical Isp (s) for the landing-burn fuel proxy used to RANK
+# burn mixes (the optimizer sizes the real stage).  Landing burns are
+# TWR-limited chemical maneuvers; a fixed chemical value stops a high-Isp
+# nuclear engine in the kit from making a full propulsive descent look cheap
+# and out-ranking a chute-heavy low-burn mix.
+_LANDING_PROXY_ISP: float = 300.0
+
+# Effective drag coefficient for the command part's own body during descent,
+# credited to the entry-bleed area alongside the (occluded) heat shield.  The
+# shield occludes the pod during hypersonic entry, but by the subsonic
+# chute-deploy regime the pod's blunt body adds real drag — without it a light
+# capsule + small shield arrives too fast for its own low-q chutes to open, and
+# the most basic Kerbin pod-on-one-Mk16 return would spuriously demand a burn.
+# 0.5 is below any real pod cube (Mk1 ≈ 0.7); the 0.8 factor is the KSP
+# drag-cube globals (Physics.cfg), matching the shield's effective-area units.
+_POD_BLEED_CD: float = 0.5
+
+
+@dataclass
+class LandingMix:
+    """Chosen staged-descent mix for one ATMO_LANDING edge.
+
+    ``burn_dv`` is the propulsive shortfall (bridge + finish), already capped at
+    the body's full propulsive-descent figure; the caller folds it into the
+    stage ``req_dv`` (so difficulty ``percent_margin`` applies) and, when
+    ``needs_burn``, runs the stage optimizer.  ``equipment`` are the chute parts
+    to add to the manifest; ``shield`` is the (size, mass, name) coverage shield.
     """
-    if not body.has_atmosphere or body.atm_density_kg_m3 <= 0:
-        return 0, None  # vacuum body — no chutes needed
+    feasible: bool
+    needs_burn: bool
+    burn_dv: float
+    equipment: list[tuple[int, str]]
+    shield: Optional[tuple[float, float, str]]
+    hardware_mass: float          # shield + chutes (passive-mix comparison key)
+    residual_speed: float = 0.0   # touchdown m/s left unbraked when infeasible
 
-    best_n, best_chute = -1, None
-    for chute, cap, is_radial in (
-        (flags.best_radial_chute, _MAX_RADIAL_CHUTES, True),
-        (flags.best_inline_chute, _MAX_INLINE_CHUTES, False),
-    ):
-        if chute is None:
-            continue
-        for n in range(1, cap + 1):
-            total_mass = landing_mass + chute.mass * n
-            drag_area = chute.drag_area * (_radial_drag_multiplier(n) if is_radial else n)
-            v_term = terminal_velocity(
-                total_mass, body.surface_gravity, body.atm_density_kg_m3,
-                diff.ship_cd, _SHIP_CROSS_SECTION, drag_area,
-            )
-            if v_term <= _MAX_SAFE_LANDING_SPEED:
-                if best_n < 0 or n < best_n:
-                    best_n, best_chute = n, chute
+
+def _chute_role_stages(chute: Parachute, n: int, body: Body, label: str):
+    """aero.DragStage tuple for ``n`` copies of ``chute`` on ``body`` (radial
+    groups scale super-linearly via ``_radial_drag_multiplier``; inline linear),
+    or None if the chute can't open on this body.  Also returns the set mass."""
+    mult = _radial_drag_multiplier(n) if chute.is_radial else float(n)
+    stages = aero.chute_stages(
+        full_area=chute.drag_area * mult,
+        semi_area=chute.semi_drag_area * mult,
+        q_safe_kpa=chute.q_safe_kpa,
+        deploy_altitude_m=chute.deploy_altitude_m,
+        min_pressure_atm=chute.min_pressure_atm,
+        p0_kpa=body.atm_pressure_kpa,
+        scale_height_m=body.atm_scale_height_m,
+        label=label,
+    )
+    return stages, chute.mass * n
+
+
+def _solve_atmo_landing(
+    payload: float, body: Body, flags: EquipmentFlags, diff: DifficultyProfile,
+    twr_floor: float, v_entry: float, dvGL_cap: float,
+    coverage_shield: Optional[HeatShield], pod_size: float,
+) -> LandingMix:
+    """Pick the min-mass staged-descent mix for a single atmospheric landing.
+
+    Enumerates {coverage shield, drag shield} × {mains, mains+drogues} × chute
+    count, evaluates each with the closed-form ``aero.staged_descent`` (entry
+    bleed → chute ladder → touchdown), and picks:
+
+    * the lightest PASSIVE mix (drag alone reaches ≤ safe touchdown) if any —
+      no optimizer, matches the old passive aero path; else
+    * the burn mix with the smallest (hardware + fuel-proxy) mass; the caller
+      folds ``burn_dv`` into ``req_dv`` and runs the stage optimizer.
+
+    ``coverage_shield`` is the pod-pair-picked shield from the pre-check — it is
+    guaranteed to COVER the pod (a profile whose owned shields can't cover was
+    already blocked ``HEAT_SHIELD_TOO_SMALL``, no undersized-fallback), so this
+    never re-derives coverage.  Returns ``feasible=False`` when no drag reaches
+    safe touchdown AND no propulsive finish is available.
+    """
+    g = body.surface_gravity
+    rho0 = body.atm_density_kg_m3
+    H = body.atm_scale_height_m
+
+    coverage = coverage_shield
+    if coverage is None:
+        # No covering shield — the NO_HEAT_SHIELD / HEAT_SHIELD_TOO_SMALL gates
+        # already fired; refuse defensively.
+        return LandingMix(False, False, 0.0, [], None, 0.0, v_entry)
+    # The command part's own subsonic drag, credited to every mix's bleed area.
+    pod_bleed = 0.8 * _POD_BLEED_CD * math.pi * (max(pod_size, 1.25) / 2.0) ** 2
+
+    # Shield choices for the BLEED phase: the coverage shield, plus the
+    # heaviest-drag shield when it drags materially more (the inflatable) — it
+    # then serves as coverage too (10m covers everything).  Owning the heavy
+    # shield only ADDS a candidate; it never displaces the lighter mains-only
+    # mix, so a heavy shield can't make a stage worse.
+    shield_opts = [coverage]
+    if (flags.best_drag_shield is not None
+            and flags.best_drag_shield.drag_area > coverage.drag_area):
+        shield_opts.append(flags.best_drag_shield)
+
+    # Chute roles available (best of each kind, from _pre_pass).
+    mains = [c for c in (flags.best_radial_main, flags.best_inline_main) if c]
+    drogues = [c for c in (flags.best_radial_drogue, flags.best_inline_drogue) if c]
+
+    # Representative exhaust velocity for the burn-mix fuel proxy (ranking ONLY;
+    # the optimizer sizes the real stage).  A landing burn is a TWR-limited
+    # maneuver done on a chemical engine — NOT the high-Isp nuclear/ion the kit
+    # may also own — so a fixed chemical proxy keeps the ranking honest: it
+    # correctly makes a large burn expensive (favouring chute-heavy, low-burn
+    # mixes), which is both the physical mass-optimum and the feature's intent.
+    ve = _LANDING_PROXY_ISP * 9.80665
+    has_burn_capacity = (flags.has_throttleable_engine
+                         and bool(flags.available_tanks or flags.available_srbs))
+
+    best_passive: Optional[LandingMix] = None
+    best_burn: Optional[LandingMix] = None
+    best_burn_key = math.inf
+    min_residual = v_entry  # track closest-to-feasible for the block reason
+
+    def _consider(shield, main, main_n, drogue, drogue_n) -> float:
+        """Evaluate one mix, record it into best_passive/best_burn, and return
+        its total landing burn (0.0 passive, capped burn, or inf infeasible) so
+        the count search can binary-search on it."""
+        nonlocal best_passive, best_burn, best_burn_key, min_residual
+        equip: list[tuple[int, str]] = []
+        stages: list = []
+        chute_mass = 0.0
+        for chute, n in ((drogue, drogue_n), (main, main_n)):
+            if chute is None or n <= 0:
+                continue
+            built, mass = _chute_role_stages(chute, n, body,
+                                             "drogue" if chute.is_drogue else "main")
+            if built is None:
+                return math.inf  # chute can't open on this body
+            stages.extend(built)
+            chute_mass += mass
+            equip.append((n, chute.name))
+        bleed_area = aero.SHIELD_BLEED_OCCLUSION * shield.drag_area + pod_bleed
+        entry_mass = payload + shield.mass + chute_mass
+        # A rigid ablative shield is jettisoned before the chutes deploy, so it
+        # weighs down the bleed but NOT the terminal-velocity / touchdown calc
+        # (matches the pre-rework model, which kept early Kerbin pod returns
+        # passive).  The inflatable used as the bleed device stays on, so it is
+        # not jettisoned.
+        is_bleed_device = shield is flags.best_drag_shield and len(shield_opts) > 1
+        jettison = 0.0 if is_bleed_device else shield.mass
+        plan = aero.staged_descent(
+            v_entry=v_entry, mass_t=entry_mass, bleed_area=bleed_area,
+            stages=stages, rho0=rho0, scale_height_m=H, gravity=g,
+            twr=twr_floor, max_safe_touchdown=_MAX_SAFE_LANDING_SPEED,
+            jettison_mass_t=jettison,
+        )
+        min_residual = min(min_residual, plan.touchdown_speed)
+        shield_tuple = (shield.size_class, shield.mass, shield.name)
+        hardware = shield.mass + chute_mass
+        if not plan.requires_burn:
+            mix = LandingMix(True, False, 0.0, equip, shield_tuple, hardware)
+            if best_passive is None or hardware < best_passive.hardware_mass:
+                best_passive = mix
+            return 0.0
+        # Burn mix: needs a throttleable engine + fuel; infeasible otherwise.
+        if not has_burn_capacity or math.isinf(plan.total_burn_dv):
+            return math.inf
+        burn = min(plan.total_burn_dv, dvGL_cap)
+        fuel_proxy = entry_mass * (math.exp(burn / ve) - 1.0) if ve > 0 else math.inf
+        key = hardware + fuel_proxy
+        if key < best_burn_key:
+            best_burn_key = key
+            best_burn = LandingMix(True, True, burn, equip, shield_tuple, hardware)
+        return burn
+
+    def _seed_count(shield, main, cap) -> int:
+        """Closed-form lightest-passive main-count estimate: solve terminal
+        velocity == safe for the continuous count (aero.terminal_limited_count),
+        then round up.  Only a SEED — the caller confirms on the real staged
+        model at the integer neighbours (the piecewise radial multiplier and the
+        settle floor shift the true boundary by a chute or two)."""
+        bleed = aero.SHIELD_BLEED_OCCLUSION * shield.drag_area + pod_bleed
+        # A rigid shield is jettisoned before the chutes carry the craft; the
+        # inflatable-as-bleed-device stays on, so its mass rides the chute phase.
+        is_bleed_device = shield is flags.best_drag_shield and len(shield_opts) > 1
+        m0 = payload + (shield.mass if is_bleed_device else 0.0)
+        n = aero.terminal_limited_count(
+            payload_t=m0, chute_drag=main.drag_area, chute_mass_t=main.mass,
+            bleed_area=bleed, rho0=rho0, gravity=g,
+            v_safe=_MAX_SAFE_LANDING_SPEED, is_radial=main.is_radial)
+        if math.isinf(n):
+            return cap
+        return max(1, min(cap, math.ceil(n)))
+
+    def _find_passive(shield, main, drogue, drogue_n, cap) -> bool:
+        """Find the lightest passive main-count by seeding from the closed-form
+        terminal boundary and confirming on the real staged model.
+
+        Passive is a MIDDLE interval (U-shaped burn: past the sweet spot the
+        chutes' own mass slows the bleed until the craft can't deploy), and the
+        lightest passive is its LOW edge.  So: evaluate at the analytic seed; if
+        it's passive, step DOWN to the true minimum; if not, step UP a bounded
+        amount (the seed can under-shoot by a chute or two).  ~3-5 evals, no full
+        sweep.  Returns True if a passive count was found; every evaluated count
+        is recorded into best_passive/best_burn for the burn ranker too."""
+        seed = _seed_count(shield, main, cap)
+        if _consider(shield, main, seed, drogue, drogue_n) <= 0.0:
+            # Passive at the seed — walk down to the lightest still-passive count.
+            n = seed
+            while n > 1 and _consider(shield, main, n - 1, drogue, drogue_n) <= 0.0:
+                n -= 1
+            return True
+        # Seed needs a burn: either it under-shot the terminal boundary (step up
+        # for more drag) or it is deploy-limited (more chutes only add mass —
+        # stop).  Bounded upward probe; a plateau/worsening burn means no passive.
+        prev = math.inf
+        n = seed
+        for _ in range(_PASSIVE_PROBE_STEPS):
+            n += max(1, seed // 4)
+            if n > cap:
                 break
-    return best_n, best_chute
+            burn = _consider(shield, main, n, drogue, drogue_n)
+            if burn <= 0.0:
+                # Found passive above the seed; tighten down to the min.
+                while n > 1 and _consider(shield, main, n - 1, drogue, drogue_n) <= 0.0:
+                    n -= 1
+                return True
+            if burn >= prev:
+                break  # burn no longer improving with more chutes — deploy-limited
+            prev = burn
+        return False
 
+    for shield in shield_opts:
+        for main in mains:
+            cap = _CHUTE_COUNT_CAPS[main.is_radial]
+            if not _find_passive(shield, main, None, 0, cap):
+                # Drogues bridge the high-speed gap so mains can land a thin-atmo
+                # or heavy craft passively (or with a smaller burn).
+                for drogue in drogues:
+                    dcap = _CHUTE_COUNT_CAPS[drogue.is_radial]
+                    for dn in (min(4, dcap), dcap):
+                        _find_passive(shield, main, drogue, dn, cap)
+        # Shield + burn, no chutes (bleed + full propulsive finish).
+        _consider(shield, None, 0, None, 0)
 
-def _best_chute_for_body(
-    landing_mass: float, body: Body, flags: EquipmentFlags,
-    diff: DifficultyProfile,
-) -> tuple[int, str]:
-    """Return (count, part_id) for the chute used in aero landing, or (0, "")."""
-    count, chute = _landing_chute_solution(landing_mass, body, flags, diff)
-    if count <= 0 or chute is None:
-        return 0, ""
-    return max(1, count), chute.name
+    if best_passive is not None:
+        return best_passive
+    if best_burn is not None:
+        return best_burn
+    return LandingMix(False, False, 0.0, [], None, 0.0, min_residual)
 
 
 # ---------------------------------------------------------------------------

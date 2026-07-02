@@ -188,6 +188,54 @@ def _probe_core_spec_from_cfg(cfg: dict, provides: frozenset) -> Optional["Probe
     return ProbeCoreSpec(sas_level=sas)
 
 
+# --- Descent-model derivations (heat-shield drag, chute deploy envelope) ----
+
+# Deployed-state preference for the entry-facing drag cube: the inflatable
+# bakes its inflated shape as "A"; rigid shields use "Clean" (post fairing
+# jettison — smaller than "Fairing", conservative) / "Default". No cube data
+# -> 0.0, and the descent model credits no aero bleed (conservative).
+_SHIELD_CUBE_STATES: tuple[str, ...] = ("A", "Clean", "Default")
+# dragMultiplier(8) * dragCubeMultiplier(0.1) from KSP Physics.cfg: converts a
+# cube's cd*area into the effective drag area the terminal-velocity model uses.
+_CUBE_DRAG_GLOBALS: float = 0.8
+
+
+def _shield_drag_area(cfg: dict) -> float:
+    cubes = cfg.get("drag_cubes") or {}
+    for state in _SHIELD_CUBE_STATES:
+        cube = cubes.get(state)
+        if cube:
+            return _CUBE_DRAG_GLOBALS * float(cube["area_y"]) * float(cube["cd_y"])
+    return 0.0
+
+
+# Parachute deployment-envelope calibration. KSP's real gate is thermal
+# (chuteMaxTemp vs shock heating scaled by machHeatMultBase); we map it onto a
+# max safe dynamic pressure per chute, anchored at the stock main-chute limit
+# and scaled by the parsed heat tolerance. Q_SAFE_MAIN is calibrated so a
+# Kerbin main full-deploys at ~120 m/s at sea-level density
+# (old_plans/staged_atmospheric_landing.md). Drogues derive a higher
+# multiplier from their heat fields — Mk25 hits the x8 cap, matching its
+# in-game ~1200 m/s Duna deploys — capped so the model always UNDER-estimates
+# the safe deploy speed (golden rule). Chutes with a raised chuteMaxTemp but
+# no mach field fall back to a flat x3.
+_Q_SAFE_MAIN_KPA: float = 8.8
+_MAIN_CHUTE_MAX_TEMP: float = 650.0   # Mk16 baseline chuteMaxTemp
+_DROGUE_Q_MULT_CAP: float = 8.0
+_DROGUE_Q_MULT_FALLBACK: float = 3.0
+
+
+def _chute_q_safe_kpa(chute: dict) -> float:
+    max_temp = chute.get("chute_max_temp")
+    mach_mult = chute.get("mach_heat_mult_base")
+    if max_temp is None or max_temp <= _MAIN_CHUTE_MAX_TEMP:
+        return _Q_SAFE_MAIN_KPA
+    if mach_mult is None or mach_mult <= 0:
+        return _Q_SAFE_MAIN_KPA * _DROGUE_Q_MULT_FALLBACK
+    mult = (max_temp / _MAIN_CHUTE_MAX_TEMP) / mach_mult
+    return _Q_SAFE_MAIN_KPA * min(max(mult, 1.0), _DROGUE_Q_MULT_CAP)
+
+
 def _build_part(part_type: type, cfg: dict, overrides: dict, name: str) -> AnyPart:
     """Construct a frozen part dataclass from cfg JSON data + manual overrides."""
     cfg_name = name
@@ -268,7 +316,12 @@ def _build_part(part_type: type, cfg: dict, overrides: dict, name: str) -> AnyPa
         )
 
     if part_type is HeatShield:
-        return HeatShield(name=cfg_name, mass=mass, size_class=size)
+        return HeatShield(
+            name=cfg_name,
+            mass=mass,
+            size_class=overrides.get("size_class", size),
+            drag_area=_shield_drag_area(cfg),
+        )
 
     if part_type is Parachute:
         chute = cfg.get("parachute", {})
@@ -278,6 +331,10 @@ def _build_part(part_type: type, cfg: dict, overrides: dict, name: str) -> AnyPa
             drag_area=chute.get("fully_deployed_drag", 0.0),
             is_drogue=overrides.get("is_drogue", False),
             is_radial=overrides.get("is_radial", False),
+            semi_drag_area=chute.get("semi_deployed_drag", 0.0),
+            q_safe_kpa=_chute_q_safe_kpa(chute),
+            deploy_altitude_m=chute.get("deploy_altitude", 0.0),
+            min_pressure_atm=chute.get("min_air_pressure_to_open", 0.0),
         )
 
     if part_type is LandingLeg:

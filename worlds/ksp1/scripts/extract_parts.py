@@ -151,6 +151,19 @@ def _parse_node(val: str) -> dict | None:
     }
 
 
+# Directory names whose cfgs must never be read: KSP keeps retired part
+# versions under zDeprecated/ with the SAME cfg names as the live parts, so
+# walking them lets stale data overwrite the shipping part (rglob sorts
+# zDeprecated after Parts and later-wins).
+_SKIP_DIR_NAMES: frozenset[str] = frozenset({"zDeprecated"})
+
+
+def _iter_cfg_files(root: Path):
+    for cfg_file in sorted(root.rglob("*.cfg")):
+        if _SKIP_DIR_NAMES.isdisjoint(cfg_file.parts):
+            yield cfg_file
+
+
 def extract_part(part_dict: dict) -> dict | None:
     """Extract relevant fields from a parsed PART block. Returns None if filtered."""
     name = part_dict.get("name", "")
@@ -242,15 +255,46 @@ def extract_part(part_dict: dict) -> dict | None:
     # Gimbal
     result["has_gimbal"] = _has_module(part_dict, "ModuleGimbal")
 
-    # Parachute
+    # Parachute — full deploy-model fields: drag areas (semi + full), the
+    # engagement gates (pressure to open, full-deploy altitude) and the thermal
+    # limits the deploy-safety envelope is derived from. Only
+    # fully_deployed_drag is guaranteed present.
     para_mod = _find_module(part_dict, "ModuleParachute")
     if para_mod:
-        try:
-            result["parachute"] = {
-                "fully_deployed_drag": float(para_mod.get("fullyDeployedDrag", "0")),
-            }
-        except ValueError:
-            result["parachute"] = {"fully_deployed_drag": 0.0}
+        chute: dict = {}
+        for cfg_key, out_key in (
+            ("fullyDeployedDrag", "fully_deployed_drag"),
+            ("semiDeployedDrag", "semi_deployed_drag"),
+            ("minAirPressureToOpen", "min_air_pressure_to_open"),
+            ("deployAltitude", "deploy_altitude"),
+            ("chuteMaxTemp", "chute_max_temp"),
+            ("machHeatMultBase", "mach_heat_mult_base"),
+        ):
+            if cfg_key in para_mod:
+                try:
+                    chute[out_key] = float(para_mod[cfg_key])
+                except ValueError:
+                    continue
+        chute.setdefault("fully_deployed_drag", 0.0)
+        result["parachute"] = chute
+
+    # Deployable drag brake (A.I.R.B.R.A.K.E.S) — lifting-surface coefficients.
+    # The deployed-state drag cube comes from PartDatabase.cfg (see --partdb).
+    aero_mod = _find_module(part_dict, "ModuleAeroSurface")
+    if aero_mod:
+        aero: dict = {}
+        for cfg_key, out_key in (
+            ("dragCoeff", "drag_coeff"),
+            ("deflectionLiftCoeff", "deflection_lift_coeff"),
+            ("ctrlSurfaceArea", "ctrl_surface_area"),
+            ("ctrlSurfaceRange", "ctrl_surface_range"),
+        ):
+            try:
+                aero[out_key] = float(aero_mod.get(cfg_key, "0"))
+            except ValueError:
+                aero[out_key] = 0.0
+        aero["lifting_surface_curve"] = aero_mod.get("liftingSurfaceCurve", "")
+        result["aero_surface"] = aero
 
     # Decoupler flags
     result["has_module_decouple"] = _has_module(part_dict, "ModuleDecouple")
@@ -321,7 +365,7 @@ def walk_and_extract(parts_dir: str) -> dict[str, dict]:
     parts_path = Path(parts_dir)
     all_parts: dict[str, dict] = {}
 
-    for cfg_file in sorted(parts_path.rglob("*.cfg")):
+    for cfg_file in _iter_cfg_files(parts_path):
         try:
             text = cfg_file.read_text(encoding="utf-8-sig", errors="replace")
         except OSError:
@@ -372,13 +416,58 @@ def walk_and_extract_with_titles(parts_dir: str) -> dict[str, dict]:
     all_parts = walk_and_extract(parts_dir)
 
     # Second pass for titles (// stripping loses autoLOC translations)
-    for cfg_file in sorted(parts_path.rglob("*.cfg")):
+    for cfg_file in _iter_cfg_files(parts_path):
         title_map = _read_title_from_raw(cfg_file)
         for part_name, title in title_map.items():
             if part_name in all_parts and not title.startswith("#autoLOC"):
                 all_parts[part_name]["title"] = title
 
     return all_parts
+
+
+def parse_part_database(partdb_path: Path) -> dict[str, dict[str, dict[str, float]]]:
+    """Parse baked DRAG_CUBE entries from KSP's PartDatabase.cfg.
+
+    Returns ``{part_name: {cube_state: {"area_y": m², "cd_y": coeff}}}``.  The
+    Y axis is the stack axis — the face presented to the airflow on a
+    retrograde entry — and the smaller of the Y+/Y− area·cd products is kept
+    (conservative).  Cube line format after the state name is six faces of
+    (area, cd, depth) in X+/X−/Y+/Y−/Z+/Z− order, then center and size.
+    Part name = last segment of the ``url`` line.
+    """
+    cubes: dict[str, dict[str, dict[str, float]]] = {}
+    try:
+        text = partdb_path.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        return cubes
+    current: str | None = None
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("url = "):
+            current = line[len("url = "):].rstrip("/").rsplit("/", 1)[-1]
+        elif line.startswith("cube = ") and current:
+            fields = [f.strip() for f in line[len("cube = "):].split(",")]
+            if len(fields) < 13:
+                continue
+            state = fields[0]
+            try:
+                nums = [float(x) for x in fields[1:13]]
+            except ValueError:
+                continue
+            yp_area, yp_cd = nums[6], nums[7]
+            ym_area, ym_cd = nums[9], nums[10]
+            area, cd = ((yp_area, yp_cd)
+                        if yp_area * yp_cd <= ym_area * ym_cd
+                        else (ym_area, ym_cd))
+            cubes.setdefault(current, {})[state] = {"area_y": area, "cd_y": cd}
+    return cubes
+
+
+def _wants_drag_cubes(name: str, part: dict) -> bool:
+    """Parts whose deployed drag matters to the descent model: heat shields
+    (the inflatable's entire purpose lives in its inflated cube) and anything
+    with a ModuleAeroSurface (airbrakes)."""
+    return "HeatShield" in name or "aero_surface" in part
 
 
 def _tag_pack(part: dict, pack: str) -> dict:
@@ -392,7 +481,7 @@ def _has_part_block(root: Path) -> bool:
     """True if any .cfg under ``root`` declares a top-level PART block. Used to
     decide whether a GameData directory is a part-bearing pack (and therefore
     must be explicitly labeled or excluded)."""
-    for cfg_file in root.rglob("*.cfg"):
+    for cfg_file in _iter_cfg_files(root):
         try:
             text = cfg_file.read_text(encoding="utf-8-sig", errors="replace")
         except OSError:
@@ -420,23 +509,36 @@ def _candidate_pack_roots(gamedata: Path) -> list[Path]:
 def main() -> None:
     argv = sys.argv[1:]
     excluded: set[str] = set()
+    excluded_dirs: set[str] = set()
+    partdb_arg: str | None = None
     positional: list[str] = []
     i = 0
     while i < len(argv):
         if argv[i] == "--exclude" and i + 1 < len(argv):
             excluded.add(argv[i + 1])
             i += 2
+        elif argv[i] == "--exclude-dir" and i + 1 < len(argv):
+            excluded_dirs.add(argv[i + 1].strip("/"))
+            i += 2
+        elif argv[i] == "--partdb" and i + 1 < len(argv):
+            partdb_arg = argv[i + 1]
+            i += 2
         else:
             positional.append(argv[i])
             i += 1
 
     if len(positional) != 1:
-        print(f"Usage: {sys.argv[0]} <path/to/GameData> [--exclude PACK ...]",
+        print(f"Usage: {sys.argv[0]} <path/to/GameData> [--exclude PACK ...]"
+              f" [--exclude-dir DIR ...] [--partdb PartDatabase.cfg]",
               file=sys.stderr)
         print("  Discovers every part-bearing pack under GameData and labels it"
               " from packs.KNOWN_PACK_ROOTS.", file=sys.stderr)
-        print("  An unlabeled pack is a hard error (add a mapping or --exclude"
-              " it) so a pack is never silently dropped.", file=sys.stderr)
+        print("  An unlabeled pack is a hard error (add a mapping, --exclude"
+              " a known pack, or --exclude-dir a GameData-relative mod dir)"
+              " so a pack is never silently dropped.", file=sys.stderr)
+        print("  --partdb: KSP's baked drag-cube database (default:"
+              " <GameData>/../PartDatabase.cfg) — source of heat-shield /"
+              " airbrake deployed drag areas.", file=sys.stderr)
         sys.exit(1)
 
     gamedata = Path(positional[0])
@@ -449,9 +551,12 @@ def main() -> None:
     packs_present: set[str] = set()
 
     for root in _candidate_pack_roots(gamedata):
+        rel = root.relative_to(gamedata).as_posix()
+        if rel in excluded_dirs or root.name in excluded_dirs:
+            print(f"Skipping excluded dir {rel!r}", file=sys.stderr)
+            continue
         if not _has_part_block(root):
             continue
-        rel = root.relative_to(gamedata).as_posix()
         pack = packs.pack_for_gamedata_dir(rel)
         if pack is None:
             print(
@@ -470,6 +575,24 @@ def main() -> None:
             parts[name] = _tag_pack(part, pack)
         sources.append(os.path.abspath(str(root)))
         packs_present.add(pack)
+
+    # Attach baked drag cubes (heat shields, airbrakes) from PartDatabase.cfg.
+    partdb = Path(partdb_arg) if partdb_arg else gamedata.parent / "PartDatabase.cfg"
+    cube_db = parse_part_database(partdb)
+    if not cube_db:
+        print(f"WARNING: no drag cubes parsed from {partdb} — heat-shield and"
+              f" airbrake deployed drag areas will be absent (the part loader"
+              f" then credits zero aero drag for them: conservative but wrong;"
+              f" pass --partdb to fix)", file=sys.stderr)
+    else:
+        for name, part in parts.items():
+            if _wants_drag_cubes(name, part):
+                states = cube_db.get(name)
+                if states:
+                    part["drag_cubes"] = states
+                else:
+                    print(f"WARNING: no DRAG_CUBE entry found for {name!r}",
+                          file=sys.stderr)
 
     sorted_parts = dict(sorted(parts.items()))
     output = {

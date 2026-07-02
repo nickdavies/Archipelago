@@ -43,8 +43,10 @@ class BlockingReason(str, Enum):
     # reentry behind an undersized shield exposes the pod, so the profile is
     # infeasible (never "fly the largest available anyway").
     HEAT_SHIELD_TOO_SMALL = "heat_shield_too_small"
-    NO_PARACHUTE = "no_parachute"
-    PARACHUTE_TERMINAL_VELOCITY = "parachute_terminal_velocity"
+    # No feasible staged descent: drag can't reach a safe touchdown AND the kit
+    # can't finish the residual with a propulsive burn (no throttleable engine /
+    # fuel / TWR).  Carries the shortfall (dv_needed) + residual touchdown speed.
+    ATMO_DESCENT_INFEASIBLE = "atmo_descent_infeasible"
     NO_SAFE_DESCENT = "no_safe_descent"                # chute OR throttleable
     CAPSULE_SOUNDING_INCOMPLETE = "capsule_sounding_incomplete"  # missing chute or decoupler
 
@@ -158,6 +160,7 @@ class BlockingInfo:
     threshold_km: float = 0.0
     relay_needed: int = 0
     relay_available: int = 0
+    residual_speed: float = 0.0  # m/s touchdown speed left unbraked (ATMO_DESCENT_INFEASIBLE)
     leg_tier_needed: int = 0
     leg_tier_available: int = 0
     # Diameters (m) for HEAT_SHIELD_TOO_SMALL: the narrowest pod that must be
@@ -226,10 +229,10 @@ class BlockingInfo:
             return (f"no heat shield covers a command module "
                     f"(narrowest pod {self.size_needed:.2f}m, largest shield "
                     f"{self.size_available:.2f}m)")
-        if r == BlockingReason.NO_PARACHUTE:
-            return "no parachutes for aero landing"
-        if r == BlockingReason.PARACHUTE_TERMINAL_VELOCITY:
-            return f"parachute terminal velocity check failed at {self.body}"
+        if r == BlockingReason.ATMO_DESCENT_INFEASIBLE:
+            return (f"no feasible descent at {self.body}: "
+                    f"{self.residual_speed:.0f} m/s residual, "
+                    f"{self.dv_needed:.0f} m/s burn needed but unavailable")
         if r == BlockingReason.NO_SAFE_DESCENT:
             return "no safe descent (need parachute or throttleable engine)"
         if r == BlockingReason.CAPSULE_SOUNDING_INCOMPLETE:

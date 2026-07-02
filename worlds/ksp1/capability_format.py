@@ -137,8 +137,9 @@ def _profile_prereqs(profile: list[MissionEdge],
     if any(e.needs_heat_shield for e in profile):
         reqs.append("heat_shield")
 
-    if any(e.edge_type == EdgeType.ATMO_LANDING_AERO for e in profile):
-        reqs.append("parachutes")
+    if any(e.edge_type == EdgeType.ATMO_LANDING for e in profile):
+        # Staged descent: parachutes and/or a touchdown burn, chosen per kit.
+        reqs.append("descent(parachutes|burn)")
 
     power_bodies = sorted({e.body for e in profile})
     if power_bodies:
@@ -152,7 +153,7 @@ def _profile_prereqs(profile: list[MissionEdge],
     prop_types: set[str] = set()
     for e in profile:
         et = e.edge_type
-        if et in (EdgeType.ATMOSPHERIC_ASCENT, EdgeType.ATMO_LANDING_PROPULSIVE):
+        if et == EdgeType.ATMOSPHERIC_ASCENT:
             prop_types.add("launch_engine+fuel")
         elif et in (EdgeType.VACUUM_ASCENT, EdgeType.PURE_VACUUM,
                     EdgeType.PLANET_TRANSFER, EdgeType.VACUUM_LANDING):

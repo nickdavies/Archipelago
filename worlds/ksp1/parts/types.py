@@ -106,6 +106,13 @@ class HeatShield:
     name: str
     mass: float             # tonnes
     size_class: float       # metres — covers parts up to this diameter
+    # Effective drag area of the entry-facing (Y) face in the deployed state,
+    # from the baked drag cube (0.8 * cd * area; 0.8 = dragMultiplier *
+    # dragCubeMultiplier from Physics.cfg). Feeds the entry-bleed model — the
+    # 10m inflatable's huge value is its whole purpose. 0.0 = no cube data
+    # extracted, which the descent model treats as zero aero credit
+    # (conservative).
+    drag_area: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -113,8 +120,14 @@ class Parachute:
     name: str
     mass: float             # tonnes
     drag_area: float        # effective drag area (m²), from KSP fullyDeployedDrag
-    is_drogue: bool         # drogue chutes are NEVER counted in logic
+    is_drogue: bool         # high-q deploy envelope; load-bearing in the descent ladder
     is_radial: bool = False # radial chutes mount on sides (unlimited); inline cap at 1
+    semi_drag_area: float = 0.0     # KSP semiDeployedDrag — drag from semi-deploy
+                                    # (pressure gate) until full deploy (altitude gate)
+    q_safe_kpa: float = 0.0         # max safe deployment dynamic pressure, derived
+                                    # from the cfg thermal limits (see parts/_raw.py)
+    deploy_altitude_m: float = 0.0  # full-deploy altitude AGL (cfg deployAltitude)
+    min_pressure_atm: float = 0.0   # semi-deploy pressure gate (cfg minAirPressureToOpen)
 
 
 @dataclass(frozen=True)

@@ -311,5 +311,80 @@ class TestStableIdRanges(unittest.TestCase):
         self.assertEqual(len(overlap), 0, f"Overlapping IDs: {overlap}")
 
 
+class TestDescentModelPartData(unittest.TestCase):
+    """Fields feeding the staged atmospheric-descent model: chute deploy
+    envelopes (q_safe / gates / semi drag) and heat-shield deployed drag areas
+    from the baked drag cubes."""
+
+    def _chute(self, ksp_name: str) -> Parachute:
+        part = next(p for p in PART_DB[ksp_name] if isinstance(p, Parachute))
+        return part
+
+    def _shield(self, ksp_name: str) -> HeatShield:
+        return next(p for p in PART_DB[ksp_name] if isinstance(p, HeatShield))
+
+    def test_main_chutes_use_baseline_q_safe(self) -> None:
+        for name in ("parachuteSingle", "parachuteLarge", "parachuteRadial"):
+            chute = self._chute(name)
+            self.assertFalse(chute.is_drogue)
+            self.assertAlmostEqual(chute.q_safe_kpa, 8.8, places=3)
+            self.assertEqual(chute.deploy_altitude_m, 1000.0)
+            self.assertAlmostEqual(chute.min_pressure_atm, 0.04)
+            self.assertGreater(chute.semi_drag_area, 0.0)
+
+    def test_drogues_get_higher_q_envelope(self) -> None:
+        mk25 = self._chute("parachuteDrogue")
+        mk12r = self._chute("radialDrogue")
+        for d in (mk25, mk12r):
+            self.assertTrue(d.is_drogue)
+            self.assertEqual(d.deploy_altitude_m, 2500.0)
+            self.assertAlmostEqual(d.min_pressure_atm, 0.02)
+        # Mk25: (1600/650)/0.25 = 9.85 -> capped at x8 = 70.4 kPa
+        self.assertAlmostEqual(mk25.q_safe_kpa, 70.4, places=1)
+        # Mk12-R: (1100/650)/0.5 = 3.38 -> 29.8 kPa
+        self.assertAlmostEqual(mk12r.q_safe_kpa, 29.78, places=1)
+        # Golden rule: the cap bounds every derived envelope
+        for d in (mk25, mk12r):
+            self.assertLessEqual(d.q_safe_kpa, 8.8 * 8.0 + 1e-9)
+
+    def test_all_shields_have_cube_drag_area(self) -> None:
+        shields = [p for parts in PART_DB.values() for p in parts
+                   if isinstance(p, HeatShield)]
+        self.assertGreaterEqual(len(shields), 6)
+        for s in shields:
+            self.assertGreater(
+                s.drag_area, 0.0,
+                f"{s.name} has no deployed drag area — cube extraction broke; "
+                f"the descent model would credit zero aero bleed",
+            )
+        # Bigger shields present more face: drag area is monotone in size class
+        by_size = sorted(shields, key=lambda s: s.size_class)
+        for a, b in zip(by_size, by_size[1:]):
+            self.assertLessEqual(a.drag_area, b.drag_area + 1e-9)
+
+    def test_inflatable_shield_deployed_state(self) -> None:
+        infl = self._shield("InflatableHeatShield")
+        # 10m across when inflated: covers wide craft AND dominates entry drag.
+        self.assertEqual(infl.size_class, 10.0)
+        # 0.8 * cd_y * area_y of the inflated cube "A" (72.75 m2, cd 0.8279)
+        self.assertAlmostEqual(infl.drag_area, 48.18, places=1)
+
+    def test_rigid_shield_uses_clean_cube(self) -> None:
+        hs2 = self._shield("HeatShield2")
+        self.assertAlmostEqual(hs2.drag_area, 3.79, places=1)
+        self.assertEqual(hs2.size_class, 2.5)
+
+    def test_airbrake_raw_data_extracted(self) -> None:
+        """airbrake1 stays MiscEquipment (Phase E decides inclusion) but the
+        raw aero data must be in parts.json for the calibration."""
+        parts_json = _load_json()
+        ab = parts_json["airbrake1"]
+        self.assertIn("aero_surface", ab)
+        self.assertAlmostEqual(ab["aero_surface"]["deflection_lift_coeff"], 0.38)
+        self.assertEqual(ab["aero_surface"]["lifting_surface_curve"], "SpeedBrake")
+        self.assertIn("drag_cubes", ab)
+        self.assertIn("fullDeflectionPos", ab["drag_cubes"])
+
+
 if __name__ == "__main__":
     unittest.main()

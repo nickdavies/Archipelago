@@ -119,7 +119,10 @@ PART_REGISTRY: list[PartMapping] = [
     PartMapping("HeatShield1", HeatShield, "Heat Shield (1.25m)", 1088),
     PartMapping("HeatShield2", HeatShield, "Heat Shield (2.5m)", 1090),
     PartMapping("HeatShield3", HeatShield, "Heat Shield (3.75m)", 1091),
-    PartMapping("InflatableHeatShield", HeatShield, "Heat Shield (10m)", 1089),
+    # Attach bulkhead is size2 (2.5m) but the INFLATED shield is 10m across and
+    # shields craft up to that width — size_class from cfg would say 2.5.
+    PartMapping("InflatableHeatShield", HeatShield, "Heat Shield (10m)", 1089,
+                {"size_class": 10.0}),
     # --- Parachutes (5) ---
     PartMapping("parachuteDrogue", Parachute, "Mk25 Parachute", 1168,
                 {"is_drogue": True}),

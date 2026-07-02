@@ -472,8 +472,7 @@ class EdgeType(Enum):
     PURE_VACUUM             = auto()  # orbital transfer, no TWR requirement
     PLANET_TRANSFER         = auto()  # interplanetary, plane change fraction applied
     VACUUM_LANDING          = auto()  # orbit -> surface, airless body
-    ATMO_LANDING_PROPULSIVE = auto()  # orbit -> surface, propulsive through atmo
-    ATMO_LANDING_AERO       = auto()  # orbit -> surface, heat shield + parachutes
+    ATMO_LANDING            = auto()  # orbit -> surface, staged aero + propulsive mix
     AEROBRAKE_CAPTURE       = auto()  # SOI capture using atmosphere (not landing)
 
 
@@ -502,6 +501,15 @@ class MissionEdge:
     needs_heat_shield: bool = False
     needs_landing_legs: bool = False
     needs_ladder: bool = False          # set at profile build time if eva_twr < 1.05
+    # ATMO_LANDING context: the speed the craft carries into the atmosphere
+    # (low-orbit circular for a landing from orbit; padded escape speed for a
+    # reentry from an interplanetary return).  Feeds the entry-bleed model.
+    entry_speed: float = 0.0
+    # True on the home-recovery descent (intercept -> home surface): the leg
+    # where solar panels may already be destroyed by reentry heating and no
+    # further power is needed.  Typed replacement for string-matching the
+    # destination node name against "<home>_surface".
+    is_recovery: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -1345,20 +1353,16 @@ class MissionBuilder:
     _PV  = EdgeType.PURE_VACUUM
     _PT  = EdgeType.PLANET_TRANSFER
     _VL  = EdgeType.VACUUM_LANDING
-    _ALP = EdgeType.ATMO_LANDING_PROPULSIVE
-    _ALA = EdgeType.ATMO_LANDING_AERO
+    _AL  = EdgeType.ATMO_LANDING
     _AB  = EdgeType.AEROBRAKE_CAPTURE
 
-    # Cap on profile alternatives per (body, mission_type).  Atmospheric
-    # destinations naturally produce 2 (aero + prop schemes); the cap
-    # guards against accidental combinatorial blow-ups from future graph
-    # additions.
     # Cap on profile alternatives kept per ``(body, mission_type)``.  Two is
-    # enough to cover the aero/prop scheme choice at a destination — the
-    # path enumerator can produce more (e.g. moon-SOI vs combined-escape
-    # routing variants) but anything past the two cheapest is dominated
-    # by them and just inflates capability-evaluation work in the sphere
-    # ladder's hot loop.
+    # enough to cover the aero/prop CAPTURE scheme choice at an atmospheric
+    # planet (landing itself is a single edge whose chute/burn mix is decided
+    # at capability time) — the path enumerator can produce more (e.g.
+    # moon-SOI vs combined-escape routing variants) but anything past the two
+    # cheapest is dominated by them and just inflates capability-evaluation
+    # work in the sphere ladder's hot loop.
     _MAX_PROFILE_ALTS = 2
 
     # Rescue rendezvous/phasing margin (m/s) — the cost of matching and closing
@@ -1543,6 +1547,7 @@ class MissionBuilder:
         pc: float = 0.0, min_twr: float = 0.0,
         throttle: bool = False, attitude: bool = False,
         heat: bool = False, legs: bool = False,
+        entry_speed: float = 0.0, is_recovery: bool = False,
     ) -> MissionEdge:
         return MissionEdge(
             source=src, destination=dst, edge_type=et,
@@ -1552,6 +1557,7 @@ class MissionBuilder:
             min_twr=min_twr, requires_throttleable=throttle,
             requires_attitude_control=attitude,
             needs_heat_shield=heat, needs_landing_legs=legs,
+            entry_speed=entry_speed, is_recovery=is_recovery,
         )
 
     def _add_out(self, edge: MissionEdge, scheme: str = "") -> None:
@@ -1707,18 +1713,19 @@ class MissionBuilder:
         # Landing — low orbit → surface.
         if body.can_land and body.dv.dvGL > 0:
             if body.has_atmosphere:
-                # Aero descent uses heatshield + parachute; nominal 100 m/s
-                # for terminal-velocity course correction.
-                land_aero = self._edge(
-                    lo, s, self._ALA, 100, bn, heat=True, legs=True,
+                # One staged aero+propulsive edge: capability picks the
+                # min-mass mix of shield bleed + drogues + mains + touchdown
+                # burn (see capability._solve_atmo_landing).  base_dv=0 — the
+                # burn is computed at evaluation time from the actual kit;
+                # min_twr / throttle / attitude are mix-dependent and imposed
+                # by capability only when a burn is chosen, so a passive chute
+                # landing stays demand-free.  No scheme tag: landing no longer
+                # forks the path.
+                land = self._edge(
+                    lo, s, self._AL, 0, bn, heat=True, legs=True,
+                    entry_speed=body.lo_circular_velocity,
                 )
-                self._add_out(land_aero, scheme="aero")
-                # Propulsive descent must overcome ascent-equivalent dv.
-                land_prop = self._edge(
-                    lo, s, self._ALP, body.dv.dvGL, bn,
-                    min_twr=1.3, throttle=True, attitude=True, legs=True,
-                )
-                self._add_out(land_prop, scheme="prop")
+                self._add_out(land)
             else:
                 land = self._edge(
                     lo, s, self._VL, body.dv.dvGL, bn,
@@ -1849,19 +1856,26 @@ class MissionBuilder:
                 attitude=True,
             ))
 
-        # Home reentry (intercept → surface).  Atmospheric homes do aero
-        # descent with a heatshield; vacuum homes need a propulsive landing.
+        # Home reentry (intercept → surface).  Atmospheric homes do a staged
+        # aero descent; vacuum homes need a propulsive landing.  Entry speed is
+        # higher than a landing-from-orbit (you arrive on a hyperbolic return),
+        # so pad low-orbit escape velocity — covers the worst stock return
+        # (Jool→Kerbin ≈ 4383 < 1.4·v_esc).  is_recovery: solar panels may be
+        # gone by touchdown and no further power is needed on this leg.
         if home.can_land:
             if home.has_atmosphere:
                 reentry = self._edge(
                     f"{hnl}_intercept", f"{hnl}_surface",
-                    self._ALA, 100, hn, heat=True,
+                    self._AL, 0, hn, heat=True,
+                    entry_speed=1.4 * home.lo_escape_velocity,
+                    is_recovery=True,
                 )
             else:
                 reentry = self._edge(
                     f"{hnl}_intercept", f"{hnl}_surface",
                     self._VL, home.dv.dvGL, hn,
                     min_twr=1.2, throttle=True, attitude=True, legs=True,
+                    is_recovery=True,
                 )
             self._add_ret(reentry)
             self._add_out(reentry)

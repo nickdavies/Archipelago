@@ -1,15 +1,15 @@
 {
   "_meta": {
     "sources": [
-      "/home/nick/.local/share/Steam/steamapps/common/Kerbal Space Program/GameData/Squad/Parts",
-      "/home/nick/.local/share/Steam/steamapps/common/Kerbal Space Program/GameData/SquadExpansion/MakingHistory/Parts"
+      "/home/nick/.local/share/Steam/steamapps/common/Kerbal Space Program/GameData/Squad",
+      "/home/nick/.local/share/Steam/steamapps/common/Kerbal Space Program/GameData/SquadExpansion/MakingHistory"
     ],
-    "generated": "2026-06-17T21:31:04.008535+00:00",
-    "part_count": 416,
     "packs": [
       "MakingHistory",
       "Stock"
-    ]
+    ],
+    "generated": "2026-07-02T16:33:09.068467+00:00",
+    "part_count": 416
   },
   "AdvancedCanard": {
     "name": "AdvancedCanard",
@@ -1542,6 +1542,12 @@
     "has_module_anchored_decouple": false,
     "resources": {
       "Ablator": 50.0
+    },
+    "drag_cubes": {
+      "Default": {
+        "area_y": 0.3831,
+        "cd_y": 0.9428
+      }
     }
   },
   "HeatShield1": {
@@ -1609,6 +1615,16 @@
     "has_module_anchored_decouple": false,
     "resources": {
       "Ablator": 200.0
+    },
+    "drag_cubes": {
+      "Fairing": {
+        "area_y": 1.435,
+        "cd_y": 0.9658
+      },
+      "Clean": {
+        "area_y": 1.27,
+        "cd_y": 0.9507
+      }
     }
   },
   "HeatShield1p5": {
@@ -1676,6 +1692,16 @@
     "has_module_anchored_decouple": false,
     "resources": {
       "Ablator": 500.0
+    },
+    "drag_cubes": {
+      "Fairing": {
+        "area_y": 2.992,
+        "cd_y": 0.9648
+      },
+      "Clean": {
+        "area_y": 2.804,
+        "cd_y": 0.9499
+      }
     }
   },
   "HeatShield2": {
@@ -1743,6 +1769,16 @@
     "has_module_anchored_decouple": false,
     "resources": {
       "Ablator": 800.0
+    },
+    "drag_cubes": {
+      "Fairing": {
+        "area_y": 5.323,
+        "cd_y": 0.9648
+      },
+      "Clean": {
+        "area_y": 4.982,
+        "cd_y": 0.9499
+      }
     }
   },
   "HeatShield3": {
@@ -1810,6 +1846,16 @@
     "has_module_anchored_decouple": false,
     "resources": {
       "Ablator": 1800.0
+    },
+    "drag_cubes": {
+      "Fairing": {
+        "area_y": 12.44,
+        "cd_y": 0.9645
+      },
+      "Clean": {
+        "area_y": 10.99,
+        "cd_y": 0.9498
+      }
     }
   },
   "HighGainAntenna": {
@@ -2066,7 +2112,17 @@
     ],
     "has_gimbal": false,
     "has_module_decouple": true,
-    "has_module_anchored_decouple": false
+    "has_module_anchored_decouple": false,
+    "drag_cubes": {
+      "A": {
+        "area_y": 72.75,
+        "cd_y": 0.8279
+      },
+      "B": {
+        "area_y": 3.585,
+        "cd_y": 0.6972
+      }
+    }
   },
   "InfraredTelescope": {
     "name": "InfraredTelescope",
@@ -10659,8 +10715,29 @@
       1
     ],
     "has_gimbal": false,
+    "aero_surface": {
+      "drag_coeff": 0.6,
+      "deflection_lift_coeff": 0.38,
+      "ctrl_surface_area": 1.0,
+      "ctrl_surface_range": 70.0,
+      "lifting_surface_curve": "SpeedBrake"
+    },
     "has_module_decouple": false,
-    "has_module_anchored_decouple": false
+    "has_module_anchored_decouple": false,
+    "drag_cubes": {
+      "neutral": {
+        "area_y": 0.1066,
+        "cd_y": 0.3505
+      },
+      "fullDeflectionPos": {
+        "area_y": 1.338,
+        "cd_y": 0.8739
+      },
+      "fullDeflectionNeg": {
+        "area_y": 1.326,
+        "cd_y": 0.8441
+      }
+    }
   },
   "airlinerCtrlSrf": {
     "name": "airlinerCtrlSrf",
@@ -13540,7 +13617,7 @@
   },
   "flagPartSize1p5": {
     "name": "flagPartSize1p5",
-    "pack": "Stock",
+    "pack": "MakingHistory",
     "title": "RFP-1.5 Flag  (1.875m)",
     "mass": 0.000125,
     "bulkhead_profiles": [
@@ -13642,7 +13719,7 @@
   },
   "flagPartSize4": {
     "name": "flagPartSize4",
-    "pack": "Stock",
+    "pack": "MakingHistory",
     "title": "RFP-4 Flag  (5m)",
     "mass": 0.0009,
     "bulkhead_profiles": [
@@ -14270,7 +14347,7 @@
   },
   "kerbalEVAVintage": {
     "name": "kerbalEVAVintage",
-    "pack": "Stock",
+    "pack": "MakingHistory",
     "title": "",
     "mass": 0.0,
     "bulkhead_profiles": [],
@@ -14292,7 +14369,7 @@
   },
   "kerbalEVAfemaleVintage": {
     "name": "kerbalEVAfemaleVintage",
-    "pack": "Stock",
+    "pack": "MakingHistory",
     "title": "",
     "mass": 0.0,
     "bulkhead_profiles": [],
@@ -18157,7 +18234,12 @@
     ],
     "has_gimbal": false,
     "parachute": {
-      "fully_deployed_drag": 170.0
+      "fully_deployed_drag": 170.0,
+      "semi_deployed_drag": 4.0,
+      "min_air_pressure_to_open": 0.02,
+      "deploy_altitude": 2500.0,
+      "chute_max_temp": 1600.0,
+      "mach_heat_mult_base": 0.25
     },
     "has_module_decouple": false,
     "has_module_anchored_decouple": false
@@ -18210,7 +18292,11 @@
     ],
     "has_gimbal": false,
     "parachute": {
-      "fully_deployed_drag": 500.0
+      "fully_deployed_drag": 500.0,
+      "semi_deployed_drag": 1.0,
+      "min_air_pressure_to_open": 0.04,
+      "deploy_altitude": 1000.0,
+      "chute_max_temp": 650.0
     },
     "has_module_decouple": false,
     "has_module_anchored_decouple": false
@@ -18246,7 +18332,11 @@
     ],
     "has_gimbal": false,
     "parachute": {
-      "fully_deployed_drag": 500.0
+      "fully_deployed_drag": 500.0,
+      "semi_deployed_drag": 1.0,
+      "min_air_pressure_to_open": 0.04,
+      "deploy_altitude": 1000.0,
+      "chute_max_temp": 650.0
     },
     "has_module_decouple": false,
     "has_module_anchored_decouple": false
@@ -18299,7 +18389,11 @@
     ],
     "has_gimbal": false,
     "parachute": {
-      "fully_deployed_drag": 500.0
+      "fully_deployed_drag": 500.0,
+      "semi_deployed_drag": 1.0,
+      "min_air_pressure_to_open": 0.04,
+      "deploy_altitude": 1000.0,
+      "chute_max_temp": 650.0
     },
     "has_module_decouple": false,
     "has_module_anchored_decouple": false
@@ -19034,7 +19128,12 @@
     ],
     "has_gimbal": false,
     "parachute": {
-      "fully_deployed_drag": 100.0
+      "fully_deployed_drag": 100.0,
+      "semi_deployed_drag": 2.0,
+      "min_air_pressure_to_open": 0.02,
+      "deploy_altitude": 2500.0,
+      "chute_max_temp": 1100.0,
+      "mach_heat_mult_base": 0.5
     },
     "has_module_decouple": false,
     "has_module_anchored_decouple": false
