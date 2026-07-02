@@ -415,6 +415,7 @@ def format_contract_output(
     difficulty_name: str,
     mission_builder: MissionBuilder,
     proxy: bool = False,
+    part_manager=None,
 ) -> list[str]:
     """Render the ``/explain`` breakdown for a contract location.
 
@@ -431,6 +432,10 @@ def format_contract_output(
     """
     # Local import keeps the capability_format <-> contracts edge one-directional.
     from worlds.ksp1.contracts import evaluate_contract, required_part_breakdown
+    from worlds.ksp1.parts import DEFAULT_PART_MANAGER
+
+    if part_manager is None:
+        part_manager = DEFAULT_PART_MANAGER
 
     td = spec.type_def
     lines: list[str] = []
@@ -483,7 +488,8 @@ def format_contract_output(
     # change here -- every parameter dataclass has a to_json().
     lines.append("")
     lines.append("  Contract parameters (client builds a native KSP contract):")
-    for p in td.build_parameters(spec.body, mission_builder):
+    for p in td.build_parameters(spec.body, mission_builder,
+                                 part_manager=part_manager):
         j = dict(p.to_json())
         kind = j.pop("kind", "?")
         detail = ", ".join(f"{k}={v}" for k, v in j.items())

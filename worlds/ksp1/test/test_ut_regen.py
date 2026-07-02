@@ -57,7 +57,8 @@ class TestUTRegen(unittest.TestCase):
         # These keys must match exactly — they control access rules.
         for key in ("goal", "difficulty", "start_with_launch_clamps",
                      "tech_slots_per_node", "physics_difficulty",
-                     "goal_locations", "goal_display_name"):
+                     "goal_locations", "goal_display_name",
+                     "enabled_part_packs", "buildings_in_logic"):
             self.assertEqual(
                 original_sd[key], regen_sd[key],
                 f"slot_data[{key!r}] mismatch after regen",
@@ -169,6 +170,86 @@ class TestUTRegen(unittest.TestCase):
         self.assertTrue(world2.goal_spec.free_goal)
         self.assertEqual(world1.goal_spec.flag_bodies, world2.goal_spec.flag_bodies)
         self.assertEqual(world1.contract_threshold_defs, world2.contract_threshold_defs)
+
+
+class TestBuildingsInLogicUTRegen(unittest.TestCase):
+    """UT round-trip for buildings_in_logic (default ON) and related slot_data."""
+
+    def _regen_from_slot_data(self, seed: int, options: dict | None = None,
+                              regen_options: dict | None = None):
+        from test.general import call_all
+        opts = options or {}
+        regen_opts = regen_options if regen_options is not None else opts
+        mw1 = setup_multiworld(
+            KSP1World,
+            steps=("generate_early", "create_regions", "create_items", "set_rules"),
+            seed=seed,
+            options=opts,
+        )
+        world1: KSP1World = mw1.worlds[1]
+        slot_data = world1.fill_slot_data()
+
+        mw2 = setup_multiworld(
+            KSP1World,
+            steps=(),
+            seed=seed + 1,
+            options=regen_opts,
+        )
+        mw2.re_gen_passthrough = {KSP1World.game: slot_data}
+        for step in ("generate_early", "create_regions", "create_items", "set_rules"):
+            call_all(mw2, step)
+        return world1, mw2.worlds[1], slot_data
+
+    def test_buildings_in_logic_default_on_round_trip(self):
+        """Default seeds emit buildings_in_logic=1 and regen restores it."""
+        from worlds.ksp1.items import (
+            PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
+            PROGRESSIVE_MISSION_CONTROL_NAME,
+            PROGRESSIVE_TRACKING_STATION_NAME,
+        )
+        from worlds.ksp1.world import _GATED_FACILITY_IDS
+
+        world1, world2, slot_data = self._regen_from_slot_data(seed=42, options={})
+        self.assertEqual(slot_data["buildings_in_logic"], 1)
+        self.assertEqual(world1.options.buildings_in_logic.value, 1)
+        self.assertEqual(world2.options.buildings_in_logic.value, 1)
+
+        locs1 = {loc.name for loc in world1.multiworld.get_locations(world1.player)}
+        locs2 = {loc.name for loc in world2.multiworld.get_locations(world2.player)}
+        self.assertEqual(locs1, locs2)
+
+        pool_names = {
+            item.name for item in world1.multiworld.itempool
+            if item.player == world1.player
+        }
+        for name in (PROGRESSIVE_TRACKING_STATION_NAME,
+                     PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
+                     PROGRESSIVE_MISSION_CONTROL_NAME):
+            self.assertIn(name, pool_names)
+
+        for fac in _GATED_FACILITY_IDS:
+            self.assertEqual(slot_data["career"]["building_levels"][fac], 0)
+
+    def test_buildings_in_logic_explicit_off_round_trip(self):
+        """Explicit OFF in gen survives regen even when regen yaml defaults ON."""
+        world1, world2, slot_data = self._regen_from_slot_data(
+            seed=42,
+            options={"buildings_in_logic": 0},
+            regen_options={},
+        )
+        self.assertEqual(slot_data["buildings_in_logic"], 0)
+        self.assertEqual(world1.options.buildings_in_logic.value, 0)
+        self.assertEqual(world2.options.buildings_in_logic.value, 0)
+
+    def test_enabled_part_packs_round_trip(self):
+        """Stock-only enabled_part_packs survives regen."""
+        from worlds.ksp1.parts.packs import STOCK
+
+        world1, world2, slot_data = self._regen_from_slot_data(
+            seed=42, options={"enabled_part_packs": []})
+        self.assertEqual(slot_data["enabled_part_packs"], ["Stock"])
+        self.assertEqual(world1.part_manager.enabled_packs, frozenset({STOCK}))
+        self.assertEqual(world2.part_manager.enabled_packs, frozenset({STOCK}))
 
 
 class TestExplainRule(unittest.TestCase):

@@ -71,6 +71,29 @@ class TestEnabledPartPacks(unittest.TestCase):
         off = _build_world([])
         self.assertEqual(off.unachievable_missions, on.unachievable_missions)
 
+    def test_stock_only_contracts_emit_no_mh_has_any_part(self):
+        """Stock-only seeds must not leak MH part names into has_any_part lists."""
+        from worlds.ksp1.parts import part_manager_for
+        from worlds.ksp1.parts.packs import MAKING_HISTORY, STOCK
+
+        w = _build_world([])
+        default_pm = part_manager_for(frozenset({STOCK, MAKING_HISTORY}))
+        stock_pm = w.part_manager
+        mh_only: set[str] = set()
+        for cat, members in default_pm.category_members.items():
+            mh_only |= members - stock_pm.category_members.get(cat, frozenset())
+
+        has_any_part_names: set[str] = set()
+        for contract in w.fill_slot_data()["contracts"]:
+            for param in contract["parameters"]:
+                if param.get("kind") == "has_any_part":
+                    has_any_part_names.update(param["parts"])
+
+        leaked = mh_only & has_any_part_names
+        self.assertFalse(
+            leaked,
+            f"MH-only parts leaked into stock-only has_any_part: {sorted(leaked)}")
+
 
 if __name__ == "__main__":
     unittest.main()

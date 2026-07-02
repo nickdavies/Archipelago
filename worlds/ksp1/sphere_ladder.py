@@ -74,6 +74,7 @@ from .parts import (
     Engine,
     FuelTank,
     MiscEquipment,
+    PartManager,
     DEFAULT_PART_MANAGER,
 )
 
@@ -374,7 +375,9 @@ def _missing_payload_blocking(
 
 
 def _contract_payload_rep_names(info: "_LocationMissionInfo",
-                                flags: EquipmentFlags) -> set[str]:
+                                flags: EquipmentFlags,
+                                part_manager: PartManager = DEFAULT_PART_MANAGER,
+                                ) -> set[str]:
     """Names of a contract location's delivery payload parts (drill / ore_tank /
     battery / science_lab / crew cabins).  These are PAYLOAD, not rank reps, so
     the bumper never designates them — but the contract location REQUIRES them.
@@ -386,7 +389,7 @@ def _contract_payload_rep_names(info: "_LocationMissionInfo",
     for non-contract locations or when no payload is needed."""
     if info.spec is None:
         return set()
-    cp = contract_payload_parts(info.spec, flags)
+    cp = contract_payload_parts(info.spec, flags, part_manager=part_manager)
     return {p.name for p in cp} if cp else set()
 
 
@@ -396,6 +399,7 @@ def _evaluate(
     diff: DifficultyProfile,
     mission_builder: MissionBuilder,
     run_parallel: bool = True,
+    part_manager: PartManager = DEFAULT_PART_MANAGER,
 ) -> ProfileResult:
     """Dispatch to the right evaluator for a location's mission type.
 
@@ -410,7 +414,8 @@ def _evaluate(
     extra_payload: tuple = ()
     mission_transform = None
     if info.spec is not None:
-        payload = contract_payload_parts(info.spec, flags)
+        payload = contract_payload_parts(info.spec, flags,
+                                         part_manager=part_manager)
         if payload is None:
             # A chain-guaranteed delivery part (crew/relay/power) isn't unlocked
             # at this kit — infeasible here; name the chain so the bumper bumps it.
@@ -1137,6 +1142,7 @@ def _pick_rank_rep_scored(
     launch_pad_caps, pad_tier: int, precollected_names: frozenset,
     mission_builder,
     buildings_in_logic: bool = False, home: "BodyName | None" = None,
+    part_manager: PartManager = DEFAULT_PART_MANAGER,
 ) -> Optional[str]:
     """Trial each candidate rep at ``(axis, new_rank)``: add it to a
     copy of ``reps_collected``, lift co-axis ranks per its rank_sig,
@@ -1178,7 +1184,8 @@ def _pick_rank_rep_scored(
             buildings_in_logic=buildings_in_logic, home=home,
         )
         trial_result = _evaluate(trial_flags, info, diff, mission_builder,
-                                 run_parallel=False)
+                                 run_parallel=False,
+                                 part_manager=part_manager)
         feasibility = 0 if trial_result.feasible else 1
         mass = trial_result.launch_mass or float("inf")
         # Blocker reduction is the real "closer to feasible" signal;
@@ -1292,6 +1299,7 @@ def minimal_ranks_for(
     max_iterations: int = 500,
     reps_only_mode: bool = True,
     buildings_in_logic: bool = False,
+    part_manager: PartManager = DEFAULT_PART_MANAGER,
 ) -> Optional[RankBumperResult]:
     """Rank-space sphere walker (Phase 1 scaffold).
 
@@ -1330,7 +1338,8 @@ def minimal_ranks_for(
             reps_only=frozenset(reps_collected) if reps_only_mode else None,
             buildings_in_logic=buildings_in_logic, home=home,
         )
-        result = _evaluate(flags, info, diff, mission_builder)
+        result = _evaluate(flags, info, diff, mission_builder,
+                           part_manager=part_manager)
         if result.feasible:
             if (reps_only_mode and os.environ.get("KSP_MINIMIZE_KIT", "1") == "1"
                     and (reps_collected - set(prior_reps))):
@@ -1356,7 +1365,8 @@ def minimal_ranks_for(
                         _trial = kept - {_rep}
                         _tf = _pre_pass_for_ranks(
                             sig, ctx, reps_only=frozenset(_trial), **_pp)
-                        if _evaluate(_tf, info, diff, mission_builder).feasible:
+                        if _evaluate(_tf, info, diff, mission_builder,
+                                     part_manager=part_manager).feasible:
                             kept = _trial
                             _changed = True
                 if kept != reps_collected:
@@ -1378,7 +1388,8 @@ def minimal_ranks_for(
                 delta=_signature_delta(prior, sig),
                 reps=reps,
                 reps_collected=frozenset(
-                    reps_collected | _contract_payload_rep_names(info, flags)),
+                    reps_collected | _contract_payload_rep_names(
+                        info, flags, part_manager=part_manager)),
                 flags=flags,
                 profile_dv=result.launch_mass,
             )
@@ -1580,6 +1591,7 @@ def minimal_ranks_for(
             reps_collected=reps_collected,
             reps_only_mode=reps_only_mode,
             buildings_in_logic=buildings_in_logic, home=home,
+            part_manager=part_manager,
         )
         if axis is None:
             # Fall back to the catchall candidate set if stage_diag-targeted
@@ -1657,7 +1669,8 @@ def minimal_ranks_for(
                 reps_only=None,
                 buildings_in_logic=buildings_in_logic, home=home,
             )
-            rescue_result = _evaluate(rescue_flags, info, diff, mission_builder)
+            rescue_result = _evaluate(rescue_flags, info, diff, mission_builder,
+                                      part_manager=part_manager)
             rescue_kit = build_kit_for_result(rescue_flags, rescue_result)
             if rescue_kit is not None:
                 kit = rescue_kit
@@ -1687,7 +1700,8 @@ def minimal_ranks_for(
                     reps_only=frozenset(union_reps),
                     buildings_in_logic=buildings_in_logic, home=home,
                 )
-                verify_result = _evaluate(verify_flags, info, diff, mission_builder)
+                verify_result = _evaluate(verify_flags, info, diff, mission_builder,
+                                        part_manager=part_manager)
                 kit_parts = variant_parts
                 if not verify_result.feasible:
                     # Variant broke a cascade.  Fall back to the
@@ -1710,7 +1724,8 @@ def minimal_ranks_for(
                         reps_only=frozenset(union_reps),
                         buildings_in_logic=buildings_in_logic, home=home,
                     )
-                    verify_result = _evaluate(verify_flags, info, diff, mission_builder)
+                    verify_result = _evaluate(verify_flags, info, diff, mission_builder,
+                                        part_manager=part_manager)
                 if verify_result.feasible:
                     for u in kit_parts:
                         if u not in reps_collected:
@@ -1744,7 +1759,8 @@ def minimal_ranks_for(
                                     lifted_ranks, ctx,
                                     reps_only=frozenset(_trial), **_rpp)
                                 if _evaluate(_tf, info, diff,
-                                             mission_builder).feasible:
+                                             mission_builder,
+                                             part_manager=part_manager).feasible:
                                     kept = _trial
                                     _changed = True
                         if kept != reps_collected:
@@ -1764,14 +1780,16 @@ def minimal_ranks_for(
                                 lifted_ranks, ctx,
                                 reps_only=frozenset(reps_collected), **_rpp)
                             verify_result = _evaluate(
-                                verify_flags, info, diff, mission_builder)
+                                verify_flags, info, diff, mission_builder,
+                                part_manager=part_manager)
                     return RankBumperResult(
                         signature=lifted_ranks,
                         delta=_signature_delta(prior, lifted_ranks),
                         reps=reps,
                         reps_collected=frozenset(
                             reps_collected
-                            | _contract_payload_rep_names(info, verify_flags)),
+                            | _contract_payload_rep_names(
+                                info, verify_flags, part_manager=part_manager)),
                         flags=verify_flags,
                         profile_dv=verify_result.launch_mass,
                     )
@@ -1796,7 +1814,8 @@ def minimal_ranks_for(
                             reps_only=frozenset(new_reps),
                             buildings_in_logic=buildings_in_logic, home=home,
                         )
-                        swap_result = _evaluate(swap_flags, info, diff, mission_builder)
+                        swap_result = _evaluate(swap_flags, info, diff, mission_builder,
+                                                part_manager=part_manager)
                         nb = len(swap_result.blocking)
                         m = swap_result.launch_mass or float("inf")
                         score = (nb, m)
@@ -1830,7 +1849,8 @@ def minimal_ranks_for(
                         reps=reps,
                         reps_collected=frozenset(
                             reps_collected
-                            | _contract_payload_rep_names(info, final_flags)),
+                            | _contract_payload_rep_names(
+                                info, final_flags, part_manager=part_manager)),
                         flags=final_flags, profile_dv=m,
                     )
             return None
@@ -1849,6 +1869,7 @@ def minimal_ranks_for(
             precollected_names=precollected_names,
             mission_builder=mission_builder,
             buildings_in_logic=buildings_in_logic, home=home,
+            part_manager=part_manager,
         )
         if rep_name is not None:
             reps[(axis, new_rank)] = rep_name
@@ -1917,6 +1938,7 @@ def _pick_rank_bump_scored(blocking, ranks: Signature, ctx: RankContext,
                            reps_only_mode: bool = True,
                            buildings_in_logic: bool = False,
                            home: "BodyName | None" = None,
+                           part_manager: PartManager = DEFAULT_PART_MANAGER,
                            ) -> Optional[RankAxisKey]:
     """Trial-bump every candidate axis; pick the one with the best
     ``(feasibility, launch_mass, n_blocking)`` score.
@@ -1973,7 +1995,8 @@ def _pick_rank_bump_scored(blocking, ranks: Signature, ctx: RankContext,
                 buildings_in_logic=buildings_in_logic, home=home,
             )
             trial_result = _evaluate(trial_flags, info, diff, mission_builder,
-                                     run_parallel=False)
+                                     run_parallel=False,
+                                     part_manager=part_manager)
             feasibility_rank = 0 if trial_result.feasible else 1
             mass = trial_result.launch_mass or float("inf")
             group_idx = len(RANK_PRIORITY_GROUPS)
@@ -2738,7 +2761,8 @@ def _install_ladder_rules(
             for i, s in enumerate(spheres):
                 if s.flags is None:
                     continue
-                r = _evaluate(s.flags, info, diff, mb)
+                r = _evaluate(s.flags, info, diff, mb,
+                              part_manager=world.part_manager)
                 if r.feasible:
                     j = i
                     # Precise per-mission pad = the lightest pad tier (number
@@ -3403,6 +3427,7 @@ def _build_ladder_graph_walk(
         mission_builder=world.mission_builder,
         precollected_names=precollected_names,
         buildings_in_logic=buildings_in_logic,
+        part_manager=world.part_manager,
     )
     infeasible = world.model_infeasible_locations
 
@@ -4024,7 +4049,8 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
     if world.options.goal_contract_mode.value in (
             GoalContractMode.option_count,
             GoalContractMode.option_progressive_unlock):
-        rep_part_names |= required_part_names_for(world.contract_specs)
+        rep_part_names |= required_part_names_for(
+            world.contract_specs, world.part_manager)
     _demote_non_rep_parts(world, rep_part_names, cumulative_sig,
                           chain_extras=chain_full_extras)
     _assert_gate_items_progression(world)

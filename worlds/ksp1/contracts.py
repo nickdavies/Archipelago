@@ -35,7 +35,7 @@ from .bodies import (
     DIFFICULTY_PROFILES, MissionBuilder, effective_physics_profile_name,
     orbit_reach_dv,
 )
-from .parts import DEFAULT_PART_MANAGER, MiscEquipment
+from .parts import DEFAULT_PART_MANAGER, MiscEquipment, PartManager
 
 if TYPE_CHECKING:
     from .capability import EquipmentFlags
@@ -306,14 +306,14 @@ _CATEGORY_TO_SYSTEM: dict[str, tuple[str, str]] = {
 }
 
 
-def _category_param(cat: str):
+def _category_param(cat: str, part_manager: PartManager = DEFAULT_PART_MANAGER):
     """The success-condition param for a required part category: a native
     has_system check where one exists, else an explicit has_any_part list."""
     if cat in _CATEGORY_TO_SYSTEM:
         system, label = _CATEGORY_TO_SYSTEM[cat]
         return HasSystemParam(system=system, label=label)
     parts = tuple(sorted(
-        DEFAULT_PART_MANAGER.category_members.get(cat, frozenset())))
+        part_manager.category_members.get(cat, frozenset())))
     return HasAnyPartParam(parts, label=cat)
 
 
@@ -476,7 +476,8 @@ class ContractTypeDef:
             return mission_builder.bump_selfloop(edges, radial)
         return list(edges) + [mission_builder.make_reach_edge(target_body, radial)]
 
-    def build_parameters(self, body: BodyName, mission_builder=None) -> list:
+    def build_parameters(self, body: BodyName, mission_builder=None,
+                         part_manager: PartManager = DEFAULT_PART_MANAGER) -> list:
         # ``mission_builder`` is required only for RANDOM_ORBIT (it owns the
         # per-body seeded target orbit); other types ignore it.
         if self.contract_type == ContractType.MINE_ORE:
@@ -489,7 +490,8 @@ class ContractTypeDef:
             # battery + power + relay). Native objective checks where they exist
             # (lab/power), explicit part lists otherwise (battery/relay).
             params = [SituationParam("landed", body)]
-            params += [_category_param(cat) for cat in self.required_categories
+            params += [_category_param(cat, part_manager)
+                       for cat in self.required_categories
                        if cat not in self.logic_only_categories]
             return params
         if self.contract_type == ContractType.SPACE_STATION:
@@ -497,7 +499,8 @@ class ContractTypeDef:
             # implies the cabins) plus battery + power + relay systems present.
             params = [SituationParam("orbiting", body),
                       CrewCapacityParam(self.crew_requirement)]
-            params += [_category_param(cat) for cat in ("battery", "power", "relay")]
+            params += [_category_param(cat, part_manager)
+                       for cat in ("battery", "power", "relay")]
             return params
         if self.contract_type == ContractType.ORBIT:
             return [SituationParam("orbiting", body)]
@@ -544,7 +547,8 @@ class ContractTypeDef:
             # Gather + phone home science from the body's space. CollectScience
             # credits on transmit OR recover; the relay category is the antenna +
             # the range gate (remoteness cap keys on "relay" in required_categories).
-            return [CollectScienceParam(body, "space"), _category_param("relay")]
+            return [CollectScienceParam(body, "space"),
+                    _category_param("relay", part_manager)]
         if self.contract_type == ContractType.FLAG_PLANT:
             return [PlantFlagParam(body)]
         if self.contract_type == ContractType.SAMPLE_RETURN:
@@ -565,7 +569,8 @@ class ContractTypeDef:
                         f"KERBAL_RESCUE on {body} has no assigned rescue orbit")
                 sma = R
             params = [RescueParam(body, sma=sma)]
-            params += [_category_param(cat) for cat in self.required_categories
+            params += [_category_param(cat, part_manager)
+                       for cat in self.required_categories
                        if cat not in self.logic_only_categories]
             return params
         if self.contract_type == ContractType.FLYBY:
@@ -812,7 +817,8 @@ class ContractSpec:
         return f"{self.display_name} 1"
 
     def to_slot_dict(self, mission_builder=None,
-                     slot_count: int = LOCATIONS_PER_CONTRACT) -> dict:
+                     slot_count: int = LOCATIONS_PER_CONTRACT,
+                     part_manager: PartManager = DEFAULT_PART_MANAGER) -> dict:
         """The self-describing manifest entry the dumb client actuates. Carries
         ``contract_type``/``body`` structurally so UT regen reconstructs the
         spec from fields, never by parsing the display name (the client ignores
@@ -831,7 +837,9 @@ class ContractSpec:
             "contract_type": str(self.contract_type),
             "body": str(self.body),
             "parameters": [p.to_json()
-                           for p in td.build_parameters(self.body, mission_builder)],
+                           for p in td.build_parameters(
+                               self.body, mission_builder,
+                               part_manager=part_manager)],
         }
         if self.title_override:
             # Round-trips through UT regen so the flavour title survives.
@@ -929,6 +937,7 @@ def required_part_manifest(
 
 def contract_payload_parts(
     spec: ContractSpec, flags: "EquipmentFlags",
+    part_manager: PartManager = DEFAULT_PART_MANAGER,
 ) -> Optional[tuple[MiscEquipment, ...]]:
     """The delivery payload the sphere ladder charges for a contract, sized from
     ``flags`` so the ladder signature matches the runtime access rule.
@@ -956,9 +965,9 @@ def contract_payload_parts(
         elif cat in _CHAIN_GUARANTEED_CATEGORIES:
             return None  # chain rep not yet unlocked at this kit
         else:
-            members = DEFAULT_PART_MANAGER.category_members.get(cat, frozenset())
+            members = part_manager.category_members.get(cat, frozenset())
             if members:
-                parts.append(min((DEFAULT_PART_MANAGER.parts[n][0]
+                parts.append(min((part_manager.parts[n][0]
                                   for n in members),
                                  key=lambda p: p.mass))
     return tuple(parts)
@@ -1021,7 +1030,9 @@ def compute_contract_access(
     }
 
 
-def required_part_names_for(specs) -> frozenset[str]:
+def required_part_names_for(specs,
+                            part_manager: PartManager = DEFAULT_PART_MANAGER,
+                            ) -> frozenset[str]:
     """The part ksp_names to promote to progression for THIS seed: ONE
     representative — the lightest — per required category over the contracts
     actually generated. AP only guarantees progression items reachable, so we
@@ -1045,10 +1056,10 @@ def required_part_names_for(specs) -> frozenset[str]:
     cats -= _CHAIN_GUARANTEED_CATEGORIES
     reps: set[str] = set()
     for cat in cats:
-        members = DEFAULT_PART_MANAGER.category_members.get(cat, frozenset())
+        members = part_manager.category_members.get(cat, frozenset())
         if members:
             reps.add(min(members,
-                         key=lambda n: DEFAULT_PART_MANAGER.parts[n][0].mass))
+                         key=lambda n: part_manager.parts[n][0].mass))
     return frozenset(reps)
 
 

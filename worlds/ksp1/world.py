@@ -316,6 +316,13 @@ class KSP1World(World):
     def generate_early(self) -> None:
         """Resolve goal spec and apply ExcludeLateTechTree."""
         self.capability_cache = {}
+
+        # UT regen: restore options from original generation's slot_data before
+        # part_manager / mission_builder / navigation gates are derived.
+        passthrough = getattr(self.multiworld, "re_gen_passthrough", {})
+        if isinstance(passthrough, dict) and self.game in passthrough:
+            self._apply_slot_data(passthrough[self.game])
+
         # Resolve the home-system navigation requirements (HomeSystemConics /
         # HomeSystemNodes + Difficulty) to plain booleans once — the capability
         # translation reads these instead of options.  Rendezvous and
@@ -373,11 +380,6 @@ class KSP1World(World):
             enabled_packs=self.part_manager.enabled_packs,
             local_needs_conics=self.local_needs_conics,
             local_needs_nodes=self.local_needs_nodes)
-
-        # UT regen: restore options from original generation's slot_data.
-        passthrough = getattr(self.multiworld, "re_gen_passthrough", {})
-        if isinstance(passthrough, dict) and self.game in passthrough:
-            self._apply_slot_data(passthrough[self.game])
 
         # Model-infeasible-locations set: a checked-in static lookup keyed by
         # (difficulty, home), generated offline by
@@ -470,7 +472,8 @@ class KSP1World(World):
             self.contract_specs, self.goal_contract_specs = (
                 contracts.generate_contracts(self))
         self.contract_required_part_names = contracts.required_part_names_for(
-            (*self.contract_specs, *self.goal_contract_specs))
+            (*self.contract_specs, *self.goal_contract_specs),
+            self.part_manager)
         # Reward locations each non-goal contract emits this seed. Read once here
         # so every per-seed consumer (region registration, access rules, /explain,
         # slot_data) shares one value.
@@ -730,7 +733,8 @@ class KSP1World(World):
         return items.get_filler_item_name(self)
 
     def fill_slot_data(self) -> dict[str, Any]:
-        d = self.options.as_dict("goal", "difficulty", "start_with_launch_clamps")
+        d = self.options.as_dict(
+            "goal", "difficulty", "start_with_launch_clamps", "buildings_in_logic")
         # Home body — used by the client mod to drive every per-body
         # comparison (KSC biome prefixes, altitude polling guard, splashdown
         # detection, first-launch / first-landing / first-crash events).
@@ -814,12 +818,10 @@ class KSP1World(World):
         # verbatim by the dumb client. Career replaces the prior game mode; the
         # client rejects non-Career saves.
         #
-        # buildings_in_logic OFF (default): every facility maxed — today's
-        # behavior, byte-for-byte.  ON: the curated-gated facilities (Astronaut
-        # Complex, Tracking Station) START at level 0 so the player upgrades them
-        # via the AP building progressives; ungated facilities stay maxed.  The
-        # client actuates both the start level and the per-item upgrades, the
-        # latter keyed by ``facility_item_map``.
+        # buildings_in_logic OFF: every facility maxed.  ON (default): the
+        # curated-gated facilities (Astronaut Complex, Tracking Station,
+        # Mission Control) START at level 0 so the player upgrades them via
+        # AP building progressives; ungated facilities stay maxed.
         building_levels = {b: _MAX_FACILITY_LEVEL for b in _FACILITY_IDS}
         if self.options.buildings_in_logic:
             for b in _GATED_FACILITY_IDS:
@@ -835,7 +837,9 @@ class KSP1World(World):
         # native KSP contract from `parameters` and reports `location` on
         # completion. Goal contracts ride the same array.
         d["contracts"] = [
-            spec.to_slot_dict(self.mission_builder, self.locations_per_contract)
+            spec.to_slot_dict(
+                self.mission_builder, self.locations_per_contract,
+                part_manager=self.part_manager)
             for spec in (*self.contract_specs, *self.goal_contract_specs)
         ]
         # Seeded RANDOM_ORBIT target orbits, per body — carried so UT regen
@@ -887,6 +891,9 @@ class KSP1World(World):
         self.options.goal.value = slot_data["goal"]
         self.options.difficulty.value = slot_data["difficulty"]
         self.options.start_with_launch_clamps.value = slot_data["start_with_launch_clamps"]
+        self.options.buildings_in_logic.value = int(slot_data["buildings_in_logic"])
+        self.options.enabled_part_packs.value = frozenset(
+            p for p in slot_data["enabled_part_packs"] if p != "Stock")
         # Physics profile: restore as an explicit level so regen logic matches
         # the original margins regardless of base difficulty.  The resolved name
         # (never "auto") maps back through the option's own name_lookup.  Absent
@@ -898,19 +905,14 @@ class KSP1World(World):
         # Restore the chosen home body.  ``starting_body`` in slot_data
         # is the canonical ``BodyName`` string (``"Kerbin"`` / ``"Mun"``
         # / ...) — the same value the client mod reads.  Reverse-map to
-        # the option integer so any downstream consumer that reads
-        # ``self.options.starting_body`` sees a consistent value, then
-        # rebuild the MissionBuilder if the home actually changed.
+        # the option integer; ``MissionBuilder`` is built from the restored
+        # option in ``generate_early`` after this call returns.
         starting_body = slot_data.get("starting_body")
         if starting_body:
             from .options import StartingBody as _SB
             self.options.starting_body.value = getattr(
                 _SB, f"option_{starting_body.lower()}"
             )
-            if starting_body != self.mission_builder.home.value:
-                new_home = BodyName(starting_body)
-                self.mission_builder = MissionBuilder(home=new_home)
-                self.location_builder = LocationBuilder(home=new_home)
 
         # Stash contracts so generate_early reconstructs the exact set rather
         # than re-randomizing (the contract pick is seed-RNG-derived).
@@ -1016,6 +1018,7 @@ class KSP1World(World):
                 state.has(contract_spec.item_name, self.player),
                 flags, DIFFICULTY_PROFILES[difficulty_name], difficulty_name,
                 self.mission_builder, proxy=self._contract_uses_proxy(contract_spec),
+                part_manager=self.part_manager,
             )
             return [{"type": "text", "text": "\n".join(lines)}]
 
