@@ -208,19 +208,35 @@ _GATED_FACILITY_IDS: tuple[str, ...] = (
     "SpaceCenter/MissionControl",
 )
 
-# item name -> the facility ids it upgrades.  List-valued so one item can drive
-# several facilities.  Emitted in slot_data (``career.facility_item_map``) so the
-# dumb client actuates building unlocks generically instead of hardcoding names —
-# adding a future building is then a server-only change.  The VAB entry is latent
-# this release (the item isn't pooled and VAB/SPH ship maxed); it drives both VAB
-# and SPH (shared vessel limits in the model) and is present so shipping a
-# VAB->part-count gate later needs no client change.
-_FACILITY_ITEM_MAP: dict[str, list[str]] = {
-    PROGRESSIVE_ASTRONAUT_COMPLEX_NAME: ["SpaceCenter/AstronautComplex"],
-    PROGRESSIVE_TRACKING_STATION_NAME: ["SpaceCenter/TrackingStation"],
-    PROGRESSIVE_MISSION_CONTROL_NAME: ["SpaceCenter/MissionControl"],
-    PROGRESSIVE_VAB_NAME: ["SpaceCenter/VehicleAssemblyBuilding",
-                           "SpaceCenter/SpaceplaneHangar"],
+# item name -> {"facilities": [ids], "thresholds": [counts]}.  Emitted in
+# slot_data (``career.facility_item_map``) so the dumb client actuates building
+# unlocks generically instead of hardcoding names — adding a future building is a
+# server-only change.  ``facilities`` is a list so one item can drive several
+# (VAB drives VAB+SPH).  ``thresholds`` maps the accumulated item count to a
+# facility level: level = count of thresholds that are <= the item count, then
+# clamped by the client to the facility's max level and floored at the
+# building_levels start (never lowered).  Increment buildings use [1, 2]; the R&D
+# facility rides the Progressive R&D count on a non-linear schedule ([2, 5] =
+# surface samples at count 2, top at count 5).
+#
+# R&D and VAB are LATENT this release (not in ``_GATED_FACILITY_IDS``, so they
+# ship maxed and the client never lowers them): the surface-sample gate is logic
+# only until a play-test spike confirms gating the R&D facility level doesn't
+# disturb KSP's tech-research / part-cost machinery, and the VAB part-count gate
+# is a later server-only change.  Both are wired here so enabling them needs no
+# client change.
+_FACILITY_ITEM_MAP: dict[str, dict] = {
+    PROGRESSIVE_ASTRONAUT_COMPLEX_NAME: {
+        "facilities": ["SpaceCenter/AstronautComplex"], "thresholds": [1, 2]},
+    PROGRESSIVE_TRACKING_STATION_NAME: {
+        "facilities": ["SpaceCenter/TrackingStation"], "thresholds": [1, 2]},
+    PROGRESSIVE_MISSION_CONTROL_NAME: {
+        "facilities": ["SpaceCenter/MissionControl"], "thresholds": [1]},
+    PROGRESSIVE_RD_NAME: {
+        "facilities": ["SpaceCenter/ResearchAndDevelopment"], "thresholds": [2, 5]},
+    PROGRESSIVE_VAB_NAME: {
+        "facilities": ["SpaceCenter/VehicleAssemblyBuilding",
+                       "SpaceCenter/SpaceplaneHangar"], "thresholds": [1, 2]},
 }
 
 
