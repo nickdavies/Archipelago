@@ -10,6 +10,7 @@ underestimate delta-v margin, underestimate asparagus benefit.
 from __future__ import annotations
 
 import math
+from bisect import bisect_left
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -85,14 +86,18 @@ FILL_LEVELS: tuple[float, ...] = (1.0, 0.75, 0.5, 0.25)
 KSP_SYMMETRY_MODES: tuple[int, ...] = (2, 3, 4, 6, 8)
 
 
-# A tank is "packing-eligible" only if its fuel:dry ratio is within this
-# fraction of the best ratio available for the fuel type.  Nearly all tanks of
-# a given fuel type share one ratio, so this keeps them all and the pack is just
-# "largest first".  But an LF engine (Nerv) sees oxidizer-drained LFO *views*
-# whose ratio is ~half the native-LF tanks'; this threshold drops those dead-
-# oxidizer views so the pack matches the optimizer's best-ratio choice instead
-# of ballooning mass by grabbing a big bad-ratio tank.
-_TANK_PACK_RATIO_TOLERANCE = 0.15
+# Tanks whose fuel:dry ratios differ by less than this (relative to the best
+# ratio) are the same "tier": ratio differences below the tier width are noise
+# next to pack quantization, so within a tier the greedy pack prefers large
+# tanks (realistic part counts).  Across tiers, better ratio always packs
+# first — a materially worse tank (Mk3 fuselages, ~12.5% below the 8:1
+# standard; oxidizer-drained LFO views at ~45% of native LF) must never lead
+# the pack (bug 092).  Ordering, not a ratio *floor*: a floor relative to the
+# best ratio makes packing non-monotone in the part set (adding a better tank
+# drops existing tanks out of eligibility — with the old 0.15 floor, granting
+# RCSTank1-2 at ratio 7.5 evicted every other monoprop tank), and a strictly
+# larger kit must never lose a mission.
+_TANK_RATIO_TIER_WIDTH = 0.05
 
 
 def _tank_ratio(t):
@@ -100,31 +105,78 @@ def _tank_ratio(t):
 
 
 def _packable_tanks(tanks, engine):
-    """Return ``(packable, rho_star)``: the mountable, spine-stackable,
-    near-best-ratio tanks for this engine (largest first) and the best fuel:dry
-    ratio among them.
+    """Return ``(pack_ctx, rho_star)``: the packing context for this engine
+    and the best fuel:dry ratio among its mountable tanks.  ``pack_ctx`` is
+    ``(packable, boundaries, cov_fuels, cov_tanks)`` — or ``None`` when the
+    engine can mount nothing:
+
+    * ``packable`` — the mountable, spine-stackable tanks, best ratio tier
+      first, largest first within a tier.
+    * ``boundaries`` — indices where ``packable`` crosses into a worse tier.
+    * ``cov_fuels`` / ``cov_tanks`` — the covering-tank index: fuels sorted
+      ascending, and for each position the lightest-dry tank among those
+      holding at least that much (suffix-min).  ``bisect_left(cov_fuels,
+      rem)`` answers "lightest tank that can hold ``rem``" in O(log n) —
+      this is the hot leaf of the whole optimizer.
 
     Only tanks the ``engine`` can mount on survive — non-SPINE tanks (radial side
     tanks, single-node tanks like the FL-C1000, slanted/coupler adapters) can't
     form a central stackable column and are excluded, and the optimizer's size
-    gate (``engine.size_class <= tank.size_class``) is applied.  Among those,
-    tanks more than ``_TANK_PACK_RATIO_TOLERANCE`` worse than the best fuel:dry
-    ratio are dropped: for uniform-ratio fuel types this keeps every tank (the
-    pack is just "largest first"), but for an LF engine seeing oxidizer-drained
-    LFO views it discards the dead-oxidizer tanks, keeping the build's mass
-    honest.  ``rho_star`` is returned so the caller need not recompute the max."""
+    gate (``engine.size_class <= tank.size_class``) is applied.
+
+    Sort order is (ratio tier, fuel desc), NOT plain largest-first: a large
+    tank whose ratio is materially worse (Mk3 fuselages, ~7:1 vs the 8:1
+    standard) must not lead the greedy pack, or it drags every column's
+    effective ratio down and can flip a high-dv stage infeasible even though a
+    pack of better-ratio tanks in the SAME set closes it — a strictly larger
+    kit losing a mission (bug 092, the monotonicity violation).  A real player
+    packs the best-ratio tanks first; worse-ratio tanks (down to the
+    oxidizer-drained LFO views a Nerv sees) only ever mop up remainders
+    smaller than every better tank, or serve as the covering tank.  Tiers
+    rather than raw ratios so a hairline ratio edge (the 0.3t toroid's 8.11 vs
+    the big tanks' 8.00) can't force an 800-part pack of tiny tanks: within
+    ``_TANK_RATIO_TIER_WIDTH`` the pack still prefers large tanks.
+
+    ``boundaries`` marks the tier transitions: ``_pack_stop_plan`` may stop
+    the greedy walk there and partial-fill a covering tank instead of letting
+    a worse tier mop up (consuming a worse-ratio tank is not always cheaper
+    than covering — and choosing wrongly is another way a larger kit packs
+    heavier than a smaller one)."""
     mountable = [t for t in tanks
                  if PartRole.SPINE in t.roles and t.fuel_mass > 0.0
                  and engine.size_class <= t.size_class]
     if not mountable:
-        return [], 0.0
+        return None, 0.0
     rho_star = max(_tank_ratio(t) for t in mountable)
-    floor = rho_star * (1.0 - _TANK_PACK_RATIO_TOLERANCE)
-    packable = sorted(
-        (t for t in mountable if _tank_ratio(t) >= floor),
-        key=lambda t: t.fuel_mass, reverse=True,
-    )
-    return packable, rho_star
+    tier_span = rho_star * _TANK_RATIO_TIER_WIDTH
+    def _tier(t):
+        return int((rho_star - _tank_ratio(t)) / tier_span)
+    mountable.sort(key=lambda t: (_tier(t), -t.fuel_mass))
+    boundaries = tuple(i for i in range(1, len(mountable))
+                       if _tier(mountable[i]) != _tier(mountable[i - 1]))
+    # Covering index: walk fuel-descending keeping the running lightest-dry
+    # tank (ties → smaller fuel: less over-capacity, the realistic pick), so
+    # after reversing, position i holds the best cover among fuels >= fuel_i.
+    by_fuel_desc = sorted(mountable, key=lambda t: -t.fuel_mass)
+    cov_fuels: list[float] = []
+    cov_tanks: list[FuelTank] = []
+    best = None
+    for t in by_fuel_desc:
+        if (best is None or t.dry_mass < best.dry_mass
+                or (t.dry_mass == best.dry_mass
+                    and t.fuel_mass < best.fuel_mass)):
+            best = t
+        cov_fuels.append(t.fuel_mass)
+        cov_tanks.append(best)
+    cov_fuels.reverse()
+    cov_tanks.reverse()
+    # Plain float tuples for the hot walk — dataclass attribute access in
+    # ``_pack_stop_plan`` (millions of calls/seed) measurably dominates it.
+    fuels = tuple(t.fuel_mass for t in mountable)
+    drys = tuple(t.dry_mass for t in mountable)
+    cov_drys = tuple(t.dry_mass for t in cov_tanks)
+    return (mountable, boundaries, tuple(cov_fuels), tuple(cov_tanks),
+            fuels, drys, cov_drys), rho_star
 
 
 def _merge_manifest(pack):
@@ -140,90 +192,116 @@ def _merge_manifest(pack):
                                     reverse=True))
 
 
-def _pack_columns(fuel_target, packable, cols):
+def _pack_stop_plan(per_col, pack_ctx):
+    """Choose the cheapest greedy stop point for ONE column, returning
+    ``(stop_index, col_dry, cover)``: consume ``packable[:stop_index]``
+    greedily (full tanks, in tier order), then partial-fill ``cover`` (or
+    nothing when ``cover`` is None) to the leftover.
+
+    Covering uses minimum DRY mass, not minimum fuel: partial fill makes
+    spare capacity free, so a cover's dead mass is exactly its dry mass.
+    Min-fuel was a correct proxy under uniform ratios, but with mixed ratios
+    a smaller-fuel heavier-dry tank can slip in — and because min-dry is a
+    pure min over the tank set, it is monotone in the kit (adding tanks can
+    only improve the cover) where min-fuel is not.
+
+    The greedy walk alone is not mass-minimal with mixed ratio tiers: letting
+    a worse tier mop up a remainder can cost more dry mass than stopping at
+    the tier boundary and partial-filling one better tank (a 4t ratio-7
+    adapter consumed + covered costs 1.14t dry where one ratio-8 tank
+    partial-filled costs 0.75t — the trial-60 regression).  So the stop point
+    is the min of ``consumed_dry + cover_dry`` over the option points: before
+    any consumption, at each tier boundary, and after the full walk.  A stop
+    option only counts when some tank can actually hold the leftover — the
+    end-of-walk option always can (greedy leaves the remainder below every
+    scanned tank's fuel), so a plan always exists.  Evaluating stops ONLY at
+    tier boundaries keeps this O(tiers) cover lookups per plan: within a tier
+    ratios agree to ``_TANK_RATIO_TIER_WIDTH``, so mid-tier stops can't
+    materially beat the boundary options, and the walk stays a single pass.
+    This is the optimizer's hottest leaf (millions of calls per seed): cover
+    lookups are O(log n) bisects on the precomputed index, boundary checks a
+    cursor, and the ``remaining < fuel`` test skips the float division."""
+    _, boundaries, cov_fuels, cov_tanks, fuels, drys, cov_drys = pack_ctx
+    best_i = -1
+    best_dry = float("inf")
+    best_cov = None
+    col_dry = 0.0
+    remaining = per_col
+    n = len(fuels)
+    nb = len(boundaries)
+    b = 0
+    n_cov = len(cov_fuels)
+    min_fuel = cov_fuels[0]  # sorted ascending — the smallest tank
+    i = 0
+    while True:
+        if b < nb and boundaries[b] == i:
+            b += 1
+            at_option = True
+        else:
+            at_option = i == 0 or i == n
+        # Once the leftover is below every tank's fuel, no later index can
+        # consume anything — every remaining option point sees this exact
+        # (col_dry, remaining), so evaluate it once here and stop instead of
+        # walking the (long) tail of the list.
+        exhausted = remaining < min_fuel
+        if at_option or exhausted:
+            if remaining <= 1e-12:
+                if col_dry < best_dry:
+                    best_i, best_dry, best_cov = i, col_dry, None
+                break  # fully packed; consuming more only adds dry mass
+            ci = bisect_left(cov_fuels, remaining)
+            if ci != n_cov:
+                total = col_dry + cov_drys[ci]
+                if total < best_dry:
+                    best_i, best_dry, best_cov = i, total, cov_tanks[ci]
+            if exhausted:
+                break
+        if i == n:
+            break
+        f = fuels[i]
+        if remaining >= f:
+            k = int(remaining // f)
+            col_dry += k * drys[i]
+            remaining -= k * f
+        i += 1
+    return best_i, best_dry, best_cov
+
+
+def _pack_columns(fuel_target, pack_ctx, cols):
     """Express ``fuel_target`` tonnes of fuel as the realistic tanks a player
     builds, returning ``(col, tank_dry)`` where ``col`` is ONE column's
     ``[(count, tank), ...]`` and tank_dry is the total (full) tank dry mass over
-    all ``cols`` columns.  Each column holds ``fuel_target/cols`` of fuel as full
-    near-best-ratio tanks (largest first) plus one covering tank **partial-filled**
-    to the leftover — so the packed fuel equals ``fuel_target`` exactly and the
-    only dead dry mass is the covering tank's.
+    all ``cols`` columns.  Each column holds ``fuel_target/cols`` of fuel as
+    ``_pack_stop_plan`` prescribes: full tanks in packable order (best ratio
+    first, largest within a tier) up to the chosen stop, plus one covering
+    tank **partial-filled** to the leftover — so the packed fuel equals
+    ``fuel_target`` exactly and the only dead dry mass is the covering
+    tank's.
 
     ``cols`` (>=1) is the mounting floor: a non-radial multi-engine stage beyond
     adapter capacity replicates one column per engine, guaranteeing every engine
-    has a tank to mount on.  ``packable`` must be non-empty and largest-first.
-    Allocation is kept minimal (no merged manifest, no covering list) because the
-    sizing convergence calls this per iteration; the merge happens once after."""
+    has a tank to mount on.  The column list is built only on the committed
+    winning stage; the sizing convergence uses the scalar ``_pack_dry``."""
     per_col = fuel_target / cols
+    stop_i, col_dry, cov = _pack_stop_plan(per_col, pack_ctx)
     col: list[tuple[int, FuelTank]] = []
-    col_dry = 0.0
     remaining = per_col
-    for t in packable:
-        if remaining <= 1e-12:
-            break
-        n = int(remaining // t.fuel_mass)
-        if n > 0:
-            col.append((n, t))
-            col_dry += n * t.dry_mass
-            remaining -= n * t.fuel_mass
-    if remaining > 1e-12:
-        col.append((1, _covering_tank(packable, remaining)))
-        col_dry += col[-1][1].dry_mass
+    for t in pack_ctx[0][:stop_i]:
+        k = int(remaining // t.fuel_mass)
+        if k > 0:
+            col.append((k, t))
+            remaining -= k * t.fuel_mass
+    if cov is not None:
+        col.append((1, cov))
     return col, col_dry * cols
 
 
-def _covering_tank(packable, remaining):
-    """Smallest packable tank that can hold ``remaining`` (it gets partial-filled
-    to it); the largest tank if none is big enough.  Allocation-free.  Shared by
-    ``_pack_columns`` and ``_pack_dry`` so their dry mass always agrees.
-
-    Fast path (byte-identical to the forward scan below): a covering call almost
-    always follows a FULL greedy pack, so ``remaining`` is below the smallest
-    packable tank's fuel (measured: 100% of calls).  Then every tank covers it,
-    so the answer is the smallest-fuel tank — tie-broken to the FIRST in packable
-    (largest-first) order, exactly as the scan's ``< cov_fuel`` does.  packable is
-    sorted fuel-descending, so equal-min-fuel tanks are contiguous at the end:
-    return the last element when its fuel is unique (the common case, O(1)), else
-    walk back over the tied run to its first member.  Avoids the O(len) scan that
-    dominated this hot leaf (avg ~5.5 tanks/call)."""
-    smallest = packable[-1]
-    if remaining <= smallest.fuel_mass:
-        mf = smallest.fuel_mass
-        if len(packable) == 1 or packable[-2].fuel_mass != mf:
-            return smallest                  # unique smallest fuel — the covering
-        cov = smallest                       # ties at min fuel: take first-in-order
-        for t in reversed(packable):
-            if t.fuel_mass == mf:
-                cov = t
-            else:
-                break
-        return cov
-    cov = None
-    cov_fuel = float("inf")
-    for t in packable:
-        if remaining <= t.fuel_mass < cov_fuel:
-            cov, cov_fuel = t, t.fuel_mass
-    return cov if cov is not None else packable[0]
-
-
-def _pack_dry(fuel_target, packable, cols):
+def _pack_dry(fuel_target, pack_ctx, cols):
     """Total full-tank dry mass for packing ``fuel_target`` into ``cols``
-    columns — the allocation-free scalar the sizing convergence needs, identical
-    to ``_pack_columns``'s dry (shared covering logic).  The column list and the
-    merged manifest are built once, only on the committed winning stage."""
-    per_col = fuel_target / cols
-    col_dry = 0.0
-    remaining = per_col
-    for t in packable:
-        if remaining <= 1e-12:
-            break
-        n = int(remaining // t.fuel_mass)
-        if n > 0:
-            col_dry += n * t.dry_mass
-            remaining -= n * t.fuel_mass
-    if remaining > 1e-12:
-        col_dry += _covering_tank(packable, remaining).dry_mass
-    return col_dry * cols
+    columns — the allocation-free scalar the sizing convergence needs,
+    identical to ``_pack_columns``'s dry by construction (both read the same
+    ``_pack_stop_plan``)."""
+    return _pack_stop_plan(fuel_target / cols, pack_ctx)[1] * cols
 
 
 # Fixed-point fuel sizing converges geometrically; this bounds the rare slow
@@ -232,7 +310,7 @@ _PACK_CONVERGE_ITERS = 8
 
 
 def _size_and_pack(base, R_minus_1, isp_g0, sm_df, required_dv, rho_star,
-                   packable, cols):
+                   pack_ctx, cols):
     """Size a stage's fuel to meet ``required_dv``, returning
     ``(fuel, tank_dry, actual_dv)`` or ``None`` if the tanks can't reach the dv.
     The caller builds the tank manifest from ``fuel`` only when this candidate
@@ -252,7 +330,7 @@ def _size_and_pack(base, R_minus_1, isp_g0, sm_df, required_dv, rho_star,
         return None  # best ratio still can't reach the dv
     fuel = R_minus_1 * base / denom
     for _ in range(_PACK_CONVERGE_ITERS):
-        tank_dry = _pack_dry(fuel, packable, cols)
+        tank_dry = _pack_dry(fuel, pack_ctx, cols)
         verify_dry = base + tank_dry * sm_df
         if verify_dry <= 0.0:
             return None
@@ -282,7 +360,7 @@ _PARALLEL_FUEL_GROW = 12     # 1.6x grows past the seed before declaring infeasi
 
 def _size_parallel_unit(payload, e_mass, n_eng_core, n_eng_boost,
                         dec_mass, fl_mass, n_boost, mode,
-                        required_dv, isp_g0, packable):
+                        required_dv, isp_g0, pack_ctx):
     """Size each identical column's fuel so the parallel unit (core +
     ``n_boost`` boosters) meets ``required_dv``, at minimum fuel.  Returns
     ``(col_fuel, col_tank_dry, actual_dv)`` or None if unreachable.
@@ -296,7 +374,7 @@ def _size_parallel_unit(payload, e_mass, n_eng_core, n_eng_boost,
     minimum-fuel one — the speedup comes from pruning the engine search, not
     from approximating the sizing."""
     def dv_exact(col_fuel):
-        col_dry = _pack_dry(col_fuel, packable, 1)
+        col_dry = _pack_dry(col_fuel, pack_ctx, 1)
         core_dry = n_eng_core * e_mass + col_dry
         booster_dry = n_eng_boost * e_mass + col_dry + dec_mass + fl_mass
         dv = parallel_stage_dv(isp_g0, payload, core_dry, col_fuel,
@@ -325,7 +403,7 @@ def _size_parallel_unit(payload, e_mass, n_eng_core, n_eng_boost,
             hi, dv_hi = mid, dv_mid
         else:
             lo = mid
-    col_dry = _pack_dry(hi, packable, 1)
+    col_dry = _pack_dry(hi, pack_ctx, 1)
     return hi, col_dry, dv_hi
 
 
@@ -371,6 +449,14 @@ class StageResult:
     # core), >0 = engine boosters (fire at liftoff for TWR, dropped with the
     # tank).  Disambiguates the flattened engine_count for display/build.
     booster_engines: int = 0
+    # Per-candidate control surcharges the optimizer actually charged to this
+    # winner (only ungimballed propulsion pays them).  The caller appends the
+    # matching real parts to ``equipment`` iff the flag is set, so manifest
+    # mass equals charged mass.  Presence of a wheel/fin in the KIT must never
+    # force the charge — that made capability non-monotone (bug 092 family:
+    # granting advSasModule flipped missions infeasible at the pad cap).
+    carries_attitude_module: bool = False
+    carries_aero_steering: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -641,6 +727,7 @@ def _find_optimal_parallel_stage(
     requires_throttleable: bool = False,
     require_gimbal: bool = False,
     attitude_module_mass: float = 0.0,
+    aero_steering_mass: float = 0.0,
     needs_heat_shield: bool = False,
     max_heat_shield_size: Optional[float] = None,
     heat_shields: tuple[tuple[float, float, str], ...] = (),
@@ -693,7 +780,8 @@ def _find_optimal_parallel_stage(
             if hs_name is None:
                 continue
         eng_payload = payload_mass + hs_mass + (
-            attitude_module_mass if not engine.has_gimbal else 0.0)
+            attitude_module_mass + aero_steering_mass
+            if not engine.has_gimbal else 0.0)
 
         # Cheap, exact lower bound on this engine's lightest possible parallel
         # build: payload + one engine with ZERO effective dry (the unreachable
@@ -714,8 +802,8 @@ def _find_optimal_parallel_stage(
             continue
         if engine.size_class > max(t.size_class for t in compatible):
             continue
-        packable, _rho = _packable_tanks(compatible, engine)
-        if not packable:
+        pack_ctx, _rho = _packable_tanks(compatible, engine)
+        if pack_ctx is None:
             continue
 
         for n_boost in _PARALLEL_BOOSTER_COUNTS:
@@ -733,7 +821,7 @@ def _find_optimal_parallel_stage(
                     res = _size_parallel_unit(
                         eng_payload, e_mass, n, n_be, decoupler_mass,
                         fuel_line_mass, n_boost, mode, required_dv, isp_g0,
-                        packable)
+                        pack_ctx)
                     if res is None:
                         continue
                     col_fuel, col_dry, actual_dv = res
@@ -750,7 +838,7 @@ def _find_optimal_parallel_stage(
                         if mn_twr < min_twr:
                             continue  # a phase is thrust-short → add engines
                     # Winner: flatten the identical columns into one manifest.
-                    col0, _cd = _pack_columns(col_fuel, packable, 1)
+                    col0, _cd = _pack_columns(col_fuel, pack_ctx, 1)
                     manifest = _merge_manifest(
                         [(cnt * (1 + n_boost), t) for cnt, t in col0])
                     total_eng = n + n_boost * n_be
@@ -780,6 +868,10 @@ def _find_optimal_parallel_stage(
                         heat_shield_name=hs_name,
                         n_boosters=n_boost,
                         booster_engines=n_be,
+                        carries_attitude_module=(
+                            not engine.has_gimbal and attitude_module_mass > 0.0),
+                        carries_aero_steering=(
+                            not engine.has_gimbal and aero_steering_mass > 0.0),
                     )
                     break  # found the lowest-n feasible for this config
     return best
@@ -805,6 +897,7 @@ def _find_optimal_stage_uncached(
     available_multi_mounts: Optional[list[MultiMount]] = None,
     require_gimbal: bool = False,
     attitude_module_mass: float = 0.0,  # added to payload only if chosen prop lacks gimbal
+    aero_steering_mass: float = 0.0,    # ditto: fins for atmo gravity-turn steering
     diagnostic_out: Optional[list[StageDiagnostic]] = None,
     body_name: str = "",                  # for diagnostic reporting only
     launch_pad_mass_cap: float = float("inf"),  # for MASS_CAP_EXCEEDED diagnostic
@@ -947,16 +1040,19 @@ def _find_optimal_stage_uncached(
             _diag_engines_throttle_blocked += 1
             continue
 
-        # Per-candidate attitude module charge. When the caller passes a
-        # non-zero `attitude_module_mass`, this stage needs an on-stage
-        # attitude-control source. Gimballed engines provide it for free;
-        # ungimballed engines must carry the lightest reaction-wheel / RCS
-        # bundle the caller selected. Adding it only to ungimballed
-        # candidates lets the optimizer trade "ungimballed + module" against
-        # "gimballed alone" inside the same search loop.
+        # Per-candidate control surcharges. When the caller passes a non-zero
+        # `attitude_module_mass` (this stage needs an on-stage attitude
+        # source) or `aero_steering_mass` (atmospheric gravity-turn steering
+        # via fins), gimballed engines provide the control for free and
+        # ungimballed engines must carry the real parts the caller selected.
+        # Adding them only to ungimballed candidates lets the optimizer trade
+        # "ungimballed + parts" against "gimballed alone" inside the same
+        # search loop — presence of the parts in the kit never forces the
+        # charge (bug 092: a mandated charge makes capability non-monotone).
         hs_mass_e, hs_name_e = _hs_for(engine.size_class) if needs_heat_shield else (0.0, None)
         eng_payload = full_payload + hs_mass_e + (
-            attitude_module_mass if not engine.has_gimbal else 0.0
+            attitude_module_mass + aero_steering_mass
+            if not engine.has_gimbal else 0.0
         )
 
         e_mass = engine.mass
@@ -1019,20 +1115,21 @@ def _find_optimal_stage_uncached(
         if cached is None:
             cached = _packable_tanks(compatible_tanks, engine)
             _packable_cache[_pk_key] = cached
-        packable, rho_star = cached
-        if not packable:
+        pack_ctx, rho_star = cached
+        if pack_ctx is None:
             _diag_engines_no_tank += 1
             continue
         if has_twr and twr_eng_denom <= 0:
             continue  # engine can't even lift its own weight at this TWR
 
-        # Adapter capacity for this engine (largest mountable tank = most
+        # Adapter capacity for this engine (widest mountable tank = most
         # permissive plate).  Non-radial stack engines beyond it each need their
         # own tank column.
-        _akey = (e_size, packable[0].size_class)
+        _widest_tank_size = max(t.size_class for t in pack_ctx[0])
+        _akey = (e_size, _widest_tank_size)
         adapter_max = _adapter_cache.get(_akey)
         if adapter_max is None:
-            adapter_max = _adapter_max_engines(e_size, packable[0].size_class, _mounts)
+            adapter_max = _adapter_max_engines(e_size, _widest_tank_size, _mounts)
             _adapter_cache[_akey] = adapter_max
         if engine.radial_mountable:
             max_eng_base = _max_radial
@@ -1074,7 +1171,7 @@ def _find_optimal_stage_uncached(
                 cols = (n_eng if (use_radial_tank_constraint and n_eng > 1
                                   and n_eng > adapter_max) else 1)
                 res = _size_and_pack(base, R_minus_1, isp_g0, sm_df,
-                                     required_dv, rho_star, packable, cols)
+                                     required_dv, rho_star, pack_ctx, cols)
                 if res is None:
                     continue
                 m_fuel, m_tank_dry, actual_dv = res
@@ -1087,7 +1184,7 @@ def _find_optimal_stage_uncached(
                 # and dv stay consistent.  Normal stacks (engine >= tank) are
                 # unchanged — the wider-tank branch simply doesn't trigger.
                 if needs_heat_shield and hs_name_e is not None:
-                    _col0, _ = _pack_columns(m_fuel, packable, cols)
+                    _col0, _ = _pack_columns(m_fuel, pack_ctx, cols)
                     _wid = max((t.size_class for _n, t in _col0), default=0.0)
                     r_mass, r_name = _hs_for(_wid)
                     if r_name is None:
@@ -1095,7 +1192,8 @@ def _find_optimal_stage_uncached(
                     if r_mass > hs_mass_e:
                         base = base + (r_mass - hs_mass_e)
                         res = _size_and_pack(base, R_minus_1, isp_g0, sm_df,
-                                             required_dv, rho_star, packable, cols)
+                                             required_dv, rho_star, pack_ctx,
+                                             cols)
                         if res is None:
                             continue
                         m_fuel, m_tank_dry, actual_dv = res
@@ -1122,7 +1220,7 @@ def _find_optimal_stage_uncached(
                 # Build the manifest only now, on the committed winner — its dry
                 # mass equals m_tank_dry (shared covering logic), so mass and
                 # parts stay one consistent build.
-                _col, _ = _pack_columns(m_fuel, packable, cols)
+                _col, _ = _pack_columns(m_fuel, pack_ctx, cols)
                 manifest = _merge_manifest([(n * cols, t) for n, t in _col])
                 best = StageResult(
                     delta_v=actual_dv,
@@ -1137,6 +1235,10 @@ def _find_optimal_stage_uncached(
                     engine_name=engine.name,
                     tank_manifest=manifest,
                     heat_shield_name=stage_hs_name,
+                    carries_attitude_module=(
+                        not engine.has_gimbal and attitude_module_mass > 0.0),
+                    carries_aero_steering=(
+                        not engine.has_gimbal and aero_steering_mass > 0.0),
                 )
                 best_wet = m_wet
                 break  # lightest TWR-passing count for this engine
@@ -1173,10 +1275,11 @@ def _find_optimal_stage_uncached(
             continue
         srb_thrust = (srb.atm_thrust if in_atmosphere else srb.vac_thrust)
 
-        # Per-candidate attitude module charge (see engine loop above).
+        # Per-candidate control surcharges (see engine loop above).
         hs_mass_s, hs_name_s = _hs_for(srb.size_class) if needs_heat_shield else (0.0, None)
         srb_payload = full_payload + hs_mass_s + (
-            attitude_module_mass if not srb.has_gimbal else 0.0
+            attitude_module_mass + aero_steering_mass
+            if not srb.has_gimbal else 0.0
         )
 
         srb_counts = range(1, max_srb + 1)
@@ -1213,6 +1316,10 @@ def _find_optimal_stage_uncached(
                     # SRB is an integral engine+tank unit — no tanks to pack.
                     tank_manifest=(),
                     heat_shield_name=hs_name_s,
+                    carries_attitude_module=(
+                        not srb.has_gimbal and attitude_module_mass > 0.0),
+                    carries_aero_steering=(
+                        not srb.has_gimbal and aero_steering_mass > 0.0),
                 )
                 best_wet = m_wet
             break  # found minimum SRB count, no need to try more
@@ -1246,6 +1353,7 @@ def _find_optimal_stage_uncached(
             requires_throttleable=requires_throttleable,
             require_gimbal=require_gimbal,
             attitude_module_mass=attitude_module_mass,
+            aero_steering_mass=aero_steering_mass,
             needs_heat_shield=needs_heat_shield,
             max_heat_shield_size=max_heat_shield_size,
             heat_shields=heat_shields,
@@ -1555,6 +1663,7 @@ def find_optimal_multistage_ascent(
     srb_needs_rcs: bool = True,
     player_has_rcs: bool = False,
     attitude_module_mass: float = 0.0,
+    aero_steering_mass: float = 0.0,
     body_name: str = "",
     launch_pad_mass_cap: float = float("inf"),
     atm_scale_height_m: float = 0.0,
@@ -1654,7 +1763,11 @@ def find_optimal_multistage_ascent(
                     tanks_by_fuel_type=tanks_by_fuel_type,
                     available_multi_mounts=available_multi_mounts,
                     require_gimbal=require_gimbal and stage_in_atm,
+                    # The wheel/RCS bundle rides the TOP stage (it serves the
+                    # whole flight); fins matter on the sub-stages that fly
+                    # through atmosphere.
                     attitude_module_mass=attitude_module_mass if i == K - 1 else 0.0,
+                    aero_steering_mass=aero_steering_mass if stage_in_atm else 0.0,
                     body_name=body_name,
                     launch_pad_mass_cap=launch_pad_mass_cap,
                     atm_scale_height_m=atm_scale_height_m if stage_in_atm else 0.0,

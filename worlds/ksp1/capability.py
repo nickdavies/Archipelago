@@ -79,11 +79,16 @@ CAPABILITY_ITEMS: frozenset[str] = frozenset(
     # Curated-building progressives (buildings_in_logic).  When the option is
     # OFF these items are never in the pool, so their count is always 0 and
     # they never enter the fingerprint — a no-op.  When ON, their counts must
-    # be tracked so the cache distinguishes e.g. VAB=0 vs VAB=2.  (Tracking
-    # Station is included for completeness even though its effect is deferred.)
+    # be tracked so the cache distinguishes e.g. VAB=0 vs VAB=2.  EVERY
+    # building with a capability effect must be here: Mission Control was
+    # missing after the navigation gate gave it one (maneuver nodes), so two
+    # states differing only in MC shared a fingerprint and the capability
+    # cached at MC=0 (navigation blocked) was reused after MC was collected —
+    # stranding every interplanetary mission in the strict post_fill sweep.
     "Progressive VAB",
     "Progressive Tracking Station",
     "Progressive Astronaut Complex",
+    "Progressive Mission Control",
 }
 
 # Terminal velocity threshold for parachute adequacy (m/s)
@@ -1516,25 +1521,28 @@ def _evaluate_profile(
     extra_payload_mass = sum(p.mass for p in extra_payload_parts)
     payload = terminal_mass + terminal_equip + extra_payload_mass
 
-    # Global attitude strategy. One reaction wheel or RCS bundle covers
-    # every stage that flies under it: place it on the *last* (highest
-    # flight-order index) stage whose edges require attitude control. That
-    # stage's wet mass propagates downward as payload, so earlier stages
-    # automatically carry the wheel. Stages *above* that point (e.g. a
-    # passive aero-capture reentry) don't pay for it.
-    attitude_group_indices = [
-        i for i, g in enumerate(groups)
-        if any(e.requires_attitude_control for e in g)
-    ]
+    # Global attitude strategy.  Every stage whose edges require attitude
+    # control must have an on-stage source: a gimballed engine/SRB (free) or
+    # the lightest wheel/RCS bundle (its real mass).  The bundle is an
+    # optimizer OPTION, never a mandate: ``attitude_module_mass`` charges it
+    # per candidate inside ``find_optimal_stage`` (gimballed candidates fly
+    # free, ungimballed carry the bundle), so owning a wheel can only widen
+    # the candidate set.  The old shape — flat-charging the bundle onto the
+    # last attitude stage whenever one existed in the kit — made the model
+    # non-monotone (bug 092 family): granting advSasModule added mandatory
+    # mass that a gimballed build never needed, flipping missions infeasible
+    # at the launch-pad mass cap.  A terminal pod with built-in wheels covers
+    # the whole flight (it rides at the top of every stage's stack).
+    attitude_has_any = any(
+        any(e.requires_attitude_control for e in g) for g in groups
+    )
     global_attitude_bundle: Optional[AttitudeBundle] = None
-    global_attitude_stage_idx: int = -1   # flight-order index of placement
     global_attitude_force_gimbal: bool = False
-    if _PER_STAGE_ATTITUDE_ENABLED and attitude_group_indices:
-        if not _terminal_has_built_in_wheels(flags, is_crewed):
+    attitude_covered_by_terminal = _terminal_has_built_in_wheels(flags, is_crewed)
+    if _PER_STAGE_ATTITUDE_ENABLED and attitude_has_any:
+        if not attitude_covered_by_terminal:
             global_attitude_bundle = _attitude_bundle_for_stage(flags, is_crewed)
-            if global_attitude_bundle is not None:
-                global_attitude_stage_idx = attitude_group_indices[-1]
-            else:
+            if global_attitude_bundle is None:
                 # No wheel/RCS source anywhere — every attitude-requiring stage
                 # must pick a gimballed engine/SRB to self-provide control.
                 global_attitude_force_gimbal = True
@@ -1610,51 +1618,44 @@ def _evaluate_profile(
                 (hs.size_class, hs.mass, hs.name) for hs in flags.available_heat_shields
             ))
 
-        # Heat-shield options the optimizer may charge (per-engine lightest
-        # covering shield).  Empty when this stage needs no shield.
-        heat_shields_arg: tuple[tuple[float, float, str], ...] = ()
-        if needs_hs and flags.available_heat_shields:
-            heat_shields_arg = tuple(sorted(
-                (hs.size_class, hs.mass, hs.name) for hs in flags.available_heat_shields
-            ))
-
         # Atmospheric-ascent gate: steering a gravity turn in atmosphere
         # requires either a gimballed engine or actuated aero surfaces.
         # Reaction wheels/RCS are not enough.  When no aero surface is
-        # available we force the optimizer to pick a gimbal engine.
-        # When aero surfaces ARE available, include 4x the lightest
-        # surface's mass (min. needed for control on all axes) in the
-        # stage payload so the optimizer accounts for it.
+        # available we force the optimizer to pick a gimbal engine.  When
+        # aero surfaces ARE available, 4x the lightest surface (min. needed
+        # for control on all axes) is charged per candidate to UNGIMBALLED
+        # propulsion only (``aero_steering_mass``) — a gimballed build never
+        # pays for fins it doesn't need, so owning fins can't make a mission
+        # infeasible (bug 092 family).
         has_atmo_ascent_in_group = any(
             e.edge_type == ET.ATMOSPHERIC_ASCENT for e in group
         )
         needs_gimbal_engine = (
             has_atmo_ascent_in_group and not flags.has_aero_control_surface
         )
+        stage_aero_mass = 0.0
+        if has_atmo_ascent_in_group and flags.lightest_aero_control:
+            stage_aero_mass = 4.0 * flags.lightest_aero_control.mass
         # Landing legs (equip_mass) are charged whenever a stage needs them,
         # independent of the heat shield.  The pre-refactor code routed
         # equip_mass through ``heat_shield_mass`` and zeroed it when the stage
         # needed no shield, silently dropping leg mass on powered (no-shield)
         # vacuum-body landings — an anti-conservative under-charge.
         stage_payload = payload + equip_mass
-        if has_atmo_ascent_in_group and flags.lightest_aero_control:
-            stage_payload += 4.0 * flags.lightest_aero_control.mass
-            stage_equipment.append((4, flags.lightest_aero_control.name))
-        # Place the attitude bundle on the highest-flight-index stage that
-        # needs attitude. Its wet mass cascades down to earlier stages, so
-        # every prior stage carries it for free.
-        if (global_attitude_bundle is not None
-                and flight_idx == global_attitude_stage_idx):
-            stage_payload += global_attitude_bundle.mass
-            stage_equipment.extend(global_attitude_bundle.parts)
-
-        # Attitude control. The terminal-stage bundle (if any) is already
-        # priced into the payload, so this stage already carries it. If no
-        # bundle is available anywhere on the rocket and the group needs
-        # attitude control, the stage must self-provide via a gimballed
-        # engine/SRB. Atmospheric ascent stages have their own gimbal-or-aero
-        # gate above (separate concern from attitude bundling).
-        group_needs_attitude = any(e.requires_attitude_control for e in group)
+        # Attitude control for this group.  If a wheel/RCS bundle exists, the
+        # optimizer trades "gimballed alone" against "ungimballed + bundle"
+        # per candidate (``attitude_module_mass``); the bundle parts land on
+        # the manifest below only when an ungimballed choice actually won.
+        # If no bundle is available anywhere on the rocket, the stage must
+        # self-provide via a gimballed engine/SRB.  Atmospheric ascent stages
+        # have their own gimbal-or-aero gate above (separate concern).
+        group_needs_attitude = (any(e.requires_attitude_control for e in group)
+                                and not attitude_covered_by_terminal)
+        stage_attitude_mass = (
+            global_attitude_bundle.mass
+            if (group_needs_attitude and global_attitude_bundle is not None)
+            else 0.0
+        )
         if (global_attitude_force_gimbal
                 and group_needs_attitude
                 and not needs_gimbal_engine):
@@ -1761,6 +1762,8 @@ def _evaluate_profile(
             tanks_by_fuel_type=flags.tanks_by_fuel_type,
             available_multi_mounts=flags.available_multi_mounts,
             require_gimbal=needs_gimbal_engine,
+            attitude_module_mass=stage_attitude_mass,
+            aero_steering_mass=stage_aero_mass,
             diagnostic_out=diagnostic_out,
             body_name=body.name,
             launch_pad_mass_cap=flags.launch_pad_mass_cap,
@@ -1799,12 +1802,8 @@ def _evaluate_profile(
                 require_gimbal=needs_gimbal_engine,
                 srb_needs_rcs=diff.srb_needs_rcs,
                 player_has_rcs=flags.has_rcs,
-                attitude_module_mass=(
-                    global_attitude_bundle.mass
-                    if (global_attitude_bundle is not None
-                        and flight_idx == global_attitude_stage_idx)
-                    else 0.0
-                ),
+                attitude_module_mass=stage_attitude_mass,
+                aero_steering_mass=stage_aero_mass,
                 body_name=body.name,
                 launch_pad_mass_cap=flags.launch_pad_mass_cap,
                 atm_scale_height_m=body.atm_scale_height_m,
@@ -1828,9 +1827,20 @@ def _evaluate_profile(
                     dv_needed=req_dv,
                     stage_diag=stage_diag,
                 )], partial_stages=partial)
-            # Bottom stage carries the group-level equipment (aero surfaces,
-            # ladder, etc.) for the multi-stage ascent.
+            # Bottom stage carries the group-level equipment (ladder etc.)
+            # for the multi-stage ascent.
             multistage[0].equipment = stage_equipment + multistage[0].equipment
+            # Control surcharges were applied per candidate inside the
+            # optimizer; the parts land on exactly the sub-stages whose
+            # winning propulsion paid for them (manifest mass == charged
+            # mass).
+            for sr in multistage:
+                if sr.carries_attitude_module:
+                    sr.equipment = (sr.equipment
+                                    + list(global_attitude_bundle.parts))
+                if sr.carries_aero_steering:
+                    sr.equipment = (sr.equipment
+                                    + [(4, flags.lightest_aero_control.name)])
             # Append top-to-bottom so the outer loop's reverse-chronological
             # ordering produces bottom-first launch-to-orbit after final
             # reversal at the ProfileResult assembly.
@@ -1877,6 +1887,12 @@ def _evaluate_profile(
         # (a parallel build's radial decouplers + fuel lines), else they're
         # lost from both the displayed build and the kit/gating.
         result.equipment = stage_equipment + result.equipment
+        # Control surcharges: on the manifest only when the winning propulsion
+        # paid for them — the optimizer charged exactly those candidates.
+        if result.carries_attitude_module:
+            result.equipment = result.equipment + list(global_attitude_bundle.parts)
+        if result.carries_aero_steering:
+            result.equipment = result.equipment + [(4, flags.lightest_aero_control.name)]
         stage_results_list.append(result)
         stage_group_list.append(flight_idx)
         # The stage's wet mass becomes the payload for the next stage back

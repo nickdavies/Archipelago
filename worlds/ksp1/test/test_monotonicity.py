@@ -41,15 +41,23 @@ GAME = "Kerbal Space Program 1"
 # — guards the counted-progressive cycle.  flag_every_body/kerbin gives broad
 # body/mission coverage.
 _CONFIGS = [
-    ("complete_tech_tree", "kerbin", "findable", 10655457994218381434),
-    ("duna_return", "kerbin", "count", 10727693526395107800),
-    ("flag_every_body", "kerbin", "findable", 0xDEADBEEF),
+    ("complete_tech_tree", "kerbin", "findable", 10655457994218381434, {}),
+    ("duna_return", "kerbin", "count", 10727693526395107800, {}),
+    ("flag_every_body", "kerbin", "findable", 0xDEADBEEF, {}),
+    # Bug 092's deadlock seed: mid-sweep the real-rules cross-check collected
+    # mk3FuselageLFO.50, whose largest-first pack poisoning lost Eve return
+    # (a strictly larger kit losing a mission) → strand → fallback re-fill.
+    # Guards the tank-pack monotonicity fix end to end.
+    ("duna_return", "kerbin", "count", 17074417405164113416,
+     {"buildings_in_logic": 1}),
 ]
 
 
-def _build_and_fill(goal: str, home: str, mode: str, seed: int):
+def _build_and_fill(goal: str, home: str, mode: str, seed: int,
+                    extra_opts: dict | None = None):
     opts = {"goal": goal, "starting_body": home, "difficulty": "normal",
             "accessibility": "minimal", "goal_contract_mode": mode}
+    opts.update(extra_opts or {})
     mw = MultiWorld(1)
     mw.game[1] = GAME
     mw.player_name = {1: "Tester"}
@@ -65,15 +73,25 @@ def _build_and_fill(goal: str, home: str, mode: str, seed: int):
     for step in gen_steps:  # includes pre_fill -> apply_sphere_ladder
         AutoWorld.call_all(mw, step)
     distribute_items_restrictive(mw)
+    # Run the real post_fill cross-check so ``_strict_ladder_fell_back``
+    # reflects a genuine divergence (gen_steps stops at pre_fill).
+    AutoWorld.call_all(mw, "post_fill")
     return mw
 
 
 class TestCapabilityCrossCheck:
     """Build + fill, then assert the seed is beatable under REAL capability."""
 
-    def _check(self, goal, home, mode, seed):
-        mw = _build_and_fill(goal, home, mode, seed)
+    def _check(self, goal, home, mode, seed, extra_opts=None):
+        mw = _build_and_fill(goal, home, mode, seed, extra_opts)
         world = mw.worlds[1]
+        # The post_fill cross-check must not have needed the whole-seed
+        # re-fill rescue: a fallback on these fixed seeds is a cheap-bracket
+        # vs capability divergence (bug 092 class) even though the rescue
+        # makes the seed solvable.
+        assert not getattr(world, "_strict_ladder_fell_back", False), (
+            f"{goal}/{home}/{mode} seed={seed}: strict-ladder fallback fired "
+            "(cheap-bracket vs capability divergence)")
         saved = getattr(world, "_strict_ladder_saved_rules", None) or {}
         assert saved, "expected strict-ladder saved capability rules"
         # Swap the cheap bracket rules for the real capability rules and verify
@@ -94,3 +112,6 @@ class TestCapabilityCrossCheck:
 
     def test_flag_every_body_kerbin(self):
         self._check(*_CONFIGS[2])
+
+    def test_bug_092_duna_return_buildings(self):
+        self._check(*_CONFIGS[3])

@@ -1707,5 +1707,82 @@ class TestPowerChargeMonotonic(unittest.TestCase):
             "an rtg-required leg must force an RTG, not the lighter fixed solar")
 
 
+class TestCapabilityFingerprintCompleteness(unittest.TestCase):
+    """Every item that can change capability MUST be in CAPABILITY_ITEMS.
+
+    The L2 capability cache is keyed by a fingerprint over CAPABILITY_ITEMS;
+    an item missing from the set makes two different kits share a cache
+    entry.  Progressive Mission Control was missing after the navigation
+    gate gave it an effect — the capability cached at MC=0 (no navigation)
+    was reused after MC was collected, stranding every interplanetary
+    mission in the strict post_fill sweep.
+    """
+
+    def test_every_curated_building_item_is_fingerprinted(self) -> None:
+        from worlds.ksp1.capability import CAPABILITY_ITEMS
+        from worlds.ksp1.items import _building_to_item_name
+        missing = set(_building_to_item_name().values()) - CAPABILITY_ITEMS
+        self.assertFalse(
+            missing,
+            f"building items absent from CAPABILITY_ITEMS: {sorted(missing)} — "
+            "their counts won't enter the capability-cache fingerprint, so "
+            "collecting them silently fails to refresh capability")
+
+
+class TestControlSurchargeMonotonicity(unittest.TestCase):
+    """Owning a control part must never lose a mission (bug 092 family).
+
+    The wheel/RCS attitude bundle and the aero-steering fins are per-candidate
+    surcharges: gimballed propulsion provides the control for free, ungimballed
+    candidates carry the real parts.  The old presence-mandated flat charge
+    made capability non-monotone — granting advSasModule (or basicFin) added
+    mass a gimballed build never needed and flipped missions infeasible at the
+    launch-pad mass cap (the strict-sweep strands behind bug 092's deadlock).
+    """
+
+    def _base_flags(self) -> EquipmentFlags:
+        return _make_flags(
+            engines=[_SWIVEL, _MAINSAIL],
+            tanks=[_FL_T400, _FL_T800, _X200_32],
+            probe_core=True, solar=True,
+            launch_clamp=True, staging_tier=1,
+        )
+
+    def _orbit(self, flags):
+        from worlds.ksp1.capability import evaluate_mission_detailed
+        return evaluate_mission_detailed(
+            flags, _normal_diff(), BodyName.KERBIN, MissionType.ORBIT,
+            False, MISSION_BUILDER)
+
+    def test_owning_a_reaction_wheel_never_costs_mass(self) -> None:
+        base = self._orbit(self._base_flags())
+        self.assertTrue(base.feasible)
+        flags = self._base_flags()
+        flags.has_reaction_wheels = True
+        flags.lightest_reaction_wheel = _REACTION_WHEEL
+        with_wheel = self._orbit(flags)
+        self.assertTrue(with_wheel.feasible,
+                        "granting a reaction wheel lost Kerbin orbit")
+        self.assertLessEqual(
+            with_wheel.launch_mass, base.launch_mass * 1.0001,
+            "granting a reaction wheel made the orbit build heavier — the "
+            "bundle must be a per-candidate option, never a mandated charge")
+
+    def test_owning_fins_never_costs_mass(self) -> None:
+        base = self._orbit(self._base_flags())
+        self.assertTrue(base.feasible)
+        flags = self._base_flags()
+        flags.has_aero_control_surface = True
+        flags.available_aero_controls.append(_BASIC_FIN)
+        flags.lightest_aero_control = _BASIC_FIN
+        with_fins = self._orbit(flags)
+        self.assertTrue(with_fins.feasible,
+                        "granting fins lost Kerbin orbit")
+        self.assertLessEqual(
+            with_fins.launch_mass, base.launch_mass * 1.0001,
+            "granting fins made the orbit build heavier — aero steering must "
+            "be a per-candidate option, never a mandated charge")
+
+
 if __name__ == "__main__":
     unittest.main()

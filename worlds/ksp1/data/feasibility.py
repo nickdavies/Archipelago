@@ -37,7 +37,7 @@ MODEL_INFEASIBLE_LOCATIONS_BY_DIFFICULTY: dict[str, dict[BodyName, frozenset[str
         BodyName.MOHO: frozenset({'Eve Return 1', 'Eve Return 2', 'Eve Return 3', 'Eve Sample Return 1', 'Eve Sample Return 2', 'Eve Sample Return 3', 'Laythe Return 1', 'Laythe Return 2', 'Laythe Return 3', 'Laythe Sample Return 1', 'Laythe Sample Return 2', 'Laythe Sample Return 3'}),
         BodyName.MUN: frozenset({'Eve Return 1', 'Eve Return 2', 'Eve Return 3', 'Eve Sample Return 1', 'Eve Sample Return 2', 'Eve Sample Return 3'}),
         BodyName.POL: frozenset({'Eve Return 1', 'Eve Return 2', 'Eve Return 3', 'Eve Sample Return 1', 'Eve Sample Return 2', 'Eve Sample Return 3'}),
-        BodyName.TYLO: frozenset({'Eve Return 1', 'Eve Return 2', 'Eve Return 3', 'Eve Sample Return 1', 'Eve Sample Return 2', 'Eve Sample Return 3', 'Kerbin Return 1', 'Kerbin Return 2', 'Kerbin Return 3', 'Kerbin Sample Return 1', 'Kerbin Sample Return 2', 'Kerbin Sample Return 3', 'Moho Return 1', 'Moho Return 2', 'Moho Return 3', 'Moho Sample Return 1', 'Moho Sample Return 2', 'Moho Sample Return 3'}),
+        BodyName.TYLO: frozenset({'Eve Return 1', 'Eve Return 2', 'Eve Return 3', 'Eve Sample Return 1', 'Eve Sample Return 2', 'Eve Sample Return 3', 'Kerbin Sample Return 1', 'Kerbin Sample Return 2', 'Kerbin Sample Return 3', 'Moho Return 1', 'Moho Return 2', 'Moho Return 3', 'Moho Sample Return 1', 'Moho Sample Return 2', 'Moho Sample Return 3'}),
         BodyName.VALL: frozenset({'Eve Return 1', 'Eve Return 2', 'Eve Return 3', 'Eve Sample Return 1', 'Eve Sample Return 2', 'Eve Sample Return 3'}),
     },
     'comfortable': {

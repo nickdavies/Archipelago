@@ -2,6 +2,7 @@
 Unit tests for rocket_math.py — pure function tests with no world state.
 """
 import math
+import random
 import unittest
 
 from worlds.ksp1.parts import (
@@ -571,6 +572,134 @@ class TestFindOptimalStageCacheStructuralGuard(unittest.TestCase):
         keyed = {entry[1] for entry in rocket_math._FOS_KEY_SPEC}
         excluded = rocket_math._FOS_EXCLUDED_PARAMS
         self.assertEqual(sig_names, keyed | excluded)
+
+
+class TestStageMonotonicity(unittest.TestCase):
+    """A strictly larger part set must never lose a stage (bug 092).
+
+    ``find_optimal_stage`` is the physics floor for every access rule; if
+    adding a part can flip a stage from feasible to infeasible, capability
+    access is non-monotone along the sphere ladder — which the sphere-ladder
+    funding pass and the strict post_fill sweep both assume never happens.
+    Perfect monotonicity is unattainable in a quantized pack model (integer
+    tanks + finite types), so these tests pin the two real trigger families
+    found so far and randomly probe for new ones with a fixed RNG (failures
+    are deterministic regressions, not flakes)."""
+
+    # The exact constraint set of the Eve-ascent group (dv=9315) from the
+    # bug-092 deadlock seed 17074417405164113416 (duna_return/kerbin,
+    # buildings_in_logic).  With the pre-fix largest-first tank pack, adding
+    # mk3FuselageLFO.50 (25t fuel at ratio 7.0 vs the 8.0 standard) poisoned
+    # every column of the SSME asparagus build and lost the mission.
+    _EVE_ASCENT = dict(
+        required_dv=9315.0,
+        payload_mass=0.538,
+        gravity=16.7,
+        min_twr=1.5,
+        requires_throttleable=True,
+        in_atmosphere=True,
+        atm_scale_height_m=7000.0,
+        atm_top_m=90000.0,
+        parallel_mode="asparagus",
+        radial_decoupler_mass=0.025,
+        radial_decoupler_name="radialDecoupler",
+        fuel_line_mass=0.05,
+        fuel_line_name="fuelLine",
+        player_has_rcs=True,
+    )
+
+    def test_bug_092_mk3_tank_must_not_poison_the_pack(self) -> None:
+        ssme = _p("SSME")
+        small_kit = [_p("Size3SmallTank"), _p("Rockomax16.BW"),
+                     _p("Size1p5.Size0.Adapter.01"), _p("externalTankToroid")]
+        big_kit = small_kit + [_p("mk3FuselageLFO.50")]
+        base = find_optimal_stage(
+            available_engines=[ssme], available_srbs=[],
+            available_tanks=small_kit, **self._EVE_ASCENT)
+        self.assertIsNotNone(base, "sans-mk3 Eve ascent must build (repro guard)")
+        assert base is not None
+        bigger = find_optimal_stage(
+            available_engines=[ssme], available_srbs=[],
+            available_tanks=big_kit, **self._EVE_ASCENT)
+        self.assertIsNotNone(
+            bigger, "adding mk3FuselageLFO.50 lost the Eve ascent (bug 092)")
+        assert bigger is not None
+        self.assertLessEqual(bigger.stage_mass_wet, base.stage_mass_wet * 1.001)
+
+    def test_better_ratio_tank_must_not_evict_others(self) -> None:
+        # The old rho_star*(1-0.15) eligibility floor: granting RCSTank1-2
+        # (ratio 7.5) evicted every other monoprop tank (6.0/5.5/4.0) from
+        # the packable set.  Eligibility must be per-tank, never relative to
+        # the best tank in the kit.
+        from worlds.ksp1.rocket_math import _packable_tanks
+        puff = next(e for pl in PART_DB.values() for e in pl
+                    if isinstance(e, Engine) and e.fuel_type == "monoprop")
+        small = [_p("rcsTankMini"), _p("RCSFuelTank")]
+        ctx_small, _ = _packable_tanks(small, puff)
+        ctx_big, _ = _packable_tanks(small + [_p("RCSTank1-2")], puff)
+        self.assertTrue(set(t.name for t in ctx_small[0])
+                        <= set(t.name for t in ctx_big[0]),
+                        "adding a tank removed others from the packable set")
+
+    def test_random_superset_never_loses_a_stage(self) -> None:
+        rng = random.Random(920925)
+        engines = [e for pl in PART_DB.values() for e in pl
+                   if isinstance(e, Engine)]
+        tanks = [t for pl in PART_DB.values() for t in pl
+                 if isinstance(t, FuelTank)]
+        feasible_bases = 0
+        for trial in range(120):
+            constraints = dict(
+                required_dv=rng.choice([1200.0, 3400.0, 5600.0, 8000.0, 9315.0]),
+                payload_mass=rng.choice([0.5, 2.0, 8.0]),
+                gravity=rng.choice([1.0, 3.5, 9.81, 16.7]),
+                min_twr=rng.choice([0.0, 1.2, 1.5]),
+                in_atmosphere=rng.random() < 0.5,
+                atm_scale_height_m=5600.0,
+                atm_top_m=70000.0,
+                parallel_mode=rng.choice(["none", "asparagus"]),
+                radial_decoupler_mass=0.025,
+                radial_decoupler_name="radialDecoupler",
+                fuel_line_mass=0.05,
+                fuel_line_name="fuelLine",
+                requires_throttleable=rng.random() < 0.5,
+                player_has_rcs=True,
+            )
+            eng_subset = rng.sample(engines, rng.randint(2, 8))
+            tank_subset = rng.sample(tanks, rng.randint(3, 12))
+            base = find_optimal_stage(
+                available_engines=eng_subset, available_srbs=[],
+                available_tanks=tank_subset, **constraints)
+            extra = rng.sample([t for t in tanks if t not in tank_subset],
+                               rng.randint(1, 3))
+            bigger = find_optimal_stage(
+                available_engines=eng_subset, available_srbs=[],
+                available_tanks=tank_subset + extra, **constraints)
+            if base is None:
+                continue
+            feasible_bases += 1
+            self.assertIsNotNone(bigger, (
+                f"trial {trial}: adding {[t.name for t in extra]} lost the "
+                f"stage (constraints={constraints}, "
+                f"tanks={[t.name for t in tank_subset]}, "
+                f"engines={[e.name for e in eng_subset]})"))
+            assert bigger is not None
+            # Mass bound: intra-tier pack quantization (a same-ratio tank of
+            # a non-commensurate size leading the greedy pack leaves a
+            # fractional remainder whose cover dead-dry compounds through the
+            # rocket equation) wobbles up to ~7% at extreme dv — measured 0
+            # feasibility flips over 1500 sampled pairs.  10% still catches
+            # the cross-tier poisoning class (bug 092's mk3 pack was +43%).
+            self.assertLessEqual(bigger.stage_mass_wet,
+                                 base.stage_mass_wet * 1.10, (
+                f"trial {trial}: adding {[t.name for t in extra]} made the "
+                f"stage >10% heavier ({base.stage_mass_wet:.3f} -> "
+                f"{bigger.stage_mass_wet:.3f}t): a poisoned pack "
+                f"(constraints={constraints}, "
+                f"tanks={[t.name for t in tank_subset]})"))
+        # Guard against vacuity: a broken sampler that never builds a stage
+        # would pass every assertion above.
+        self.assertGreaterEqual(feasible_bases, 20)
 
 
 if __name__ == "__main__":
