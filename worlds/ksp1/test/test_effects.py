@@ -187,16 +187,16 @@ class TestCapabilityLayer(unittest.TestCase):
 
     def test_samples_at_rd_threshold(self):
         from ..effects import (
-            Building, Capability, RD_FACILITY_SAMPLES_COUNT, buildings_for_capability,
+            Building, Capability, RD_SAMPLES_COUNT, buildings_for_capability,
         )
-        below = self._caps({Building.RESEARCH_AND_DEVELOPMENT: RD_FACILITY_SAMPLES_COUNT - 1})
-        at = self._caps({Building.RESEARCH_AND_DEVELOPMENT: RD_FACILITY_SAMPLES_COUNT})
+        below = self._caps({Building.RESEARCH_AND_DEVELOPMENT: RD_SAMPLES_COUNT - 1})
+        at = self._caps({Building.RESEARCH_AND_DEVELOPMENT: RD_SAMPLES_COUNT})
         self.assertFalse(below[Capability.CAN_COLLECT_SAMPLES])
         self.assertTrue(at[Capability.CAN_COLLECT_SAMPLES])
         self.assertEqual(
             buildings_for_capability(Capability.CAN_COLLECT_SAMPLES,
                                      local_needs_conics=True, local_needs_nodes=True),
-            ((Building.RESEARCH_AND_DEVELOPMENT, RD_FACILITY_SAMPLES_COUNT),))
+            ((Building.RESEARCH_AND_DEVELOPMENT, RD_SAMPLES_COUNT),))
 
     def test_inverse_local_none_when_ungated(self):
         from ..effects import Capability, buildings_for_capability

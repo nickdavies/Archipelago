@@ -33,7 +33,7 @@ from worlds.ksp1.locations import (
 )
 from worlds.ksp1.bodies import ALL_BODIES, BodyName
 from worlds.ksp1.comms import DSN_POWER_MAX
-from worlds.ksp1.items import PROGRESSIVE_RD_NAME
+from worlds.ksp1.items import PROGRESSIVE_ASTRONAUT_COMPLEX_NAME, PROGRESSIVE_RD_NAME
 from worlds.ksp1.tech_tree import TECH_NODES, TIER_TO_BAND
 from worlds.ksp1.test.base import KSP1TestBase as _SharedKSP1TestBase
 
@@ -316,31 +316,50 @@ class TestKerbinEarlyLocations(KSP1TestBase):
         )
 
     def test_capsule_enables_kerbin_eva_missions(self):
-        """A capsule alone → all capsule-only Kerbin locations reachable.
+        """Under buildings_in_logic (default on), a capsule enables the launchpad
+        and landing checks, but home flag planting still needs the Astronaut
+        Complex and home surface samples still need the R&D facility.
 
-        Kerbin Sample Return and Flag Plant have empty MISSION_PROFILES (no rocket
-        needed — launchpad EVA). These must not be blocked by body-level gates
-        that duplicate per-edge checks.
+        Stock KSP permits only plain surface EVA on the home body at AC level 0;
+        flag planting needs the AC upgrade even at home, while surface samples ride
+        the free home-surface EVA but need R&D (verified against in-game truth
+        tables).  The empty MISSION_PROFILES for these home missions must therefore
+        gate on the building items, not be unconditionally reachable.
         """
         self.collect_by_name("mk1pod.v2")
 
-        # Per-body mission events with empty profiles (always achievable with capsule)
-        for loc in (
-            "Kerbin Sample Return 1", "Kerbin Sample Return 2", "Kerbin Sample Return 3",
-            "Kerbin Flag Plant 1", "Kerbin Flag Plant 2",
-        ):
-            self.assertTrue(
-                self.can_reach_location(loc),
-                f"'{loc}' must be reachable with just a capsule (empty profile = launchpad EVA)",
-            )
-
-        # Kerbin-specific locations that only need has_capsule
+        # Capsule alone: launchpad/landing checks + KSC biomes are reachable...
         self.assertTrue(self.can_reach_location("Kerbin First Launch"))
         self.assertTrue(self.can_reach_location("Kerbin First Landing"))
-
-        # All 12 KSC biomes (already tested separately but included for completeness)
         for biome in KSC_BIOME_NAMES:
             self.assertTrue(self.can_reach_location(biome))
+
+        # ...but flag planting needs the Astronaut Complex and surface samples
+        # need the R&D facility, so neither is reachable on a capsule alone.
+        for loc in ("Kerbin Flag Plant 1", "Kerbin Flag Plant 2"):
+            self.assertFalse(
+                self.can_reach_location(loc),
+                f"'{loc}' needs the Astronaut Complex, not just a capsule")
+        for loc in ("Kerbin Sample Return 1", "Kerbin Sample Return 2",
+                    "Kerbin Sample Return 3"):
+            self.assertFalse(
+                self.can_reach_location(loc),
+                f"'{loc}' needs the R&D facility, not just a capsule")
+
+        # The Astronaut Complex unlocks home flag planting (home-surface EVA).
+        self.collect_by_name(PROGRESSIVE_ASTRONAUT_COMPLEX_NAME)
+        for loc in ("Kerbin Flag Plant 1", "Kerbin Flag Plant 2"):
+            self.assertTrue(
+                self.can_reach_location(loc),
+                f"'{loc}' must be reachable once the Astronaut Complex is unlocked")
+
+        # R&D unlocks home surface samples (home EVA is already free; samples ride R&D).
+        self.collect_by_name(PROGRESSIVE_RD_NAME)
+        for loc in ("Kerbin Sample Return 1", "Kerbin Sample Return 2",
+                    "Kerbin Sample Return 3"):
+            self.assertTrue(
+                self.can_reach_location(loc),
+                f"'{loc}' must be reachable once R&D is unlocked")
 
     def test_probe_core_does_not_enable_crewed_kerbin_missions(self):
         """Probe core alone must NOT unlock crewed Kerbin missions.

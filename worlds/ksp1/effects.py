@@ -30,6 +30,7 @@ consumption of them — they are wired when ``buildings_in_logic`` lands.
 from enum import StrEnum
 
 from .bodies import BodyName, progressive_launch_pad_caps_for
+from .tech_tree import MAX_RD_BAND, max_reachable_node_cost
 
 
 class Effect(StrEnum):
@@ -105,14 +106,34 @@ _EVA_AC_LEVEL = 1
 _CONICS_TS_LEVEL = 1
 _NODES_MC_LEVEL = 1
 
-# R&D facility: surface samples require facility level 2 (even on the home body).
-# We don't add a separate item — the facility level rides the Progressive R&D
-# count (which also gates tech bands): samples at count 2 (facility L2), full at
-# count 5 (facility L3, cosmetic here — we don't gate part costs).  So the
-# "level" carried for RESEARCH_AND_DEVELOPMENT in a levels dict is the raw R&D
-# count, and the samples ability compares it against this threshold.
-RD_FACILITY_SAMPLES_COUNT = 2
-RD_FACILITY_TOP_COUNT = 5
+# R&D facility level gates the most expensive tech node you are PERMITTED to buy
+# (stock GameVariables.GetScienceCostLimit: 100 at L0, 500 at L1, unlimited at L2 —
+# independent of how much science you've banked).  The facility has no dedicated AP
+# item; its level rides the Progressive R&D count (which also unlocks tech bands).
+# We pick the Building->Progressive-R&D thresholds DELIBERATELY so the building cap
+# is never the binding gate — the Progressive R&D band always is.  Building L1 by
+# count 2 (tier-5 nodes exceed L0's 100 cap), L2 by count 4 (tier-7 nodes exceed
+# L1's 500 cap).  ``RESEARCH_AND_DEVELOPMENT``'s "level" in a levels dict is the
+# raw Progressive R&D count.
+RD_SCIENCE_COST_LIMIT_BY_LEVEL: tuple[float, ...] = (100.0, 500.0, float("inf"))
+RD_FACILITY_THRESHOLDS: tuple[int, ...] = (2, 4)
+
+# Surface samples additionally need the R&D facility at ``_RD_SAMPLES_LEVEL`` (KSP
+# "level 2", index 1), on TOP of the Astronaut-Complex EVA gate.  Samples unlock
+# when the building reaches that level, so the count rides the schedule above.
+_RD_SAMPLES_LEVEL = 1
+RD_SAMPLES_COUNT: int = RD_FACILITY_THRESHOLDS[_RD_SAMPLES_LEVEL - 1]
+
+# Guardrail (check only — never consulted on the hot path): the deliberate
+# thresholds must keep the building cap ahead of every reachable node so the
+# Progressive R&D band, not the building, is always the binding gate.  Fails loudly
+# at import if a future tier/cost/band change breaks that invariant.
+for _c in range(MAX_RD_BAND + 1):
+    _lvl = sum(1 for _t in RD_FACILITY_THRESHOLDS if _c >= _t)
+    assert RD_SCIENCE_COST_LIMIT_BY_LEVEL[_lvl] >= max_reachable_node_cost(_c), (
+        f"R&D building cap binds before the band at Progressive R&D count {_c}; "
+        f"raise RD_FACILITY_THRESHOLDS"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -289,14 +310,14 @@ def player_capabilities(
     ac = levels.get(Building.ASTRONAUT_COMPLEX, _EVA_AC_LEVEL)
     ts = levels.get(Building.TRACKING_STATION, _CONICS_TS_LEVEL)
     mc = levels.get(Building.MISSION_CONTROL, _NODES_MC_LEVEL)
-    rd = levels.get(Building.RESEARCH_AND_DEVELOPMENT, RD_FACILITY_SAMPLES_COUNT)
+    rd = levels.get(Building.RESEARCH_AND_DEVELOPMENT, RD_SAMPLES_COUNT)
     conics = ts >= _CONICS_TS_LEVEL
     nodes = conics and mc >= _NODES_MC_LEVEL
     can_local = ((not local_needs_conics or conics)
                  and (not local_needs_nodes or nodes))
     return {
         Capability.CAN_EVA: CAN_EVA_BY_LEVEL[_clamp_index(ac, CAN_EVA_BY_LEVEL)],
-        Capability.CAN_COLLECT_SAMPLES: rd >= RD_FACILITY_SAMPLES_COUNT,
+        Capability.CAN_COLLECT_SAMPLES: rd >= RD_SAMPLES_COUNT,
         Capability.CAN_RENDEZVOUS: nodes,
         Capability.CAN_NAVIGATE_INTERPLANETARY: nodes,
         Capability.CAN_NAVIGATE_LOCAL: can_local,
@@ -317,7 +338,7 @@ def buildings_for_capability(
         return ((Building.ASTRONAUT_COMPLEX, _EVA_AC_LEVEL),)
     if cap is Capability.CAN_COLLECT_SAMPLES:
         # The "level" is the Progressive R&D count threshold (no separate item).
-        return ((Building.RESEARCH_AND_DEVELOPMENT, RD_FACILITY_SAMPLES_COUNT),)
+        return ((Building.RESEARCH_AND_DEVELOPMENT, RD_SAMPLES_COUNT),)
     if cap in (Capability.CAN_RENDEZVOUS, Capability.CAN_NAVIGATE_INTERPLANETARY):
         return (conics_req, nodes_req)          # nodes imply conics
     if cap is Capability.CAN_NAVIGATE_LOCAL:

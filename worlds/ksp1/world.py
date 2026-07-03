@@ -47,6 +47,7 @@ _BANNED_EDGES: frozenset[tuple[BodyName, EdgeType]] = frozenset(
 )
 from .options import Difficulty, Goal, GoalContractMode, KSP1Options, PhysicsDifficulty, STARTING_BODY_POOLS, StartingBody
 from .tech_tree import MAX_TIER, NODES_BY_TIER, TECH_NODES, TIER_TO_BAND
+from .effects import RD_FACILITY_THRESHOLDS
 
 
 # Diagnostic flag: keep the strict_ladder post_fill physics cross-check but
@@ -201,13 +202,14 @@ _MAX_FACILITY_LEVEL = 2  # stock 0/1/2 (level-3 buildings)
 # the curated building progressives); every other facility stays maxed.  The
 # Launch Pad is gated separately via progressive_launch_pad (its tonnage caps
 # ride their own slot_data key).  VAB/SPH stay maxed this release (their
-# part-count gate is a follow-up), so the gated set is the Astronaut Complex
-# (EVA), the Tracking Station (DSN comms range + patched conics) and Mission
-# Control (maneuver nodes).
+# part-count gate is a follow-up).  The gated set: Astronaut Complex (EVA),
+# Tracking Station (DSN comms range + patched conics), Mission Control (maneuver
+# nodes) and R&D (science-cost cap on which tech nodes may be bought).
 _GATED_FACILITY_IDS: tuple[str, ...] = (
     "SpaceCenter/AstronautComplex",
     "SpaceCenter/TrackingStation",
     "SpaceCenter/MissionControl",
+    "SpaceCenter/ResearchAndDevelopment",
 )
 
 # item name -> {"facilities": [ids], "thresholds": [counts]}.  Emitted in
@@ -218,15 +220,13 @@ _GATED_FACILITY_IDS: tuple[str, ...] = (
 # facility level: level = count of thresholds that are <= the item count, then
 # clamped by the client to the facility's max level and floored at the
 # building_levels start (never lowered).  Increment buildings use [1, 2]; the R&D
-# facility rides the Progressive R&D count on a non-linear schedule ([2, 5] =
-# surface samples at count 2, top at count 5).
+# facility rides the Progressive R&D count on the deliberate
+# ``RD_FACILITY_THRESHOLDS`` schedule (building upgrades placed so the science-cost
+# cap never binds before the Progressive R&D band — see effects.py).
 #
-# R&D and VAB are LATENT this release (not in ``_GATED_FACILITY_IDS``, so they
-# ship maxed and the client never lowers them): the surface-sample gate is logic
-# only until a play-test spike confirms gating the R&D facility level doesn't
-# disturb KSP's tech-research / part-cost machinery, and the VAB part-count gate
-# is a later server-only change.  Both are wired here so enabling them needs no
-# client change.
+# VAB is LATENT this release (not in ``_GATED_FACILITY_IDS``, so it ships maxed and
+# the client never lowers it): its part-count gate is a later server-only change,
+# wired here so enabling it needs no client change.
 _FACILITY_ITEM_MAP: dict[str, dict] = {
     PROGRESSIVE_ASTRONAUT_COMPLEX_NAME: {
         "facilities": ["SpaceCenter/AstronautComplex"], "thresholds": [1, 2]},
@@ -235,7 +235,8 @@ _FACILITY_ITEM_MAP: dict[str, dict] = {
     PROGRESSIVE_MISSION_CONTROL_NAME: {
         "facilities": ["SpaceCenter/MissionControl"], "thresholds": [1]},
     PROGRESSIVE_RD_NAME: {
-        "facilities": ["SpaceCenter/ResearchAndDevelopment"], "thresholds": [2, 5]},
+        "facilities": ["SpaceCenter/ResearchAndDevelopment"],
+        "thresholds": list(RD_FACILITY_THRESHOLDS)},
     PROGRESSIVE_VAB_NAME: {
         "facilities": ["SpaceCenter/VehicleAssemblyBuilding",
                        "SpaceCenter/SpaceplaneHangar"], "thresholds": [1, 2]},

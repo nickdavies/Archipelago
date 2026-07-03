@@ -2621,11 +2621,16 @@ def _mission_building_reqs(
                 local_needs_nodes=local_needs_nodes):
             reqs.append((name_for[building], level))
 
-    # Astronaut Complex EVA gate (away-from-home EVA only).
+    # Astronaut Complex EVA gate.  Flag planting and orbital EVA need the AC
+    # upgrade even at home; only surface samples ride the free home-surface EVA,
+    # so they alone are home-exempt.  Mirrors capability._evaluate_profile.
     eva_required = (info.requires_eva if info.requires_eva is not None
                     else info.mission_type in MISSION_TYPES_REQUIRING_EVA)
-    if eva_required and needs_travel and info.body != home:
-        _record(Capability.CAN_EVA)
+    if eva_required:
+        home_exempt = (info.mission_type in MISSION_TYPES_REQUIRING_SAMPLES
+                       and info.body == home)
+        if not home_exempt:
+            _record(Capability.CAN_EVA)
 
     # Surface samples (R&D facility) — home and off-home, so no travel condition.
     if info.mission_type in MISSION_TYPES_REQUIRING_SAMPLES:

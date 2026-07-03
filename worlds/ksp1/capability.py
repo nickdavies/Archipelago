@@ -146,8 +146,10 @@ MISSION_TYPES_REQUIRING_RENDEZVOUS: frozenset[MissionType] = frozenset({
 })
 
 # Mission types that take a surface sample (a Kerbal collecting surface material)
-# — sample returns.  In stock KSP this needs the R&D facility at level 2, even on
-# the home body, so it gates on ``can_collect_samples`` regardless of travel.
+# — sample returns.  In stock KSP this needs the R&D facility at index 1 (KSP
+# "level 2"), even on the home body, so it gates on ``can_collect_samples``
+# regardless of travel — ON TOP OF the EVA gate (which is home-surface-exempt for
+# samples: plain home EVA is free, so a home sample needs only R&D).
 MISSION_TYPES_REQUIRING_SAMPLES: frozenset[MissionType] = frozenset({
     MissionType.SAMPLE_RETURN,
 })
@@ -1303,9 +1305,9 @@ def _evaluate_profile(
     home: BodyName,
     extra_payload_parts: tuple[MiscEquipment, ...] = (),
     run_parallel: bool = True,
-    requires_eva: bool = False,
-    requires_rendezvous: bool = False,
-    requires_samples: bool = False,
+    requires_eva: bool | None = None,
+    requires_rendezvous: bool | None = None,
+    requires_samples: bool | None = None,
 ) -> ProfileResult:
     """
     Run the two-pass evaluation on a single mission profile alternative.
@@ -1322,6 +1324,19 @@ def _evaluate_profile(
     added to the terminal payload — so every stage below carries it — and the
     parts are listed on the terminal manifest. Default empty = ordinary mission.
     """
+    # EVA / rendezvous / surface-sample requirements.  An explicit override wins
+    # (EVA-in-orbit forces requires_eva=True; docking/station contracts force
+    # requires_rendezvous=True); otherwise derive from the mission type.  Kept in
+    # one place so every evaluation entry point gates identically — the per-body
+    # ``_try_profiles*`` path used to omit samples/rendezvous, silently skipping
+    # those gates.
+    if requires_eva is None:
+        requires_eva = mission_type in MISSION_TYPES_REQUIRING_EVA
+    if requires_rendezvous is None:
+        requires_rendezvous = mission_type in MISSION_TYPES_REQUIRING_RENDEZVOUS
+    if requires_samples is None:
+        requires_samples = mission_type in MISSION_TYPES_REQUIRING_SAMPLES
+
     # ------------------------------------------------------------------
     # Forward pass — broad gate checks
     # ------------------------------------------------------------------
@@ -1369,15 +1384,17 @@ def _evaluate_profile(
 
     # EVA (Astronaut Complex, buildings_in_logic).  ``flags.can_eva`` defaults
     # True, so when buildings aren't in logic this never fires.  Stock AC level 0
-    # permits EVA in the HOME body's vicinity — its surface AND its orbit — so
-    # any EVA that never leaves the home body is allowed: an empty profile (walk
-    # off the pad: home flag/sample) or an all-home profile (home-orbit EVA).
-    # EVA anywhere else needs the upgrade — home's moons have their own SOI, and
-    # other planets are farther still.  Gating home-orbit EVA would also strand
-    # bootstrap items placed on those early home-orbit locations behind the AC.
-    if (requires_eva and not flags.can_eva
-            and any(edge.body != home for edge in profile)):
-        blocking.append(BlockingInfo(reason=BlockingReason.CANNOT_EVA))
+    # permits ONLY plain surface EVA on the home body; flag planting and any
+    # orbital EVA need the AC upgrade even at home, and all EVA off-home needs it
+    # too (verified against in-game truth tables, Kerbin and alien homes alike).
+    # Surface samples ride that free home-surface EVA, so a home-surface
+    # SAMPLE_RETURN is exempt here — its separate R&D gate below still applies.
+    if requires_eva and not flags.can_eva:
+        home_surface_sample = (
+            mission_type == MissionType.SAMPLE_RETURN
+            and not any(edge.body != home for edge in profile))
+        if not home_surface_sample:
+            blocking.append(BlockingInfo(reason=BlockingReason.CANNOT_EVA))
 
     # Surface samples (R&D facility, buildings_in_logic).  Needs the facility
     # upgraded even on the home body (stock), so unlike EVA there is no home
@@ -2738,7 +2755,8 @@ def _assess_one_body(
 
         profiles = mission_builder.profiles_for(body.name, event.mission_type)
 
-        # Empty profile = always achievable (e.g. Kerbin launchpad EVA).
+        # No profile alternatives at all (defensive: an achievable mission always
+        # registers at least one, even the empty-edge home profile ``[[]]``).
         if not profiles:
             prof.access[event.name] = True
             continue
@@ -3026,16 +3044,9 @@ def evaluate_mission_detailed(
     if mission_transform is not None:
         profiles = [mission_transform(p) for p in profiles]
 
-    # EVA requirement: explicit override (EVA-in-orbit), else derived from type.
-    eva_required = (mission_type in MISSION_TYPES_REQUIRING_EVA
-                    if requires_eva is None else requires_eva)
-    # Rendezvous requirement: explicit override (docking/station contracts),
-    # else derived from type (RESCUE).
-    rendezvous_required = (mission_type in MISSION_TYPES_REQUIRING_RENDEZVOUS
-                           if requires_rendezvous is None else requires_rendezvous)
-    # Surface-sample requirement (R&D facility), derived from type (SAMPLE_RETURN).
-    samples_required = (mission_type in MISSION_TYPES_REQUIRING_SAMPLES
-                        if requires_samples is None else requires_samples)
+    # requires_eva / requires_rendezvous / requires_samples pass straight through
+    # to _evaluate_profile, which derives them from the mission type when None (an
+    # override — e.g. EVA-in-orbit, docking contracts — wins).
 
     # ``run_parallel`` controls whether the exact asparagus (parallel-staged)
     # build is searched.  The bumper's GUIDANCE trials pass run_parallel=False:
@@ -3054,9 +3065,9 @@ def evaluate_mission_detailed(
                                        home=mission_builder.home,
                                        extra_payload_parts=extra_payload_parts,
                                        run_parallel=run_parallel,
-                                       requires_eva=eva_required,
-                                       requires_rendezvous=rendezvous_required,
-                                       requires_samples=samples_required)
+                                       requires_eva=requires_eva,
+                                       requires_rendezvous=requires_rendezvous,
+                                       requires_samples=requires_samples)
             if result.feasible:
                 return result
             for b in result.blocking:

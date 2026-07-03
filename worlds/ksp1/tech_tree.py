@@ -77,6 +77,17 @@ TIER_TO_BAND: dict[int, int] = {
 MAX_RD_BAND: int = 5
 
 
+def max_reachable_node_cost(count: int) -> int:
+    """Highest single-node science cost reachable once ``count`` Progressive R&D
+    items are held (bands ``0..count`` unlocked).  KSP's R&D *facility* level caps
+    the most expensive node you are PERMITTED to buy, so the facility upgrades
+    must be placed to cover this at every count.  Used only by the invariant
+    guardrail in ``effects`` — the schedule itself is a deliberate design choice,
+    not derived from this."""
+    return max((n.science_cost for n in TECH_NODES
+                if TIER_TO_BAND[n.tier] <= count), default=0)
+
+
 def cumulative_tier_cost(tier: int) -> int:
     """Return the total science needed to purchase all nodes through *tier*."""
     return _CUMULATIVE[tier]
