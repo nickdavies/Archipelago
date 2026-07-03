@@ -149,7 +149,7 @@ class TestRankBumperReps(unittest.TestCase):
             r = _bumper(loc)
             self.assertIsNotNone(r, f"bumper failed on {loc}")
             for (axis, rank), name in r.reps.items():
-                with self.subTest(loc=loc, axis=axis, rank=rank):
+                with self.subTest(loc=loc, axis=axis.name, rank=rank):
                     self.assertIn(name, PART_DB,
                                   f"{loc}: rep {name!r} for ({axis}, {rank}) "
                                   f"not in PART_DB")

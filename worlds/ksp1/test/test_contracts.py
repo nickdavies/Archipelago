@@ -220,7 +220,7 @@ class TestSlotDataRoundTrip(unittest.TestCase):
         mb.rescue_orbit_params = generate_rescue_orbit_params(
             _random.Random(1), ALL_BODIES)
         for ct, td in C.CONTRACT_TYPE_DEFS.items():
-            with self.subTest(contract_type=ct):
+            with self.subTest(contract_type=ct.name):
                 body = _first_compatible_body(td)
                 self.assertIsNotNone(body, f"{ct} has no compatible body")
                 spec = C.ContractSpec(ct, body)
@@ -728,7 +728,7 @@ class TestExplainContractGeneric(unittest.TestCase):
             self.assertIsNotNone(body, f"{ct} has no compatible body")
             spec = C.ContractSpec(ct, body)
             for label, flags in (("full", FULL), ("empty", EMPTY)):
-                with self.subTest(contract_type=ct, kit=label):
+                with self.subTest(contract_type=ct.name, kit=label):
                     lines = format_contract_output(
                         spec, in_logic=False, item_held=False,
                         flags=flags, diff=DIFF, difficulty_name="comfortable",
@@ -778,7 +778,7 @@ class TestRequirementSeam(unittest.TestCase):
 
     def test_every_def_derives_anyof_from_categories(self):
         for ct, td in C.CONTRACT_TYPE_DEFS.items():
-            with self.subTest(contract_type=ct):
+            with self.subTest(contract_type=ct.name):
                 self.assertEqual(
                     td.requirements,
                     tuple(C.AnyOf(cat) for cat in td.required_categories))

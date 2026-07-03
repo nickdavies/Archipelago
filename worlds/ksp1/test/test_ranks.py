@@ -28,7 +28,7 @@ class TestRanksPopulated(unittest.TestCase):
     def test_every_axis_has_items(self) -> None:
         r = ranks_for_context()
         for axis in RANK_AXES:
-            with self.subTest(axis=axis.key):
+            with self.subTest(axis=axis.key.name):
                 items = r[axis.key]
                 self.assertGreater(
                     len(items), 0,
@@ -43,7 +43,7 @@ class TestRanksPopulated(unittest.TestCase):
         for axis in RANK_AXES:
             if axis.key not in dense:
                 continue
-            with self.subTest(axis=axis.key):
+            with self.subTest(axis=axis.key.name):
                 ranks_seen = set(r[axis.key].values())
                 self.assertEqual(
                     ranks_seen, set(range(1, max_rank_for(axis.key) + 1)),
