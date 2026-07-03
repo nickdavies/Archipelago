@@ -147,6 +147,33 @@ _ATTITUDE_ENABLER_NAME = "advSasModule"
 _ATTITUDE_ENABLERS: frozenset[str] = frozenset(
     {_ATTITUDE_ENABLER_NAME} & set(PART_DB))
 
+# Apollo docking gear — injected REPS-ONLY at the deep-space band (same dv
+# threshold as ``_DEEP_SPACE_ENABLERS``).  Deep round trips that exceed the
+# whole-stack ceiling close only via capability's Apollo-split retry, which
+# gates on a docking port + RCS + monopropellant (``_apollo_candidate`` /
+# ``_apollo_split_for``); without these in the cumulative kit the bumper
+# never proposes them and the anchor dead-ends.  Reps-only (the attitude-
+# enabler precedent): the gear carries no meaningful rank axes, and skipping
+# the rank bump avoids reordering spheres.  All three derived by property
+# from the part universe — no hardcoded names.
+_LIGHTEST_DOCKING_PORT: Optional[str] = DEFAULT_PART_MANAGER.lightest_providing(
+    CapabilityFlag.DOCKING_PORT)
+_LIGHTEST_RCS_THRUSTER: Optional[str] = DEFAULT_PART_MANAGER.lightest_providing(
+    CapabilityFlag.RCS)
+_LIGHTEST_MONOPROP_TANK: Optional[str] = min(
+    (nm for nm, parts in PART_DB.items()
+     if any(isinstance(p, FuelTank) and p.fuel_type == "monoprop"
+            for p in parts)),
+    key=lambda nm: min(p.dry_mass + p.fuel_mass for p in PART_DB[nm]
+                       if isinstance(p, FuelTank)),
+    default=None,
+)
+_DOCKING_ENABLERS: frozenset[str] = frozenset(
+    n for n in (_LIGHTEST_DOCKING_PORT, _LIGHTEST_RCS_THRUSTER,
+                _LIGHTEST_MONOPROP_TANK)
+    if n is not None and n in PART_DB
+)
+
 
 if TYPE_CHECKING:
     from .world import KSP1World
@@ -3615,6 +3642,7 @@ def _build_ladder_graph_walk(
     }
     _deep_enablers = _DEEP_SPACE_ENABLERS - precollected_names
     _attitude_enablers = _ATTITUDE_ENABLERS - precollected_names
+    _docking_enablers = _DOCKING_ENABLERS - precollected_names
     _deep_max_dv = max(_sphere_dv_by_name.values(), default=0.0)
     _deep_inject_dv = (
         _DEEP_INJECT_DV_FRAC * _deep_max_dv
@@ -3656,6 +3684,10 @@ def _build_ladder_graph_walk(
                 for _ax, _rk in rank_sig_for(_ep, ctx).axes:
                     if _rk > sig.rank(_ax):
                         sig = sig.with_rank(_ax, _rk)
+            # Apollo docking gear rides the same band, reps-only (see the
+            # _DOCKING_ENABLERS comment): the deep round trips that need
+            # capability's Apollo retry live past this threshold.
+            reps = reps | _docking_enablers
         if dv >= _attitude_inject_dv:
             reps = reps | _attitude_enablers
         return sig, reps
@@ -3664,7 +3696,7 @@ def _build_ladder_graph_walk(
     # global keep-set (the per-mission cumulative inject is applied below when
     # each sphere is assembled, where the location's dv is in hand).
     if _deep_inject_dv != float("inf"):
-        cumulative_reps = cumulative_reps | _deep_enablers
+        cumulative_reps = cumulative_reps | _deep_enablers | _docking_enablers
     if _attitude_inject_dv != float("inf"):
         cumulative_reps = cumulative_reps | _attitude_enablers
 

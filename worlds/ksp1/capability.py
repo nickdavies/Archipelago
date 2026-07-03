@@ -345,6 +345,9 @@ class EquipmentFlags:
     lightest_reaction_wheel: Optional[MiscEquipment] = None
     lightest_rcs_thruster: Optional[MiscEquipment] = None
     lightest_monoprop_tank: Optional[FuelTank] = None
+    # Lightest docking port — the Apollo-split rejoin interface (one per
+    # docked side, real part mass charged to each stack's manifest).
+    lightest_docking_port: Optional[MiscEquipment] = None
 
     # Lightest available part per contract part-category (e.g. "drill",
     # "ore_tank"). Populated generically from PART_TO_CONTRACT_CATEGORIES — no
@@ -917,6 +920,9 @@ def _apply_misc(flags: EquipmentFlags, part: MiscEquipment, count: int) -> None:
             flags.has_battery_large = True
         elif flag == CF.DOCKING_PORT:
             flags.has_docking_port = True
+            if (flags.lightest_docking_port is None
+                    or part.mass < flags.lightest_docking_port.mass):
+                flags.lightest_docking_port = part
         elif flag == CF.FUEL_LINE:
             flags.has_fuel_lines = True
         elif flag == CF.LADDER:
@@ -1303,6 +1309,33 @@ class AttitudeBundle:
 _PER_STAGE_ATTITUDE_ENABLED: bool = True
 
 
+def _rcs_bundle(
+    flags: EquipmentFlags, terminal_pod: Optional[MiscEquipment],
+) -> Optional[AttitudeBundle]:
+    """Concrete RCS translation/attitude kit from real PART_DB parts:
+    4 × lightest standalone RCS thruster + (1 × lightest monoprop tank,
+    unless the terminal payload already supplies MonoPropellant internally).
+
+    Returns None when the kit can't fly RCS at all (no thruster, or no
+    monopropellant source).  Shared by the attitude bundle (RCS-vs-wheel
+    trade) and the Apollo docking gear (the docking approach mandates RCS,
+    a wheel is not a substitute).
+    """
+    t = flags.lightest_rcs_thruster
+    if t is None:
+        return None
+    parts: list[tuple[int, str]] = [(4, t.name)]
+    mass = 4 * t.mass
+    if not _pod_has_built_in_monoprop(terminal_pod):
+        tank = flags.lightest_monoprop_tank
+        if tank is None:
+            # Can't fly an RCS bundle without monopropellant.
+            return None
+        parts.append((1, tank.name))
+        mass += tank.dry_mass + tank.fuel_mass
+    return AttitudeBundle(mass=mass, parts=tuple(parts))
+
+
 def _attitude_bundle_for_stage(
     flags: EquipmentFlags, terminal_pod: Optional[MiscEquipment],
 ) -> Optional[AttitudeBundle]:
@@ -1311,9 +1344,7 @@ def _attitude_bundle_for_stage(
 
     Two candidate bundles, real masses only:
       - **Wheel**: 1 × lightest standalone reaction-wheel module.
-      - **RCS**:   4 × lightest standalone RCS thruster
-                   + (1 × lightest monoprop tank, unless the terminal payload
-                      already supplies MonoPropellant internally).
+      - **RCS**:   the shared :func:`_rcs_bundle`.
 
     The lighter of the two wins. The chosen parts (with counts) appear
     verbatim in the stage manifest so manifest mass == charged mass.
@@ -1325,24 +1356,9 @@ def _attitude_bundle_for_stage(
             mass=w.mass,
             parts=((1, w.name),),
         ))
-    if flags.lightest_rcs_thruster is not None:
-        t = flags.lightest_rcs_thruster
-        rcs_parts: list[tuple[int, str]] = [(4, t.name)]
-        rcs_mass = 4 * t.mass
-        rcs_skip = False
-        if not _pod_has_built_in_monoprop(terminal_pod):
-            tank = flags.lightest_monoprop_tank
-            if tank is None:
-                # Can't fly an RCS bundle without monopropellant — skip.
-                rcs_skip = True
-            else:
-                rcs_parts.append((1, tank.name))
-                rcs_mass += tank.dry_mass + tank.fuel_mass
-        if not rcs_skip:
-            candidates.append(AttitudeBundle(
-                mass=rcs_mass,
-                parts=tuple(rcs_parts),
-            ))
+    rcs = _rcs_bundle(flags, terminal_pod)
+    if rcs is not None:
+        candidates.append(rcs)
     if not candidates:
         return None
     return min(candidates, key=lambda b: b.mass)
@@ -1404,6 +1420,7 @@ def _evaluate_profile(
     requires_samples: bool | None = None,
     requires_precise_pointing: bool = False,
     gameplay: GameplayDifficulty = CONSERVATIVE_GAMEPLAY,
+    apollo_split: bool = False,
 ) -> ProfileResult:
     """
     Run the two-pass evaluation on a single mission profile alternative.
@@ -1419,6 +1436,13 @@ def _evaluate_profile(
     tank) that must be *delivered* to the destination. Their summed mass is
     added to the terminal payload — so every stage below carries it — and the
     parts are listed on the terminal manifest. Default empty = ordinary mission.
+
+    ``apollo_split`` evaluates the Apollo architecture instead of the
+    whole-stack cascade: the return stack parks in destination orbit while
+    the lander flies descent + ascent carrying only the pod (+ delivered
+    payload + docking gear), then rejoins for the trip home.  Gated on a
+    docking port + RCS (see ``_apollo_split_for``); callers try the standard
+    architecture first and only retry with this on failure.
     """
     # EVA / rendezvous / surface-sample requirements.  An explicit override wins
     # (EVA-in-orbit forces requires_eva=True; docking/station contracts force
@@ -1746,6 +1770,19 @@ def _evaluate_profile(
     extra_payload_mass = sum(p.mass for p in extra_payload_parts)
     payload = terminal_mass + terminal_equip + extra_payload_mass
 
+    # Apollo split: resolve the lander boundary + docking gear now (needs the
+    # terminal pod for the RCS monoprop decision).  Not applicable → nothing
+    # new to report: the caller already ran the standard architecture, so the
+    # honest failure reasons are that attempt's.
+    apollo: Optional[_ApolloSplit] = None
+    if apollo_split:
+        apollo = _apollo_split_for(groups, home, flags, terminal_pod)
+        if apollo is None:
+            return ProfileResult(False, launch_mass=payload)
+    # Wet mass of the parked return stack, stashed when the reverse walk
+    # crosses from the parked groups into the lander ascent group.
+    apollo_parked_wet = 0.0
+
     # Global attitude strategy.  Every stage whose edges require attitude
     # control must have an on-stage source: a gimballed engine/SRB (free) or
     # the lightest wheel/RCS bundle (its real mass).  The bundle is an
@@ -1782,6 +1819,23 @@ def _evaluate_profile(
     # flight-order index so we can hook stage-specific behaviour.
     for rev_idx, group in enumerate(reversed(groups)):
         flight_idx = len(groups) - 1 - rev_idx
+
+        if apollo is not None:
+            if flight_idx == apollo.ascent_gidx:
+                # Park everything above (return transfer + home entry) in
+                # destination orbit; the lander flies down/up with only the
+                # pod + delivered payload (docking gear is charged as this
+                # group's equipment below).  The pod is deliberately counted
+                # in BOTH stacks on the outbound legs — it physically rides
+                # the lander, while the parked stack stays sized as if
+                # already carrying it home — a conservative double-count.
+                apollo_parked_wet = payload
+                payload = terminal_mass + terminal_equip + extra_payload_mass
+            elif flight_idx == apollo.land_gidx - 1:
+                # Rejoin for the outbound legs: everything below the landing
+                # hauls the full lander stack AND the parked return stack.
+                payload += apollo_parked_wet
+
         body = BODY_BY_NAME[group[0].body]
         solar_au = body.solar_distance_au
 
@@ -1836,6 +1890,11 @@ def _evaluate_profile(
         # Compute effective dv with difficulty margins
         base_dv = sum(e.base_dv for e in group)
         pc_dv = sum(e.plane_change_dv for e in group)
+        # Apollo rejoin: the lander's ascent ends in a rendezvous + docking
+        # with the parked stack — charge the phasing/matching burn here so
+        # the margins below apply to it like any other burn.
+        if apollo is not None and flight_idx == apollo.ascent_gidx:
+            base_dv += _APOLLO_RENDEZVOUS_DV
         # Landing edges carry base_dv=0; a pure landing group must not pick up
         # the spurious fixed_margin floor that effective_dv(0) would add.
         if atmo_land_edges and base_dv <= 1e-9:
@@ -1871,7 +1930,11 @@ def _evaluate_profile(
             _min_accel = max(_min_accel, _landing_twr_floor * _lg)
         min_twr = _min_accel / body.surface_gravity if body.surface_gravity > 0 else 0.0
 
-        req_throttle = any(e.requires_throttleable for e in group) or landing_needs_burn
+        req_throttle = (any(e.requires_throttleable for e in group)
+                        or landing_needs_burn
+                        # The docking approach needs fine thrust control.
+                        or (apollo is not None
+                            and flight_idx == apollo.ascent_gidx))
         needs_hs = any(e.needs_heat_shield for e in group)
         needs_legs_g = any(e.needs_landing_legs for e in group)
 
@@ -1888,6 +1951,19 @@ def _evaluate_profile(
             equip_mass += leg_mass
             if leg_id:
                 stage_equipment.append((_LANDING_LEG_COUNT, leg_id))
+        # Apollo docking gear — real part masses, manifest == charge.  The
+        # lander (active vehicle) carries its port + the RCS approach kit
+        # down and back up; the parked stack's port rides the bottom of the
+        # first parked group (the docking interface stays with the transfer
+        # stage — it is not carried through the home entry above it).
+        if apollo is not None:
+            if flight_idx == apollo.ascent_gidx:
+                equip_mass += apollo.port.mass + apollo.rcs.mass
+                stage_equipment.append((1, apollo.port.name))
+                stage_equipment.extend(apollo.rcs.parts)
+            elif flight_idx == apollo.ascent_gidx + 1:
+                equip_mass += apollo.port.mass
+                stage_equipment.append((1, apollo.port.name))
         # Staged atmospheric landing: the whole descent kit (coverage shield +
         # chutes) is fixed PAYLOAD mass on this stage.  The shield protects the
         # pod during the aero bleed and is jettisoned before any touchdown burn,
@@ -2299,6 +2375,84 @@ def _group_edges(profile: list[MissionEdge], staging_tier: int) -> list[list[Mis
         groups = groups[:best_pair] + [merged] + groups[best_pair + 2:]
 
     return groups
+
+
+# ---------------------------------------------------------------------------
+# Apollo split — leave the return stack parked in destination orbit
+# ---------------------------------------------------------------------------
+
+# Rendezvous budget for the lander's post-ascent rejoin with the parked
+# return stack: the same low-orbit phasing + matching burn the rescue
+# contract charges.  Added to the ascent group's base_dv, so the difficulty
+# margins apply via effective_dv like any other burn.
+_APOLLO_RENDEZVOUS_DV: float = MissionBuilder._RESCUE_RENDEZVOUS_DV
+
+
+@dataclass(frozen=True)
+class _ApolloSplit:
+    """Resolved lander boundary + concrete docking gear for one profile.
+
+    ``land_gidx``/``ascent_gidx`` are flight-order indices into the stage
+    groups: the destination landing group and the surface-ascent group that
+    follows it.  Everything after ``ascent_gidx`` is the parked return
+    stack; everything before ``land_gidx`` hauls lander + parked stack
+    outbound.  ``port`` is charged once per docked side; ``rcs`` flies on
+    the lander (the active vehicle in the docking approach).
+    """
+    land_gidx: int
+    ascent_gidx: int
+    port: MiscEquipment
+    rcs: AttitudeBundle
+
+
+def _apollo_split_for(
+    groups: list[list[MissionEdge]],
+    home: BodyName,
+    flags: EquipmentFlags,
+    terminal_pod: Optional[MiscEquipment],
+) -> Optional[_ApolloSplit]:
+    """Locate the Apollo lander boundary in ``groups``, or None when the
+    profile isn't a parkable round trip or the docking gear is missing.
+
+    Applicable iff the profile lands at a non-home body and ascends from it
+    again with at least one post-ascent leg to park (the return transfer /
+    home entry).  The gear gates are concrete parts: a docking port and the
+    RCS bundle for the approach — without either, the standard whole-stack
+    evaluation (already attempted by the caller) is the only architecture.
+    """
+    if flags.lightest_docking_port is None:
+        return None
+    land_types = (EdgeType.VACUUM_LANDING, EdgeType.ATMO_LANDING)
+    ascent_types = (EdgeType.ATMOSPHERIC_ASCENT, EdgeType.VACUUM_ASCENT)
+    pair: Optional[tuple[int, int]] = None
+    for i in range(len(groups) - 1):
+        land_bodies = {e.body for e in groups[i]
+                       if e.edge_type in land_types and e.body != home}
+        if not land_bodies:
+            continue
+        if any(e.edge_type in ascent_types and e.body in land_bodies
+               for e in groups[i + 1]):
+            pair = (i, i + 1)  # keep the LAST qualifying pair
+    if pair is None:
+        return None
+    land_gidx, ascent_gidx = pair
+    # Need an outbound side to rejoin from and a return stack to park.
+    if land_gidx == 0 or ascent_gidx + 1 >= len(groups):
+        return None
+    rcs = _rcs_bundle(flags, terminal_pod)
+    if rcs is None:
+        return None
+    return _ApolloSplit(land_gidx, ascent_gidx,
+                        flags.lightest_docking_port, rcs)
+
+
+def _apollo_candidate(flags: EquipmentFlags, mission_type: MissionType) -> bool:
+    """Cheap pre-gate for the Apollo retry: only round-trip mission types,
+    and only kits that own a docking port (the common early-ladder kit has
+    none, so the retry costs nothing there)."""
+    return (flags.has_docking_port
+            and mission_type in (MissionType.RETURN,
+                                 MissionType.SAMPLE_RETURN))
 
 
 def _required_power_source(
@@ -2962,6 +3116,22 @@ def _try_profiles(
                                            gameplay=gameplay)
                 if result.feasible:
                     return True
+    # Apollo retry — failure path only, and only for round-trip missions on
+    # kits that own a docking port (see _apollo_candidate).  The rejoin is a
+    # rendezvous, so the buildings gate applies (requires_rendezvous).
+    if _apollo_candidate(flags, mission_type):
+        for run_par in (False, True):
+            for is_crewed in _crewed_options(crewed, flags):
+                for profile in profiles:
+                    result = _evaluate_profile(profile, flags, diff, mission_type,
+                                               is_crewed=is_crewed, home=home,
+                                               extra_payload_parts=extra_payload_parts,
+                                               run_parallel=run_par,
+                                               requires_eva=requires_eva,
+                                               requires_rendezvous=True,
+                                               apollo_split=True)
+                    if result.feasible:
+                        return True
     return False
 
 
@@ -3008,6 +3178,22 @@ def _try_profiles_reason(
                     if key not in seen:
                         seen.add(key)
                         all_blocking.append(b)
+    # Apollo retry — failure path only (see _try_profiles).  Blocking stays
+    # the standard architecture's: those reasons drive the bumper's guidance
+    # axes, and an Apollo near-miss adds no rankable signal beyond them.
+    if _apollo_candidate(flags, mission_type):
+        for run_par in (False, True):
+            for is_crewed in _crewed_options(crewed, flags):
+                for profile in profiles:
+                    result = _evaluate_profile(profile, flags, diff, mission_type,
+                                               is_crewed=is_crewed, home=home,
+                                               extra_payload_parts=extra_payload_parts,
+                                               run_parallel=run_par,
+                                               requires_eva=requires_eva,
+                                               requires_rendezvous=True,
+                                               apollo_split=True)
+                    if result.feasible:
+                        return True, []
     return False, all_blocking
 
 
@@ -3193,6 +3379,24 @@ def evaluate_mission_detailed(
                 if key not in seen:
                     seen.add(key)
                     all_blocking.append(b)
+
+    # Apollo retry — same failure-path-only order as the gating layer
+    # (_try_profiles), so a mission gated feasible-via-Apollo reproduces
+    # here with its real stage list (spoiler / post_fill cross-check).
+    if _apollo_candidate(flags, mission_type):
+        for is_crewed in _crewed_options(crewed, flags):
+            for profile in profiles:
+                result = _evaluate_profile(profile, flags, diff, mission_type,
+                                           is_crewed=is_crewed,
+                                           home=mission_builder.home,
+                                           extra_payload_parts=extra_payload_parts,
+                                           run_parallel=run_parallel,
+                                           requires_eva=requires_eva,
+                                           requires_rendezvous=True,
+                                           requires_samples=requires_samples,
+                                           apollo_split=True)
+                if result.feasible:
+                    return result
 
     return ProfileResult(False, blocking=all_blocking)
 
