@@ -50,6 +50,14 @@ _CONFIGS = [
     # Guards the tank-pack monotonicity fix end to end.
     ("duna_return", "kerbin", "count", 17074417405164113416,
      {"buildings_in_logic": 1}),
+    # Bugs/101's strand seed: the bracket scan proved missions against
+    # spheres[i].flags — the defining mission's own kit, or a fallback
+    # anchor's full rank-admit kit — while the installed gate enforces
+    # has_all(reps_collected), a thinner kit nobody proved.  Here that
+    # stranded 64 progression items behind a "Moho Orbit 1" gate whose
+    # enforced kit couldn't fly the mission.  Guards SphereBoundary.flags
+    # being built reps-only from exactly reps_collected.
+    ("complete_tech_tree", "duna", "count", 6903591710897770246, {}),
 ]
 
 
@@ -115,3 +123,6 @@ class TestCapabilityCrossCheck:
 
     def test_bug_092_duna_return_buildings(self):
         self._check(*_CONFIGS[3])
+
+    def test_bug_101_complete_tech_tree_duna(self):
+        self._check(*_CONFIGS[4])

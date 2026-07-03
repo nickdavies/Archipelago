@@ -253,15 +253,21 @@ class SphereBoundary:
     ``(MinimumRanks ranks, dict extras)`` into one :class:`Signature`.
     ``reps_collected`` is the union of all bumper-selected reps through
     this sphere — used by chain-walker reps-only feasibility proofs and
-    by downstream tech-tier band funding.
+    by downstream tech-tier band funding.  ``flags`` is the
+    :class:`EquipmentFlags` for EXACTLY that enforced kit
+    (``reps_collected`` + precollected): the bracket scan proves mission
+    feasibility against these flags and then installs
+    ``has_all(reps_collected)`` as the access rule, so flags built from
+    any broader kit let the cheap gate pass missions the enforced kit
+    cannot actually fly (bugs/101).
     """
     name: str
     location_name: str
     is_predictable: bool
     provides: Signature
     delta: Signature
+    flags: EquipmentFlags
     reps_collected: frozenset[str] = frozenset()
-    flags: EquipmentFlags = field(default_factory=lambda: None)  # type: ignore[arg-type]
     profile_dv: float = 0.0
     signature: Optional[LocationSignature] = None
 
@@ -2723,8 +2729,6 @@ def _install_ladder_rules(
             pad_req = 0
             building_reqs: tuple[tuple[str, int], ...] = ()
             for i, s in enumerate(spheres):
-                if s.flags is None:
-                    continue
                 r = _evaluate(s.flags, info, diff, mb,
                               part_manager=world.part_manager)
                 if r.feasible:
@@ -3855,14 +3859,31 @@ def _build_ladder_graph_walk(
         running_sig = running_sig.merged_max(cum_sig)
         running_reps |= set(res.reps_collected)
         cumulative_sig = running_sig
+        sphere_reps = frozenset(running_reps)
         ladder.spheres.append(SphereBoundary(
             name=label,
             location_name=name,
             is_predictable=is_pred,
             provides=running_sig,
             delta=res.delta,
-            reps_collected=frozenset(running_reps),
-            flags=res.flags,
+            reps_collected=sphere_reps,
+            # The boundary's flags must be the EXACT kit its cheap gate
+            # enforces (sphere_reps + precollected), NOT the defining
+            # mission's own flags (res.flags): walked results carry the
+            # mission's reps at walk time and fallback anchors carry full
+            # rank-admit flags — both broader kits that can fly missions
+            # the enforced kit can't, which made the bracket scan install
+            # unsound gates (bugs/101).
+            flags=_pre_pass_for_ranks(
+                running_sig, ctx,
+                start_with_clamps=start_with_clamps,
+                progressive_launch_pad=progressive_launch_pad,
+                launch_pad_caps=world.mission_builder.launch_pad_caps,
+                pad_tier=running_sig.counted(PROGRESSIVE_LAUNCH_PAD_NAME),
+                precollected_names=precollected_names,
+                reps_only=sphere_reps,
+                buildings_in_logic=buildings_in_logic, home=bn_home,
+            ),
             profile_dv=res.profile_dv,
             signature=ladder.location_signatures.get(name),
         ))
