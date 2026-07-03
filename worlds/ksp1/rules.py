@@ -622,8 +622,19 @@ def _set_contract_rules(world: KSP1World, player: int) -> None:
                 # kit delivers, conservative).  An unbracketed non-proxy contract
                 # falls back to the all-parts proxy.
                 reps = creps.get(cid)
-                return state.has_all(
-                    reps if reps is not None else _ALL_PROGRESSION_ITEMS, player)
+                if not state.has_all(
+                        reps if reps is not None else _ALL_PROGRESSION_ITEMS,
+                        player):
+                    return False
+                # ...plus the counted-progressive Thresholds (buildings / pad /
+                # R&D / PSI) from the contract's own signature.  has_all above only
+                # covers the physics RANK reps; without this the contract is
+                # reachable with no Mission Control (interplanetary), no pad tier,
+                # etc.  These are the SAME reqs the ordinary mission rule enforces
+                # (see sphere_ladder._install_cheap_mission_reps).
+                counted = getattr(
+                    world, "_cheap_contract_counted_reqs", {}).get(cid, ())
+                return all(state.has(kind, player, lvl) for kind, lvl in counted)
         # Every non-goal reward slot (base 2 + Contract Repeats) shares the one
         # gate+capability rule, so the extra slots land at the contract's own
         # sphere as buffer-fill.

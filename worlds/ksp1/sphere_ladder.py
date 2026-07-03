@@ -2909,10 +2909,23 @@ def _install_ladder_rules(
     world._cheap_access_bracket = bracket_by_loc
     if save_original and install_access:
         world._strict_ladder_saved_rules = saved
-    _install_cheap_mission_reps(world, ladder)
+    _install_cheap_mission_reps(world, ladder, location_signatures)
 
 
-def _install_cheap_mission_reps(world: "KSP1World", ladder: SphereLadder) -> None:
+# Counted-progressive kinds the contract ACCESS rule gates on: the building
+# sequence-break gates (nav/DSN/EVA).  Pad and R&D/PSI are deliberately excluded
+# (see the extraction below).
+_CONTRACT_ACCESS_BUILDINGS: frozenset[str] = frozenset({
+    PROGRESSIVE_MISSION_CONTROL_NAME,
+    PROGRESSIVE_TRACKING_STATION_NAME,
+    PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
+})
+
+
+def _install_cheap_mission_reps(
+    world: "KSP1World", ladder: SphereLadder,
+    location_signatures: dict[str, "Signature"],
+) -> None:
     """Precompute, per ``(body, event)``, the cheap bracket reps that gate that
     mission — the SAME ``has_all(reps)`` the location's access rule uses.
 
@@ -2946,17 +2959,40 @@ def _install_cheap_mission_reps(world: "KSP1World", ladder: SphereLadder) -> Non
     # contract mission with its payload, so it's conservative-sound like the
     # ordinary mission gates, and lets the contract access rule stay off
     # ``get_capability`` during fill.
+    # ``has_all(reps)`` covers the physics RANK half only.  The counted-progressive
+    # THRESHOLDS (buildings/pad/R&D/PSI) live in the SAME location signature — the
+    # ordinary mission rule enforces them, but the contract rule (excluded from the
+    # signature-derived deriver, see _install_ladder_rules) would silently drop
+    # them, so an interplanetary contract was reachable with no Mission Control
+    # (and a heavy one with an insufficient pad, etc).  Carry the counted half off
+    # the same canonical signature so the contract rule gates on has(kind, level)
+    # too — the exact reqs the mission rule uses, keeping the two consistent.
     contract_reps: dict[str, frozenset[str]] = {}
+    contract_counted: dict[str, tuple[tuple[str, int], ...]] = {}
     for spec in (*getattr(world, "contract_specs", ()),
                  *getattr(world, "goal_contract_specs", ())):
-        best: Optional[tuple[int, frozenset[str]]] = None
+        best: Optional[tuple[int, frozenset[str], str]] = None
         for ln in spec.location_names(world.locations_per_contract):
             j = bracket.get(ln)
             if j is not None and (best is None or j < best[0]):
-                best = (j, frozenset(spheres[j].reps_collected))
+                best = (j, frozenset(spheres[j].reps_collected), ln)
         if best is not None:
             contract_reps[spec.contract_id] = best[1]
+            sig = location_signatures.get(best[2])
+            if sig is not None:
+                # Only the BUILDING gates (nav/DSN/EVA — MC/TS/AC) — these are the
+                # real, body-dependent sequence-break requirements the contract's
+                # mission genuinely needs.  Pad and the R&D/PSI Thresholds are NOT
+                # included: R&D/PSI carry the sphere-position *upper-bound* level
+                # (a placement-safety artifact, not the contract's real need), and
+                # gating the access rule on them over-constrains the science-heavy
+                # goals into fill deadlocks.  Their placement safety already comes
+                # from the signature's Rule-B window, unchanged.
+                contract_counted[spec.contract_id] = tuple(
+                    (c.kind, c.level) for c in sig.counted_reqs
+                    if c.kind in _CONTRACT_ACCESS_BUILDINGS)
     world._cheap_contract_reps = contract_reps
+    world._cheap_contract_counted_reqs = contract_counted
 
 
 def _first_covering_sphere(spheres, need: Signature) -> int:
