@@ -3259,6 +3259,7 @@ def _try_profiles(
                                                run_parallel=run_par,
                                                requires_eva=requires_eva,
                                                requires_rendezvous=True,
+                                               gameplay=gameplay,
                                                apollo_split=True)
                     if result.feasible:
                         return True
@@ -3321,6 +3322,7 @@ def _try_profiles_reason(
                                                run_parallel=run_par,
                                                requires_eva=requires_eva,
                                                requires_rendezvous=True,
+                                               gameplay=gameplay,
                                                apollo_split=True)
                     if result.feasible:
                         return True, []
@@ -3526,6 +3528,7 @@ def evaluate_mission_detailed(
                                            requires_samples=requires_samples,
                                            requires_precise_pointing=(
                                                requires_precise_pointing),
+                                           gameplay=gameplay,
                                            apollo_split=True)
                 if result.feasible:
                     return result
