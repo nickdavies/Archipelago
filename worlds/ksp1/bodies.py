@@ -92,6 +92,13 @@ class DifficultyProfile:
     min_twr_vac: float          # minimum TWR for vacuum ascent/landing
     ship_cd: float              # ship body drag coefficient (parachute discount)
     srb_needs_rcs: bool         # True = SRBs require RCS for throttle-mode edges
+    precise_pointing_needs_reaction_control: bool
+    # True = missions that must hold a fixed attitude with the engine off
+    # (precise-orbit contracts, space stations, kerbal rescues) require a reaction
+    # wheel or RCS, not just engine gimbal. Gimbal only steers under thrust.
+    # Expert (small/zero) is trusted to fly these on gimbal alone. See the
+    # capability NO_PRECISE_ATTITUDE gate. (A future DOCKING layer would demand
+    # RCS specifically + docking hardware; not modelled yet.)
 
 
 # Physics-difficulty profiles, keyed by the PhysicsDifficulty option's level
@@ -110,16 +117,19 @@ DIFFICULTY_PROFILES: dict[str, DifficultyProfile] = {
         fixed_margin=200, percent_margin=0.30, plane_change_fraction=1.00,
         min_twr_atmo=1.5, min_twr_vac=1.2,
         ship_cd=0.0, srb_needs_rcs=True,
+        precise_pointing_needs_reaction_control=True,
     ),
     "comfortable": DifficultyProfile(
         fixed_margin=100, percent_margin=0.15, plane_change_fraction=0.25,
         min_twr_atmo=1.5, min_twr_vac=1.2,
         ship_cd=0.1, srb_needs_rcs=True,
+        precise_pointing_needs_reaction_control=True,
     ),
     "small": DifficultyProfile(
         fixed_margin=50, percent_margin=0.05, plane_change_fraction=0.05,
         min_twr_atmo=1.3, min_twr_vac=1.1,
         ship_cd=0.2, srb_needs_rcs=False,
+        precise_pointing_needs_reaction_control=False,
     ),
     # No dv margin at all: every budget must close exactly.  srb_needs_rcs is an
     # equipment-gating flag, not a margin lever — it travels with the profile
@@ -128,6 +138,7 @@ DIFFICULTY_PROFILES: dict[str, DifficultyProfile] = {
         fixed_margin=0, percent_margin=0.00, plane_change_fraction=0.00,
         min_twr_atmo=1.2, min_twr_vac=1.0,
         ship_cd=0.2, srb_needs_rcs=False,
+        precise_pointing_needs_reaction_control=False,
     ),
 }
 

@@ -742,6 +742,11 @@ _RANK_BUMP_TABLE: dict[BlockingReason, tuple[RankAxisKey, ...]] = {
     BlockingReason.NO_ATTITUDE_CONTROL: (
         RankAxisKey.SAS, RankAxisKey.PROBE_SAS, RankAxisKey.CAPSULE,
     ),
+    # Same resolution as NO_ATTITUDE_CONTROL: injecting a reaction wheel (SAS /
+    # wheel-bearing probe or capsule) satisfies the precise-pointing gate.
+    BlockingReason.NO_PRECISE_ATTITUDE: (
+        RankAxisKey.SAS, RankAxisKey.PROBE_SAS, RankAxisKey.CAPSULE,
+    ),
 }
 
 

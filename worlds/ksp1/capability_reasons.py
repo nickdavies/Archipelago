@@ -34,6 +34,10 @@ class BlockingReason(str, Enum):
 
     # --- Control --------------------------------------------------------
     NO_ATTITUDE_CONTROL = "no_attitude_control"
+    # Has attitude control, but only engine gimbal — insufficient for a
+    # precise-orbit contract (needs a reaction wheel or RCS to hold a fixed
+    # coast attitude). Only raised on casual/normal physics.
+    NO_PRECISE_ATTITUDE = "no_precise_attitude"
 
     # --- Landing / safe descent -----------------------------------------
     LANDING_LEGS_MISSING = "landing_legs_missing"
@@ -218,6 +222,8 @@ class BlockingInfo:
         # Control / landing --------------------------------------------
         if r == BlockingReason.NO_ATTITUDE_CONTROL:
             return "no attitude control"
+        if r == BlockingReason.NO_PRECISE_ATTITUDE:
+            return "no reaction wheel or RCS for precise orbit (gimbal only)"
         if r == BlockingReason.LANDING_LEGS_MISSING:
             return (f"need leg tier {self.leg_tier_needed}, "
                     f"have {self.leg_tier_available}")

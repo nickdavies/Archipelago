@@ -50,6 +50,93 @@ def _first_compatible_body(td):
     return None
 
 
+class TestPreciseOrbitAttitude(unittest.TestCase):
+    """Precise-orbit contracts (equatorial/polar/stationary/random) must hold a
+    fixed attitude with the engine off, so on casual/normal physics they need a
+    reaction wheel or RCS — engine gimbal alone isn't enough. Expert (small/zero)
+    is trusted to fly them on gimbal. Generic ORBIT (any shape) never needs it.
+    """
+
+    GENEROUS = DIFFICULTY_PROFILES["generous"]        # casual
+    COMFORTABLE = DIFFICULTY_PROFILES["comfortable"]  # normal
+    SMALL = DIFFICULTY_PROFILES["small"]              # expert
+    ZERO = DIFFICULTY_PROFILES["zero"]
+
+    def _gimbal_only(self):
+        """A full kit (reaches any Kerbin orbit, gimballed engines available) but
+        with NO reaction wheel and NO RCS — attitude comes solely from gimbal."""
+        g = _flags(lambda n: 99)
+        g.has_reaction_wheels = False
+        g.has_rcs = False
+        g.lightest_reaction_wheel = None
+        g.lightest_rcs_thruster = None
+        return g
+
+    def test_precise_orbit_blocked_on_casual_normal_gimbal_only(self):
+        g = self._gimbal_only()
+        for ct in C.PRECISE_ORBIT_TYPES:
+            spec = C.ContractSpec(ct, BodyName.KERBIN)
+            for diff in (self.GENEROUS, self.COMFORTABLE):
+                self.assertFalse(
+                    C.can_complete_contract(spec, g, diff, MB),
+                    f"{ct} on gimbal-only should be blocked at {diff.fixed_margin=}")
+
+    def test_precise_orbit_allowed_on_expert_gimbal_only(self):
+        # Proves the precise-attitude gate is the SOLE differentiator: the same
+        # gimbal-only kit flies these orbits on expert physics.
+        g = self._gimbal_only()
+        for ct in C.PRECISE_ORBIT_TYPES:
+            spec = C.ContractSpec(ct, BodyName.KERBIN)
+            for diff in (self.SMALL, self.ZERO):
+                self.assertTrue(
+                    C.can_complete_contract(spec, g, diff, MB),
+                    f"{ct} should fly on gimbal alone on expert {diff.fixed_margin=}")
+
+    def test_generic_orbit_never_needs_wheel(self):
+        g = self._gimbal_only()
+        spec = C.ContractSpec(C.ContractType.ORBIT, BodyName.KERBIN)
+        for diff in (self.GENEROUS, self.COMFORTABLE, self.SMALL, self.ZERO):
+            self.assertTrue(
+                C.can_complete_contract(spec, g, diff, MB),
+                "generic (any-shape) ORBIT must never require a wheel/RCS")
+
+    def test_wheel_or_rcs_restores_precise_orbit_on_casual(self):
+        spec = C.ContractSpec(C.ContractType.EQUATORIAL_ORBIT, BodyName.KERBIN)
+        with_wheel = self._gimbal_only()
+        with_wheel.has_reaction_wheels = True
+        self.assertTrue(C.can_complete_contract(spec, with_wheel, self.GENEROUS, MB))
+        with_rcs = self._gimbal_only()
+        with_rcs.has_rcs = True
+        self.assertTrue(C.can_complete_contract(spec, with_rcs, self.GENEROUS, MB))
+
+    def test_station_and_rescue_also_need_precise_pointing(self):
+        """SPACE_STATION (large crewed vessel holding a service orbit) and
+        KERBAL_RESCUE (fine approach) join the precise-pointing set — same
+        wheel/RCS-on-casual, gimbal-on-expert rule as the specific orbits.
+        RESCUE additionally keeps its existing navigation (rendezvous) gate."""
+        g = self._gimbal_only()
+        for ct in (C.ContractType.SPACE_STATION, C.ContractType.KERBAL_RESCUE):
+            self.assertIn(ct, C.PRECISE_POINTING_TYPES)
+            body = _first_compatible_body(C.CONTRACT_TYPE_DEFS[ct])
+            spec = C.ContractSpec(ct, body)
+            for diff in (self.GENEROUS, self.COMFORTABLE):
+                self.assertFalse(
+                    C.can_complete_contract(spec, g, diff, MB),
+                    f"{ct} on gimbal-only should be blocked on casual/normal")
+            # Expert flies it on gimbal alone → attitude is the sole differentiator.
+            self.assertTrue(
+                C.can_complete_contract(spec, g, self.SMALL, MB),
+                f"{ct} should fly gimbal-only on expert (so the block above is "
+                f"the precise-attitude gate, not some other missing part)")
+
+    def test_generic_precise_pointing_excludes_plain_missions(self):
+        """The precise-pointing set must NOT sweep in ordinary missions — a
+        generic ORBIT / a mine-ore landing never needs a wheel."""
+        for ct in (C.ContractType.ORBIT, C.ContractType.MINE_ORE,
+                   C.ContractType.TRANSMIT_SCIENCE):
+            self.assertNotIn(ct, C.PRECISE_POINTING_TYPES)
+
+
 class TestRequiredPartManifest(unittest.TestCase):
     def test_full_kit_returns_lightest_per_category(self):
         manifest = C.required_part_manifest(MUN_MINE, FULL)

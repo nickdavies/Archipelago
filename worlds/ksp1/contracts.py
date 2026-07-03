@@ -294,6 +294,24 @@ NON_GOAL_TYPES: tuple[ContractType, ...] = (
     ContractType.TRANSMIT_SCIENCE, ContractType.KERBAL_RESCUE,
 )
 
+# Contract types that ask the player to match a SPECIFIC target orbit (via the
+# stock SpecificOrbitParameter) rather than "any orbit".
+PRECISE_ORBIT_TYPES: frozenset[ContractType] = frozenset({
+    ContractType.EQUATORIAL_ORBIT, ContractType.POLAR_ORBIT,
+    ContractType.STATIONARY_ORBIT, ContractType.RANDOM_ORBIT,
+})
+
+# Contract types whose mission must hold a fixed attitude with the engine off, so
+# they need a reaction wheel or RCS (not just engine gimbal) on casual/normal
+# physics — see DifficultyProfile.precise_pointing_needs_reaction_control and the
+# capability NO_PRECISE_ATTITUDE gate. Beyond the specific-orbit set: a space
+# station (a large crewed vessel holding a service orbit) and a kerbal rescue
+# (fine approach to the stranded craft). RESCUE additionally carries the
+# navigation (rendezvous) gate via its mission type.
+PRECISE_POINTING_TYPES: frozenset[ContractType] = PRECISE_ORBIT_TYPES | frozenset({
+    ContractType.SPACE_STATION, ContractType.KERBAL_RESCUE,
+})
+
 
 # Part categories with a native KSP contract-objective check. "Generator" covers
 # any solar panel / RTG / fuel cell; "ModuleScienceLab" matches the lab by module
@@ -1000,6 +1018,7 @@ def evaluate_contract(
         flags, diff, spec.body, td.base_mission_type, td.crewed,
         mission_builder, extra_payload_parts=manifest,
         mission_transform=spec.mission_transform(mission_builder),
+        requires_precise_pointing=spec.contract_type in PRECISE_POINTING_TYPES,
         run_parallel=run_parallel,
     )
 

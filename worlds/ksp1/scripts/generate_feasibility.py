@@ -43,12 +43,13 @@ Verify the checked-in table matches what this script would produce
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import itertools
 import sys
 from pathlib import Path
 
 from worlds.ksp1.bodies import (
-    ALL_BODIES, BodyName, DIFFICULTY_PROFILES, DifficultyProfile,
+    ALL_BODIES, BodyName, DIFFICULTY_PROFILES,
     MissionBuilder,
 )
 from worlds.ksp1.capability import compute_capability_from_items
@@ -112,15 +113,10 @@ def _profile_with_overhead(base_name: str, overhead: float) -> str:
         return base_name
     base = DIFFICULTY_PROFILES[base_name]
     name = f"_probe_{base_name}_p{int(round(overhead * 100))}"
-    DIFFICULTY_PROFILES[name] = DifficultyProfile(
-        fixed_margin=base.fixed_margin,
-        percent_margin=base.percent_margin + overhead,
-        plane_change_fraction=base.plane_change_fraction,
-        min_twr_atmo=base.min_twr_atmo,
-        min_twr_vac=base.min_twr_vac,
-        ship_cd=base.ship_cd,
-        srb_needs_rcs=base.srb_needs_rcs,
-    )
+    # replace() copies every field and overrides only the margin, so adding a
+    # field to DifficultyProfile can't silently drop it from the probe profile.
+    DIFFICULTY_PROFILES[name] = dataclasses.replace(
+        base, percent_margin=base.percent_margin + overhead)
     return name
 
 

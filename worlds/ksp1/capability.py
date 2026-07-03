@@ -137,10 +137,11 @@ MISSION_TYPES_REQUIRING_EVA: frozenset[MissionType] = frozenset({
 })
 
 # Mission types that require a rendezvous — matching orbits with another vessel.
-# Rescuing a stranded Kerbal is the sole mission type; docking / space-station
-# CONTRACTS also need it and pass ``requires_rendezvous=True`` explicitly (they
-# share the ORBIT base mission type).  Rendezvous needs patched conics + maneuver
-# nodes (Tracking Station + Mission Control), the ``can_rendezvous`` gate.
+# Rescuing a stranded Kerbal is the sole type today; other callers (e.g. the
+# Apollo-split return retry) pass ``requires_rendezvous=True`` explicitly.
+# Rendezvous needs patched conics + maneuver nodes (Tracking Station + Mission
+# Control), the ``can_rendezvous`` gate — this is the NAVIGATION axis, orthogonal
+# to the precise-pointing (attitude-hardware) gate above.
 MISSION_TYPES_REQUIRING_RENDEZVOUS: frozenset[MissionType] = frozenset({
     MissionType.RESCUE,
 })
@@ -1308,6 +1309,7 @@ def _evaluate_profile(
     requires_eva: bool | None = None,
     requires_rendezvous: bool | None = None,
     requires_samples: bool | None = None,
+    requires_precise_pointing: bool = False,
 ) -> ProfileResult:
     """
     Run the two-pass evaluation on a single mission profile alternative.
@@ -1364,6 +1366,19 @@ def _evaluate_profile(
     if any(e.requires_attitude_control for e in profile):
         if not _has_attitude_control(flags):
             blocking.append(BlockingInfo(reason=BlockingReason.NO_ATTITUDE_CONTROL))
+
+    # Precise pointing: a mission that must hold a fixed attitude with the engine
+    # off — a specific target orbit (equatorial/polar/stationary/random), a space
+    # station, or a kerbal rescue's fine approach. Engine gimbal only steers under
+    # thrust, so on casual/normal physics this needs a reaction wheel or RCS (a
+    # wheel-bearing pod counts). Expert (small/zero) is trusted to fly these on
+    # gimbal alone, so the profile leaves it False. Physically joining two craft
+    # (docking — RCS + a docking port) is a separate concern from holding a fixed
+    # attitude and is modelled elsewhere, not by this gate.
+    if (requires_precise_pointing
+            and diff.precise_pointing_needs_reaction_control
+            and not (flags.has_reaction_wheels or flags.has_rcs)):
+        blocking.append(BlockingInfo(reason=BlockingReason.NO_PRECISE_ATTITUDE))
 
     # Landing legs
     if needs_legs:
@@ -2910,6 +2925,7 @@ def evaluate_mission_detailed(
     requires_eva: bool | None = None,
     requires_rendezvous: bool | None = None,
     requires_samples: bool | None = None,
+    requires_precise_pointing: bool = False,
     run_parallel: bool = True,
 ) -> ProfileResult:
     """
@@ -3067,7 +3083,8 @@ def evaluate_mission_detailed(
                                        run_parallel=run_parallel,
                                        requires_eva=requires_eva,
                                        requires_rendezvous=requires_rendezvous,
-                                       requires_samples=requires_samples)
+                                       requires_samples=requires_samples,
+                                       requires_precise_pointing=requires_precise_pointing)
             if result.feasible:
                 return result
             for b in result.blocking:
