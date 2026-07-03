@@ -1,0 +1,42 @@
+name: KSP1 Feasibility Table
+
+# Drift-guard for the checked-in feasibility table (worlds/ksp1/data/feasibility.py).
+# The table is generated offline from the dv model, mission graph and part DB; if
+# any of those change without the table being regenerated, the world's banned-
+# location set silently goes out of sync. `--check` recomputes every difficulty x
+# body (~80s), which is too slow for the local unit loop, so it lives here instead.
+#
+# Runs on every branch push / PR that touches worlds/ksp1/, and is called by
+# release-apworld.yml as a required gate — a stale table blocks the .apworld build.
+
+on:
+  push:
+    branches:
+      - '**'
+    paths:
+      - 'worlds/ksp1/**'
+      - '.github/workflows/ksp1-feasibility.yml'
+  pull_request:
+    paths:
+      - 'worlds/ksp1/**'
+      - '.github/workflows/ksp1-feasibility.yml'
+  workflow_call: {}
+
+permissions:
+  contents: read
+
+jobs:
+  feasibility:
+    runs-on: ubuntu-latest
+    name: Feasibility table is current
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python ModuleUpdate.py --yes --force
+      - name: Check feasibility table matches generator
+        run: python -m worlds.ksp1.scripts.generate_feasibility --check

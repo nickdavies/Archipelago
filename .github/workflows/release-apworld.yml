@@ -10,7 +10,12 @@ permissions:
   contents: write
 
 jobs:
+  # Gate: a stale feasibility table must never ship in a release.
+  feasibility:
+    uses: ./.github/workflows/ksp1-feasibility.yml
+
   build:
+    needs: feasibility
     runs-on: ubuntu-latest
 
     steps:
