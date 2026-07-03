@@ -303,8 +303,8 @@ PRECISE_ORBIT_TYPES: frozenset[ContractType] = frozenset({
 
 # Contract types whose mission must hold a fixed attitude with the engine off, so
 # they need a reaction wheel or RCS (not just engine gimbal) on casual/normal
-# physics — see DifficultyProfile.precise_pointing_needs_reaction_control and the
-# capability NO_PRECISE_ATTITUDE gate. Beyond the specific-orbit set: a space
+# difficulty — see GameplayDifficulty.precise_pointing_needs_reaction_control and
+# the capability NO_PRECISE_ATTITUDE gate. Beyond the specific-orbit set: a space
 # station (a large crewed vessel holding a service orbit) and a kerbal rescue
 # (fine approach to the stranded craft). RESCUE additionally carries the
 # navigation (rendezvous) gate via its mission type.

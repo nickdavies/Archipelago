@@ -85,27 +85,23 @@ class BodyName(StrEnum):
 
 @dataclass(frozen=True)
 class DifficultyProfile:
+    """PHYSICS overheads only (dv margins, TWR floors, drag). Resolved from the
+    PhysicsDifficulty option. Player skill/equipment gates live on
+    GameplayDifficulty, resolved from the separate base Difficulty option."""
     fixed_margin: float         # m/s added to every dv budget
     percent_margin: float       # fraction multiplied on top (0.15 = 15%)
     plane_change_fraction: float # fraction of worst-case plane-change dv included
     min_twr_atmo: float         # minimum TWR for atmospheric ascent/landing
     min_twr_vac: float          # minimum TWR for vacuum ascent/landing
     ship_cd: float              # ship body drag coefficient (parachute discount)
-    srb_needs_rcs: bool         # True = SRBs require RCS for throttle-mode edges
-    precise_pointing_needs_reaction_control: bool
-    # True = missions that must hold a fixed attitude with the engine off
-    # (precise-orbit contracts, space stations, kerbal rescues) require a reaction
-    # wheel or RCS, not just engine gimbal. Gimbal only steers under thrust.
-    # Expert (small/zero) is trusted to fly these on gimbal alone. See the
-    # capability NO_PRECISE_ATTITUDE gate. (A future DOCKING layer would demand
-    # RCS specifically + docking hardware; not modelled yet.)
 
 
 # Physics-difficulty profiles, keyed by the PhysicsDifficulty option's level
 # names (generous/comfortable/small = old casual/normal/expert physics; zero =
 # the retired "insane" 0-margin profile).  This is the PHYSICS axis only —
-# base Difficulty (tech slots / inventory / science / contract pacing) is
-# separate.  Resolve a world's profile name with effective_physics_profile_name.
+# base Difficulty (tech slots / inventory / science / contract pacing / the
+# GameplayDifficulty gates below) is separate.  Resolve a world's profile name
+# with effective_physics_profile_name.
 DIFFICULTY_PROFILES: dict[str, DifficultyProfile] = {
     # plane_change_fraction models a window-timing SKILL: matching an inclined
     # target's plane is mostly avoidable by departing at the node, but it's a
@@ -115,32 +111,55 @@ DIFFICULTY_PROFILES: dict[str, DifficultyProfile] = {
     # X→parent is always free (see _add_home_return_paths).
     "generous": DifficultyProfile(
         fixed_margin=200, percent_margin=0.30, plane_change_fraction=1.00,
-        min_twr_atmo=1.5, min_twr_vac=1.2,
-        ship_cd=0.0, srb_needs_rcs=True,
-        precise_pointing_needs_reaction_control=True,
+        min_twr_atmo=1.5, min_twr_vac=1.2, ship_cd=0.0,
     ),
     "comfortable": DifficultyProfile(
         fixed_margin=100, percent_margin=0.15, plane_change_fraction=0.25,
-        min_twr_atmo=1.5, min_twr_vac=1.2,
-        ship_cd=0.1, srb_needs_rcs=True,
-        precise_pointing_needs_reaction_control=True,
+        min_twr_atmo=1.5, min_twr_vac=1.2, ship_cd=0.1,
     ),
     "small": DifficultyProfile(
         fixed_margin=50, percent_margin=0.05, plane_change_fraction=0.05,
-        min_twr_atmo=1.3, min_twr_vac=1.1,
-        ship_cd=0.2, srb_needs_rcs=False,
-        precise_pointing_needs_reaction_control=False,
+        min_twr_atmo=1.3, min_twr_vac=1.1, ship_cd=0.2,
     ),
-    # No dv margin at all: every budget must close exactly.  srb_needs_rcs is an
-    # equipment-gating flag, not a margin lever — it travels with the profile
-    # for now and stays False here (matching 'small').
+    # No dv margin at all: every budget must close exactly.
     "zero": DifficultyProfile(
         fixed_margin=0, percent_margin=0.00, plane_change_fraction=0.00,
-        min_twr_atmo=1.2, min_twr_vac=1.0,
-        ship_cd=0.2, srb_needs_rcs=False,
-        precise_pointing_needs_reaction_control=False,
+        min_twr_atmo=1.2, min_twr_vac=1.0, ship_cd=0.2,
     ),
 }
+
+
+@dataclass(frozen=True)
+class GameplayDifficulty:
+    """Player skill/equipment gates, resolved from the base Difficulty option
+    (casual/normal/expert) — NOT the physics PhysicsDifficulty profile. These are
+    orthogonal to dv margins: whether holding a precise attitude needs a reaction
+    wheel or RCS (gimbal alone suffices on expert), and whether an SRB-steered
+    ascent needs RCS. A player can run forgiving physics at an expert skill
+    setting, so these must track base Difficulty, not the margins."""
+    precise_pointing_needs_reaction_control: bool
+    srb_needs_rcs: bool
+
+
+# Base Difficulty.value → gameplay gates.  Raw-int keys (mirrors
+# _AUTO_PHYSICS_BY_DIFFICULTY) so bodies.py stays free of an options import.
+# casual/normal expect the assists; expert flies without them.
+_GAMEPLAY_BY_DIFFICULTY: dict[int, GameplayDifficulty] = {
+    0: GameplayDifficulty(precise_pointing_needs_reaction_control=True,  srb_needs_rcs=True),   # casual
+    1: GameplayDifficulty(precise_pointing_needs_reaction_control=True,  srb_needs_rcs=True),   # normal
+    2: GameplayDifficulty(precise_pointing_needs_reaction_control=False, srb_needs_rcs=False),  # expert
+}
+
+# Strictest gates — the conservative default for callers that don't resolve a
+# world's difficulty (test/generator/feasibility paths).  The real runtime
+# (get_capability) and the sphere ladder pass the world's actual value;
+# over-requiring here is Golden-Rule-safe.
+CONSERVATIVE_GAMEPLAY = _GAMEPLAY_BY_DIFFICULTY[0]
+
+
+def effective_gameplay_difficulty(options) -> GameplayDifficulty:
+    """Gameplay gates for this world, from the base Difficulty option."""
+    return _GAMEPLAY_BY_DIFFICULTY[options.difficulty.value]
 
 
 # Base Difficulty.value → default physics profile when PhysicsDifficulty=auto.
@@ -1383,6 +1402,13 @@ class MissionBuilder:
 
     def __init__(self, home: BodyName):
         self.home: BodyName = home
+        # Player skill/equipment gates (reaction-wheel/RCS/nav assists) for this
+        # world, resolved from the base Difficulty + HomeSystem options. Populated
+        # by the world in generate_early (same lifecycle as random_orbit_params
+        # below); the conservative default stands for test/CLI builders that don't
+        # set it. Carried here so the sphere ladder's _evaluate and the capability
+        # evaluators reach it without threading a param through the bumper.
+        self.gameplay: GameplayDifficulty = CONSERVATIVE_GAMEPLAY
         # Per-body seeded target orbits for RANDOM_ORBIT contracts. Populated by
         # the world in generate_early (fresh or UT-restored); empty until then.
         # transform_mission reads these to model the home-orbit extra cost, so

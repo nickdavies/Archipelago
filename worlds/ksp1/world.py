@@ -17,7 +17,7 @@ from .data.feasibility import (
 )
 from .bodies import (
     ALL_BODIES, BodyName, EdgeType, MissionBuilder, MissionType, RandomOrbitParams,
-    effective_physics_profile_name,
+    effective_physics_profile_name, effective_gameplay_difficulty,
     generate_random_orbit_params, generate_rescue_orbit_params,
     home_relative_science_values,
 )
@@ -364,6 +364,11 @@ class KSP1World(World):
         # title-case round-trip rebuilds the canonical ``StrEnum`` value.
         home = BodyName(self.options.starting_body.current_key.title())
         self.mission_builder = MissionBuilder(home=home)
+        # Player skill/equipment gates (reaction-wheel/RCS/nav assists) from the
+        # base Difficulty option.  Carried on the mission_builder so capability +
+        # the sphere ladder reach it without threading a param (options.difficulty
+        # is already restored by _apply_slot_data under UT before this point).
+        self.mission_builder.gameplay = effective_gameplay_difficulty(self.options)
         # Pack-aware source of truth for which parts this world may use. The
         # enabled optional packs come from the option (Stock is always added by
         # PartManager); a disabled pack's parts are then absent from the item

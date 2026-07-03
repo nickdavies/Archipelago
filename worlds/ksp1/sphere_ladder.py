@@ -59,7 +59,7 @@ from .locations import (
 )
 from .contracts import (
     parse_contract_location_name, contract_payload_parts, required_part_breakdown,
-    _CHAIN_GUARANTEED_CATEGORIES,
+    _CHAIN_GUARANTEED_CATEGORIES, PRECISE_POINTING_TYPES,
 )
 from .items import (
     PROGRESSIVE_LAUNCH_PAD_COUNT, PROGRESSIVE_LAUNCH_PAD_NAME,
@@ -433,6 +433,13 @@ def _evaluate(
         extra_payload_parts=extra_payload,
         mission_transform=mission_transform,
         requires_eva=info.requires_eva,
+        # Match the runtime contract rule: precise-orbit / station / rescue
+        # contracts must hold a fixed attitude (wheel or RCS on casual/normal),
+        # so the cheap-rep bracket requires it too — else the ladder brackets
+        # these too early (gimbal-only) and the reps diverge from contract_access.
+        requires_precise_pointing=(
+            info.spec is not None
+            and info.spec.contract_type in PRECISE_POINTING_TYPES),
         run_parallel=run_parallel,
     )
 

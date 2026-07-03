@@ -24,6 +24,7 @@ from BaseClasses import CollectionState
 from .bodies import (
     BODY_BY_NAME, ALL_BODIES,
     BodyName, MissionType, DifficultyProfile, DIFFICULTY_PROFILES,
+    GameplayDifficulty, CONSERVATIVE_GAMEPLAY,
     Body, MissionEdge, MissionBuilder, EdgeType,
     effective_dv, effective_physics_profile_name, home_system_bodies, parent_chain,
 )
@@ -1310,6 +1311,7 @@ def _evaluate_profile(
     requires_rendezvous: bool | None = None,
     requires_samples: bool | None = None,
     requires_precise_pointing: bool = False,
+    gameplay: GameplayDifficulty = CONSERVATIVE_GAMEPLAY,
 ) -> ProfileResult:
     """
     Run the two-pass evaluation on a single mission profile alternative.
@@ -1376,7 +1378,7 @@ def _evaluate_profile(
     # (docking — RCS + a docking port) is a separate concern from holding a fixed
     # attitude and is modelled elsewhere, not by this gate.
     if (requires_precise_pointing
-            and diff.precise_pointing_needs_reaction_control
+            and gameplay.precise_pointing_needs_reaction_control
             and not (flags.has_reaction_wheels or flags.has_rcs)):
         blocking.append(BlockingInfo(reason=BlockingReason.NO_PRECISE_ATTITUDE))
 
@@ -1924,7 +1926,7 @@ def _evaluate_profile(
             max_heat_shield_size=flags.best_heat_shield.size_class if flags.best_heat_shield else None,
             heat_shields=heat_shields_arg,
             in_atmosphere=in_atmo,
-            srb_needs_rcs=diff.srb_needs_rcs,
+            srb_needs_rcs=gameplay.srb_needs_rcs,
             player_has_rcs=flags.has_rcs,
             tanks_by_fuel_type=flags.tanks_by_fuel_type,
             available_multi_mounts=flags.available_multi_mounts,
@@ -1967,7 +1969,7 @@ def _evaluate_profile(
                 heat_shields=heat_shields_arg,
                 requires_throttleable=req_throttle,
                 require_gimbal=needs_gimbal_engine,
-                srb_needs_rcs=diff.srb_needs_rcs,
+                srb_needs_rcs=gameplay.srb_needs_rcs,
                 player_has_rcs=flags.has_rcs,
                 attitude_module_mass=stage_attitude_mass,
                 aero_steering_mass=stage_aero_mass,
@@ -2730,6 +2732,7 @@ def _assess_one_body(
     computed: dict[str, BodyAccessProfile],
     mission_builder: MissionBuilder,
 ) -> BodyAccessProfile:
+    gameplay = mission_builder.gameplay  # world-carried skill/equipment gates
     prof = BodyAccessProfile()
     home_system = home_system_bodies(mission_builder.home)
 
@@ -2783,7 +2786,7 @@ def _assess_one_body(
         ok, sub_blocking = _try_profiles_reason(
             profiles, flags, diff, event.mission_type,
             crewed=event.crewed, home=mission_builder.home,
-            requires_eva=event.requires_eva,
+            requires_eva=event.requires_eva, gameplay=gameplay,
         )
         prof.access[event.name] = ok
         if not ok and not prof.blocking:
@@ -2843,6 +2846,7 @@ def _try_profiles(
     home: BodyName,
     extra_payload_parts: tuple[MiscEquipment, ...] = (),
     requires_eva: bool = False,
+    gameplay: GameplayDifficulty = CONSERVATIVE_GAMEPLAY,
 ) -> bool:
     """Return True if any profile alternative is feasible.
 
@@ -2862,7 +2866,8 @@ def _try_profiles(
                                            is_crewed=is_crewed, home=home,
                                            extra_payload_parts=extra_payload_parts,
                                            run_parallel=run_par,
-                                           requires_eva=requires_eva)
+                                           requires_eva=requires_eva,
+                                           gameplay=gameplay)
                 if result.feasible:
                     return True
     return False
@@ -2877,6 +2882,7 @@ def _try_profiles_reason(
     home: BodyName,
     extra_payload_parts: tuple[MiscEquipment, ...] = (),
     requires_eva: bool = False,
+    gameplay: GameplayDifficulty = CONSERVATIVE_GAMEPLAY,
 ) -> tuple[bool, list[BlockingInfo]]:
     """
     Like _try_profiles but also returns deduplicated blocking entries
@@ -2901,7 +2907,8 @@ def _try_profiles_reason(
                                            is_crewed=is_crewed, home=home,
                                            extra_payload_parts=extra_payload_parts,
                                            run_parallel=run_par,
-                                           requires_eva=requires_eva)
+                                           requires_eva=requires_eva,
+                                           gameplay=gameplay)
                 if result.feasible:
                     return True, []
                 for b in result.blocking:
@@ -2948,6 +2955,7 @@ def evaluate_mission_detailed(
     capability flags.
     """
     home = mission_builder.home_body
+    gameplay = mission_builder.gameplay  # world-carried skill/equipment gates
 
     # --- Sounding rocket (altitude milestones, first crash) ---
     if mission_type == MissionType.SOUNDING:
@@ -3030,7 +3038,7 @@ def evaluate_mission_detailed(
                 continue
             ok, sub_blocking = _try_profiles_reason(
                 profiles, flags, diff, MissionType.LAND,
-                crewed=None, home=home,
+                crewed=None, home=home, gameplay=gameplay,
             )
             if ok:
                 return ProfileResult(True)
@@ -3084,7 +3092,8 @@ def evaluate_mission_detailed(
                                        requires_eva=requires_eva,
                                        requires_rendezvous=requires_rendezvous,
                                        requires_samples=requires_samples,
-                                       requires_precise_pointing=requires_precise_pointing)
+                                       requires_precise_pointing=requires_precise_pointing,
+                                       gameplay=gameplay)
             if result.feasible:
                 return result
             for b in result.blocking:
