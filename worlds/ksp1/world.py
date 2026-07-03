@@ -889,6 +889,14 @@ class KSP1World(World):
 
     def _apply_slot_data(self, slot_data: dict[str, Any]) -> None:
         """Restore options from slot_data during UT regen."""
+        # Marks this world as a Universal Tracker regen.  UT rebuilds logic
+        # through set_rules only and never runs pre_fill, so the fill-time cheap
+        # ladder proxies (_cheap_contract_reps, _science_body_event_reps) are
+        # absent.  Contract and science-node access rules read this flag to fall
+        # back to the live get_capability oracle instead of their conservative
+        # pre-ladder floor (which would report every contract and every tech node
+        # permanently out of logic).  Never set during normal generation.
+        self._ut_active = True
         self.options.goal.value = slot_data["goal"]
         self.options.difficulty.value = slot_data["difficulty"]
         self.options.start_with_launch_clamps.value = slot_data["start_with_launch_clamps"]

@@ -159,6 +159,63 @@ class TestUTRegen(unittest.TestCase):
         self.assertEqual(original_sd["random_orbit_params"],
                          world2.fill_slot_data()["random_orbit_params"])
 
+    def test_contracts_and_science_in_logic_under_ut(self):
+        """Under UT (no pre_fill) contract locations and tech nodes must NOT be
+        permanently out of logic.
+
+        The cheap ladder proxies (_cheap_contract_reps / _science_body_event_reps)
+        are built only in pre_fill, which UT skips.  Without the live-capability
+        fallback every contract returned unreachable and every tech node saw a
+        0.0 science budget, so nothing past bootstrap was ever in logic.  With a
+        full inventory both must be reachable, and the _ut_active gate must be
+        what enables it (off the UT path the conservative floor still stands).
+        """
+        from worlds.ksp1.rules import _accessible_science
+
+        opts = {
+            "goal": "flag_every_body",
+            "goal_contract_mode": "count",
+            "contracts_available": 10,
+        }
+        _, world2, _ = self._regen_from_slot_data(seed=7, options=opts)
+        self.assertTrue(getattr(world2, "_ut_active", False),
+                        "UT regen must set _ut_active")
+        player = world2.player
+        home = world2.mission_builder.home
+        state = world2.multiworld.get_all_state(False)
+
+        contract_locs = [
+            loc for loc in world2.multiworld.get_locations(player)
+            if loc.name.startswith("Contract:")
+        ]
+        self.assertTrue(contract_locs, "seed produced no contract locations")
+
+        # Fix on: full inventory reaches contracts + banks science.
+        self.assertTrue(
+            any(loc.can_reach(state) for loc in contract_locs),
+            "no contract location reachable under UT even with full inventory",
+        )
+        self.assertGreater(
+            _accessible_science(state, player, 1.0, home), 0.0,
+            "accessible science is 0 under UT — tech nodes all out of logic",
+        )
+
+        # Negative control: the _ut_active gate is load-bearing.  With it off,
+        # the absent proxies force the conservative floor (unreachable / 0.0),
+        # which is exactly the pre-fix behaviour.
+        world2._ut_active = False
+        try:
+            self.assertFalse(
+                any(loc.can_reach(state) for loc in contract_locs),
+                "contract reachable with proxy absent AND _ut_active off",
+            )
+            self.assertEqual(
+                _accessible_science(state, player, 1.0, home), 0.0,
+                "science non-zero with brackets absent AND _ut_active off",
+            )
+        finally:
+            world2._ut_active = True
+
     def test_random_contracts_round_trip(self):
         """random_contracts goal (free flag-on-home) reconstructs after regen."""
         opts = {

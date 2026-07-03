@@ -270,12 +270,20 @@ def _accessible_science(
     currently reach, given their current instrument and crew equipment.
 
     Multiplied by the safety factor before returning.  Uses the cheap ladder
-    science brackets (built in pre_fill).  Rules only evaluate after pre_fill, so
-    if the brackets are absent the ladder isn't built yet — conservatively report
-    no accessible science (Golden Rule) rather than fall back to capability.
+    science brackets (built in pre_fill).  During normal generation the rules
+    only evaluate after pre_fill, so an absent-brackets state means the ladder
+    isn't built yet — conservatively report no accessible science (Golden Rule).
+    The one exception is Universal Tracker, which rebuilds logic through
+    set_rules only (no pre_fill): there we fall back to the live capability
+    science sum the brackets approximate, so tech nodes aren't all reported out
+    of logic.
     """
     world = state.multiworld.worlds[player]
     if getattr(world, "_science_body_event_reps", None) is None:
+        if getattr(world, "_ut_active", False):
+            cap = get_capability(state, player)
+            psi_tier = state.count("Progressive Science Instrument", player)
+            return bankable_science(cap, psi_tier, home) * safety
         return 0.0
     return _cheap_bankable_science(state, player, world, home) * safety
 
@@ -599,6 +607,16 @@ def _set_contract_rules(world: KSP1World, player: int) -> None:
                 world = state.multiworld.worlds[player]
                 creps = getattr(world, "_cheap_contract_reps", None)
                 if creps is None:
+                    # The cheap proxy is built in pre_fill.  Universal Tracker
+                    # rebuilds logic through set_rules only (no pre_fill), so the
+                    # proxy is absent — fall back to the live capability oracle it
+                    # approximates (get_capability works under UT; ordinary
+                    # mission rules already use it).  Off the UT path this stays
+                    # the conservative pre-ladder floor, so normal fill is
+                    # unchanged.
+                    if getattr(world, "_ut_active", False):
+                        return get_capability(state, player) \
+                            .contract_access.get(cid, False)
                     return False  # pre-ladder: conservatively not completable
                 # Cheap delivery gate: the contract's bracket reps (has_all ⟹ the
                 # kit delivers, conservative).  An unbracketed non-proxy contract
