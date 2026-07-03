@@ -401,9 +401,15 @@ class BuildingsInLogic(Toggle):
     upgrades them by collecting building progressives.  When off, all facilities
     are maxed similar to science sandbox, no facility gates anything:
 
-      - **Astronaut Complex** gates EVA.  Until upgraded, missions that need a
-        Kerbal outside the craft off-home (flags, surface samples, rescues) are
-        out of logic; home-pad EVA still works.
+      - **Astronaut Complex** gates EVA.  Until upgraded, planting a flag and EVA
+        in orbit are out of logic on EVERY body incl. home, as are rescues and
+        surface samples away from home; only plain home-surface EVA works at
+        level 0.
+      - **Research & Development** gates surface samples (needs the R&D facility
+        even on the home body) *and* the science-cost cap — how expensive a tech
+        node you may buy.  Its level rides the Progressive R&D count on a
+        ``(2, 4)`` schedule (samples + mid cap at the 2nd copy, max at the 4th),
+        placed so the cap never binds before the tech band does.
       - **Tracking Station** gates the Deep Space Network comms range (a weaker
         DSN needs a stronger antenna, so far uncrewed missions and far science
         transmission require upgrading it) *and* patched conics (L2), a
