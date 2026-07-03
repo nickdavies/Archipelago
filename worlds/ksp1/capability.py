@@ -1767,7 +1767,8 @@ def _evaluate_profile(
 
     # Add equipment mass for the terminal stage
     # (legs, ladder, heat shield on the last edge in the profile)
-    terminal_equip = _terminal_equipment_mass(profile, flags, home=home)
+    terminal_equip = _terminal_equipment_mass(
+        profile, flags, home=home, is_crewed=is_crewed)
     # Contract-required equipment delivered to the destination (drill, ore tank,
     # …). Added to the terminal payload so all stages below carry it.
     extra_payload_mass = sum(p.mass for p in extra_payload_parts)
@@ -2266,7 +2267,8 @@ def _evaluate_profile(
     terminal_parts: list[tuple[int, str]] = []
     if terminal_pod is not None:
         terminal_parts.append((1, terminal_pod.name))
-    support_mass, support_parts = _support_equipment_mass(flags, profile, home=home)
+    support_mass, support_parts = _support_equipment_mass(
+        flags, profile, home=home, is_crewed=is_crewed)
     terminal_parts.extend(support_parts)
     # Contract equipment is part of the delivered terminal payload — list it on
     # the manifest so /explain shows the real parts whose mass was charged.
@@ -2593,7 +2595,7 @@ def _required_power_source(
 
 def _support_equipment_mass(
     flags: EquipmentFlags, profile: list[MissionEdge],
-    home: BodyName,
+    home: BodyName, is_crewed: bool,
 ) -> tuple[float, list[tuple[int, str]]]:
     """
     Return (mass, parts) for required support equipment (antenna, power).
@@ -2604,13 +2606,22 @@ def _support_equipment_mass(
     gate enforces, charged as the lightest adequate part so the charge can't
     exceed what a smaller kit pays (monotone) and can't diverge from the
     feasibility verdict.  Relay is the lightest antenna meeting the strictest
-    tier across all edges.
+    tier across all edges — charged ONLY when the forward relay gate enforces
+    it (uncrewed; a pilot needs no radio link, so crewed profiles carry no
+    antenna).  Charging what the gate doesn't require broke monotonicity the
+    same way the old power charge did: only the kit that OWNS the higher-tier
+    antenna paid its mass, so acquiring one pushed the launch past the pad cap
+    (a strictly larger kit losing a mission, bug-092 class; the gate blocks
+    RELAY_TIER_TOO_LOW for uncrewed kits below tier, so the charge here is
+    exactly the part the verdict required).
     """
     mass = 0.0
     parts: list[tuple[int, str]] = []
 
-    # Relay: lightest antenna meeting the strictest tier across all edges.
-    max_relay = max((edge.relay_tier for edge in profile), default=0)
+    # Relay: lightest antenna meeting the strictest tier across all edges,
+    # mirroring the forward gate's crewed exemption.
+    max_relay = (max((edge.relay_tier for edge in profile), default=0)
+                 if not is_crewed else 0)
     if max_relay > 0:
         best_relay: Optional[MiscEquipment] = None
         for tier in range(max_relay, 4):
@@ -2632,7 +2643,7 @@ def _support_equipment_mass(
 
 def _terminal_equipment_mass(profile: list[MissionEdge],
                               flags: EquipmentFlags,
-                              home: BodyName) -> float:
+                              home: BodyName, is_crewed: bool) -> float:
     """
     Equipment mass carried all the way to the terminal destination.
 
@@ -2653,7 +2664,8 @@ def _terminal_equipment_mass(profile: list[MissionEdge],
     if profile and profile[-1].needs_ladder and flags.lightest_ladder:
         mass += flags.lightest_ladder.mass
     # Support equipment (antenna + power source)
-    support_mass, _ = _support_equipment_mass(flags, profile, home=home)
+    support_mass, _ = _support_equipment_mass(
+        flags, profile, home=home, is_crewed=is_crewed)
     mass += support_mass
     return mass
 

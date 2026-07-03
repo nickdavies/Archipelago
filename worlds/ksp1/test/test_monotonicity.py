@@ -58,6 +58,12 @@ _CONFIGS = [
     # enforced kit couldn't fly the mission.  Guards SphereBoundary.flags
     # being built reps-only from exactly reps_collected.
     ("complete_tech_tree", "duna", "count", 6903591710897770246, {}),
+    # Bugs/102's strand seed: the relay CHARGE ignored the relay GATE's
+    # crewed exemption, so only kits that OWNED a tier-2 antenna paid its
+    # mass on crewed missions — acquiring RelayAntenna5 pushed "Kerbin EVA
+    # in Orbit 1" (from Moho) past the pad cap (a strictly larger kit
+    # losing a mission).  Guards charge-mirrors-gate for support equipment.
+    ("flag_every_body", "moho", "count", 10721509650795190484, {}),
 ]
 
 
@@ -126,3 +132,6 @@ class TestCapabilityCrossCheck:
 
     def test_bug_101_complete_tech_tree_duna(self):
         self._check(*_CONFIGS[4])
+
+    def test_bug_102_flag_every_body_moho(self):
+        self._check(*_CONFIGS[5])
