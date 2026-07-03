@@ -424,7 +424,14 @@ class KSP1World(World):
         eve_allowed = (self.options.allow_eve_on_expert.value
                        and self.options.difficulty.value == Difficulty.option_expert)
         if not eve_allowed:
-            unachievable |= self.mission_builder.missions_using_edges(_BANNED_EDGES)
+            # The HOME body is exempt from the curated ban: picking a banned
+            # body as the starting body IS the opt-in (every mission from an
+            # Eve home traverses the Eve ascent as its pad launch — the ban,
+            # written for Eve-as-destination round trips, would otherwise
+            # void the whole seed).  The dv feasibility table still gates
+            # honestly per difficulty.
+            banned = frozenset(e for e in _BANNED_EDGES if e[0] != home)
+            unachievable |= self.mission_builder.missions_using_edges(banned)
         self.unachievable_missions = frozenset(unachievable)
         self.mission_builder.unachievable = self.unachievable_missions
         # Name-keyed view derived from the canonical tuple set (one source).

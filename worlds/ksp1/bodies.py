@@ -284,6 +284,14 @@ class Body:
     # ``low_orbit_alt_km`` so science/capability "in space low" semantics don't
     # move.  0.0 = no data (no terrain floor applied; falls back to low orbit).
     max_terrain_km: float = 0.0
+    # Elevation (m ASL) of this body's designated HOME launch site (the
+    # AP_KSC_Sites pad the client places when this body is the starting
+    # body).  0.0 = at/near sea level (no adjustment).  Only consumed by
+    # ``home_pad_ascent_dv`` — the HOME ascent starts from the pad, so an
+    # elevated site skips the densest atmosphere slab; destination-ascent
+    # edges (a lander that touched down anywhere) always use sea-level
+    # ``dvGL``.
+    pad_altitude_m: float = 0.0
 
     # --- Science budget (for tech-tree access rules) ---
     has_ocean: bool = False         # body has splashable liquid surface
@@ -323,6 +331,39 @@ class Body:
     def lo_radius_m(self) -> float:
         """Low-orbit radius (m) from body centre."""
         return (self.radius_km + self.low_orbit_alt_km) * 1000.0
+
+    # Vacuum-ascent gravity-loss allowance: surface→orbit from an airless
+    # start costs ~10% over circular orbital velocity at a modelled TWR.
+    # Used as the altitude-independent floor when scaling ``dvGL`` down for
+    # an elevated home pad.
+    _VAC_ASCENT_LOSS_FACTOR = 1.1
+
+    def home_pad_ascent_dv(self) -> float:
+        """Surface→low-orbit dv (m/s) from this body's designated HOME pad.
+
+        ``dvGL`` is tabulated at sea level.  An elevated pad starts above
+        the densest atmosphere, so the ATMOSPHERIC EXCESS — everything
+        ``dvGL`` charges beyond the vacuum-ascent floor
+        (``_VAC_ASCENT_LOSS_FACTOR × v_circ``) — shrinks with the pressure
+        remaining above the pad.  The excess scales by **√(pressure
+        fraction)**, not linearly: pure drag loss tracks the remaining
+        column pressure, but much of the excess is drag-LIMITED gravity
+        loss (terminal velocity ∝ 1/√ρ caps the climb rate), which decays
+        as the square root.  √p errs on the conservative (higher-dv) side
+        of community highland-ascent data — Eve's 6,140 m mesa pad yields
+        ~6,415 m/s vs ~6,000-6,500 community figures for that band.
+
+        Sea-level pads (``pad_altitude_m == 0``) and vacuum bodies return
+        ``dvGL`` unchanged.
+        """
+        if (self.pad_altitude_m <= 0.0 or not self.has_atmosphere
+                or self.atm_scale_height_m <= 0.0 or self.dv.dvGL <= 0.0):
+            return self.dv.dvGL
+        v_circ = math.sqrt(self.gm / self.lo_radius_m)
+        vac_floor = self._VAC_ASCENT_LOSS_FACTOR * v_circ
+        excess = max(0.0, self.dv.dvGL - vac_floor)
+        p_frac = math.exp(-self.pad_altitude_m / self.atm_scale_height_m)
+        return vac_floor + excess * math.sqrt(p_frac)
 
     @property
     def min_orbit_radius_m(self) -> float:
@@ -674,6 +715,10 @@ EVE = Body(
     radius_km=700,
     safe_altitude_km=90.0,  # Kármán line; atmosphere edge
     atm_scale_height_m=7000.0,
+    # The AP home pad sits on the 25°S/-159° mesa at 6,140 m ASL
+    # (AP_KSC_Sites/generate.py: "OFF-EQUATOR mesa: +536m vs equator") —
+    # the recommender deliberately targets Eve's highest usable ground.
+    pad_altitude_m=6140.0,
     # 4 land_only + 1 water_only + 8 mixed per BiomeSplit dump.
     # Two tiny biomes (Craters, Akatsuki Lake) weren't sampled by the
     # 5° grid; conservatively excluded.
@@ -1692,12 +1737,18 @@ class MissionBuilder:
         soi = f"{bnl}_soi"
         ic  = f"{bnl}_intercept"
 
-        # Ascent — surface → low orbit (atmospheric or vacuum).
+        # Ascent — surface → low orbit (atmospheric or vacuum).  The HOME
+        # body's ascent starts from its designated pad (an elevated site
+        # pays less than the sea-level ``dvGL`` — Eve's mesa); every other
+        # body's ascent is a lander that touched down anywhere, so it keeps
+        # the sea-level figure.
         if body.can_land and body.dv.dvGL > 0:
             ascent_type = self._AT if body.has_atmosphere else self._VA
             min_twr_ascent = 1.3 if body.has_atmosphere else 1.2
+            ascent_dv = (body.home_pad_ascent_dv() if bn == self.home
+                         else body.dv.dvGL)
             ascent = self._edge(
-                s, lo, ascent_type, body.dv.dvGL, bn,
+                s, lo, ascent_type, ascent_dv, bn,
                 min_twr=min_twr_ascent, throttle=True, attitude=True,
             )
             self._add_out(ascent)
