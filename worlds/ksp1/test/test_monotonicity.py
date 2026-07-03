@@ -64,6 +64,13 @@ _CONFIGS = [
     # in Orbit 1" (from Moho) past the pad cap (a strictly larger kit
     # losing a mission).  Guards charge-mirrors-gate for support equipment.
     ("flag_every_body", "moho", "count", 10721509650795190484, {}),
+    # Bugs/103's strand seed: the relay charge scanned tiers
+    # range(required, 4), EXCLUDING tier 4 — a kit whose only adequate
+    # antenna was the tier-4 dish charged NO antenna mass (under-charge)
+    # while a kit that also owned the tier-3 antenna paid its real mass
+    # (bigger kit, heavier rocket → over Moho's pad cap).  Guards the
+    # scan-all-owned-tiers charge.
+    ("mun_flag", "moho", "count", 11551505357908101103, {}),
 ]
 
 
@@ -135,3 +142,6 @@ class TestCapabilityCrossCheck:
 
     def test_bug_102_flag_every_body_moho(self):
         self._check(*_CONFIGS[5])
+
+    def test_bug_103_mun_flag_moho(self):
+        self._check(*_CONFIGS[6])

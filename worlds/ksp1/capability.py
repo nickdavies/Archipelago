@@ -2619,13 +2619,19 @@ def _support_equipment_mass(
     parts: list[tuple[int, str]] = []
 
     # Relay: lightest antenna meeting the strictest tier across all edges,
-    # mirroring the forward gate's crewed exemption.
+    # mirroring the forward gate's crewed exemption.  Scan every OWNED tier
+    # ≥ required (not a hardcoded range: the old ``range(max_relay, 4)``
+    # excluded tier 4 — the highest real antenna — so a kit whose only
+    # adequate antenna was the tier-4 dish charged NOTHING while a kit that
+    # also owned a mid-tier antenna paid its mass: an under-charge on the
+    # poorer kit AND a bigger-kit-pays-more non-monotonicity, bugs/103).
     max_relay = (max((edge.relay_tier for edge in profile), default=0)
                  if not is_crewed else 0)
     if max_relay > 0:
         best_relay: Optional[MiscEquipment] = None
-        for tier in range(max_relay, 4):
-            candidate = flags.lightest_relay.get(tier)
+        for tier, candidate in flags.lightest_relay.items():
+            if tier < max_relay:
+                continue
             if candidate and (best_relay is None or candidate.mass < best_relay.mass):
                 best_relay = candidate
         if best_relay:
