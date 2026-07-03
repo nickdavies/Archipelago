@@ -3524,6 +3524,8 @@ def evaluate_mission_detailed(
                                            requires_eva=requires_eva,
                                            requires_rendezvous=True,
                                            requires_samples=requires_samples,
+                                           requires_precise_pointing=(
+                                               requires_precise_pointing),
                                            apollo_split=True)
                 if result.feasible:
                     return result
