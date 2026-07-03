@@ -286,12 +286,23 @@ class Body:
     max_terrain_km: float = 0.0
     # Elevation (m ASL) of this body's designated HOME launch site (the
     # AP_KSC_Sites pad the client places when this body is the starting
-    # body).  0.0 = at/near sea level (no adjustment).  Only consumed by
+    # body).  0.0 = at/near sea level (no adjustment).  Consumed by
     # ``home_pad_ascent_dv`` — the HOME ascent starts from the pad, so an
-    # elevated site skips the densest atmosphere slab; destination-ascent
-    # edges (a lander that touched down anywhere) always use sea-level
-    # ``dvGL``.
+    # elevated site skips the densest atmosphere slab.
     pad_altitude_m: float = 0.0
+    # Destination-lander ascents assume a HIGHLANDS touchdown at roughly the
+    # home pad's elevation band (operator decision, 2026-07-03): the landing
+    # site is player-controlled and aiming for high ground is the universal
+    # Eve strategy, so charging the full sea-level ascent would be a
+    # false-negative machine.  When True, the trunk ascent edge uses
+    # ``home_pad_ascent_dv()`` for destination landers too (else sea-level
+    # ``dvGL``).
+    #
+    # DURABLE CAVEAT: a splashdown on such a body is ONE-WAY.  Logic assumes
+    # the ascent starts from highlands, so no mission may ever assume an
+    # ascent after an ocean landing — future biome/splashed-science work must
+    # keep splashdown-reachable checks strictly non-return.
+    assume_highlands_landing: bool = False
 
     # --- Science budget (for tech-tree access rules) ---
     has_ocean: bool = False         # body has splashable liquid surface
@@ -709,7 +720,15 @@ EVE = Body(
     power_requirement="solar",
     eva_jetpack_twr=_jetpack_twr(16.7),
     dv=BodyDeltaV(
-        dvGL=8000, dvLE=1330, dvEI=80, dvK=90,
+        # Sea-level ascent is ~11,500-12,000 m/s (community-verified: modern
+        # dv maps and sea-level ascent reports).  The long-tabulated 8,000 was
+        # implicitly a HIGHLANDS figure — keeping it as "sea level" while the
+        # elevated-pad derivation also discounted altitude double-counted the
+        # terrain benefit.  In-logic Eve ascents never pay this raw figure:
+        # the home ascent launches from the mesa pad, and destination landers
+        # assume a highlands touchdown (assume_highlands_landing) — both
+        # resolve to ~9,000 via home_pad_ascent_dv().
+        dvGL=12000, dvLE=1330, dvEI=80, dvK=90,
         dvLI=None, dvPL=None, dvPE=None, dvPlaneChange=430,
     ),
     radius_km=700,
@@ -719,6 +738,7 @@ EVE = Body(
     # (AP_KSC_Sites/generate.py: "OFF-EQUATOR mesa: +536m vs equator") —
     # the recommender deliberately targets Eve's highest usable ground.
     pad_altitude_m=6140.0,
+    assume_highlands_landing=True,
     # 4 land_only + 1 water_only + 8 mixed per BiomeSplit dump.
     # Two tiny biomes (Craters, Akatsuki Lake) weren't sampled by the
     # 5° grid; conservatively excluded.
@@ -1123,18 +1143,23 @@ _PROGRESSIVE_LAUNCH_PAD_ISP_REF: float = 3000.0
 def progressive_launch_pad_caps_for(home: BodyName) -> tuple[float, ...]:
     """Per-home tonnage caps for the Progressive Launch Pad item.
 
-    Scales the Kerbin baseline by ``exp((home.dvGL - kerbin.dvGL) / Isp_ref)``.
+    Scales the Kerbin baseline by ``exp(Δ(pad ascent dv) / Isp_ref)``.
     This matches the rocket equation's ``payload * exp(Δdv / Isp_eff)``
     mass scaling so each cap tier opens up a similar "effective span of
-    missions" regardless of home gravity well.
+    missions" regardless of home gravity well.  The scaling input is
+    ``home_pad_ascent_dv()`` — the dv a pad launch actually pays — not raw
+    sea-level ``dvGL``: for an elevated home pad (Eve's mesa) the raw
+    figure would inflate the caps past what any home launch needs
+    (12,000 → 17.6× Kerbin vs the pad's ~9,000 → 6.5×).  Identical for
+    sea-level pads, where the two values coincide.
 
     The infinity entry stays as infinity — that final cap removes the
     constraint entirely so heavy goal missions stay feasible after the
     player collects all copies.
     """
     import math
-    kerbin_dv = BODY_BY_NAME[BodyName.KERBIN].dv.dvGL or 3400.0
-    home_dv = BODY_BY_NAME[home].dv.dvGL or kerbin_dv
+    kerbin_dv = BODY_BY_NAME[BodyName.KERBIN].home_pad_ascent_dv() or 3400.0
+    home_dv = BODY_BY_NAME[home].home_pad_ascent_dv() or kerbin_dv
     ratio = math.exp((home_dv - kerbin_dv) / _PROGRESSIVE_LAUNCH_PAD_ISP_REF)
     return tuple(
         cap * ratio if cap != float("inf") else cap
@@ -1739,13 +1764,16 @@ class MissionBuilder:
 
         # Ascent — surface → low orbit (atmospheric or vacuum).  The HOME
         # body's ascent starts from its designated pad (an elevated site
-        # pays less than the sea-level ``dvGL`` — Eve's mesa); every other
-        # body's ascent is a lander that touched down anywhere, so it keeps
-        # the sea-level figure.
+        # pays less than the sea-level ``dvGL`` — Eve's mesa).  Destination
+        # landers pay sea level, EXCEPT on assume_highlands_landing bodies
+        # (Eve), where logic assumes a player-controlled highlands touchdown
+        # at the pad's elevation band — see the field's one-way-splashdown
+        # caveat.
         if body.can_land and body.dv.dvGL > 0:
             ascent_type = self._AT if body.has_atmosphere else self._VA
             min_twr_ascent = 1.3 if body.has_atmosphere else 1.2
-            ascent_dv = (body.home_pad_ascent_dv() if bn == self.home
+            ascent_dv = (body.home_pad_ascent_dv()
+                         if bn == self.home or body.assume_highlands_landing
                          else body.dv.dvGL)
             ascent = self._edge(
                 s, lo, ascent_type, ascent_dv, bn,

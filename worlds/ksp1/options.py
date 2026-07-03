@@ -138,6 +138,11 @@ class StartingBody(Choice):
     generation aborts with OptionError — e.g. ``mun_flag`` with
     ``home = mun`` is rejected at gen time.
 
+    ``eve`` is rejected at generation in this release: the recalibrated
+    Eve ascent (~9,000 m/s from the mesa pad) leaves too little of the
+    solar system verifiable by the capability model.  Planned to reopen
+    with orbital assembly / ISRU support.
+
     Default ``kerbin`` preserves the existing single-home behaviour.
 
     Pool keys (resolved to a concrete body at generation time using the

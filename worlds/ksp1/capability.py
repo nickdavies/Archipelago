@@ -48,7 +48,9 @@ from .rocket_math import (
     ESCALATED_MAX_ENG_PER_COL,
 )
 from .rocket_math import aero
-from .data.feasibility import ESCALATED_ASCENT_EDGES
+from .data.feasibility import (
+    ESCALATED_ASCENT_EDGES, ESCALATED_HOME_ASCENT_EDGES,
+)
 
 if TYPE_CHECKING:
     from .world import KSP1World
@@ -2125,17 +2127,28 @@ def _evaluate_profile(
             for e in group
         )
         if is_ascent_group:
-            # Escalated build caps — ONLY the Apollo lander ascent, and only
-            # for edges the offline feasibility probe marked eligible (e.g.
-            # Eve's ~8 km/s ascent needs K=3 + wide asparagus).  The standard
-            # architecture and every home ascent keep the default caps: the
-            # hot path never searches the escalated space (bug 094).
+            # Escalated build caps, two offline-probed eligibility channels
+            # (the standard architecture everywhere else keeps the default
+            # caps — the hot path never searches the escalated space,
+            # bug 094):
+            #   * Apollo lander ascents on ESCALATED_ASCENT_EDGES (e.g.
+            #     Eve's ~9 km/s lander ascent needs K=3 + wide asparagus);
+            #   * the world's OWN home ascent on the allowlist-bounded
+            #     ESCALATED_HOME_ASCENT_EDGES (Eve-home mesa launch) — an
+            #     operator-approved hot-path exception, applied on the
+            #     PRIMARY evaluation because every mission from that home
+            #     traverses it.
+            _asc_tuples = [(e.body, e.edge_type) for e in group
+                           if e.edge_type in (ET.ATMOSPHERIC_ASCENT,
+                                              ET.VACUUM_ASCENT)]
+            _escalate = (
+                (apollo is not None and flight_idx == apollo.ascent_gidx
+                 and any(t in _escalated_edges() for t in _asc_tuples))
+                or any(t[0] == home and t in _escalated_home_edges()
+                       for t in _asc_tuples)
+            )
             _esc_kwargs: dict = {}
-            if (apollo is not None and flight_idx == apollo.ascent_gidx
-                    and any((e.body, e.edge_type) in _escalated_edges()
-                            for e in group
-                            if e.edge_type in (ET.ATMOSPHERIC_ASCENT,
-                                               ET.VACUUM_ASCENT))):
+            if _escalate:
                 _esc_kwargs = dict(
                     max_ascent_stages=ESCALATED_MAX_ASCENT_STAGES,
                     booster_counts=ESCALATED_BOOSTER_COUNTS,
@@ -2417,12 +2430,28 @@ _APOLLO_RENDEZVOUS_DV: float = MissionBuilder._RESCUE_RENDEZVOUS_DV
 # this while probing per-edge eligibility (the checked-in set is that probe's
 # OUTPUT, so the probe can't read it).  Production code never touches it.
 _ESCALATION_OVERRIDE: Optional[frozenset] = None
+# Same contract for the HOME-ascent escalation set (see
+# _escalated_home_edges).
+_HOME_ESCALATION_OVERRIDE: Optional[frozenset] = None
 
 
 def _escalated_edges() -> frozenset:
     """The (body, EdgeType) ascent edges eligible for escalated build caps."""
     return (_ESCALATION_OVERRIDE if _ESCALATION_OVERRIDE is not None
             else ESCALATED_ASCENT_EDGES)
+
+
+def _escalated_home_edges() -> frozenset:
+    """HOME-ascent edges eligible for escalated build caps.
+
+    Operator-approved exceptions to the home-hot-path ban (bug 094): a
+    listed edge escalates the PRIMARY evaluation whenever it is the
+    world's home ascent — every mission from that home pays the bigger
+    search, so entries are allowlist-bounded in the generator, never free
+    probe output.  Today: Eve only, whose recalibrated ~9,000 m/s pad
+    ascent exceeds the standard caps at the table's probe bar."""
+    return (_HOME_ESCALATION_OVERRIDE if _HOME_ESCALATION_OVERRIDE is not None
+            else ESCALATED_HOME_ASCENT_EDGES)
 
 
 @dataclass(frozen=True)

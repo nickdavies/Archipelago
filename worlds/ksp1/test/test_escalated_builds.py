@@ -63,14 +63,30 @@ class TestEligibilitySet(unittest.TestCase):
         )
 
     def test_no_home_ascent_is_eligible(self) -> None:
-        """Escalating a HOME ascent is the hot-path cost the design bans.
-        Eve can never be a table home for these edges because Eve-as-home
-        rows exclude everything anyway; this guards the invariant shape."""
+        """Escalating a HOME ascent is the hot-path cost the design bans
+        from the APOLLO set (the probe skips edge.body == home candidates);
+        approved exceptions live ONLY in the separate allowlisted
+        ESCALATED_HOME_ASCENT_EDGES."""
         for body, _et in ESCALATED_ASCENT_EDGES:
             # An eligible edge must come from a DESTINATION ascent — i.e.
             # the probe skipped candidates where edge.body == home, so the
             # pair can only have entered via missions from OTHER homes.
             self.assertIsInstance(body, BodyName)
+
+    def test_home_set_is_allowlisted_eve_only(self) -> None:
+        """The HOME-ascent escalation set is operator-allowlisted (the probe
+        can only confirm entries, never add homes) — a change here is an
+        operator decision, not a physics drift to wave through."""
+        from worlds.ksp1.data.feasibility import ESCALATED_HOME_ASCENT_EDGES
+        from worlds.ksp1.scripts.generate_feasibility import (
+            _HOME_ESCALATION_ALLOWLIST,
+        )
+        self.assertEqual(
+            ESCALATED_HOME_ASCENT_EDGES,
+            frozenset({(BodyName.EVE, EdgeType.ATMOSPHERIC_ASCENT)}),
+        )
+        self.assertTrue(
+            ESCALATED_HOME_ASCENT_EDGES <= _HOME_ESCALATION_ALLOWLIST)
 
 
 class TestSplitGrid(unittest.TestCase):
@@ -101,9 +117,14 @@ class TestEveCeiling(unittest.TestCase):
             self.cap.bodies[BodyName.EVE].access[EventName.RETURN],
             "Eve Return should close via Apollo + escalated ascent",
         )
-        self.assertTrue(
+        # Crewed Eve SSR is OUT at the small probe bar since the dv
+        # recalibration (lander ascent 8,000 → ~8,996 highlands-in-logic):
+        # the pod+ladder payload on the escalated ascent no longer fits.
+        # It survives only at zero physics, and not from Kerbin — see the
+        # regenerated table.
+        self.assertFalse(
             self.cap.bodies[BodyName.EVE].access[EventName.SAMPLE_RETURN],
-            "crewed Eve SSR should close at small margins too",
+            "crewed Eve SSR at small+bar should be excluded post-recalibration",
         )
 
     def test_no_docking_port_no_escalation(self) -> None:
