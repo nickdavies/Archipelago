@@ -698,6 +698,19 @@ _PARALLEL_BOOSTER_COUNTS: tuple[int, ...] = (2, 4, 6, 8)
 # Engines per column to escalate through for per-phase TWR before giving up.
 _PARALLEL_MAX_ENG_PER_COL: int = 4
 
+# Escalated build caps — the wider search space capability threads in ONLY for
+# ascent edges named in ``data.feasibility.ESCALATED_ASCENT_EDGES``, and only
+# inside Apollo-split evaluations.  Never the defaults: the common home-ascent
+# path keeps the caps above (bug 094: a global K=3 cost 53-54% of all
+# multistage builds for 0.3-1.3% mass wins and zero feasibility rescues — the
+# rescues live on the hard tail these edges name, e.g. Eve's ~8 km/s ascent).
+# Values are the smallest set measured to close Eve Return/Sample Return at
+# max kit (probe 2026-07-02: uncrewed 124.5-355.2t, crewed 273.8-966.2t
+# across zero/small/comfortable).
+ESCALATED_BOOSTER_COUNTS: tuple[int, ...] = (2, 4, 6, 8, 10, 12, 16)
+ESCALATED_MAX_ENG_PER_COL: int = 6
+ESCALATED_MAX_ASCENT_STAGES: int = 3
+
 
 def _lightest_covering_shield(
     size_class: float,
@@ -736,6 +749,8 @@ def _find_optimal_parallel_stage(
     max_heat_shield_size: Optional[float] = None,
     heat_shields: tuple[tuple[float, float, str], ...] = (),
     best_wet_bound: float = float("inf"),
+    booster_counts: tuple[int, ...] = _PARALLEL_BOOSTER_COUNTS,
+    max_eng_per_col: int = _PARALLEL_MAX_ENG_PER_COL,
 ) -> Optional[StageResult]:
     """Lowest-wet-mass parallel-staged build (a core column ringed by identical
     radial boosters dropped progressively) for this stage, or None.
@@ -810,7 +825,7 @@ def _find_optimal_parallel_stage(
         if pack_ctx is None:
             continue
 
-        for n_boost in _PARALLEL_BOOSTER_COUNTS:
+        for n_boost in booster_counts:
             # Drop-tanks first (no booster engines); escalate to engine
             # boosters only if drop-tanks were TWR-bound.  If drop-tanks clear
             # TWR with a SINGLE core engine, the stage isn't thrust-bound, so
@@ -820,7 +835,7 @@ def _find_optimal_parallel_stage(
             for booster_has_engine in (False, True):
                 if booster_has_engine and droptank_single_eng:
                     break
-                for n in range(1, _PARALLEL_MAX_ENG_PER_COL + 1):
+                for n in range(1, max_eng_per_col + 1):
                     n_be = n if booster_has_engine else 0
                     res = _size_parallel_unit(
                         eng_payload, e_mass, n, n_be, decoupler_mass,
@@ -919,6 +934,11 @@ def _find_optimal_stage_uncached(
     # probes use the conservative serial mass; the final build / display
     # leave it True for the exact asparagus rocket.
     run_parallel: bool = True,
+    # Parallel-build search bounds.  Defaults are the hot-path caps; the
+    # ESCALATED_* values arrive here only via capability's Apollo/eligible-
+    # edge scoping.  Hashable, so they join the memo key automatically.
+    booster_counts: tuple[int, ...] = _PARALLEL_BOOSTER_COUNTS,
+    max_eng_per_col: int = _PARALLEL_MAX_ENG_PER_COL,
 ) -> Optional[StageResult]:
     """
     Find the minimum-mass engine+tank configuration that meets *required_dv*
@@ -1362,6 +1382,8 @@ def _find_optimal_stage_uncached(
             max_heat_shield_size=max_heat_shield_size,
             heat_shields=heat_shields,
             best_wet_bound=best.stage_mass_wet if best is not None else float("inf"),
+            booster_counts=booster_counts,
+            max_eng_per_col=max_eng_per_col,
         )
         if par is not None:
             best = par
@@ -1627,6 +1649,21 @@ _F4_DV_SPLITS: dict[int, tuple[tuple[float, ...], ...]] = {
         (0.6, 0.4),
         (0.7, 0.3),
     ),
+    # K=3 is reachable only via ``max_ascent_stages`` (the escalated bound —
+    # _F4_MAX_K stays 2 on the hot path, bug 094).  Grid covers bottom-heavy
+    # through top-heavy allocations (index 0 = bottom/launch stage); the
+    # coarse 6-entry grid of the old K=3 era undervalued staging on high-dv
+    # ascents (bug 094 cause #3).
+    3: (
+        (0.2, 0.3, 0.5),
+        (0.25, 0.25, 0.5),
+        (0.3, 0.3, 0.4),
+        (0.3, 0.4, 0.3),
+        (0.34, 0.33, 0.33),
+        (0.4, 0.3, 0.3),
+        (0.5, 0.25, 0.25),
+        (0.5, 0.3, 0.2),
+    ),
 }
 
 # Per-stage TWR floor.  Stage 1 (liftoff) uses whatever the caller passes
@@ -1680,6 +1717,14 @@ def find_optimal_multistage_ascent(
     run_parallel: bool = True,
     diagnostic_out: Optional[list[StageDiagnostic]] = None,
     partial_stages_out: Optional[list[StageResult]] = None,
+    # Escalated search bounds (capability's Apollo/eligible-edge scoping).
+    # ``max_ascent_stages`` None = the hot-path default: _F4_MAX_K, further
+    # bounded by staging_tier+1.  An explicit value bypasses the tier bound
+    # (a search-cost choice, not physics — stack decouplers permit arbitrary
+    # serial depth) but never the no-stack-decoupler ⇒ K=1 kit gate.
+    max_ascent_stages: Optional[int] = None,
+    booster_counts: tuple[int, ...] = _PARALLEL_BOOSTER_COUNTS,
+    max_eng_per_col: int = _PARALLEL_MAX_ENG_PER_COL,
 ) -> Optional[list[StageResult]]:
     """Find lowest-total-wet K-stage ascent architecture for an atmospheric
     body.  Returns a list of StageResults from BOTTOM (launch) to TOP
@@ -1694,9 +1739,12 @@ def find_optimal_multistage_ascent(
     """
     if required_dv <= 0:
         return None
-    # K cap from kit: no stack decoupler ⇒ K=1; otherwise up to _F4_MAX_K.
+    # K cap from kit: no stack decoupler ⇒ K=1; otherwise up to _F4_MAX_K
+    # (or the caller's escalated bound).
     if stack_decoupler is None:
         max_K = 1
+    elif max_ascent_stages is not None:
+        max_K = max(1, max_ascent_stages)
     else:
         max_K = min(_F4_MAX_K, max(1, staging_tier + 1))
     deco_mass = stack_decoupler.mass if stack_decoupler else 0.0
@@ -1762,6 +1810,8 @@ def find_optimal_multistage_ascent(
                     fuel_line_mass=fuel_line_mass,
                     fuel_line_name=fuel_line_name,
                     run_parallel=run_parallel,
+                    booster_counts=booster_counts,
+                    max_eng_per_col=max_eng_per_col,
                     srb_needs_rcs=srb_needs_rcs,
                     player_has_rcs=player_has_rcs,
                     tanks_by_fuel_type=tanks_by_fuel_type,

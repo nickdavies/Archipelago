@@ -17,7 +17,7 @@ from functools import lru_cache
 from typing import Optional
 
 from . import packs
-from .types import AnyPart, CapabilityFlag, MiscEquipment
+from .types import AnyPart, CapabilityFlag, Decoupler, FuelTank, MiscEquipment
 from ._raw import _RAW_PART_DB, _RAW_PART_PACK
 from .categories import CONTRACT_PART_CATEGORIES
 
@@ -62,6 +62,42 @@ class PartManager:
                         break
             self._lightest[flag] = best[0] if best else None
         return self._lightest[flag]
+
+    def lightest_decoupler(self, kind: str) -> Optional[str]:
+        """Item name of the lightest decoupler of ``kind`` ("stack"/"radial")
+        among enabled parts; None if none."""
+        best: Optional[tuple[str, float]] = None
+        for nm, parts in self.parts.items():
+            for p in parts:
+                if isinstance(p, Decoupler) and p.kind == kind:
+                    if best is None or p.mass < best[1]:
+                        best = (nm, p.mass)
+        return best[0] if best else None
+
+    def docking_gear_candidates(self) -> dict[str, frozenset[str]]:
+        """Per-role candidate part names for the Apollo docking gear under
+        these packs: every docking port, RCS thruster, and monoprop tank.
+
+        No command-part role: the mission's own kit always carries one
+        (capsule for crewed, probe core for uncrewed) and the parked stack
+        reuses it — capability's ``_apollo_split_for`` flies the lightest
+        the player owns.  Consumers pick ONE candidate per role per seed
+        (variance — no part is hardcoded into every run); capability then
+        accepts whichever suitable parts are actually collected.
+        """
+        def _providing(flag: CapabilityFlag) -> frozenset[str]:
+            return frozenset(
+                nm for nm, parts in self.parts.items()
+                if any(flag in getattr(p, "provides", ()) for p in parts))
+
+        return {
+            "docking_port": _providing(CapabilityFlag.DOCKING_PORT),
+            "rcs_thruster": _providing(CapabilityFlag.RCS),
+            "monoprop_tank": frozenset(
+                nm for nm, parts in self.parts.items()
+                if any(isinstance(p, FuelTank) and p.fuel_type == "monoprop"
+                       for p in parts)),
+        }
 
     def _fuel_line_info(self) -> tuple[Optional[str], float]:
         if self._fuel_line is None:

@@ -44,8 +44,11 @@ from .rocket_math import (
     StageResult, find_optimal_stage, find_optimal_multistage_ascent,
     terminal_velocity,
     FILL_LEVELS, merge_edge_groups,
+    ESCALATED_MAX_ASCENT_STAGES, ESCALATED_BOOSTER_COUNTS,
+    ESCALATED_MAX_ENG_PER_COL,
 )
 from .rocket_math import aero
+from .data.feasibility import ESCALATED_ASCENT_EDGES
 
 if TYPE_CHECKING:
     from .world import KSP1World
@@ -1776,7 +1779,8 @@ def _evaluate_profile(
     # honest failure reasons are that attempt's.
     apollo: Optional[_ApolloSplit] = None
     if apollo_split:
-        apollo = _apollo_split_for(groups, home, flags, terminal_pod)
+        apollo = _apollo_split_for(groups, home, flags, terminal_pod,
+                                   is_crewed)
         if apollo is None:
             return ProfileResult(False, launch_mass=payload)
     # Wet mass of the parked return stack, stashed when the reverse walk
@@ -1953,17 +1957,20 @@ def _evaluate_profile(
                 stage_equipment.append((_LANDING_LEG_COUNT, leg_id))
         # Apollo docking gear — real part masses, manifest == charge.  The
         # lander (active vehicle) carries its port + the RCS approach kit
-        # down and back up; the parked stack's port rides the bottom of the
-        # first parked group (the docking interface stays with the transfer
-        # stage — it is not carried through the home entry above it).
+        # down and back up; the parked stack's port AND its control gear
+        # (probe core / attitude / power — see _ApolloSplit.parked_gear)
+        # ride the bottom of the first parked group (the docking interface
+        # and the stack's brain stay with the transfer stage — they are not
+        # carried through the home entry above it).
         if apollo is not None:
             if flight_idx == apollo.ascent_gidx:
                 equip_mass += apollo.port.mass + apollo.rcs.mass
                 stage_equipment.append((1, apollo.port.name))
                 stage_equipment.extend(apollo.rcs.parts)
             elif flight_idx == apollo.ascent_gidx + 1:
-                equip_mass += apollo.port.mass
+                equip_mass += apollo.port.mass + apollo.parked_gear_mass
                 stage_equipment.append((1, apollo.port.name))
+                stage_equipment.extend(apollo.parked_gear_parts)
         # Staged atmospheric landing: the whole descent kit (coverage shield +
         # chutes) is fixed PAYLOAD mass on this stage.  The shield protects the
         # pod during the aero bleed and is jettisoned before any touchdown burn,
@@ -2117,9 +2124,26 @@ def _evaluate_profile(
             for e in group
         )
         if is_ascent_group:
+            # Escalated build caps — ONLY the Apollo lander ascent, and only
+            # for edges the offline feasibility probe marked eligible (e.g.
+            # Eve's ~8 km/s ascent needs K=3 + wide asparagus).  The standard
+            # architecture and every home ascent keep the default caps: the
+            # hot path never searches the escalated space (bug 094).
+            _esc_kwargs: dict = {}
+            if (apollo is not None and flight_idx == apollo.ascent_gidx
+                    and any((e.body, e.edge_type) in _escalated_edges()
+                            for e in group
+                            if e.edge_type in (ET.ATMOSPHERIC_ASCENT,
+                                               ET.VACUUM_ASCENT))):
+                _esc_kwargs = dict(
+                    max_ascent_stages=ESCALATED_MAX_ASCENT_STAGES,
+                    booster_counts=ESCALATED_BOOSTER_COUNTS,
+                    max_eng_per_col=ESCALATED_MAX_ENG_PER_COL,
+                )
             ms_diag_out: list = []
             ms_partial_out: list = []
             multistage = find_optimal_multistage_ascent(
+                **_esc_kwargs,
                 required_dv=req_dv,
                 payload_mass=stage_payload,
                 gravity=body.surface_gravity,
@@ -2387,6 +2411,17 @@ def _group_edges(profile: list[MissionEdge], staging_tier: int) -> list[list[Mis
 # margins apply via effective_dv like any other burn.
 _APOLLO_RENDEZVOUS_DV: float = MissionBuilder._RESCUE_RENDEZVOUS_DV
 
+# Offline override for the escalated-edge set — generate_feasibility.py sets
+# this while probing per-edge eligibility (the checked-in set is that probe's
+# OUTPUT, so the probe can't read it).  Production code never touches it.
+_ESCALATION_OVERRIDE: Optional[frozenset] = None
+
+
+def _escalated_edges() -> frozenset:
+    """The (body, EdgeType) ascent edges eligible for escalated build caps."""
+    return (_ESCALATION_OVERRIDE if _ESCALATION_OVERRIDE is not None
+            else ESCALATED_ASCENT_EDGES)
+
 
 @dataclass(frozen=True)
 class _ApolloSplit:
@@ -2398,11 +2433,19 @@ class _ApolloSplit:
     stack; everything before ``land_gidx`` hauls lander + parked stack
     outbound.  ``port`` is charged once per docked side; ``rcs`` flies on
     the lander (the active vehicle in the docking approach).
+
+    ``parked_gear`` is the parked stack's own control hardware: while the
+    pod is away the parked stack is a pilotless craft, so it carries a
+    probe core (command), an attitude source (wheel unless the core has
+    one, else RCS), and a power source — real parts, charged on the first
+    parked group's manifest and hauled outbound like the rest of the stack.
     """
     land_gidx: int
     ascent_gidx: int
     port: MiscEquipment
     rcs: AttitudeBundle
+    parked_gear_mass: float
+    parked_gear_parts: tuple[tuple[int, str], ...]
 
 
 def _apollo_split_for(
@@ -2410,6 +2453,7 @@ def _apollo_split_for(
     home: BodyName,
     flags: EquipmentFlags,
     terminal_pod: Optional[MiscEquipment],
+    is_crewed: bool,
 ) -> Optional[_ApolloSplit]:
     """Locate the Apollo lander boundary in ``groups``, or None when the
     profile isn't a parkable round trip or the docking gear is missing.
@@ -2442,8 +2486,47 @@ def _apollo_split_for(
     rcs = _rcs_bundle(flags, terminal_pod)
     if rcs is None:
         return None
+    # Parked-stack control gear.  While the pod is away the parked stack
+    # needs a command source, an attitude source to hold orientation as the
+    # dock target (wheel unless the command part provides one, else an RCS
+    # kit), and its own power.  UNCREWED missions need a probe core — an
+    # empty capsule is not commandable.  CREWED missions may instead leave
+    # a pilot aboard a second capsule instance (the Apollo CM pattern), so
+    # the command part is the lightest suitable one the kit has unlocked.
+    # All concrete parts; without a command source (or any attitude source)
+    # the split is not flyable and the standard architecture is the only
+    # one.
+    cmd_candidates = [p for p in (
+        flags.lightest_probe,
+        flags.lightest_capsule if is_crewed else None,
+    ) if p is not None]
+    if not cmd_candidates:
+        return None
+    command = min(cmd_candidates, key=lambda p: p.mass)
+    parked_parts: list[tuple[int, str]] = [(1, command.name)]
+    parked_mass = command.mass
+    if not _pod_has_built_in_wheels(command):
+        wheel = flags.lightest_reaction_wheel
+        if wheel is not None:
+            parked_parts.append((1, wheel.name))
+            parked_mass += wheel.mass
+        else:
+            park_rcs = _rcs_bundle(flags, command)
+            if park_rcs is None:
+                return None
+            parked_parts.extend(park_rcs.parts)
+            parked_mass += park_rcs.mass
+    # Lightest power source adequate for the profile's strictest per-leg
+    # requirement (same selection the terminal support gear uses) — the
+    # parked stack rides through the same aerobrake/solar-distance regime.
+    power = _required_power_source(
+        flags, [e for g in groups for e in g], home)
+    if power is not None:
+        parked_parts.append((1, power.name))
+        parked_mass += power.mass
     return _ApolloSplit(land_gidx, ascent_gidx,
-                        flags.lightest_docking_port, rcs)
+                        flags.lightest_docking_port, rcs,
+                        parked_mass, tuple(parked_parts))
 
 
 def _apollo_candidate(flags: EquipmentFlags, mission_type: MissionType) -> bool:

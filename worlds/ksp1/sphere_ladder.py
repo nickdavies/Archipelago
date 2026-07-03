@@ -111,17 +111,24 @@ _BASIC_SCIENCE_INSTRUMENTS: frozenset[str] = frozenset(
 # anchor raises OptionError.  See ``project_060_deep_interplanetary_enablers``.
 # nuclear + fuel line are named (critical, present in every pack — user-approved);
 # the radial decoupler (sheds the asparagus booster ring) is derived by property.
+#
+# PACK SCOPING: enabler sets are derived PER SEED from ``world.part_manager``,
+# never from the full installed universe.  The inject adds part names straight
+# into reps, bypassing the item-grant mechanism that normally does per-seed
+# pack filtering — a disabled pack's part here would demand an item the pool
+# can't grant.  (The rest of the ladder's full-universe PART_DB reasoning is
+# fine: possession filtering happens through item grants and the rank table.)
 _NUCLEAR_ENGINE_NAME = "nuclearEngine"
 _FUEL_LINE_NAME = "fuelLine"
-_LIGHTEST_RADIAL_DECOUPLER: Optional[str] = min(
-    (nm for nm, parts in PART_DB.items()
-     if any(isinstance(p, Decoupler) and p.kind == "radial" for p in parts)),
-    key=lambda nm: PART_DB[nm][0].mass, default=None,
-)
-_DEEP_SPACE_ENABLERS: frozenset[str] = frozenset(
-    n for n in (_NUCLEAR_ENGINE_NAME, _FUEL_LINE_NAME, _LIGHTEST_RADIAL_DECOUPLER)
-    if n is not None and n in PART_DB
-)
+
+
+def _deep_space_enablers_for(pm) -> frozenset[str]:
+    """Deep-space enabler names available under ``pm``'s enabled packs."""
+    return frozenset(
+        n for n in (_NUCLEAR_ENGINE_NAME, _FUEL_LINE_NAME,
+                    pm.lightest_decoupler("radial"))
+        if n is not None and n in pm.parts
+    )
 # Inject once the chain's dv crosses this fraction of its max (mid-run band), and
 # only when that max is interplanetary-deep — keeps Mun/Minmus/simple seeds free
 # of the enablers (preserves early-game variance; the bumper finds its own kit).
@@ -144,35 +151,22 @@ _DEEP_INJECT_MIN_DV: float = 12000.0
 # rank-bumped leave-home inject reordered spheres and stranded near missions).
 # The REAL fix is a torque model (bug 004); this does not model torque.
 _ATTITUDE_ENABLER_NAME = "advSasModule"
-_ATTITUDE_ENABLERS: frozenset[str] = frozenset(
-    {_ATTITUDE_ENABLER_NAME} & set(PART_DB))
 
-# Apollo docking gear — injected REPS-ONLY at the deep-space band (same dv
-# threshold as ``_DEEP_SPACE_ENABLERS``).  Deep round trips that exceed the
-# whole-stack ceiling close only via capability's Apollo-split retry, which
-# gates on a docking port + RCS + monopropellant (``_apollo_candidate`` /
-# ``_apollo_split_for``); without these in the cumulative kit the bumper
-# never proposes them and the anchor dead-ends.  Reps-only (the attitude-
-# enabler precedent): the gear carries no meaningful rank axes, and skipping
-# the rank bump avoids reordering spheres.  All three derived by property
-# from the part universe — no hardcoded names.
-_LIGHTEST_DOCKING_PORT: Optional[str] = DEFAULT_PART_MANAGER.lightest_providing(
-    CapabilityFlag.DOCKING_PORT)
-_LIGHTEST_RCS_THRUSTER: Optional[str] = DEFAULT_PART_MANAGER.lightest_providing(
-    CapabilityFlag.RCS)
-_LIGHTEST_MONOPROP_TANK: Optional[str] = min(
-    (nm for nm, parts in PART_DB.items()
-     if any(isinstance(p, FuelTank) and p.fuel_type == "monoprop"
-            for p in parts)),
-    key=lambda nm: min(p.dry_mass + p.fuel_mass for p in PART_DB[nm]
-                       if isinstance(p, FuelTank)),
-    default=None,
-)
-_DOCKING_ENABLERS: frozenset[str] = frozenset(
-    n for n in (_LIGHTEST_DOCKING_PORT, _LIGHTEST_RCS_THRUSTER,
-                _LIGHTEST_MONOPROP_TANK)
-    if n is not None and n in PART_DB
-)
+# Apollo docking gear (``PartManager.docking_gear_candidates``) is injected
+# REPS-ONLY at the deep-space band (same dv threshold as the deep-space
+# enablers).  Deep round trips that exceed the whole-stack ceiling close only
+# via capability's Apollo-split retry, which gates on a docking port + RCS +
+# monopropellant (``_apollo_candidate`` / ``_apollo_split_for``); without
+# these in the cumulative kit the bumper never proposes them and the anchor
+# dead-ends.  ONE candidate per role is picked PER SEED with the world rng —
+# no part is hardcoded into every run (kit-variant precedent); capability
+# itself accepts whichever suitable parts are actually collected.  The
+# parked stack's command part needs no inject (the mission kit's capsule /
+# probe core covers it), its attitude comes from the attitude enabler
+# (wheel, leave-home band) or the pod, and power from the mission's own
+# power gate.  Reps-only (the attitude-enabler precedent): the gear carries
+# no meaningful rank axes, and skipping the rank bump avoids reordering
+# spheres.
 
 
 if TYPE_CHECKING:
@@ -3640,9 +3634,18 @@ def _build_ladder_graph_walk(
         n: _goal_dv(walk_descriptors.get(n), world.mission_builder)
         for n in _all_walk_names
     }
-    _deep_enablers = _DEEP_SPACE_ENABLERS - precollected_names
-    _attitude_enablers = _ATTITUDE_ENABLERS - precollected_names
-    _docking_enablers = _DOCKING_ENABLERS - precollected_names
+    _pm = world.part_manager
+    _deep_enablers = _deep_space_enablers_for(_pm) - precollected_names
+    _attitude_enablers = (frozenset({_ATTITUDE_ENABLER_NAME} & set(_pm.parts))
+                          - precollected_names)
+    # One docking-gear candidate per role, seeded pick (sorted roles AND
+    # sorted candidates — frozenset iteration is hash-randomized, and the
+    # pick must reproduce across solve-check workers).
+    _gear = _pm.docking_gear_candidates()
+    _docking_enablers = frozenset(
+        world.random.choice(sorted(_gear[role]))
+        for role in sorted(_gear) if _gear[role]
+    ) - precollected_names
     _deep_max_dv = max(_sphere_dv_by_name.values(), default=0.0)
     _deep_inject_dv = (
         _DEEP_INJECT_DV_FRAC * _deep_max_dv

@@ -46,6 +46,12 @@ _PORT_NAMES = frozenset(
            for p in parts)
 )
 
+_PROBE_CORE_NAMES = frozenset(
+    nm for nm, parts in _PART_DB.items()
+    if any(CapabilityFlag.PROBE_CORE in getattr(p, "provides", ())
+           for p in parts)
+)
+
 
 def _max_kit(exclude: frozenset[str] = frozenset()):
     counts = {n: 1 for n in _PART_DB if n not in exclude}
@@ -93,6 +99,21 @@ class TestApolloCeiling(unittest.TestCase):
             "stripping docking ports must drop Tylo SSR back to infeasible",
         )
 
+    def test_crewed_apollo_without_probe_cores(self) -> None:
+        """A crewed mission may leave a pilot aboard a second capsule as the
+        parked stack's command source (the Apollo CM pattern) — stripping
+        every probe core must NOT drop crewed Tylo SSR."""
+        cap, _flags = compute_capability_from_items(
+            _max_kit(exclude=_PROBE_CORE_NAMES),
+            difficulty_name=_PROBE_PROFILE,
+            start_with_clamps=True,
+            mission_builder=self.mb,
+        )
+        self.assertTrue(
+            cap.bodies[BodyName.TYLO].access[EventName.SAMPLE_RETURN],
+            "crewed Apollo should close with a capsule-parked stack",
+        )
+
     def test_detailed_build_carries_docking_gear(self) -> None:
         """The detailed (spoiler / cross-check) path reproduces the gating
         verdict, with one port per docked side on the manifests."""
@@ -134,7 +155,8 @@ class TestApolloSplitFinder(unittest.TestCase):
 
     def test_split_found_on_destination_return(self) -> None:
         groups = self._groups(BodyName.TYLO, MissionType.RETURN)
-        split = _apollo_split_for(groups, BodyName.KERBIN, self.flags, self.pod)
+        split = _apollo_split_for(groups, BodyName.KERBIN, self.flags,
+                                  self.pod, is_crewed=True)
         self.assertIsNotNone(split)
         self.assertEqual(split.ascent_gidx, split.land_gidx + 1)
         self.assertGreater(split.land_gidx, 0,
@@ -145,14 +167,16 @@ class TestApolloSplitFinder(unittest.TestCase):
     def test_home_return_not_applicable(self) -> None:
         groups = self._groups(BodyName.KERBIN, MissionType.RETURN)
         self.assertIsNone(
-            _apollo_split_for(groups, BodyName.KERBIN, self.flags, self.pod),
+            _apollo_split_for(groups, BodyName.KERBIN, self.flags, self.pod,
+                              is_crewed=True),
             "a home round trip has nothing to park",
         )
 
     def test_one_way_mission_not_applicable(self) -> None:
         groups = self._groups(BodyName.TYLO, MissionType.LAND)
         self.assertIsNone(
-            _apollo_split_for(groups, BodyName.KERBIN, self.flags, self.pod),
+            _apollo_split_for(groups, BodyName.KERBIN, self.flags, self.pod,
+                              is_crewed=True),
             "a one-way landing has no post-ascent legs",
         )
 
