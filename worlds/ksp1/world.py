@@ -668,6 +668,15 @@ class KSP1World(World):
             if orig is not None:
                 cheap_rules[loc.name] = loc.access_rule
                 loc.access_rule = orig
+        # Contract-ruled locations are first-class in ``saved`` now: their real
+        # rule (award gate AND the live ``contract_access`` oracle) was merged in
+        # by sphere_ladder._install_ladder_rules, so the swap above already put
+        # them on the real capability path.  can_beat_game therefore verifies
+        # contract capability alongside missions — no separate mode-toggle needed
+        # (contract_access is already computed inside the get_capability the
+        # mission rules trigger, so it costs nothing extra).  The real rules stay
+        # installed through the fallback re-fill below and are restored (with the
+        # cheap rules) only on the success path.
         if self.multiworld.can_beat_game():
             for loc in self.multiworld.get_locations(self.player):
                 if loc.name in cheap_rules:

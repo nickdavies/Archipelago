@@ -1023,6 +1023,20 @@ def evaluate_contract(
     )
 
 
+def contract_logic_needs(spec: ContractSpec, mission_builder: MissionBuilder):
+    """The contract's non-physics logic requirements as player *capabilities*
+    (nav / EVA / samples / rendezvous / DSN), read the same way ``evaluate_contract``
+    reads its gate stack — but spec-direct, from the contract's base mission type
+    and body, independent of where the ladder placed the contract.  The
+    sphere-ladder translates this into the counted building thresholds the cheap
+    contract access rule gates on (``_needs_to_counted`` /
+    ``_install_cheap_mission_reps``)."""
+    from .capability import mission_logic_needs
+    td = spec.type_def
+    return mission_logic_needs(
+        spec.body, td.base_mission_type, td.crewed, None, mission_builder)
+
+
 def can_complete_contract(
     spec: ContractSpec,
     flags: "EquipmentFlags",

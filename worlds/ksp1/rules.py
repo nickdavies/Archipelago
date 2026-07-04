@@ -137,6 +137,11 @@ def _make_goal_event_rule(
 
     A body/event with no bracket entry (e.g. model-infeasible) falls back to the
     all-parts proxy — conservative, matching the proxy access rule.
+
+    Beyond the physics parts, each body/event carries its capability counted gate
+    (nav / EVA / samples / DSN / pad, from ``world._cheap_mission_counted``), so
+    victory enforces the SAME non-physics gate the mission location does — it
+    can't be declared for an interplanetary goal with no Mission Control.
     """
     bt = tuple(bodies)
     ev = event.value
@@ -146,10 +151,14 @@ def _make_goal_event_rule(
         reps_map = getattr(world, "_cheap_mission_reps", None)
         if reps_map is None:
             return False  # pre-ladder: conservatively unreachable (Golden Rule)
+        counted_map = getattr(world, "_cheap_mission_counted", {})
         for b in bt:
             reps = reps_map.get((b.value, ev))
             need = reps if reps is not None else _ALL_PROGRESSION_ITEMS
             if not state.has_all(need, player):
+                return False
+            counted = counted_map.get((b.value, ev), ())
+            if not all(state.has(kind, player, lvl) for kind, lvl in counted):
                 return False
         return True
 
@@ -571,6 +580,16 @@ def _set_contract_rules(world: KSP1World, player: int) -> None:
     # the bracket rule omits the award gate on goal-contract events) — which
     # stranded items and forced the expensive strict_ladder fallback re-fill.
     world._contract_ruled_locations = set()
+    # The REAL capability rule for each contract-ruled location: award gate AND
+    # the live ``contract_access[cid]`` oracle.  Stashed here (keyed by location
+    # name) so the sphere-ladder can merge it into ``_strict_ladder_saved_rules``;
+    # the post_fill cross-check then swaps it in — verifying contract capability
+    # exactly as it verifies missions, instead of re-checking contracts on the
+    # same cheap rule the fill used (the old contract blind spot).  Proxy
+    # contracts are omitted: their cheap all-parts rule already IS their real rule
+    # (the dv model can't verify the achievement, so contract_access is False and
+    # a swap would wrongly close the goal).
+    world._contract_real_rules = {}
     # In count / progressive_unlock each non-goal contract has a completion-event
     # location; it shares the contract's rule so has("Contract Count Progress", X)
     # counts contracts completable in logic.
@@ -594,12 +613,29 @@ def _set_contract_rules(world: KSP1World, player: int) -> None:
         # contract without first finding its item, and a demoted gate item
         # strands whatever progression fill placed on the contract location.
         gate = require_item(world, spec.item_name)
+        # The real-rule swap the post_fill cross-check installs for a non-proxy
+        # contract: award gate AND the live capability oracle.  ``None`` for proxy
+        # contracts (kept on their cheap all-parts rule during the cross-check).
+        real_rule = None
         if uses_proxy:
             world._proxy_contract_ids.add(spec.contract_id)
-            def rule(state: CollectionState, _gate=gate,
+            def rule(state: CollectionState, cid=spec.contract_id, _gate=gate,
                      _proxy=proxy_rule) -> bool:
-                return _gate(state) and _proxy(state)
+                if not (_gate(state) and _proxy(state)):
+                    return False
+                # A model-infeasible goal contract still has real capability gates
+                # (nav / EVA / samples).  ``has_all(ALL parts)`` can't express a
+                # count>=2 building level, so check the counted reqs explicitly.
+                world = state.multiworld.worlds[player]
+                counted = getattr(
+                    world, "_cheap_contract_counted_reqs", {}).get(cid, ())
+                return all(state.has(kind, player, lvl) for kind, lvl in counted)
         else:
+            def real_rule(state: CollectionState, cid=spec.contract_id,
+                          _gate=gate) -> bool:
+                return _gate(state) and get_capability(
+                    state, player).contract_access.get(cid, False)
+
             def rule(state: CollectionState, cid=spec.contract_id,
                      _gate=gate) -> bool:
                 if not _gate(state):
@@ -626,29 +662,37 @@ def _set_contract_rules(world: KSP1World, player: int) -> None:
                         reps if reps is not None else _ALL_PROGRESSION_ITEMS,
                         player):
                     return False
-                # ...plus the counted-progressive Thresholds (buildings / pad /
-                # R&D / PSI) from the contract's own signature.  has_all above only
-                # covers the physics RANK reps; without this the contract is
-                # reachable with no Mission Control (interplanetary), no pad tier,
-                # etc.  These are the SAME reqs the ordinary mission rule enforces
-                # (see sphere_ladder._install_cheap_mission_reps).
+                # ...plus the CAPABILITY counted gate (nav/EVA/samples/DSN + the
+                # pad) the contract really needs — derived spec-direct in
+                # sphere_ladder._install_cheap_mission_reps, NOT from the sphere
+                # position.  has_all above only covers the physics RANK reps;
+                # without this a contract is reachable with no Mission Control
+                # (interplanetary), no pad tier, etc.  R&D/PSI placement artifacts
+                # are deliberately NOT here (they'd bind the contract to its
+                # physics position; see _install_cheap_mission_reps).
                 counted = getattr(
                     world, "_cheap_contract_counted_reqs", {}).get(cid, ())
                 return all(state.has(kind, player, lvl) for kind, lvl in counted)
+        def _apply(name: str, _rule=rule, _real=real_rule) -> None:
+            """Install the cheap contract rule on ``name``, record it
+            contract-ruled, and stash its real-rule swap (non-proxy only)."""
+            world.get_location(name).access_rule = _rule
+            world._contract_ruled_locations.add(name)
+            if _real is not None:
+                world._contract_real_rules[name] = _real
+
         # Every non-goal reward slot (base 2 + Contract Repeats) shares the one
         # gate+capability rule, so the extra slots land at the contract's own
         # sphere as buffer-fill.
         for loc_name in spec.location_names(world.locations_per_contract):
-            world.get_location(loc_name).access_rule = rule
-            world._contract_ruled_locations.add(loc_name)
+            _apply(loc_name)
 
         # Non-goal completion event shares the rule (count / progressive_unlock):
         # reachable iff the contract is completable, so it contributes one to the
         # "Contract Count Progress" count exactly when the contract is done in logic.
         if counts_contracts and not spec.is_goal:
             ev_name = spec.display_name.replace("Contract: ", "Contract Complete: ", 1)
-            world.get_location(ev_name).access_rule = rule
-            world._contract_ruled_locations.add(ev_name)
+            _apply(ev_name)
 
         # A goal contract's matching mission event(s) share its EXACT rule, so
         # the (now ordinary) event is reachable iff the goal contract is
@@ -657,8 +701,7 @@ def _set_contract_rules(world: KSP1World, player: int) -> None:
         # capability rule (which could drift from the contract's feasibility).
         if spec.is_goal and ev is not None:
             for ev_loc in event_locations(spec.body, ev):
-                world.get_location(str(ev_loc)).access_rule = rule
-                world._contract_ruled_locations.add(str(ev_loc))
+                _apply(str(ev_loc))
 
 
 def _set_threshold_rules(world: KSP1World, player: int) -> None:

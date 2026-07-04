@@ -2581,94 +2581,68 @@ def _make_bracket_rule(player: int, reps: tuple, signature: "Signature"):
     return rule
 
 
-def _mission_needs_travel(info: "_LocationMissionInfo",
-                          mission_builder: MissionBuilder) -> bool:
-    """True iff the mission has a non-empty edge profile (a rocket must fly).
-
-    Home-surface FLAG_PLANT / SAMPLE_RETURN register an EMPTY profile (the
-    Kerbal walks off the pad), so they need no travel — and EVA there is
-    allowed at Astronaut Complex level 0 in stock KSP.  Mirrors the
-    empty-profile exemption in ``capability._evaluate_profile``.
-    """
-    profiles = mission_builder.profiles_for(info.body, info.mission_type)
-    return any(bool(p) for p in profiles)
-
-
-def _mission_building_reqs(
-    info: "_LocationMissionInfo", *, home: "BodyName", needs_travel: bool,
+def _needs_to_counted(
+    needs: "MissionLogicNeeds", *, buildings_in_logic: bool,
     local_needs_conics: bool, local_needs_nodes: bool,
 ) -> tuple[tuple[str, int], ...]:
-    """Per-mission curated-building requirements as ``(item_name, level)``.
+    """Translate a mission's capability needs into ``(item_name, level)`` counted
+    thresholds — the SINGLE point where an ability becomes a building item.
 
-    Inverts the capability gate: a mission's required *abilities*
-    (``effects.buildings_for_capability``) plus its comms need become the
-    building items it depends on, so the sphere-ladder gates those copies at the
-    right sphere and they can't strand.  Only positive levels are recorded.
-    (VAB/SPH ship maxed this release, so no VAB requirement is recorded.)
+    ``()`` when buildings aren't in logic (a strict no-op, matching the maxed
+    capability defaults).  Max-merges duplicate items (nodes imply conics; the
+    DSN Tracking-Station level merges with the conics one) and returns a
+    deterministic name-sorted tuple, so hash-randomized frozenset iteration can't
+    leak into the output.  Consumers are all-of / max-merge, so the dedup is
+    semantics-preserving.
 
-    * EVA (Astronaut Complex): away-from-home EVA only — home-body EVA is allowed
-      at AC level 0 (matches the capability gate's home exemption).
-    * Comms/DSN (Tracking Station): uncrewed missions that leave the home system,
-      at the min level the antenna the mission needs already holds the link.
-      ``crewed is not True`` treats an ambiguous mission as possibly-uncrewed
-      (conservative).
-    * Navigation (Tracking Station conics + Mission Control nodes): interplanetary
-      always; home-system (moon) transfers per the resolved options.  Rendezvous
-      (RESCUE) always.  These gate crewed and uncrewed alike.
+    A new option that changes which buildings provide a capability (e.g.
+    interplanetary-with-conics-only) is a one-line edit in
+    ``effects.buildings_for_capability`` — this layer and every caller pick it up
+    unchanged (no building name is hardcoded here beyond the DSN Tracking-Station
+    merge, which is the same building conics already maps to).
     """
-    from .effects import Building, Capability, buildings_for_capability
+    if not buildings_in_logic:
+        return ()
+    from .effects import Building, buildings_for_capability
     from .items import _building_to_item_name
-    from .capability import (
-        MISSION_TYPES_REQUIRING_EVA, MISSION_TYPES_REQUIRING_RENDEZVOUS,
-        MISSION_TYPES_REQUIRING_SAMPLES,
-    )
-    from .bodies import home_system_bodies, min_relay_tier
-
     name_for = _building_to_item_name()
-    reqs: list[tuple[str, int]] = []
-
-    def _record(cap: Capability) -> None:
+    levels: dict[str, int] = {}
+    for cap in needs.capabilities:
         for building, level in buildings_for_capability(
                 cap, local_needs_conics=local_needs_conics,
                 local_needs_nodes=local_needs_nodes):
-            reqs.append((name_for[building], level))
+            item = name_for[building]
+            if level > levels.get(item, 0):
+                levels[item] = level
+    if needs.min_ts_dsn_level > 0:
+        ts_item = name_for[Building.TRACKING_STATION]
+        if needs.min_ts_dsn_level > levels.get(ts_item, 0):
+            levels[ts_item] = needs.min_ts_dsn_level
+    return tuple(sorted(levels.items()))
 
-    # Astronaut Complex EVA gate.  Flag planting and orbital EVA need the AC
-    # upgrade even at home; only surface samples ride the free home-surface EVA,
-    # so they alone are home-exempt.  Mirrors capability._evaluate_profile.
-    eva_required = (info.requires_eva if info.requires_eva is not None
-                    else info.mission_type in MISSION_TYPES_REQUIRING_EVA)
-    if eva_required:
-        home_exempt = (info.mission_type in MISSION_TYPES_REQUIRING_SAMPLES
-                       and info.body == home)
-        if not home_exempt:
-            _record(Capability.CAN_EVA)
 
-    # Surface samples (R&D facility) — home and off-home, so no travel condition.
-    if info.mission_type in MISSION_TYPES_REQUIRING_SAMPLES:
-        _record(Capability.CAN_COLLECT_SAMPLES)
+def _mission_building_reqs(
+    info: "_LocationMissionInfo", *,
+    local_needs_conics: bool, local_needs_nodes: bool,
+    mission_builder: MissionBuilder, buildings_in_logic: bool,
+) -> tuple[tuple[str, int], ...]:
+    """Per-mission curated-building requirements as ``(item_name, level)``.
 
-    # Tracking Station (DSN) comms gate — uncrewed missions only.
-    if needs_travel and info.crewed is not True:
-        from .comms import min_dsn_level_for
-        ts_level = min_dsn_level_for(
-            info.body, home, min_relay_tier(info.body, home))
-        if ts_level > 0:
-            reqs.append((name_for[Building.TRACKING_STATION], ts_level))
-
-    # Navigation (conics + nodes) — crewed and uncrewed.  Interplanetary targets
-    # (outside the home system) always need it; a home-system moon scales with
-    # the options.  Rendezvous (RESCUE) always needs it.
-    if needs_travel:
-        home_system = home_system_bodies(home)
-        if info.body not in home_system:
-            _record(Capability.CAN_NAVIGATE_INTERPLANETARY)
-        elif info.body != home:
-            _record(Capability.CAN_NAVIGATE_LOCAL)
-    if info.mission_type in MISSION_TYPES_REQUIRING_RENDEZVOUS:
-        _record(Capability.CAN_RENDEZVOUS)
-
-    return tuple(reqs)
+    A thin composition of the two shared layers: derive the mission's capability
+    needs (``capability.mission_logic_needs`` — the semantics, mirroring
+    ``_evaluate_profile``) and translate them into building items
+    (``_needs_to_counted`` — the mapping).  So a mission location's signature and
+    a contract's access rule gate on the SAME requirements and neither can drift
+    from the real evaluator.  ``()`` when buildings aren't in logic.
+    """
+    from .capability import mission_logic_needs
+    needs = mission_logic_needs(
+        info.body, info.mission_type, info.crewed, info.requires_eva,
+        mission_builder)
+    return _needs_to_counted(
+        needs, buildings_in_logic=buildings_in_logic,
+        local_needs_conics=local_needs_conics,
+        local_needs_nodes=local_needs_nodes)
 
 
 def _install_ladder_rules(
@@ -2749,17 +2723,11 @@ def _install_ladder_rules(
     # rank-vector domination, which diverges from the chain (see
     # _install_unified_sphere_rules).
     bracket_by_loc: dict[str, int] = {}
+    # Per-location bracket pad tier, so ``_install_cheap_mission_reps`` can read a
+    # contract's own launch-pad requirement off its bracketed reward slot without
+    # re-parsing the location name back into a mission key.
+    pad_by_loc: dict[str, int] = {}
     rebracketed = 0
-    # Contract locations carry an extra REAL-rule gate beyond physics: the award
-    # item (``has(award) AND can_deliver``).  Map every contract slot -> award so
-    # the cheap bracket rule includes it and matches the real rule (otherwise the
-    # cheap fill strands the contract once real rules return).  Generic over all
-    # contract kinds; no per-type special-casing.
-    contract_gate: dict[str, str] = {}
-    for spec in (*getattr(world, "contract_specs", ()),
-                 *getattr(world, "goal_contract_specs", ())):
-        for slot in spec.location_names(world.locations_per_contract):
-            contract_gate[slot] = spec.item_name
     for loc in world.multiworld.get_locations(player):
         if loc.address is None or loc.name in bootstrap_locations:
             continue
@@ -2795,25 +2763,26 @@ def _install_ladder_rules(
                                     if r.launch_mass <= c), len(caps) - 1)
                     # Precise per-mission building reqs (buildings_in_logic) —
                     # the same self-gate the pad gets, derived from THIS
-                    # mission's physics at the bracket sphere.
-                    if buildings_in_logic:
-                        building_reqs = _mission_building_reqs(
-                            info, home=bn_home,
-                            needs_travel=_mission_needs_travel(info, mb),
-                            local_needs_conics=getattr(
-                                world, "local_needs_conics", True),
-                            local_needs_nodes=getattr(
-                                world, "local_needs_nodes", True))
+                    # mission's capability needs (target + type, kit-independent).
+                    building_reqs = _mission_building_reqs(
+                        info, mission_builder=mb,
+                        buildings_in_logic=buildings_in_logic,
+                        local_needs_conics=getattr(
+                            world, "local_needs_conics", True),
+                        local_needs_nodes=getattr(
+                            world, "local_needs_nodes", True))
                     break
-            if j is None and buildings_in_logic:
+            if j is None:
                 # Unbracketed mission (beyond the chain's reps-only reach, e.g.
                 # a far body's EVA for a near goal).  Its building gate (EVA +
-                # DSN) depends only on the target and mission type, not the kit,
-                # so record it directly so a unique-provider TS/AC copy can't
+                # DSN + nav) depends only on the target and mission type, not the
+                # kit, so record it directly so a unique-provider TS/AC copy can't
                 # strand at a location that requires a higher level than it.
+                # (``_mission_building_reqs`` is a no-op when buildings aren't in
+                # logic, so this is unconditional.)
                 building_reqs = _mission_building_reqs(
-                    info, home=bn_home,
-                    needs_travel=_mission_needs_travel(info, mb),
+                    info, mission_builder=mb,
+                    buildings_in_logic=buildings_in_logic,
                     local_needs_conics=getattr(world, "local_needs_conics", True),
                     local_needs_nodes=getattr(world, "local_needs_nodes", True))
             bracket_by_mission[mkey] = (j, pad_req, building_reqs)
@@ -2833,6 +2802,7 @@ def _install_ladder_rules(
             # ``location_signatures`` filter above skips them.)
             continue
         bracket_by_loc[loc.name] = j
+        pad_by_loc[loc.name] = pad_req
         # Counted-progressive requirements, recorded so the unified placement
         # window can never drop a counted copy behind a location that needs it
         # (and so the cheap access rule gates on them explicitly), exactly as for
@@ -2864,14 +2834,10 @@ def _install_ladder_rules(
         # (per-mission building reqs are recorded above, before the j-is-None
         # bail, so they also cover unbracketed-but-eventually-reachable
         # locations — unique-provider building copies must never strand there.)
-        # Fold the contract award (a non-physics Item gate) INTO this location's
-        # signature.  It is now one Threshold among the physics ranks/counted in
-        # the single signature, not a side channel the cheap rule could forget —
-        # the rule-deriver picks it up structurally (single source of truth).
-        _gate = contract_gate.get(loc.name)
-        if _gate is not None:
-            location_signatures[loc.name] = location_signatures.get(
-                loc.name, Signature.empty()).with_item(_gate)
+        # The contract award (a non-physics Item gate) and the contract's own
+        # capability counted reqs are folded into every contract slot's signature
+        # by ``_install_cheap_mission_reps`` (which covers unbracketed slots too),
+        # so no per-mission award fold is needed here.
         if install_access and loc.name not in contract_ruled:
             if save_original:
                 saved[loc.name] = loc.access_rule
@@ -2908,89 +2874,151 @@ def _install_ladder_rules(
     world._cheap_access_rebracketed = rebracketed
     world._cheap_access_bracket = bracket_by_loc
     if save_original and install_access:
+        # Contract-ruled locations are excluded from the per-location bracket
+        # swap above (they keep their own cheap rule), so their REAL rule — award
+        # gate AND the live ``contract_access`` oracle — is stashed separately by
+        # rules._set_contract_rules.  Merge it in so the post_fill cross-check
+        # (and its fallback re-fill) verify contract capability symmetrically with
+        # missions, closing the long-standing contract blind spot.
+        saved.update(getattr(world, "_contract_real_rules", {}))
         world._strict_ladder_saved_rules = saved
-    _install_cheap_mission_reps(world, ladder, location_signatures)
-
-
-# Counted-progressive kinds the contract ACCESS rule gates on: the building
-# sequence-break gates (nav/DSN/EVA).  Pad and R&D/PSI are deliberately excluded
-# (see the extraction below).
-_CONTRACT_ACCESS_BUILDINGS: frozenset[str] = frozenset({
-    PROGRESSIVE_MISSION_CONTROL_NAME,
-    PROGRESSIVE_TRACKING_STATION_NAME,
-    PROGRESSIVE_ASTRONAUT_COMPLEX_NAME,
-})
+    _install_cheap_mission_reps(world, ladder, location_signatures, pad_by_loc)
 
 
 def _install_cheap_mission_reps(
     world: "KSP1World", ladder: SphereLadder,
-    location_signatures: dict[str, "Signature"],
+    location_signatures: dict, pad_by_loc: dict,
 ) -> None:
-    """Precompute, per ``(body, event)``, the cheap bracket reps that gate that
-    mission — the SAME ``has_all(reps)`` the location's access rule uses.
+    """Precompute the cheap fill-time gates that stand in for live capability:
 
-    Lets the goal rule (and other body-access consumers) decide "can the player
-    do <event> at <body>?" with a microsecond ``state.has_all`` check instead of
-    a live ``get_capability`` call, keeping the goal completion condition on the
-    same cheap ladder oracle as the location rules.  Keyed by the lowest bracket
-    sphere across an event's duplicate slots (they share one mission).
+      * ``_cheap_mission_reps`` / ``_cheap_mission_counted`` — per ``(body,
+        event)``, the bracket reps (parts) and the capability counted gate
+        (nav/EVA/samples/DSN + pad).  The goal / victory rule ANDs both, so it
+        matches the mission location and can't declare victory for an
+        interplanetary goal with no nav buildings.
+      * ``_cheap_contract_reps`` / ``_cheap_contract_counted_reqs`` — per
+        contract, the physics parts (bracket reps + required payload) and the
+        capability counted gate, derived spec-direct (kit- and
+        sphere-position-independent) so a contract's completability tracks its
+        real flyability, never its ladder position.
+
+    Everything here is a microsecond ``state.has`` / ``has_all`` check — the
+    whole point is to keep contracts and goals off ``get_capability`` during fill
+    while still enforcing the real non-physics requirements.
     """
+    from .capability import mission_logic_needs
+    from .contracts import contract_logic_needs, required_part_names_for
     bracket = getattr(world, "_cheap_access_bracket", {})
     spheres = ladder.spheres
-    reps_by_event: dict[tuple[str, str], tuple[int, frozenset[str]]] = {}
+    mb = world.mission_builder
+    buildings_in_logic = bool(world.options.buildings_in_logic)
+    pool_pad = bool(world.options.progressive_launch_pad)
+    lnc = getattr(world, "local_needs_conics", True)
+    lnn = getattr(world, "local_needs_nodes", True)
+
+    # Per (body, event): the cheap bracket reps (physics parts) AND the capability
+    # counted gates (nav/EVA/samples/DSN + option-conditional pad).  The goal /
+    # victory rule ANDs both, so it enforces the SAME gate the mission location
+    # does — victory can't be declared for an interplanetary goal with no Mission
+    # Control.  Counted is derived spec-direct off the event definition (NO
+    # R&D/PSI placement artifacts — a goal is an out-of-sequence consumer, exactly
+    # like a contract).
+    reps_by_event: dict[tuple[str, str], tuple[int, frozenset[str], int]] = {}
+    counted_by_event: dict[tuple[str, str], dict[str, int]] = {}
     for loc in world.multiworld.get_locations(world.player):
         if loc.address is None:
             continue
         ml = MissionLocation.parse(loc.name)
         if ml is None:
             continue
+        key = (ml.body, ml.event.value)
+        if key not in counted_by_event:
+            info = _parse_location(loc.name)
+            counted_by_event[key] = {} if info is None else dict(_needs_to_counted(
+                mission_logic_needs(
+                    info.body, info.mission_type, info.crewed,
+                    info.requires_eva, mb),
+                buildings_in_logic=buildings_in_logic,
+                local_needs_conics=lnc, local_needs_nodes=lnn))
         j = bracket.get(loc.name)
         if j is None:
             continue
-        key = (ml.body, ml.event.value)
         prev = reps_by_event.get(key)
         if prev is None or j < prev[0]:
-            reps_by_event[key] = (j, frozenset(spheres[j].reps_collected))
+            reps_by_event[key] = (j, frozenset(spheres[j].reps_collected),
+                                  pad_by_loc.get(loc.name, 0))
     world._cheap_mission_reps = {k: v[1] for k, v in reps_by_event.items()}
+    for _key, (_j, _reps, _pad) in reps_by_event.items():
+        if pool_pad and _pad > 0:
+            counted_by_event[_key][PROGRESSIVE_LAUNCH_PAD_NAME] = max(
+                counted_by_event[_key].get(PROGRESSIVE_LAUNCH_PAD_NAME, 0), _pad)
+    world._cheap_mission_counted = {
+        k: tuple(sorted(v.items())) for k, v in counted_by_event.items()}
 
-    # Per-contract delivery reps: the bracket reps of the contract's mission
-    # location(s) — the cheap stand-in for ``contract_access[cid]`` (can the
-    # player deliver the payload).  ``has_all(reps)`` ⟹ the bracket kit flies the
-    # contract mission with its payload, so it's conservative-sound like the
-    # ordinary mission gates, and lets the contract access rule stay off
-    # ``get_capability`` during fill.
-    # ``has_all(reps)`` covers the physics RANK half only.  The counted-progressive
-    # THRESHOLDS (buildings/pad/R&D/PSI) live in the SAME location signature — the
-    # ordinary mission rule enforces them, but the contract rule (excluded from the
-    # signature-derived deriver, see _install_ladder_rules) would silently drop
-    # them, so an interplanetary contract was reachable with no Mission Control
-    # (and a heavy one with an insufficient pad, etc).  Carry the counted half off
-    # the same canonical signature so the contract rule gates on has(kind, level)
-    # too — the exact reqs the mission rule uses, keeping the two consistent.
+    # Per-contract cheap access reqs — the fill-time stand-in for the real
+    # ``contract_access[cid]``, in two channels the contract rule ANDs together:
+    #
+    #   * ``_cheap_contract_reps[cid]`` — the physics PARTS.  The bracket reps of
+    #     the contract's lowest-bracket reward slot; ``has_all(reps)`` ⟹ the
+    #     bracket kit flies the mission with its payload (conservative-sound like
+    #     the ordinary mission gates), keeping the rule off ``get_capability``.
+    #   * ``_cheap_contract_counted_reqs[cid]`` — the non-physics CAPABILITY gates
+    #     (nav/EVA/samples/rendezvous/DSN), derived SPEC-DIRECT from the contract's
+    #     base mission type and body via ``contract_logic_needs`` and translated to
+    #     building items once.  Spec-direct (not scavenged from the bracket) so an
+    #     UNBRACKETED contract still carries its full capability gate, and so the
+    #     requirement is the contract's real flyability need — NOT its ladder
+    #     sphere position.  The launch pad (a real physics ceiling) is the one
+    #     building added on top, only when the option pools it.
+    #
+    # R&D/PSI sphere-position upper bounds are DELIBERATELY absent here: they are a
+    # placement artifact (a rep's tech band ≤ what's available at the mission's own
+    # sphere), not a flyability need.  Gating the ACCESS rule on them would bind a
+    # contract to its physics position and break the whole point of contracts —
+    # being sendable out of physics order by where the award/buildings land.  They
+    # still ride the location SIGNATURE (placement window only) via the main loop.
     contract_reps: dict[str, frozenset[str]] = {}
     contract_counted: dict[str, tuple[tuple[str, int], ...]] = {}
     for spec in (*getattr(world, "contract_specs", ()),
                  *getattr(world, "goal_contract_specs", ())):
+        counted_levels: dict[str, int] = dict(_needs_to_counted(
+            contract_logic_needs(spec, mb),
+            buildings_in_logic=buildings_in_logic,
+            local_needs_conics=lnc, local_needs_nodes=lnn))
+        # A contract's REQUIRED PARTS (drill/ore_tank/lab/battery for its
+        # category) are PAYLOAD, not rank reps, so they never enter the bracket
+        # sphere's ``reps_collected``.  The real ``contract_access`` fails
+        # (MANIFEST_NONE) without them, so the cheap ``has_all(reps)`` must
+        # require them too — else fill treats the contract as completable without
+        # e.g. a drill and strands whatever it places on it.  The lightest rep per
+        # category (the same one the demote keep promotes to PROGRESSION) is the
+        # conservative-sound choice.
+        req_parts = required_part_names_for((spec,), world.part_manager)
         best: Optional[tuple[int, frozenset[str], str]] = None
         for ln in spec.location_names(world.locations_per_contract):
             j = bracket.get(ln)
             if j is not None and (best is None or j < best[0]):
                 best = (j, frozenset(spheres[j].reps_collected), ln)
         if best is not None:
-            contract_reps[spec.contract_id] = best[1]
-            sig = location_signatures.get(best[2])
-            if sig is not None:
-                # Only the BUILDING gates (nav/DSN/EVA — MC/TS/AC) — these are the
-                # real, body-dependent sequence-break requirements the contract's
-                # mission genuinely needs.  Pad and the R&D/PSI Thresholds are NOT
-                # included: R&D/PSI carry the sphere-position *upper-bound* level
-                # (a placement-safety artifact, not the contract's real need), and
-                # gating the access rule on them over-constrains the science-heavy
-                # goals into fill deadlocks.  Their placement safety already comes
-                # from the signature's Rule-B window, unchanged.
-                contract_counted[spec.contract_id] = tuple(
-                    (c.kind, c.level) for c in sig.counted_reqs
-                    if c.kind in _CONTRACT_ACCESS_BUILDINGS)
+            contract_reps[spec.contract_id] = best[1] | req_parts
+            pad_req = pad_by_loc.get(best[2], 0)
+            if pool_pad and pad_req > 0:
+                counted_levels[PROGRESSIVE_LAUNCH_PAD_NAME] = max(
+                    counted_levels.get(PROGRESSIVE_LAUNCH_PAD_NAME, 0), pad_req)
+        counted = tuple(sorted(counted_levels.items()))
+        if counted:
+            contract_counted[spec.contract_id] = counted
+        # Placement safety: fold the award gate AND the capability counted reqs
+        # into EVERY reward slot's signature — including unbracketed slots the
+        # main loop never reached — so the unified placement window can't strand a
+        # unique-provider building copy (or the award) behind the contract that
+        # needs it.  Signature max-merges make this idempotent for bracketed slots.
+        for slot in spec.location_names(world.locations_per_contract):
+            sig = location_signatures.get(slot, Signature.empty()).with_item(
+                spec.item_name)
+            for kind, lvl in counted:
+                sig = sig.with_counted(kind, lvl)
+            location_signatures[slot] = sig
     world._cheap_contract_reps = contract_reps
     world._cheap_contract_counted_reqs = contract_counted
 
@@ -4092,18 +4120,31 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
     # contract.  ``_assert_gate_items_progression`` below fails generation if a
     # gate item ever slips through again.
     rep_part_names |= world.logic_required_items
-    # Count / progressive_unlock: completing X non-goal contracts unlocks the
-    # goal, so those contracts' DELIVERY parts must also stay PROGRESSION (their
-    # GATE items are already covered above).  ``required_part_names_for`` is the
-    # lightest standalone rep per required category (drill / ore_tank / battery /
-    # science_lab); chain-guaranteed payload reps are already in cumulative_reps.
+    # Every contract's access rule requires its DELIVERY parts (the lightest rep
+    # per required category — drill / ore_tank / battery / science_lab; the cheap
+    # rule unions ``required_part_names_for`` into ``cheap_contract_reps``).  A
+    # required part must therefore be reachable IN LOGIC, i.e. PROGRESSION — a
+    # demoted-to-filler required part makes the contract an unsatisfiable gate that
+    # can only ever hold filler.  Keep them in EVERY mode (this was
+    # count/progressive-only, which left a findable contract gating on a filler
+    # drill).  Chain-guaranteed payload (relay / crew / power) is already covered
+    # by ``cumulative_reps``; goal contracts are included for the same reason.
     from .contracts import required_part_names_for
-    from .options import GoalContractMode
-    if world.options.goal_contract_mode.value in (
-            GoalContractMode.option_count,
-            GoalContractMode.option_progressive_unlock):
-        rep_part_names |= required_part_names_for(
-            world.contract_specs, world.part_manager)
+    rep_part_names |= required_part_names_for(
+        (*world.contract_specs, *getattr(world, "goal_contract_specs", ())),
+        world.part_manager)
+    # Contract capability gates (nav / EVA / samples / DSN / pad) the tightened
+    # contract access rule now enforces: keep enough copies of each required
+    # BUILDING / pad PROGRESSION so an unbracketed contract — and, in
+    # count/progressive, its completion-count threshold and Victory — stays
+    # reachable-in-logic.  A no-op for bracketed contracts (the chain already
+    # bumped those levels into ``chain_full_extras``); this only lifts the tail.
+    # ``chain_extras`` (not ``require_item``) is the right lever: spare copies past
+    # the needed level must stay demotable, which ``_assert_gate_items_progression``
+    # would forbid on a require_item route.
+    for _counted in getattr(world, "_cheap_contract_counted_reqs", {}).values():
+        for _kind, _lvl in _counted:
+            chain_full_extras[_kind] = max(chain_full_extras.get(_kind, 0), _lvl)
     _demote_non_rep_parts(world, rep_part_names, cumulative_sig,
                           chain_extras=chain_full_extras)
     _assert_gate_items_progression(world)

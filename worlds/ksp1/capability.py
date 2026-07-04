@@ -73,6 +73,18 @@ CAPABILITY_ITEMS: frozenset[str] = frozenset(
         for p in parts
     )
 ) | {
+    # Contract required-category parts (drill / ore_tank / science_lab /
+    # eva_jetpack, ...).  ``contract_access`` depends on their presence via
+    # ``required_part_manifest`` (category_lightest), but several are payload
+    # parts with no ``provides``, so the part-type filter above misses them.
+    # They MUST be fingerprinted or a state without the drill and a state with
+    # it share a fingerprint and the cached (drill-less → mine_ore infeasible)
+    # contract_access is reused after the drill is collected -- the same
+    # collision the Mission Control note below describes, for parts.
+    name
+    for members in DEFAULT_PART_MANAGER.category_members.values()
+    for name in members
+} | {
     # Counted progressives that still affect capability — counts must
     # appear in the L2 fingerprint to distinguish e.g. Pad=0 vs Pad=3.
     "Progressive Launch Pad",
@@ -169,6 +181,86 @@ def _home_system_moons(home: BodyName) -> frozenset:
         moons = frozenset(home_system_bodies(home)) - {home}
         _HOME_SYSTEM_MOONS[home] = moons
     return moons
+
+
+@dataclass(frozen=True)
+class MissionLogicNeeds:
+    """A mission's non-physics logic requirements, as player *capabilities*
+    (never buildings/items) plus the comms DSN Tracking-Station level.
+
+    This is the single semantic source for "what does this mission need beyond
+    raw dv/rank physics".  It mirrors the capability gate stack in
+    ``_evaluate_profile`` clause-for-clause; the sphere-ladder translates it into
+    building items at one point (``sphere_ladder._needs_to_counted`` via
+    ``effects.buildings_for_capability``) so mission locations and contracts
+    cannot drift from the real evaluator or from each other.
+
+    Deliberately EXCLUDES precise pointing (an attitude-*part* gate, satisfied by
+    the bracket's reps) and the launch pad (a kit-dependent physics ceiling, kept
+    bracket-derived) — both live off the capability/building axis.
+    """
+    capabilities: "frozenset[Capability]"
+    min_ts_dsn_level: int = 0
+
+
+def mission_logic_needs(
+    body: BodyName, mission_type: MissionType, crewed: Optional[bool],
+    requires_eva: Optional[bool], mission_builder: MissionBuilder,
+) -> MissionLogicNeeds:
+    """Capability + comms requirements a mission imposes beyond dv/rank physics.
+
+    Shared by mission locations (via ``sphere_ladder._mission_building_reqs``)
+    and contracts (via ``contracts.contract_logic_needs``).  Each clause below
+    mirrors a named gate in ``_evaluate_profile``:
+
+    * EVA (``CAN_EVA``) — flag/sample/rescue; home-surface SAMPLE_RETURN rides the
+      free home EVA (the ``home_surface_sample`` exemption), so it is excluded.
+    * Samples (``CAN_COLLECT_SAMPLES``) — SAMPLE_RETURN, home and off-home.
+    * Navigation — interplanetary (target outside the home system) always needs
+      ``CAN_NAVIGATE_INTERPLANETARY``; a home-system moon transfer needs
+      ``CAN_NAVIGATE_LOCAL`` (scaled by the resolved HomeSystem* options in the
+      translation layer).  Rendezvous (RESCUE) always needs ``CAN_RENDEZVOUS``.
+    * Comms/DSN — uncrewed missions leaving the home system need the Tracking
+      Station at ``min_dsn_level_for`` the minimal antenna the target requires.
+
+    Navigation keys on home-system *membership* (not the profile's edge types) to
+    keep mission signatures byte-identical; the equivalence to the real gate's
+    ``PLANET_TRANSFER``-edge test is pinned by a unit tripwire.
+    """
+    from .effects import Capability
+    from .comms import min_dsn_level_for
+    from .bodies import min_relay_tier
+
+    home = mission_builder.home
+    caps: set[Capability] = set()
+    needs_travel = any(
+        bool(p) for p in mission_builder.profiles_for(body, mission_type))
+
+    eva_required = (requires_eva if requires_eva is not None
+                    else mission_type in MISSION_TYPES_REQUIRING_EVA)
+    if eva_required:
+        home_exempt = (mission_type in MISSION_TYPES_REQUIRING_SAMPLES
+                       and body == home)
+        if not home_exempt:
+            caps.add(Capability.CAN_EVA)
+
+    if mission_type in MISSION_TYPES_REQUIRING_SAMPLES:
+        caps.add(Capability.CAN_COLLECT_SAMPLES)
+
+    if needs_travel:
+        if body not in home_system_bodies(home):
+            caps.add(Capability.CAN_NAVIGATE_INTERPLANETARY)
+        elif body != home:
+            caps.add(Capability.CAN_NAVIGATE_LOCAL)
+    if mission_type in MISSION_TYPES_REQUIRING_RENDEZVOUS:
+        caps.add(Capability.CAN_RENDEZVOUS)
+
+    min_ts_dsn_level = 0
+    if needs_travel and crewed is not True:
+        min_ts_dsn_level = min_dsn_level_for(
+            body, home, min_relay_tier(body, home))
+
+    return MissionLogicNeeds(frozenset(caps), min_ts_dsn_level)
 
 
 # Sounding rocket parameters
