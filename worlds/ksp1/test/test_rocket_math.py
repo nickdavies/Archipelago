@@ -701,6 +701,60 @@ class TestStageMonotonicity(unittest.TestCase):
         # would pass every assertion above.
         self.assertGreaterEqual(feasible_bases, 20)
 
+    # bugs/106: a SHIELDED stage's tank pack must stay coverable by the
+    # largest owned shield.  The seed (standard_sample_returns/eeloo, seed
+    # 2062830491824920332, Mun SSR ascent group) had a 0.625m shield
+    # (HeatShield0) and a small engine.  With only narrow tanks the greedy
+    # pack was pure miniFuelTank (width 0.625, coverable) — feasible.  Adding
+    # Size1p5.Size2.Adapter.01 (a size-2.5 SPINE tank, same 8:1 ratio) made
+    # the fuel-descending greedy prefer it, producing a width-2.5 pack no
+    # 0.625 shield could cover → every candidate rejected → a strictly larger
+    # kit lost the stage.  The fix caps a shielded stage's packable tanks at
+    # the largest shield size.
+    _SHIELDED_ASCENT = dict(
+        required_dv=3522.7,
+        payload_mass=24.4,
+        gravity=1.69,
+        min_twr=0.0,
+        in_atmosphere=False,
+        needs_heat_shield=True,
+        max_heat_shield_size=0.625,
+        heat_shields=((0.625, 0.025, "HeatShield0"),),
+        parallel_mode="none",
+    )
+
+    def test_bug_106_wide_tank_must_not_poison_shielded_pack(self) -> None:
+        mini = _p("liquidEngineMini.v2")
+        narrow = [_p("miniFuelTank"), _p("Size3To2Adapter.v2")]
+        wide = narrow + [_p("Size1p5.Size2.Adapter.01")]  # size-2.5, uncoverable
+        base = find_optimal_stage(
+            available_engines=[mini], available_srbs=[],
+            available_tanks=narrow, **self._SHIELDED_ASCENT)
+        self.assertIsNotNone(
+            base, "narrow-tank shielded ascent must build (repro guard)")
+        assert base is not None
+        bigger = find_optimal_stage(
+            available_engines=[mini], available_srbs=[],
+            available_tanks=wide, **self._SHIELDED_ASCENT)
+        self.assertIsNotNone(
+            bigger, "adding a wide un-coverable tank lost the shielded "
+            "stage (bugs/106)")
+        assert bigger is not None
+        self.assertLessEqual(bigger.stage_mass_wet, base.stage_mass_wet * 1.001)
+
+    def test_bug_106_packable_excludes_tanks_wider_than_shield(self) -> None:
+        from worlds.ksp1.rocket_math import _packable_tanks
+        mini = _p("liquidEngineMini.v2")
+        tanks = [_p("miniFuelTank"), _p("Size1p5.Size2.Adapter.01")]
+        ctx_capped, _ = _packable_tanks(tanks, mini, max_tank_size=0.625)
+        self.assertEqual(
+            {t.name for t in ctx_capped[0]}, {"miniFuelTank"},
+            "shield cap must drop the size-2.5 adapter from the packable set")
+        ctx_free, _ = _packable_tanks(tanks, mini)
+        self.assertIn("Size1p5.Size2.Adapter.01",
+                      {t.name for t in ctx_free[0]},
+                      "uncapped set keeps the wide tank (guard)")
+
 
 if __name__ == "__main__":
     unittest.main()

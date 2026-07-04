@@ -108,7 +108,7 @@ def _tank_ratio(t):
     return t.fuel_mass / t.dry_mass if t.dry_mass > 0.0 else float("inf")
 
 
-def _packable_tanks(tanks, engine):
+def _packable_tanks(tanks, engine, max_tank_size=None):
     """Return ``(pack_ctx, rho_star)``: the packing context for this engine
     and the best fuel:dry ratio among its mountable tanks.  ``pack_ctx`` is
     ``(packable, boundaries, cov_fuels, cov_tanks)`` — or ``None`` when the
@@ -127,6 +127,15 @@ def _packable_tanks(tanks, engine):
     tanks, single-node tanks like the FL-C1000, slanted/coupler adapters) can't
     form a central stackable column and are excluded, and the optimizer's size
     gate (``engine.size_class <= tank.size_class``) is applied.
+
+    ``max_tank_size`` (set on shielded stages to the largest owned heat shield's
+    size) excludes tanks WIDER than any shield can cover.  A reentry stage's
+    widest tank must fit under a shield; a tank wider than every shield can never
+    be shielded, so it can't be part of a coverable pack.  Without this the
+    greedy pack (fuel-descending) could pick a wide un-coverable tank when a
+    NARROWER pack of the same set was shieldable — and adding a mid-width tank to
+    the kit would flip a feasible shielded stage infeasible (bug-092 shape,
+    bugs/106).  Constraining the set keeps the pack coverable and monotone.
 
     Sort order is (ratio tier, fuel desc), NOT plain largest-first: a large
     tank whose ratio is materially worse (Mk3 fuselages, ~7:1 vs the 8:1
@@ -148,7 +157,8 @@ def _packable_tanks(tanks, engine):
     heavier than a smaller one)."""
     mountable = [t for t in tanks
                  if PartRole.SPINE in t.roles and t.fuel_mass > 0.0
-                 and engine.size_class <= t.size_class]
+                 and engine.size_class <= t.size_class
+                 and (max_tank_size is None or t.size_class <= max_tank_size)]
     if not mountable:
         return None, 0.0
     rho_star = max(_tank_ratio(t) for t in mountable)
@@ -821,7 +831,12 @@ def _find_optimal_parallel_stage(
             continue
         if engine.size_class > max(t.size_class for t in compatible):
             continue
-        pack_ctx, _rho = _packable_tanks(compatible, engine)
+        # Shielded stage: exclude tanks wider than any owned shield can cover,
+        # same monotone constraint as the serial path (bugs/106).
+        _cap = (max_heat_shield_size
+                if (needs_heat_shield and max_heat_shield_size is not None)
+                else None)
+        pack_ctx, _rho = _packable_tanks(compatible, engine, max_tank_size=_cap)
         if pack_ctx is None:
             continue
 
@@ -1023,6 +1038,16 @@ def _find_optimal_stage_uncached(
     has_twr = min_twr > 0 and gravity > 0
     twr_g = min_twr * gravity  # reused per engine
 
+    # On a shielded stage every packed tank must fit under a shield: the widest
+    # coverable tank is the largest owned shield's size.  Wider tanks can never
+    # be shielded, so excluding them from the pack keeps it coverable AND
+    # monotone (a wide un-coverable tank in the kit can't flip a shielded stage
+    # infeasible — bugs/106).  ``None`` off the shielded path (no constraint).
+    _shield_tank_cap = (max_heat_shield_size
+                        if (needs_heat_shield
+                            and max_heat_shield_size is not None)
+                        else None)
+
     # Local refs to avoid repeated global/attribute lookups in hot loop
     _exp = math.exp
     _log = math.log
@@ -1137,7 +1162,8 @@ def _find_optimal_stage_uncached(
         _pk_key = (engine.fuel_type, e_size)
         cached = _packable_cache.get(_pk_key)
         if cached is None:
-            cached = _packable_tanks(compatible_tanks, engine)
+            cached = _packable_tanks(compatible_tanks, engine,
+                                     max_tank_size=_shield_tank_cap)
             _packable_cache[_pk_key] = cached
         pack_ctx, rho_star = cached
         if pack_ctx is None:
