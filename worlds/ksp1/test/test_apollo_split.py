@@ -21,6 +21,7 @@ import unittest
 
 from worlds.ksp1.bodies import (
     BodyName, DIFFICULTY_PROFILES, MissionBuilder, MissionType,
+    _GAMEPLAY_BY_DIFFICULTY,
 )
 from worlds.ksp1.capability import (
     _apollo_split_for, _group_edges, compute_capability_from_items,
@@ -49,6 +50,12 @@ _PORT_NAMES = frozenset(
 _PROBE_CORE_NAMES = frozenset(
     nm for nm, parts in _PART_DB.items()
     if any(CapabilityFlag.PROBE_CORE in getattr(p, "provides", ())
+           for p in parts)
+)
+
+_RCS_NAMES = frozenset(
+    nm for nm, parts in _PART_DB.items()
+    if any(CapabilityFlag.RCS in getattr(p, "provides", ())
            for p in parts)
 )
 
@@ -132,6 +139,106 @@ class TestApolloCeiling(unittest.TestCase):
             "expected one docking port on the lander and one on the parked "
             f"stack; manifests: {[sr.equipment for sr in res.stage_results]}",
         )
+        self.assertTrue(
+            res.via_apollo,
+            "an Apollo-retry closure must mark via_apollo so bracket-side "
+            "consumers gate on the rendezvous it imposed",
+        )
+
+    def test_standard_closure_not_marked_via_apollo(self) -> None:
+        """A mission the standard architecture closes never carries the
+        Apollo rendezvous supplement."""
+        res = evaluate_mission_detailed(
+            self.flags, DIFFICULTY_PROFILES[_PROBE_PROFILE],
+            BodyName.MUN, MissionType.RETURN,
+            crewed=True, mission_builder=self.mb,
+        )
+        self.assertTrue(res.feasible, res.failure_reasons)
+        self.assertFalse(res.via_apollo)
+
+
+class TestDockingAttitudeGear(unittest.TestCase):
+    """Docking gear gates (operator rule): the approach always needs torque
+    authority (at least wheels), and below expert gameplay an RCS translation
+    kit on top — an expert player can dock on main-engine translation."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.mb = MissionBuilder(home=BodyName.KERBIN)
+        cls.cap_no_rcs, cls.flags_no_rcs = compute_capability_from_items(
+            _max_kit(exclude=_RCS_NAMES),
+            difficulty_name=_PROBE_PROFILE,
+            start_with_clamps=True,
+            mission_builder=cls.mb,
+        )
+
+    def test_no_rcs_blocks_apollo_below_expert(self) -> None:
+        """CONSERVATIVE_GAMEPLAY (casual/normal): stripping every RCS
+        thruster must drop the Apollo-only Tylo SSR back to infeasible."""
+        self.assertFalse(
+            self.cap_no_rcs.bodies[BodyName.TYLO].access[
+                EventName.SAMPLE_RETURN],
+            "docking below expert requires the RCS approach kit",
+        )
+
+    def test_expert_docks_without_rcs(self) -> None:
+        """Expert gameplay: wheels alone suffice — the same RCS-less kit
+        closes Tylo SSR via Apollo, and no RCS part is charged."""
+        expert_mb = MissionBuilder(home=BodyName.KERBIN)
+        expert_mb.gameplay = _GAMEPLAY_BY_DIFFICULTY[2]
+        res = evaluate_mission_detailed(
+            self.flags_no_rcs, DIFFICULTY_PROFILES[_PROBE_PROFILE],
+            BodyName.TYLO, MissionType.SAMPLE_RETURN,
+            crewed=True, mission_builder=expert_mb,
+        )
+        self.assertTrue(res.feasible, res.failure_reasons)
+        self.assertTrue(res.via_apollo)
+        charged_rcs = [
+            nm for sr in res.stage_results
+            for (_cnt, nm) in sr.equipment if nm in _RCS_NAMES
+        ]
+        self.assertEqual(
+            charged_rcs, [],
+            "expert docking must not charge an unrequired RCS kit",
+        )
+
+
+class TestApolloBracketBuildingGate(unittest.TestCase):
+    """bugs/104: the kit-dependent rendezvous supplement.
+
+    ``mission_logic_needs`` is kit-independent, so a home-SYSTEM heavy-moon
+    return closed only by the Apollo retry (Laythe-home Tylo Return is the
+    live case) derives CAN_NAVIGATE_LOCAL's building set — while the real
+    evaluator imposed ``requires_rendezvous=True`` (conics + nodes).  The
+    bracket scan passes ``via_apollo`` so the gate requires what was proven.
+    """
+
+    def test_via_apollo_adds_rendezvous_buildings(self) -> None:
+        from worlds.ksp1.sphere_ladder import (
+            _LocationMissionInfo, _mission_building_reqs)
+        from worlds.ksp1.items import PROGRESSIVE_MISSION_CONTROL_NAME
+        mb = MissionBuilder(home=BodyName.LAYTHE)
+        info = _LocationMissionInfo(
+            body=BodyName.TYLO, mission_type=MissionType.RETURN,
+            crewed=None, threshold_km=None)
+        # Options leave home-system nav ungated: the kit-independent needs
+        # carry no Mission Control requirement...
+        base = _mission_building_reqs(
+            info, mission_builder=mb, buildings_in_logic=True,
+            local_needs_conics=False, local_needs_nodes=False)
+        self.assertNotIn(
+            PROGRESSIVE_MISSION_CONTROL_NAME, dict(base),
+            "fixture invalidated: the base needs already require nodes — "
+            "pick a target/options pair where they don't")
+        # ...but an Apollo-closed bracket must add conics + nodes.
+        supplemented = _mission_building_reqs(
+            info, mission_builder=mb, buildings_in_logic=True,
+            local_needs_conics=False, local_needs_nodes=False,
+            via_apollo=True)
+        self.assertGreaterEqual(
+            dict(supplemented).get(PROGRESSIVE_MISSION_CONTROL_NAME, 0), 1,
+            f"via_apollo must require Mission Control (nodes); got "
+            f"{supplemented}")
 
 
 class TestApolloSplitFinder(unittest.TestCase):

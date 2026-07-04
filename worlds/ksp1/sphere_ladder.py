@@ -2610,6 +2610,7 @@ def _mission_building_reqs(
     info: "LocationDescriptor", *,
     local_needs_conics: bool, local_needs_nodes: bool,
     mission_builder: MissionBuilder, buildings_in_logic: bool,
+    via_apollo: bool = False,
 ) -> tuple[tuple[str, int], ...]:
     """Per-mission curated-building requirements as ``(item_name, level)``.
 
@@ -2619,11 +2620,23 @@ def _mission_building_reqs(
     (``_needs_to_counted`` — the mapping).  So a mission location's signature and
     a contract's access rule gate on the SAME requirements and neither can drift
     from the real evaluator.  ``()`` when buildings aren't in logic.
+
+    ``via_apollo`` is the bracket-derived (kit-dependent) supplement the
+    kit-independent needs model cannot see: a mission whose bracket sphere
+    closed it only through the Apollo-split retry additionally requires
+    rendezvous (``requires_rendezvous=True`` in the real evaluator), so
+    ``CAN_RENDEZVOUS`` joins the needs before translation.  Same pattern as
+    the pad: prove-what-you-enforce, derived where the kit is known.
     """
-    from .capability import mission_logic_needs
+    from .capability import MissionLogicNeeds, mission_logic_needs
+    from .effects import Capability
     needs = mission_logic_needs(
         info.body, info.mission_type, info.crewed, info.requires_eva,
         mission_builder)
+    if via_apollo and Capability.CAN_RENDEZVOUS not in needs.capabilities:
+        needs = MissionLogicNeeds(
+            needs.capabilities | {Capability.CAN_RENDEZVOUS},
+            needs.min_ts_dsn_level)
     return _needs_to_counted(
         needs, buildings_in_logic=buildings_in_logic,
         local_needs_conics=local_needs_conics,
@@ -2712,6 +2725,11 @@ def _install_ladder_rules(
     # contract's own launch-pad requirement off its bracketed reward slot without
     # re-parsing the location name back into a mission key.
     pad_by_loc: dict[str, int] = {}
+    # Per-location bracket building reqs (incl. the kit-dependent via_apollo
+    # rendezvous supplement the spec-direct channel cannot see), so
+    # ``_install_cheap_mission_reps`` can fold them into a bracketed contract's
+    # counted access reqs the same way it folds the bracket pad.
+    breq_by_loc: dict[str, tuple] = {}
     rebracketed = 0
     for loc in world.multiworld.get_locations(player):
         if loc.address is None or loc.name in bootstrap_locations:
@@ -2746,14 +2764,18 @@ def _install_ladder_rules(
                                     if r.launch_mass <= c), len(caps) - 1)
                     # Precise per-mission building reqs (buildings_in_logic) —
                     # the same self-gate the pad gets, derived from THIS
-                    # mission's capability needs (target + type, kit-independent).
+                    # mission's capability needs (target + type, kit-independent)
+                    # plus the bracket-derived Apollo supplement: a sphere that
+                    # closed the mission only via the Apollo-split retry proved
+                    # feasibility WITH rendezvous, so the gate must require it.
                     building_reqs = _mission_building_reqs(
                         info, mission_builder=mb,
                         buildings_in_logic=buildings_in_logic,
                         local_needs_conics=getattr(
                             world, "local_needs_conics", True),
                         local_needs_nodes=getattr(
-                            world, "local_needs_nodes", True))
+                            world, "local_needs_nodes", True),
+                        via_apollo=r.via_apollo)
                     break
             if j is None:
                 # Unbracketed mission (beyond the chain's reps-only reach, e.g.
@@ -2786,6 +2808,7 @@ def _install_ladder_rules(
             continue
         bracket_by_loc[loc.name] = j
         pad_by_loc[loc.name] = pad_req
+        breq_by_loc[loc.name] = building_reqs
         # Counted-progressive requirements, recorded so the unified placement
         # window can never drop a counted copy behind a location that needs it
         # (and so the cheap access rule gates on them explicitly), exactly as for
@@ -2865,12 +2888,13 @@ def _install_ladder_rules(
         # missions, closing the long-standing contract blind spot.
         saved.update(getattr(world, "_contract_real_rules", {}))
         world._strict_ladder_saved_rules = saved
-    _install_cheap_mission_reps(world, ladder, location_signatures, pad_by_loc)
+    _install_cheap_mission_reps(world, ladder, location_signatures, pad_by_loc,
+                                breq_by_loc)
 
 
 def _install_cheap_mission_reps(
     world: "KSP1World", ladder: SphereLadder,
-    location_signatures: dict, pad_by_loc: dict,
+    location_signatures: dict, pad_by_loc: dict, breq_by_loc: dict,
 ) -> None:
     """Precompute the cheap fill-time gates that stand in for live capability:
 
@@ -2928,12 +2952,20 @@ def _install_cheap_mission_reps(
         prev = reps_by_event.get(key)
         if prev is None or j < prev[0]:
             reps_by_event[key] = (j, frozenset(spheres[j].reps_collected),
-                                  pad_by_loc.get(loc.name, 0))
+                                  pad_by_loc.get(loc.name, 0),
+                                  breq_by_loc.get(loc.name, ()))
     world._cheap_mission_reps = {k: v[1] for k, v in reps_by_event.items()}
-    for _key, (_j, _reps, _pad) in reps_by_event.items():
+    for _key, (_j, _reps, _pad, _breq) in reps_by_event.items():
         if pool_pad and _pad > 0:
             counted_by_event[_key][PROGRESSIVE_LAUNCH_PAD_NAME] = max(
                 counted_by_event[_key].get(PROGRESSIVE_LAUNCH_PAD_NAME, 0), _pad)
+        # Bracket-derived building reqs (the via_apollo rendezvous supplement) —
+        # the goal/victory rule must enforce what the bracket kit was proven
+        # WITH, exactly as the mission location's own gate does.  Max-merge: the
+        # spec-direct entries are already present with the same levels.
+        for _kind, _lvl in _breq:
+            counted_by_event[_key][_kind] = max(
+                counted_by_event[_key].get(_kind, 0), _lvl)
     world._cheap_mission_counted = {
         k: tuple(sorted(v.items())) for k, v in counted_by_event.items()}
 
@@ -2987,6 +3019,14 @@ def _install_cheap_mission_reps(
             if pool_pad and pad_req > 0:
                 counted_levels[PROGRESSIVE_LAUNCH_PAD_NAME] = max(
                     counted_levels.get(PROGRESSIVE_LAUNCH_PAD_NAME, 0), pad_req)
+            # Bracket-derived building reqs (the via_apollo rendezvous
+            # supplement): the cheap rule's ``has_all(reps)`` is the BRACKET
+            # kit, and that kit was proven to fly this contract's mission only
+            # WITH rendezvous — so the counted gate must require it, exactly as
+            # the bracket pad is folded above.  Max-merge: spec-direct entries
+            # are already present with the same levels.
+            for _kind, _lvl in breq_by_loc.get(best[2], ()):
+                counted_levels[_kind] = max(counted_levels.get(_kind, 0), _lvl)
         counted = tuple(sorted(counted_levels.items()))
         if counted:
             contract_counted[spec.contract_id] = counted

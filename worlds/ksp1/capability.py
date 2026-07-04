@@ -1073,6 +1073,15 @@ class ProfileResult:
     # view derived from ``blocking``. Producers populate ``blocking``;
     # downstream consumers can read either.
     blocking: list[BlockingInfo] = field(default_factory=list)
+    # True when feasibility came from the Apollo-split retry, which imposes
+    # requires_rendezvous=True beyond what ``mission_logic_needs`` derives from
+    # the mission type alone.  Bracket-side consumers must union the rendezvous
+    # buildings (conics + nodes) into the location's gate — for interplanetary
+    # targets that's a no-op (CAN_NAVIGATE_INTERPLANETARY maps to the same
+    # buildings), but a home-SYSTEM heavy-moon return closed only by Apollo
+    # (e.g. Laythe-home Tylo Return) would otherwise under-gate to
+    # CAN_NAVIGATE_LOCAL's weaker building set.
+    via_apollo: bool = False
     # Command module + support equipment for the terminal stage: [(count, part_id), ...]
     terminal_parts: list[tuple[int, str]] = field(default_factory=list)
     # The flown pod.  On passive aero-entry profiles this is pair-picked with
@@ -1264,6 +1273,7 @@ def _passive_entry_pod_and_shield(
     pods: list[MiscEquipment],
     heat_shields: list[HeatShield],
     n_entries: int,
+    extra_pod_cost=None,
 ) -> Optional[tuple[MiscEquipment, HeatShield]]:
     """Cheapest (pod, covering shield) pair for a profile with ``n_entries``
     passive aero entries, or None when no owned shield covers any owned pod.
@@ -1277,10 +1287,22 @@ def _passive_entry_pod_and_shield(
     uncoverable one and lose the mission (the bug-092 shape).  A pure min over
     a growing candidate set can only improve.  Both masses are real flown
     parts, so the charge stays conservative.
+
+    ``extra_pod_cost`` extends the same pair-pick to architectures where the
+    pod carries an additional per-pod gear consequence (the Apollo docking
+    approach: ``_docking_approach_gear`` mass).  It returns that mass for a
+    pod, or None when the pod can't fly the architecture at all — those pods
+    are skipped, exactly like an uncoverable one.
     """
     best: Optional[tuple[MiscEquipment, HeatShield]] = None
     best_key: tuple[float, float, str] = (float("inf"), float("inf"), "")
     for pod in pods:
+        extra = 0.0
+        if extra_pod_cost is not None:
+            e = extra_pod_cost(pod)
+            if e is None:
+                continue
+            extra = e
         shield = None
         for hs in heat_shields:
             if hs.size_class >= pod.size_class and (
@@ -1288,7 +1310,7 @@ def _passive_entry_pod_and_shield(
                 shield = hs
         if shield is None:
             continue
-        key = (pod.mass + n_entries * shield.mass, pod.mass, pod.name)
+        key = (pod.mass + extra + n_entries * shield.mass, pod.mass, pod.name)
         if key < best_key:
             best_key, best = key, (pod, shield)
     return best
@@ -1323,8 +1345,9 @@ def _rcs_bundle(
 
     Returns None when the kit can't fly RCS at all (no thruster, or no
     monopropellant source).  Shared by the attitude bundle (RCS-vs-wheel
-    trade) and the Apollo docking gear (the docking approach mandates RCS,
-    a wheel is not a substitute).
+    trade) and the Apollo docking gear (the docking approach mandates RCS
+    below expert gameplay — ``docking_needs_rcs``; a wheel is not a
+    substitute for translation, nor RCS for the always-required wheels).
     """
     t = flags.lightest_rcs_thruster
     if t is None:
@@ -1338,6 +1361,41 @@ def _rcs_bundle(
             return None
         parts.append((1, tank.name))
         mass += tank.dry_mass + tank.fuel_mass
+    return AttitudeBundle(mass=mass, parts=tuple(parts))
+
+
+def _docking_approach_gear(
+    flags: EquipmentFlags, pod: Optional[MiscEquipment],
+    gameplay: GameplayDifficulty,
+) -> Optional[AttitudeBundle]:
+    """Docking attitude gear the active vehicle flies with ``pod``: torque
+    ALWAYS (built-in pod wheels or a charged standalone module) and, below
+    expert gameplay, the RCS translation kit (``_rcs_bundle`` — monoprop tank
+    included unless the pod carries internal monoprop).  None when this pod
+    cannot dock with the current kit.
+
+    Single source of truth for BOTH the Apollo pod pick (pod.mass +
+    gear.mass, the same pair-pick shape as ``_passive_entry_pod_and_shield``)
+    and the approach-gear charge in ``_apollo_split_for`` — pick basis must
+    equal charge, or a lighter pod whose gear consequence is huge (kv3Pod
+    forcing the kit's only monoprop tank, a Mk3 fuselage, onto the lander)
+    wins the pick and a BIGGER kit loses the mission (bug-092 shape; the
+    docking-gear pod-pick facet of bugs/105).
+    """
+    parts: list[tuple[int, str]] = []
+    mass = 0.0
+    if not _pod_has_built_in_wheels(pod):
+        wheel = flags.lightest_reaction_wheel
+        if wheel is None:
+            return None
+        parts.append((1, wheel.name))
+        mass += wheel.mass
+    if gameplay.docking_needs_rcs:
+        rcs = _rcs_bundle(flags, pod)
+        if rcs is None:
+            return None
+        parts.extend(rcs.parts)
+        mass += rcs.mass
     return AttitudeBundle(mass=mass, parts=tuple(parts))
 
 
@@ -1446,7 +1504,8 @@ def _evaluate_profile(
     whole-stack cascade: the return stack parks in destination orbit while
     the lander flies descent + ascent carrying only the pod (+ delivered
     payload + docking gear), then rejoins for the trip home.  Gated on a
-    docking port + RCS (see ``_apollo_split_for``); callers try the standard
+    docking port + docking attitude gear — wheels always, +RCS below expert
+    gameplay (see ``_apollo_split_for``); callers try the standard
     architecture first and only retry with this on failure.
     """
     # EVA / rendezvous / surface-sample requirements.  An explicit override wins
@@ -1739,7 +1798,13 @@ def _evaluate_profile(
         # specific "too small" when both exist and no pair covers.
         if pods and flags.available_heat_shields:
             pair = _passive_entry_pod_and_shield(
-                pods, flags.available_heat_shields, len(passive_entry_groups))
+                pods, flags.available_heat_shields, len(passive_entry_groups),
+                # On the Apollo retry the pod also pays its docking-gear
+                # consequence (bugs/106) — score it into the pair.
+                extra_pod_cost=(
+                    (lambda p: getattr(_docking_approach_gear(
+                        flags, p, gameplay), "mass", None))
+                    if apollo_split else None))
             if pair is None:
                 blocking.append(BlockingInfo(
                     reason=BlockingReason.HEAT_SHIELD_TOO_SMALL,
@@ -1764,6 +1829,25 @@ def _evaluate_profile(
     # the lightest pod of the required kind.
     terminal_pod = passive_pod if passive_pod is not None else (
         flags.lightest_capsule if is_crewed else flags.lightest_probe)
+    # Apollo pod pick (bugs/106): on the docking architecture the pod's true
+    # cost includes its approach-gear consequence — a lighter pod without
+    # internal monoprop can force the kit's only (huge) monoprop tank onto
+    # the lander, blow the pad cap, and a BIGGER kit loses the mission
+    # (bug-092 shape; seed receipt: eeloo/SSR, +kv3Pod 155.8t→infeasible).
+    # Pair-pick pod + gear with the same helper _apollo_split_for charges
+    # with; a pure min over a growing candidate set can only improve.
+    if apollo_split and passive_pod is None:
+        _cands = (flags.available_capsules if is_crewed
+                  else flags.available_probes)
+        _best = None
+        _best_total = float("inf")
+        for _p in _cands:
+            _g = _docking_approach_gear(flags, _p, gameplay)
+            if _g is not None and _p.mass + _g.mass < _best_total:
+                _best_total = _p.mass + _g.mass
+                _best = _p
+        if _best is not None:
+            terminal_pod = _best
     pod_mass = terminal_pod.mass if terminal_pod else 0.0
     terminal_mass = max(pod_mass, 0.08 if is_crewed else 0.04)
 
@@ -1783,7 +1867,7 @@ def _evaluate_profile(
     apollo: Optional[_ApolloSplit] = None
     if apollo_split:
         apollo = _apollo_split_for(groups, home, flags, terminal_pod,
-                                   is_crewed)
+                                   is_crewed, gameplay)
         if apollo is None:
             return ProfileResult(False, launch_mass=payload)
     # Wet mass of the parked return stack, stashed when the reverse walk
@@ -1959,17 +2043,18 @@ def _evaluate_profile(
             if leg_id:
                 stage_equipment.append((_LANDING_LEG_COUNT, leg_id))
         # Apollo docking gear — real part masses, manifest == charge.  The
-        # lander (active vehicle) carries its port + the RCS approach kit
-        # down and back up; the parked stack's port AND its control gear
+        # lander (active vehicle) carries its port + the docking attitude
+        # gear (wheels always; +RCS below expert gameplay) down and back
+        # up; the parked stack's port AND its control gear
         # (probe core / attitude / power — see _ApolloSplit.parked_gear)
         # ride the bottom of the first parked group (the docking interface
         # and the stack's brain stay with the transfer stage — they are not
         # carried through the home entry above it).
         if apollo is not None:
             if flight_idx == apollo.ascent_gidx:
-                equip_mass += apollo.port.mass + apollo.rcs.mass
+                equip_mass += apollo.port.mass + apollo.approach_gear.mass
                 stage_equipment.append((1, apollo.port.name))
-                stage_equipment.extend(apollo.rcs.parts)
+                stage_equipment.extend(apollo.approach_gear.parts)
             elif flight_idx == apollo.ascent_gidx + 1:
                 equip_mass += apollo.port.mass + apollo.parked_gear_mass
                 stage_equipment.append((1, apollo.port.name))
@@ -2462,8 +2547,10 @@ class _ApolloSplit:
     groups: the destination landing group and the surface-ascent group that
     follows it.  Everything after ``ascent_gidx`` is the parked return
     stack; everything before ``land_gidx`` hauls lander + parked stack
-    outbound.  ``port`` is charged once per docked side; ``rcs`` flies on
-    the lander (the active vehicle in the docking approach).
+    outbound.  ``port`` is charged once per docked side; ``approach_gear``
+    flies on the lander (the active vehicle in the docking approach): its
+    torque source (standalone wheel unless the pod has built-in wheels)
+    plus, below expert gameplay, the RCS translation kit.
 
     ``parked_gear`` is the parked stack's own control hardware: while the
     pod is away the parked stack is a pilotless craft, so it carries a
@@ -2474,7 +2561,7 @@ class _ApolloSplit:
     land_gidx: int
     ascent_gidx: int
     port: MiscEquipment
-    rcs: AttitudeBundle
+    approach_gear: AttitudeBundle
     parked_gear_mass: float
     parked_gear_parts: tuple[tuple[int, str], ...]
 
@@ -2485,15 +2572,20 @@ def _apollo_split_for(
     flags: EquipmentFlags,
     terminal_pod: Optional[MiscEquipment],
     is_crewed: bool,
+    gameplay: GameplayDifficulty = CONSERVATIVE_GAMEPLAY,
 ) -> Optional[_ApolloSplit]:
     """Locate the Apollo lander boundary in ``groups``, or None when the
     profile isn't a parkable round trip or the docking gear is missing.
 
     Applicable iff the profile lands at a non-home body and ascends from it
     again with at least one post-ascent leg to park (the return transfer /
-    home entry).  The gear gates are concrete parts: a docking port and the
-    RCS bundle for the approach — without either, the standard whole-stack
-    evaluation (already attempted by the caller) is the only architecture.
+    home entry).  The gear gates are concrete parts: a docking port plus the
+    docking attitude gear — torque authority ALWAYS (built-in pod wheels or a
+    standalone reaction wheel), and below expert gameplay an RCS translation
+    kit on top (``docking_needs_rcs``; an expert player can dock on
+    main-engine translation, but wheels are never substitutable by RCS nor
+    RCS by wheels).  Without the gear, the standard whole-stack evaluation
+    (already attempted by the caller) is the only architecture.
     """
     if flags.lightest_docking_port is None:
         return None
@@ -2514,8 +2606,12 @@ def _apollo_split_for(
     # Need an outbound side to rejoin from and a return stack to park.
     if land_gidx == 0 or ascent_gidx + 1 >= len(groups):
         return None
-    rcs = _rcs_bundle(flags, terminal_pod)
-    if rcs is None:
+    # Docking attitude gear on the lander (the active vehicle): wheels
+    # always — the pod's built-in torque or a standalone module, charged —
+    # and the RCS approach kit below expert gameplay.  MUST stay the same
+    # helper the pod pick scores with (see _docking_approach_gear).
+    approach_gear = _docking_approach_gear(flags, terminal_pod, gameplay)
+    if approach_gear is None:
         return None
     # Parked-stack control gear.  While the pod is away the parked stack
     # needs a command source, an attitude source to hold orientation as the
@@ -2556,7 +2652,7 @@ def _apollo_split_for(
         parked_parts.append((1, power.name))
         parked_mass += power.mass
     return _ApolloSplit(land_gidx, ascent_gidx,
-                        flags.lightest_docking_port, rcs,
+                        flags.lightest_docking_port, approach_gear,
                         parked_mass, tuple(parked_parts))
 
 
@@ -3531,6 +3627,7 @@ def evaluate_mission_detailed(
                                            gameplay=gameplay,
                                            apollo_split=True)
                 if result.feasible:
+                    result.via_apollo = True
                     return result
 
     return ProfileResult(False, blocking=all_blocking)

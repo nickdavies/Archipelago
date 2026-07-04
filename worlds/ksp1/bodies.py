@@ -134,20 +134,27 @@ class GameplayDifficulty:
     """Player skill/equipment gates, resolved from the base Difficulty option
     (casual/normal/expert) — NOT the physics PhysicsDifficulty profile. These are
     orthogonal to dv margins: whether holding a precise attitude needs a reaction
-    wheel or RCS (gimbal alone suffices on expert), and whether an SRB-steered
-    ascent needs RCS. A player can run forgiving physics at an expert skill
-    setting, so these must track base Difficulty, not the margins."""
+    wheel or RCS (gimbal alone suffices on expert), whether an SRB-steered
+    ascent needs RCS, and whether a docking approach needs an RCS translation
+    kit (an expert player can dock on main-engine translation with wheels
+    alone; docking always needs at least wheels). A player can run forgiving
+    physics at an expert skill setting, so these must track base Difficulty,
+    not the margins."""
     precise_pointing_needs_reaction_control: bool
     srb_needs_rcs: bool
+    docking_needs_rcs: bool
 
 
 # Base Difficulty.value → gameplay gates.  Raw-int keys (mirrors
 # _AUTO_PHYSICS_BY_DIFFICULTY) so bodies.py stays free of an options import.
 # casual/normal expect the assists; expert flies without them.
 _GAMEPLAY_BY_DIFFICULTY: dict[int, GameplayDifficulty] = {
-    0: GameplayDifficulty(precise_pointing_needs_reaction_control=True,  srb_needs_rcs=True),   # casual
-    1: GameplayDifficulty(precise_pointing_needs_reaction_control=True,  srb_needs_rcs=True),   # normal
-    2: GameplayDifficulty(precise_pointing_needs_reaction_control=False, srb_needs_rcs=False),  # expert
+    0: GameplayDifficulty(precise_pointing_needs_reaction_control=True,  srb_needs_rcs=True,
+                          docking_needs_rcs=True),   # casual
+    1: GameplayDifficulty(precise_pointing_needs_reaction_control=True,  srb_needs_rcs=True,
+                          docking_needs_rcs=True),   # normal
+    2: GameplayDifficulty(precise_pointing_needs_reaction_control=False, srb_needs_rcs=False,
+                          docking_needs_rcs=False),  # expert
 }
 
 # Strictest gates — the conservative default for callers that don't resolve a
