@@ -1953,6 +1953,15 @@ def _evaluate_profile(
             # Coverage shield + pod come from the pod/shield pair-pick above
             # (part-packs' covering rule: no undersized fallback — a profile
             # with no covering shield was already blocked HEAT_SHIELD_TOO_SMALL).
+            # Landing-site elevation: the home pad and highlands-in-logic
+            # bodies (Eve) touch down at the elevated site — thinner air,
+            # higher terminal velocity, shorter braking column.  Mirrors the
+            # ascent-dv site rule (bodies.py trunk-ascent: home pad or
+            # assume_highlands_landing pays the pad figure).
+            _land_ground = (
+                _land_body.pad_altitude_m
+                if (_land_body.assume_highlands_landing
+                    or _land_body.name == home) else 0.0)
             landing_mix = _solve_atmo_landing(
                 payload, _land_body, flags, diff,
                 twr_floor=_landing_twr_floor,
@@ -1960,6 +1969,7 @@ def _evaluate_profile(
                 dvGL_cap=_land_body.dv.dvGL or 0.0,
                 coverage_shield=passive_pod_shield,
                 pod_size=terminal_pod.size_class if terminal_pod else 0.0,
+                ground_altitude_m=_land_ground,
             )
             if not landing_mix.feasible:
                 return ProfileResult(False, launch_mass=payload, blocking=[BlockingInfo(
@@ -2074,10 +2084,11 @@ def _evaluate_profile(
             if landing_mix.shield is not None:
                 landing_shield_name = landing_mix.shield[2]
                 # A burn-landing's stage comes from the optimizer (no shield of
-                # its own), so put the coverage shield on the manifest here; the
+                # its own), so put the shield(s) on the manifest here; the
                 # passive branch reports it via heat_shield_name instead.
                 if landing_mix.needs_burn:
-                    stage_equipment.append((1, landing_shield_name))
+                    stage_equipment.append(
+                        (landing_mix.shield_count, landing_shield_name))
         # Heat-shield options the optimizer may charge (per-engine lightest
         # covering shield).  Empty when this stage needs no shield.
         heat_shields_arg: tuple[tuple[float, float, str], ...] = ()
@@ -2868,6 +2879,15 @@ _LANDING_PROXY_ISP: float = 300.0
 # drag-cube globals (Physics.cfg), matching the shield's effective-area units.
 _POD_BLEED_CD: float = 0.5
 
+# Max drag-device (inflatable) shields one descent stack may mount.  Heavy
+# stacks radially mount several 10m inflatables — the operator's Eve
+# calibration flight (2026-07-05) flew FIVE (one per core, 4+1) on a 729 t
+# lander and its recorded speeds sit ~2.2x below what this model predicts
+# even when all five are credited at their raw cube (the craft's uncredited
+# core/tank body drag stays a conservative margin).  Each extra shield
+# charges its real part mass, so the search stays monotone and honest.
+_MAX_DRAG_SHIELDS: int = 5
+
 
 @dataclass
 class LandingMix:
@@ -2884,11 +2904,13 @@ class LandingMix:
     burn_dv: float
     equipment: list[tuple[int, str]]
     shield: Optional[tuple[float, float, str]]
-    hardware_mass: float          # shield + chutes (passive-mix comparison key)
+    hardware_mass: float          # shields + chutes (passive-mix comparison key)
     residual_speed: float = 0.0   # touchdown m/s left unbraked when infeasible
+    shield_count: int = 1         # copies of ``shield`` mounted (drag devices)
 
 
-def _chute_role_stages(chute: Parachute, n: int, body: Body, label: str):
+def _chute_role_stages(chute: Parachute, n: int, body: Body, label: str,
+                       ground_altitude_m: float = 0.0):
     """aero.DragStage tuple for ``n`` copies of ``chute`` on ``body`` (radial
     groups scale super-linearly via ``_radial_drag_multiplier``; inline linear),
     or None if the chute can't open on this body.  Also returns the set mass."""
@@ -2902,6 +2924,7 @@ def _chute_role_stages(chute: Parachute, n: int, body: Body, label: str):
         p0_kpa=body.atm_pressure_kpa,
         scale_height_m=body.atm_scale_height_m,
         label=label,
+        ground_altitude_m=ground_altitude_m,
     )
     return stages, chute.mass * n
 
@@ -2910,12 +2933,13 @@ def _solve_atmo_landing(
     payload: float, body: Body, flags: EquipmentFlags, diff: DifficultyProfile,
     twr_floor: float, v_entry: float, dvGL_cap: float,
     coverage_shield: Optional[HeatShield], pod_size: float,
+    ground_altitude_m: float = 0.0,
 ) -> LandingMix:
     """Pick the min-mass staged-descent mix for a single atmospheric landing.
 
-    Enumerates {coverage shield, drag shield} × {mains, mains+drogues} × chute
-    count, evaluates each with the closed-form ``aero.staged_descent`` (entry
-    bleed → chute ladder → touchdown), and picks:
+    Enumerates {coverage shield, drag shield × count} × {mains, mains+drogues}
+    × chute count, evaluates each with the closed-form ``aero.staged_descent``
+    (entry bleed → chute ladder → touchdown), and picks:
 
     * the lightest PASSIVE mix (drag alone reaches ≤ safe touchdown) if any —
       no optimizer, matches the old passive aero path; else
@@ -2925,12 +2949,15 @@ def _solve_atmo_landing(
     ``coverage_shield`` is the pod-pair-picked shield from the pre-check — it is
     guaranteed to COVER the pod (a profile whose owned shields can't cover was
     already blocked ``HEAT_SHIELD_TOO_SMALL``, no undersized-fallback), so this
-    never re-derives coverage.  Returns ``feasible=False`` when no drag reaches
-    safe touchdown AND no propulsive finish is available.
+    never re-derives coverage.  ``ground_altitude_m`` is the landing-site
+    elevation (highlands sites land in thinner air with less braking column).
+    Returns ``feasible=False`` when no drag reaches safe touchdown AND no
+    propulsive finish is available.
     """
     g = body.surface_gravity
     rho0 = body.atm_density_kg_m3
     H = body.atm_scale_height_m
+    rho_site = aero.local_density(rho0, H, ground_altitude_m)
 
     coverage = coverage_shield
     if coverage is None:
@@ -2940,15 +2967,30 @@ def _solve_atmo_landing(
     # The command part's own subsonic drag, credited to every mix's bleed area.
     pod_bleed = 0.8 * _POD_BLEED_CD * math.pi * (max(pod_size, 1.25) / 2.0) ** 2
 
-    # Shield choices for the BLEED phase: the coverage shield, plus the
-    # heaviest-drag shield when it drags materially more (the inflatable) — it
-    # then serves as coverage too (10m covers everything).  Owning the heavy
-    # shield only ADDS a candidate; it never displaces the lighter mains-only
-    # mix, so a heavy shield can't make a stage worse.
-    shield_opts = [coverage]
+    # Shield candidates for the BLEED phase: (shield, count, bleed_area,
+    # jettisoned, chute-phase shield mass).
+    #
+    # * The coverage shield rides in a pod stack, so its credit is the
+    #   occluded cube (SHIELD_BLEED_OCCLUSION — calibrated on an in-game
+    #   shield+pod CdA measurement); rigid and staged off before the chutes.
+    # * The drag shield (the inflatable, when it out-drags coverage) is a NOSE
+    #   device — the stack hides behind its 10m disk, nothing occludes it — so
+    #   it credits its RAW cube, stays mounted through touchdown, and may be
+    #   mounted up to ``_MAX_DRAG_SHIELDS`` times (each charging real part
+    #   mass).  Operator's Eve calibration flight (5 shields, 729 t, passive
+    #   landing) shows raw-cube crediting is still ~2x conservative.
+    #
+    # Owning the drag shield only ADDS candidates; it never displaces the
+    # lighter coverage-only mix, so a heavy shield can't make a stage worse.
+    shield_cands: list[tuple[HeatShield, int, float, bool]] = [
+        (coverage, 1,
+         aero.SHIELD_BLEED_OCCLUSION * coverage.drag_area + pod_bleed, True)]
     if (flags.best_drag_shield is not None
             and flags.best_drag_shield.drag_area > coverage.drag_area):
-        shield_opts.append(flags.best_drag_shield)
+        drag_sh = flags.best_drag_shield
+        for n_sh in range(1, _MAX_DRAG_SHIELDS + 1):
+            shield_cands.append(
+                (drag_sh, n_sh, drag_sh.drag_area * n_sh + pod_bleed, False))
 
     # Chute roles available (best of each kind, from _pre_pass).
     mains = [c for c in (flags.best_radial_main, flags.best_inline_main) if c]
@@ -2969,11 +3011,12 @@ def _solve_atmo_landing(
     best_burn_key = math.inf
     min_residual = v_entry  # track closest-to-feasible for the block reason
 
-    def _consider(shield, main, main_n, drogue, drogue_n) -> float:
+    def _consider(sh_cand, main, main_n, drogue, drogue_n) -> float:
         """Evaluate one mix, record it into best_passive/best_burn, and return
         its total landing burn (0.0 passive, capped burn, or inf infeasible) so
         the count search can binary-search on it."""
         nonlocal best_passive, best_burn, best_burn_key, min_residual
+        shield, n_sh, bleed_area, jettisoned = sh_cand
         equip: list[tuple[int, str]] = []
         stages: list = []
         chute_mass = 0.0
@@ -2981,32 +3024,33 @@ def _solve_atmo_landing(
             if chute is None or n <= 0:
                 continue
             built, mass = _chute_role_stages(chute, n, body,
-                                             "drogue" if chute.is_drogue else "main")
+                                             "drogue" if chute.is_drogue else "main",
+                                             ground_altitude_m)
             if built is None:
-                return math.inf  # chute can't open on this body
+                return math.inf  # chute can't open on this body / above this site
             stages.extend(built)
             chute_mass += mass
             equip.append((n, chute.name))
-        bleed_area = aero.SHIELD_BLEED_OCCLUSION * shield.drag_area + pod_bleed
-        entry_mass = payload + shield.mass + chute_mass
+        shield_mass = shield.mass * n_sh
+        entry_mass = payload + shield_mass + chute_mass
         # A rigid ablative shield is jettisoned before the chutes deploy, so it
         # weighs down the bleed but NOT the terminal-velocity / touchdown calc
         # (matches the pre-rework model, which kept early Kerbin pod returns
         # passive).  The inflatable used as the bleed device stays on, so it is
         # not jettisoned.
-        is_bleed_device = shield is flags.best_drag_shield and len(shield_opts) > 1
-        jettison = 0.0 if is_bleed_device else shield.mass
         plan = aero.staged_descent(
             v_entry=v_entry, mass_t=entry_mass, bleed_area=bleed_area,
             stages=stages, rho0=rho0, scale_height_m=H, gravity=g,
             twr=twr_floor, max_safe_touchdown=_MAX_SAFE_LANDING_SPEED,
-            jettison_mass_t=jettison,
+            jettison_mass_t=shield_mass if jettisoned else 0.0,
+            ground_altitude_m=ground_altitude_m,
         )
         min_residual = min(min_residual, plan.touchdown_speed)
         shield_tuple = (shield.size_class, shield.mass, shield.name)
-        hardware = shield.mass + chute_mass
+        hardware = shield_mass + chute_mass
         if not plan.requires_burn:
-            mix = LandingMix(True, False, 0.0, equip, shield_tuple, hardware)
+            mix = LandingMix(True, False, 0.0, equip, shield_tuple, hardware,
+                             shield_count=n_sh)
             if best_passive is None or hardware < best_passive.hardware_mass:
                 best_passive = mix
             return 0.0
@@ -3018,29 +3062,29 @@ def _solve_atmo_landing(
         key = hardware + fuel_proxy
         if key < best_burn_key:
             best_burn_key = key
-            best_burn = LandingMix(True, True, burn, equip, shield_tuple, hardware)
+            best_burn = LandingMix(True, True, burn, equip, shield_tuple,
+                                   hardware, shield_count=n_sh)
         return burn
 
-    def _seed_count(shield, main, cap) -> int:
+    def _seed_count(sh_cand, main, cap) -> int:
         """Closed-form lightest-passive main-count estimate: solve terminal
         velocity == safe for the continuous count (aero.terminal_limited_count),
         then round up.  Only a SEED — the caller confirms on the real staged
         model at the integer neighbours (the piecewise radial multiplier and the
         settle floor shift the true boundary by a chute or two)."""
-        bleed = aero.SHIELD_BLEED_OCCLUSION * shield.drag_area + pod_bleed
+        shield, n_sh, bleed, jettisoned = sh_cand
         # A rigid shield is jettisoned before the chutes carry the craft; the
         # inflatable-as-bleed-device stays on, so its mass rides the chute phase.
-        is_bleed_device = shield is flags.best_drag_shield and len(shield_opts) > 1
-        m0 = payload + (shield.mass if is_bleed_device else 0.0)
+        m0 = payload + (0.0 if jettisoned else shield.mass * n_sh)
         n = aero.terminal_limited_count(
             payload_t=m0, chute_drag=main.drag_area, chute_mass_t=main.mass,
-            bleed_area=bleed, rho0=rho0, gravity=g,
+            bleed_area=bleed, rho0=rho_site, gravity=g,
             v_safe=_MAX_SAFE_LANDING_SPEED, is_radial=main.is_radial)
         if math.isinf(n):
             return cap
         return max(1, min(cap, math.ceil(n)))
 
-    def _find_passive(shield, main, drogue, drogue_n, cap) -> bool:
+    def _find_passive(sh_cand, main, drogue, drogue_n, cap) -> bool:
         """Find the lightest passive main-count by seeding from the closed-form
         terminal boundary and confirming on the real staged model.
 
@@ -3051,11 +3095,11 @@ def _solve_atmo_landing(
         amount (the seed can under-shoot by a chute or two).  ~3-5 evals, no full
         sweep.  Returns True if a passive count was found; every evaluated count
         is recorded into best_passive/best_burn for the burn ranker too."""
-        seed = _seed_count(shield, main, cap)
-        if _consider(shield, main, seed, drogue, drogue_n) <= 0.0:
+        seed = _seed_count(sh_cand, main, cap)
+        if _consider(sh_cand, main, seed, drogue, drogue_n) <= 0.0:
             # Passive at the seed — walk down to the lightest still-passive count.
             n = seed
-            while n > 1 and _consider(shield, main, n - 1, drogue, drogue_n) <= 0.0:
+            while n > 1 and _consider(sh_cand, main, n - 1, drogue, drogue_n) <= 0.0:
                 n -= 1
             return True
         # Seed needs a burn: either it under-shot the terminal boundary (step up
@@ -3067,10 +3111,10 @@ def _solve_atmo_landing(
             n += max(1, seed // 4)
             if n > cap:
                 break
-            burn = _consider(shield, main, n, drogue, drogue_n)
+            burn = _consider(sh_cand, main, n, drogue, drogue_n)
             if burn <= 0.0:
                 # Found passive above the seed; tighten down to the min.
-                while n > 1 and _consider(shield, main, n - 1, drogue, drogue_n) <= 0.0:
+                while n > 1 and _consider(sh_cand, main, n - 1, drogue, drogue_n) <= 0.0:
                     n -= 1
                 return True
             if burn >= prev:
@@ -3078,18 +3122,27 @@ def _solve_atmo_landing(
             prev = burn
         return False
 
-    for shield in shield_opts:
+    for sh_cand in shield_cands:
         for main in mains:
             cap = _CHUTE_COUNT_CAPS[main.is_radial]
-            if not _find_passive(shield, main, None, 0, cap):
+            if not _find_passive(sh_cand, main, None, 0, cap):
                 # Drogues bridge the high-speed gap so mains can land a thin-atmo
                 # or heavy craft passively (or with a smaller burn).
                 for drogue in drogues:
                     dcap = _CHUTE_COUNT_CAPS[drogue.is_radial]
                     for dn in (min(4, dcap), dcap):
-                        _find_passive(shield, main, drogue, dn, cap)
+                        _find_passive(sh_cand, main, drogue, dn, cap)
+        # Drogues WITHOUT mains + a propulsive finish: the drogue-braked burn
+        # landing (operator's Eve receipt: drogues alone reach ~200 m/s and
+        # the engine finishes).  Matters when mains can't open at the site
+        # (highlands above their gate) or their deploy-q needs a bigger
+        # bridge than the drogue-only finish.
+        for drogue in drogues:
+            dcap = _CHUTE_COUNT_CAPS[drogue.is_radial]
+            for dn in (min(4, dcap), dcap):
+                _consider(sh_cand, None, 0, drogue, dn)
         # Shield + burn, no chutes (bleed + full propulsive finish).
-        _consider(shield, None, 0, None, 0)
+        _consider(sh_cand, None, 0, None, 0)
 
     if best_passive is not None:
         return best_passive

@@ -35,10 +35,17 @@ import math
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
-# Pessimistic (steep) ballistic entry angle: sin(30°).  Real entries from low
-# orbit are far shallower and bleed far more; relaxing this requires flight
-# receipts (see plan).  THE golden-rule-sensitive constant.
-SIN_ENTRY_GAMMA: float = 0.5
+# Ballistic entry angle: sin(~8.6°).  A shallow entry is a universally
+# flyable piloting choice (lower the periapsis into the upper atmosphere from
+# low orbit) — the operator's calibration flight (Eve, 729 t, 110 km -> 80 km
+# PE, 2026-07-05) entered at only a few degrees and every recorded speed
+# (40 km: 1348, 30 km: 661, 22 km: 369, 12 km: 200 m/s) sits 2.0-2.4x BELOW
+# what this model predicts at 0.15 with honest shield credit — so 0.15 is
+# still comfortably conservative.  The old sin(30°)=0.5 charged multi-km/s
+# phantom bridge burns on heavy entries.  THE golden-rule-sensitive constant:
+# tightening it below 0.15 needs a new flight receipt showing a shallow entry
+# failing.
+SIN_ENTRY_GAMMA: float = 0.15
 
 # A craft reaching the surface is still settling toward terminal velocity from
 # above; sim grid shows arrival at up to ~1.25x local terminal (shielded
@@ -259,16 +266,24 @@ class DragStage:
 def chute_stages(full_area: float, semi_area: float, q_safe_kpa: float,
                  deploy_altitude_m: float, min_pressure_atm: float,
                  p0_kpa: float, scale_height_m: float,
-                 label: str = "chute") -> Optional[tuple[DragStage, ...]]:
+                 label: str = "chute",
+                 ground_altitude_m: float = 0.0) -> Optional[tuple[DragStage, ...]]:
     """Build the ladder stages one chute set contributes: a semi-deployed
     stage engageable anywhere between its pressure gate and its full-deploy
     altitude (with the higher semi q envelope), and the fully-deployed stage
     at ``deployAltitude``.  Areas are the TOTALS for the whole set (caller
     applies chute count / radial-symmetry scaling).  Returns None when the
-    body's surface pressure cannot open the chute at all."""
+    body's surface pressure cannot open the chute at all, or when the landing
+    site sits above the chute's pressure gate.
+
+    ``deploy_altitude_m`` is AGL (KSP's deployAltitude is radar altitude), so
+    an elevated landing site shifts the full-deploy gate up by
+    ``ground_altitude_m``; the semi-deploy pressure gate is a true (ASL)
+    pressure altitude and does not shift."""
     h_semi = pressure_altitude(p0_kpa, scale_height_m, min_pressure_atm)
-    if h_semi is None:
+    if h_semi is None or h_semi <= ground_altitude_m:
         return None
+    deploy_altitude_m = ground_altitude_m + deploy_altitude_m
     if h_semi > deploy_altitude_m and semi_area > 0.0:
         # The q-limit governs the RISKY initial opening — that's the semi stage
         # (reefed, higher tolerance ×SEMI_DEPLOY_Q_MULT).  Reefing out to full
@@ -318,25 +333,26 @@ class DescentPlan:
 
 
 def _engage_candidates(stage: DragStage, scale_height_m: float,
-                       h_below: float) -> list[float]:
+                       h_below: float, ground_altitude_m: float) -> list[float]:
     """Altitudes at which a stage could engage: its gate, plus a ladder of
-    scale-height multiples below it — a player deploys wherever the q-limit
-    allows, not blindly at the gate.  ``h_below`` additionally caps candidates
-    to at/below the previous engagement (stages engage in descent order).
+    scale-height multiples above the GROUND — a player deploys wherever the
+    q-limit allows, not blindly at the gate.  ``h_below`` additionally caps
+    candidates to at/below the previous engagement (stages engage in descent
+    order).
 
     The lower bound is the stage's own ``floor_altitude_m`` (a semi stage's
     floor is its full-deploy altitude; a full/single stage's is the ground).
-    A floor of 0 is NOT added as a candidate — engaging with no braking room
-    left is a slam the greedy gap objective would otherwise pick; the
-    scale-height rungs keep a natural minimum altitude above it."""
-    top = min(max(stage.gate_altitude_m, 0.0), h_below)
-    floor = max(stage.floor_altitude_m, 0.0)
+    A floor at the ground is NOT added as a candidate — engaging with no
+    braking room left is a slam the greedy gap objective would otherwise
+    pick; the scale-height rungs keep a natural minimum altitude above it."""
+    top = min(max(stage.gate_altitude_m, ground_altitude_m), h_below)
+    floor = max(stage.floor_altitude_m, ground_altitude_m)
     cands = {top}
     for k in _ENGAGE_CANDIDATE_SCALE_HEIGHTS:
-        h = k * scale_height_m
+        h = ground_altitude_m + k * scale_height_m
         if floor <= h <= top:
             cands.add(h)
-    if 0.0 < floor < top:
+    if ground_altitude_m < floor < top:
         cands.add(floor)
     return sorted(cands, reverse=True)
 
@@ -346,7 +362,8 @@ def staged_descent(v_entry: float, mass_t: float, bleed_area: float,
                    scale_height_m: float, gravity: float, twr: float,
                    max_safe_touchdown: float,
                    sin_gamma: float = SIN_ENTRY_GAMMA,
-                   jettison_mass_t: float = 0.0) -> DescentPlan:
+                   jettison_mass_t: float = 0.0,
+                   ground_altitude_m: float = 0.0) -> DescentPlan:
     """Walk the descent ladder and price the propulsive shortfall.
 
     ``bleed_area`` is the pre-chute drag area (occluded shield credit — see
@@ -363,6 +380,12 @@ def staged_descent(v_entry: float, mass_t: float, bleed_area: float,
     NOT weigh down the terminal-velocity / touchdown calc (its drag still
     counted the whole bleed).  Pass 0 for a shield that stays on (the inflatable
     used as the bleed device).
+
+    ``ground_altitude_m`` is the landing-site elevation (ASL): touchdown is
+    evaluated at the site's thinner density (higher terminal velocity — an
+    elevated landing is genuinely harder), and no stage may engage below the
+    site.  The caller builds chute gates with the same ground offset
+    (``chute_stages(ground_altitude_m=...)``).
 
     The result's dv is uncapped and may be ``inf`` when the TWR cannot brake the
     required gap (caller treats that mix as infeasible)."""
@@ -394,8 +417,11 @@ def staged_descent(v_entry: float, mass_t: float, bleed_area: float,
         return 1.0 - (1.0 - sin_gamma) * frac
 
     for stage in ordered:
+        if min(stage.gate_altitude_m, h_prev) <= ground_altitude_m:
+            continue  # gate never clears the landing site — stage unusable
         best: Optional[tuple[float, float, float]] = None  # (gap, -h, v_capped)
-        for h in _engage_candidates(stage, scale_height_m, h_prev):
+        for h in _engage_candidates(stage, scale_height_m, h_prev,
+                                    ground_altitude_m):
             v_arrive = arrival(h)
             v_max = max_engage_speed(stage.q_safe_kpa,
                                      local_density(rho0, scale_height_m, h))
@@ -415,21 +441,23 @@ def staged_descent(v_entry: float, mass_t: float, bleed_area: float,
         engaged = True
         v_prev, h_prev = v_engage, -neg_h
 
+    rho_ground = local_density(rho0, scale_height_m, ground_altitude_m)
     if engaged:
         # Touchdown speed is measured AT the ground, so it settles toward the
-        # sea-level terminal velocity (densest air), not the thinner air at the
-        # last deploy gate.  Evaluate the final descent from the last gate to
-        # the ground at sea-level density: accurate at touchdown (converges to
-        # ground terminal when there's settling room), still > terminal when the
-        # gate is low and fast (thin atmo).  Using the gate-altitude density
-        # here instead would leave a light craft a fraction above the true
-        # ground terminal — enough to spuriously fail the safe-speed check.
-        touchdown = drag_decayed_speed(v_prev, chute_mass_t, area, rho0,
-                                       h_prev, gravity)
+        # SITE terminal velocity (densest air on the remaining path), not the
+        # thinner air at the last deploy gate.  Evaluate the final descent
+        # from the last gate to the ground at the site's density: accurate at
+        # touchdown (converges to ground terminal when there's settling room),
+        # still > terminal when the gate is low and fast (thin atmo).  Using
+        # the gate-altitude density here instead would leave a light craft a
+        # fraction above the true ground terminal — enough to spuriously fail
+        # the safe-speed check.
+        touchdown = drag_decayed_speed(v_prev, chute_mass_t, area, rho_ground,
+                                       h_prev - ground_altitude_m, gravity)
     else:
         # No chute engaged — shield stays on, full mass bleeds to the ground.
-        touchdown = bleed_speed(v_entry, mass_t, area, rho0, scale_height_m,
-                                gravity, sin_gamma)
+        touchdown = bleed_speed(v_entry, mass_t, area, rho_ground,
+                                scale_height_m, gravity, sin_gamma)
 
     finish_dv = 0.0
     if touchdown > max_safe_touchdown:

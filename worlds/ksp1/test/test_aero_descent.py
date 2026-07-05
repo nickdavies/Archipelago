@@ -42,9 +42,10 @@ class TestPrimitives(unittest.TestCase):
             aero.local_terminal_velocity(1.5, 9.81, 0.0, 500.0), math.inf)
 
     def test_bleed_speed_allen_eggers(self) -> None:
-        # K = 0.096*3000*2.5 / (2*10000*0.5) = 0.072 -> 1000*exp(-0.072)
+        # K = rho*H*A / (2*m*sin_gamma) at the default entry angle
+        k = 0.096 * 3000.0 * 2.5 / (2.0 * 10000.0 * aero.SIN_ENTRY_GAMMA)
         v = aero.bleed_speed(1000.0, 10.0, 2.5, 0.096, 3000.0, 2.94)
-        self.assertAlmostEqual(v, 1000.0 * math.exp(-0.072), delta=0.1)
+        self.assertAlmostEqual(v, 1000.0 * math.exp(-k), delta=0.1)
 
     def test_bleed_speed_settle_floor(self) -> None:
         # Strong drag would decay to ~0; the floor is 1.3x local terminal
@@ -205,8 +206,9 @@ class TestStagedDescent(unittest.TestCase):
         plan = aero.staged_descent(1000.0, 10.0, 2.5, (), DUNA["rho0"],
                                    DUNA["H"], DUNA["g"], 1.5, 6.0)
         self.assertEqual(plan.bridge_dv, 0.0)
-        self.assertAlmostEqual(plan.touchdown_speed,
-                               1000.0 * math.exp(-0.072), delta=0.1)
+        expected_td = aero.bleed_speed(1000.0, 10.0, 2.5, DUNA["rho0"],
+                                       DUNA["H"], DUNA["g"])
+        self.assertAlmostEqual(plan.touchdown_speed, expected_td, delta=0.1)
         expected = aero.burn_dv_for(plan.touchdown_speed - 6.0, 1.5, 1.0)
         self.assertAlmostEqual(plan.finish_dv, expected, delta=0.1)
 
@@ -265,6 +267,29 @@ class TestStagedDescent(unittest.TestCase):
         plan = aero.staged_descent(1000.0, 10.0, 2.5, (), DUNA["rho0"],
                                    DUNA["H"], DUNA["g"], 0.8, 6.0)
         self.assertEqual(plan.finish_dv, math.inf)
+
+
+class TestEveFlightReceipt(unittest.TestCase):
+    """Operator calibration flight (2026-07-05): 729 t lander, 5x 10m
+    inflatable shields, shallow entry (110 km -> 80 km PE) at ~3173 m/s.
+    Observed speeds: 40 km 1348, 30 km 661, 22 km 369, 12 km 200 m/s;
+    landed passively.  The model's entry-bleed prediction must stay AT OR
+    ABOVE every observed speed (conservative envelope) — if a recalibration
+    ever under-predicts one of these receipts it has crossed the Golden Rule
+    line into false-positive territory."""
+    EVE = {"rho0": 5.0, "H": 7000.0, "g": 16.7}
+    OBSERVED = {40000.0: 1348.0, 30000.0: 661.0, 22000.0: 369.0, 12000.0: 200.0}
+    # 5 inflatables at raw cube (nose drag devices) + ~2 m^2 pod bleed.
+    CREDITED_AREA = 5 * 48.18 + 2.0
+
+    def test_bleed_stays_above_observed(self) -> None:
+        for alt, v_obs in self.OBSERVED.items():
+            rho = aero.local_density(self.EVE["rho0"], self.EVE["H"], alt)
+            v_model = aero.bleed_speed(3173.0, 729.0, self.CREDITED_AREA, rho,
+                                       self.EVE["H"], self.EVE["g"])
+            self.assertGreaterEqual(
+                v_model, v_obs,
+                f"entry bleed under-predicts the flight receipt at {alt:.0f}m")
 
 
 if __name__ == "__main__":
