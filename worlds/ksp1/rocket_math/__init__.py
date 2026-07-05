@@ -33,6 +33,7 @@ def _isp_for_ascent(
     in_atmosphere: bool,
     atm_scale_height_m: float,
     atm_top_m: float,
+    pad_altitude_m: float = 0.0,
 ) -> float:
     """Effective Isp for an ascent stage.
 
@@ -41,17 +42,28 @@ def _isp_for_ascent(
     near the top of the atmosphere.
 
     Vacuum bodies (or any call with ``in_atmosphere=False``) get ``vac_isp``
-    directly.  Atmospheric bodies get a pressure-weighted average over
-    the [0, atm_top_m] column.  All atmospheric parameters come from the
-    Body — nothing here is Kerbin-specific.
+    directly.  Atmospheric bodies get a pressure-weighted average of the
+    pressure fraction over the ascent column ``[pad_altitude_m, atm_top_m]``.
+    An elevated launch site starts the burn where ambient pressure is already
+    ``exp(-pad_altitude_m/H)`` of sea level, so the engines run nearer ``vac_isp``
+    from the start — charging the sea-level column (pad=0) over-charges an
+    elevated ascent (Eve's ~6.1 km mesa pad).  ``pad_altitude_m == 0`` (every
+    sea-level pad) reduces to the original ``[0, atm_top_m]`` average, so this
+    is byte-identical off the elevated-pad path.  All atmospheric parameters
+    come from the Body — nothing here is Kerbin-specific.
     """
     if not in_atmosphere:
         return vac_isp
     if atm_scale_height_m <= 0.0 or atm_top_m <= 0.0:
         return atm_isp  # body has no atmospheric model — be conservative
+    a = pad_altitude_m if pad_altitude_m > 0.0 else 0.0
+    if a >= atm_top_m:
+        return vac_isp  # pad above the modelled atmosphere → vacuum-Isp launch
+    # Average pressure fraction over [a, atm_top_m]: ∫ exp(-h/H) dh / (top - a).
     avg_p = (atm_scale_height_m
-             * (1.0 - math.exp(-atm_top_m / atm_scale_height_m))
-             / atm_top_m)
+             * (math.exp(-a / atm_scale_height_m)
+                - math.exp(-atm_top_m / atm_scale_height_m))
+             / (atm_top_m - a))
     return atm_isp * avg_p + vac_isp * (1.0 - avg_p)
 
 
@@ -751,6 +763,7 @@ def _find_optimal_parallel_stage(
     in_atmosphere: bool = False,
     atm_scale_height_m: float = 0.0,
     atm_top_m: float = 0.0,
+    pad_altitude_m: float = 0.0,
     requires_throttleable: bool = False,
     require_gimbal: bool = False,
     attitude_module_mass: float = 0.0,
@@ -793,7 +806,7 @@ def _find_optimal_parallel_stage(
         if requires_throttleable and not engine.throttleable:
             continue
         isp = _isp_for_ascent(engine.atm_isp, engine.vac_isp, in_atmosphere,
-                              atm_scale_height_m, atm_top_m)
+                              atm_scale_height_m, atm_top_m, pad_altitude_m)
         if isp <= 0:
             continue
         isp_g0 = isp * G0
@@ -937,6 +950,7 @@ def _find_optimal_stage_uncached(
     launch_pad_mass_cap: float = float("inf"),  # for MASS_CAP_EXCEEDED diagnostic
     atm_scale_height_m: float = 0.0,    # body atmosphere model (0 = no atm)
     atm_top_m: float = 0.0,             # body atmosphere top in metres
+    pad_altitude_m: float = 0.0,        # launch-site altitude (elevated-pad Isp credit)
     # Parallel-staging parts (as hashable primitives so the cache key stays
     # valid).  When present and parallel_mode != "none", a real radial
     # asparagus/onion build is tried alongside the serial search.
@@ -1118,7 +1132,7 @@ def _find_optimal_stage_uncached(
         # atmospheric column rather than flat atm_isp — the burn spans
         # both regimes and Isp climbs to vacuum near the top of the column.
         isp = _isp_for_ascent(engine.atm_isp, engine.vac_isp, in_atmosphere,
-                              atm_scale_height_m, atm_top_m)
+                              atm_scale_height_m, atm_top_m, pad_altitude_m)
         if isp <= 0:
             _diag_engines_isp_blocked += 1
             continue
@@ -1320,7 +1334,7 @@ def _find_optimal_stage_uncached(
 
         # Same pressure-weighted Isp treatment as the engine loop.
         srb_isp = _isp_for_ascent(srb.atm_isp, srb.vac_isp, in_atmosphere,
-                                  atm_scale_height_m, atm_top_m)
+                                  atm_scale_height_m, atm_top_m, pad_altitude_m)
         if srb_isp <= 0:
             continue
         srb_thrust = (srb.atm_thrust if in_atmosphere else srb.vac_thrust)
@@ -1400,6 +1414,7 @@ def _find_optimal_stage_uncached(
             in_atmosphere=in_atmosphere,
             atm_scale_height_m=atm_scale_height_m,
             atm_top_m=atm_top_m,
+            pad_altitude_m=pad_altitude_m,
             requires_throttleable=requires_throttleable,
             require_gimbal=require_gimbal,
             attitude_module_mass=attitude_module_mass,
@@ -1735,6 +1750,7 @@ def find_optimal_multistage_ascent(
     launch_pad_mass_cap: float = float("inf"),
     atm_scale_height_m: float = 0.0,
     atm_top_m: float = 0.0,
+    pad_altitude_m: float = 0.0,  # elevated launch-site altitude (Isp credit)
     parallel_mode: str = "none",  # asparagus/onion — applied at K=1 only
     radial_decoupler_mass: float = 0.0,
     radial_decoupler_name: str = "",
@@ -1852,6 +1868,7 @@ def find_optimal_multistage_ascent(
                     launch_pad_mass_cap=launch_pad_mass_cap,
                     atm_scale_height_m=atm_scale_height_m if stage_in_atm else 0.0,
                     atm_top_m=atm_top_m if stage_in_atm else 0.0,
+                    pad_altitude_m=pad_altitude_m if stage_in_atm else 0.0,
                     diagnostic_out=inner_diag,
                 )
                 if stage is None:

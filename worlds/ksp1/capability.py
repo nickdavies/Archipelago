@@ -2268,6 +2268,7 @@ def _evaluate_profile(
                 launch_pad_mass_cap=flags.launch_pad_mass_cap,
                 atm_scale_height_m=body.atm_scale_height_m,
                 atm_top_m=body.safe_altitude_km * 1000.0 if body.has_atmosphere else 0.0,
+                pad_altitude_m=body.pad_altitude_m,
                 parallel_mode=parallel_mode,
                 radial_decoupler_mass=rdec_mass,
                 radial_decoupler_name=rdec_name,
