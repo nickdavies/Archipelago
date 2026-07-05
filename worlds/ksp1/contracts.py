@@ -876,41 +876,6 @@ class ContractSpec:
         )
 
 
-def _parse_exact_contract_name(name: str) -> Optional[ContractSpec]:
-    """Match a name against the bare ``display_name`` of some (type, body), or
-    None. Rebuilds each candidate and compares — no preposition/format coupling."""
-    body_str = name.rsplit(None, 1)[-1]          # body is the final token
-    try:
-        body = BodyName(body_str)
-    except ValueError:
-        return None
-    for ct in CONTRACT_TYPE_DEFS:
-        spec = ContractSpec(ct, body)
-        if spec.display_name == name:
-            return spec
-    return None
-
-
-def parse_contract_location_name(name: str) -> Optional[ContractSpec]:
-    """Return the ContractSpec for a contract location name, or None if it isn't
-    one. Accepts BOTH the bare goal-contract form ("Contract: Mine Ore on Mun")
-    and the non-goal slot-suffixed form ("Contract: Mine Ore on Mun 1" / "... 2").
-    Used by the sphere ladder to give every contract slot a real signature — a
-    silent None here un-gates the location and deadlocks fill (bug 086 / project
-    memory). Threshold ("Contract Threshold N") and event ("Contract Complete:
-    ...") names deliberately don't match (different prefix)."""
-    if not name.startswith("Contract: "):
-        return None
-    spec = _parse_exact_contract_name(name)
-    if spec is not None:
-        return spec
-    # Strip a trailing slot integer ("... 1") and retry against the bare form.
-    base, _, last = name.rpartition(" ")
-    if last.isdigit():
-        return _parse_exact_contract_name(base)
-    return None
-
-
 # ---------------------------------------------------------------------------
 # Part requirements & feasibility (shared by generation and access rules)
 # ---------------------------------------------------------------------------

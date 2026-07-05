@@ -198,21 +198,6 @@ class TestSlotDataRoundTrip(unittest.TestCase):
         self.assertEqual(d["locations"], ["Contract: Return from Duna"])
         self.assertEqual(goal.location_name, "Contract: Return from Duna")
 
-    def test_parse_contract_location_name_both_forms(self):
-        # The sphere ladder must resolve both non-goal slots AND the bare goal
-        # form back to a spec; threshold/event names must NOT match.
-        for name in ("Contract: Mine Ore on Mun",
-                     "Contract: Mine Ore on Mun 1",
-                     "Contract: Mine Ore on Mun 2"):
-            spec = C.parse_contract_location_name(name)
-            self.assertIsNotNone(spec, name)
-            self.assertEqual(spec.contract_type, C.ContractType.MINE_ORE)
-            self.assertEqual(spec.body, BodyName.MUN)
-        for name in ("Contract Threshold 3",
-                     "Contract Complete: Mine Ore on Mun",
-                     "Mun Flag Plant 1"):
-            self.assertIsNone(C.parse_contract_location_name(name), name)
-
     def test_every_type_round_trips(self):
         # to_slot_dict/from_slot_dict must rebuild an identical spec for EVERY
         # contract type (UT regen reconstructs from fields, never re-randomizes),

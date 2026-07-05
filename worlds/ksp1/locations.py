@@ -44,7 +44,8 @@ from .bodies import (
     home_altitude_milestones,
 )
 from .contracts import (
-    all_possible_contract_specs, GOAL_CONTRACT_TYPES, MAX_LOCATIONS_PER_CONTRACT,
+    ContractSpec, all_possible_contract_specs, GOAL_CONTRACT_TYPES,
+    MAX_LOCATIONS_PER_CONTRACT,
 )
 from .tech_tree import TECH_NODES
 
@@ -67,6 +68,12 @@ _CONTRACT_OFFSET_START = 20_000     # Contract completion locations: large dedic
 
 class KSP1Location(Location):
     game = "Kerbal Space Program 1"
+    # The physics meaning of this location, attached at creation
+    # (create_all_locations).  ``None`` for locations whose access isn't
+    # capability-gated (tech tree / KSC biomes / starting inventory /
+    # body-agnostic Splashdown).  The sphere ladder reads structured meaning
+    # off this object instead of decoding the display name.
+    descriptor: "LocationDescriptor | None" = None
 
 
 # ---------------------------------------------------------------------------
@@ -270,8 +277,8 @@ class HomeLocationDef:
 
     Single source of truth for the home-body location names, mission types,
     altitude thresholds, and the body itself — used by rules.py (access
-    rules), sphere_ladder.py (parsing), and capability_format.py
-    (CLI/tracker display).
+    rules), sphere_ladder.py (via the location's LocationDescriptor), and
+    capability_format.py (CLI/tracker display).
 
     ``body=None`` means the location is body-agnostic (e.g., "Splashdown"
     can be achieved on any ocean body, not just the home).
@@ -280,6 +287,74 @@ class HomeLocationDef:
     mission_type: MissionType
     threshold_km: float | None = None
     body: BodyName | None = None
+
+
+@dataclass(frozen=True)
+class LocationDescriptor:
+    """The physics meaning of a capability-gated location, carried as a real
+    object on its ``KSP1Location`` (``loc.descriptor``).
+
+    Built once at location creation from the structured producer objects
+    (``MissionLocation`` + ``EventDef`` / ``HomeLocationDef`` / ``ContractSpec``)
+    so the sphere ladder never recovers structure by decoding the display name.
+    Slot-agnostic: the event slots that share a mission (e.g. Mun Landing 1/2/3)
+    map to one descriptor.
+    """
+    body: BodyName
+    mission_type: MissionType
+    crewed: bool | None
+    threshold_km: float | None = None
+    # Contract-completion locations carry their ContractSpec; the delivery
+    # payload is sized per-rung from it (see contract_payload_parts).  ``None``
+    # for ordinary (non-contract) missions.
+    spec: ContractSpec | None = None
+    # Whether the mission requires a Kerbal EVA — drives the curated
+    # Astronaut-Complex ``can_eva`` gate (buildings_in_logic).  ``None`` means
+    # "let the evaluator derive it from mission_type".
+    requires_eva: bool | None = None
+    # The specific event (ORBIT and EVA_IN_ORBIT stay distinct even though they
+    # share ``mission_type=ORBIT``).  ``None`` for home specials and contracts —
+    # used by the mission-only graph-walk to skip non-mission descriptors.
+    event: EventName | None = None
+
+    @classmethod
+    def from_mission(cls, ml: "MissionLocation",
+                     event_def: "EventDef") -> "LocationDescriptor":
+        return cls(
+            body=ml.body,
+            mission_type=event_def.mission_type,
+            crewed=event_def.crewed,
+            threshold_km=None,
+            requires_eva=event_def.requires_eva,
+            event=ml.event,
+        )
+
+    @classmethod
+    def from_home(cls, hloc: "HomeLocationDef") -> "LocationDescriptor | None":
+        # Body-agnostic entries (Splashdown) have no single body to drive the
+        # bumper's mission-centric work; their requirements are dominated by the
+        # per-body LAND missions the bumper already handles.
+        if hloc.body is None:
+            return None
+        return cls(
+            body=hloc.body,
+            mission_type=hloc.mission_type,
+            crewed=None,
+            threshold_km=hloc.threshold_km,
+        )
+
+    @classmethod
+    def from_spec(cls, spec: "ContractSpec") -> "LocationDescriptor":
+        # Physics-gated like a mission of the contract's base type, but with the
+        # required equipment as delivered payload (sized per-rung from the spec).
+        td = spec.type_def
+        return cls(
+            body=spec.body,
+            mission_type=td.base_mission_type,
+            crewed=td.crewed,
+            threshold_km=None,
+            spec=spec,
+        )
 
 
 # Single, body-agnostic Splashdown location: one AP check that fires when
@@ -615,3 +690,25 @@ def create_all_locations(world: KSP1World) -> None:
         for name in spec.location_names(world.locations_per_contract)
     }
     menu.add_locations(contract_locs, KSP1Location)
+
+    # Attach each capability-gated location's physics descriptor to the created
+    # object so the sphere ladder reads structured meaning off ``loc.descriptor``
+    # instead of decoding the display name (bug 086).  Built from the structured
+    # producers in hand; the wiring dict is transient (discarded here).  Tech /
+    # KSC / starting / body-agnostic Splashdown locations stay ``descriptor=None``
+    # (not physics-gated).  Tech-tree locations live in per-node regions, never
+    # in ``menu``, so they are untouched here.
+    descriptors: dict[str, LocationDescriptor] = {
+        str(ml): LocationDescriptor.from_mission(ml, EVENT_BY_NAME[ml.event])
+        for ml in MISSION_LOCATIONS
+    }
+    for hloc in world.location_builder.locations:
+        home_desc = LocationDescriptor.from_home(hloc)
+        if home_desc is not None:
+            descriptors[hloc.name] = home_desc
+    for spec in (*world.contract_specs, *world.goal_contract_specs):
+        spec_desc = LocationDescriptor.from_spec(spec)
+        for name in spec.location_names(world.locations_per_contract):
+            descriptors[name] = spec_desc
+    for loc in menu.locations:
+        loc.descriptor = descriptors.get(loc.name)

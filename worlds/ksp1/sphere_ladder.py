@@ -54,11 +54,11 @@ from .capability_reasons import (
     BlockingInfo, BlockingReason, StageDiagnostic, StageFailure,
 )
 from .locations import (
-    EVENT_BY_NAME, EventName, LocationBuilder, MissionLocation,
+    EventName, LocationDescriptor,
     KSC_BIOME_NAMES, KSC_LOCATION_PREFIX,
 )
 from .contracts import (
-    parse_contract_location_name, contract_payload_parts, required_part_breakdown,
+    contract_payload_parts, required_part_breakdown,
     _CHAIN_GUARANTEED_CATEGORIES, PRECISE_POINTING_TYPES,
 )
 from .items import (
@@ -259,74 +259,14 @@ class SphereLadder:
 # Helpers
 # ---------------------------------------------------------------------------
 
-@dataclass(frozen=True)
-class _LocationMissionInfo:
-    body: str
-    mission_type: MissionType
-    crewed: Optional[bool]
-    threshold_km: Optional[float]
-    # Contract-completion locations carry their ContractSpec; the delivery
-    # payload is then sized per-rung from that rung's flags (via
-    # ``contract_payload_parts``) so the ladder signature matches the runtime
-    # access rule. ``None`` for ordinary (non-contract) missions.
-    spec: Optional["ContractSpec"] = None
-    # Whether this location's mission requires a Kerbal EVA — drives the
-    # curated Astronaut-Complex ``can_eva`` gate (buildings_in_logic).  For
-    # FLAG_PLANT/SAMPLE_RETURN this is implied by mission_type; for EVA-in-orbit
-    # it comes from the EventDef (it shares the ORBIT type).  ``None`` means
-    # "let the evaluator derive it from mission_type".
-    requires_eva: Optional[bool] = None
+# The physics meaning of a location is a ``LocationDescriptor`` (locations.py),
+# built at creation and carried on ``loc.descriptor``.  The ladder reads it off
+# the real object — never by decoding the display name (bug 086).  Sites that
+# hold only an AP name resolve the object through AP's registry
+# (``world.get_location(name).descriptor``).
 
 
-def _parse_location(name: str) -> Optional[_LocationMissionInfo]:
-    """Resolve a location name to a (body, mission_type, crewed, threshold)
-    tuple.  Returns ``None`` for locations whose access isn't physics-gated
-    (tech tree, KSC biomes, starting inventory, body-agnostic Splashdown)
-    — those need their own handling and are skipped by the greedy walk.
-    """
-    # Home-body event/altitude locations — flat lookup spans all 15 home
-    # bodies; the prefix in the location name uniquely identifies the body.
-    hloc = LocationBuilder.all_home_locations().get(name)
-    if hloc is not None:
-        # Body-agnostic entries (Splashdown) have no single body to drive
-        # the bumper's mission-centric work; their requirements are
-        # dominated by per-body LAND missions the bumper already handles.
-        if hloc.body is None:
-            return None
-        return _LocationMissionInfo(
-            body=hloc.body,
-            mission_type=hloc.mission_type,
-            crewed=None,
-            threshold_km=hloc.threshold_km,
-        )
-    # Per-body mission locations.
-    parsed = MissionLocation.parse(name)
-    if parsed is not None:
-        event_def = EVENT_BY_NAME[parsed.event]
-        return _LocationMissionInfo(
-            body=parsed.body,
-            mission_type=event_def.mission_type,
-            crewed=event_def.crewed,
-            threshold_km=None,
-            requires_eva=event_def.requires_eva,
-        )
-    # Contract completion locations: physics-gated like a mission of the
-    # contract's base type, but with the required equipment as delivered payload.
-    spec = parse_contract_location_name(name)
-    if spec is not None:
-        td = spec.type_def
-        return _LocationMissionInfo(
-            body=spec.body,
-            mission_type=td.base_mission_type,
-            crewed=td.crewed,
-            threshold_km=None,
-            spec=spec,
-        )
-    # Tech tree / KSC / starting inventory: not capability-gated.
-    return None
-
-
-def _mission_key(info: "_LocationMissionInfo") -> tuple:
+def _mission_key(info: "LocationDescriptor") -> tuple:
     """Canonical dedup key for a location's mission — locations sharing it get
     one capability evaluation (signature + feasibility bracket).
 
@@ -374,7 +314,7 @@ def _missing_payload_blocking(
     ]
 
 
-def _contract_payload_rep_names(info: "_LocationMissionInfo",
+def _contract_payload_rep_names(info: "LocationDescriptor",
                                 flags: EquipmentFlags,
                                 part_manager: PartManager = DEFAULT_PART_MANAGER,
                                 ) -> set[str]:
@@ -395,7 +335,7 @@ def _contract_payload_rep_names(info: "_LocationMissionInfo",
 
 def _evaluate(
     flags: EquipmentFlags,
-    info: _LocationMissionInfo,
+    info: LocationDescriptor,
     diff: DifficultyProfile,
     mission_builder: MissionBuilder,
     run_parallel: bool = True,
@@ -1298,7 +1238,7 @@ def _pick_rank_bump(blocking, ranks: Signature, rng: Random) -> Optional[RankAxi
 
 
 def minimal_ranks_for(
-    location_name: str,
+    descriptor: "LocationDescriptor | None",
     prior: Signature,
     ctx: RankContext,
     difficulty: str,
@@ -1321,11 +1261,11 @@ def minimal_ranks_for(
     a designated rep (a random newly-admitted part) in
     ``RankBumperResult.reps``.
 
-    Returns ``None`` if the location isn't capability-gated (tech-tree
-    biome / starting inventory) OR if no kit reaches it within
-    ``max_iterations`` bumps.
+    Returns ``None`` when ``descriptor`` is ``None`` (the location isn't
+    capability-gated — tech-tree / biome / starting inventory) OR if no kit
+    reaches it within ``max_iterations`` bumps.
     """
-    info = _parse_location(location_name)
+    info = descriptor
     if info is None:
         return None
     diff = DIFFICULTY_PROFILES[difficulty]
@@ -2063,10 +2003,11 @@ def _pick_rank_bump_scored(blocking, ranks: Signature, ctx: RankContext,
 # ---------------------------------------------------------------------------
 
 
-def _goal_dv(name: str, mission_builder: MissionBuilder) -> float:
+def _goal_dv(descriptor: "LocationDescriptor | None",
+             mission_builder: MissionBuilder) -> float:
     """Cheapest profile delta-v for a goal location, used for sphere
     ordering and 'hardest-goal' selection."""
-    info = _parse_location(name)
+    info = descriptor
     if info is None:
         return 0.0
     profiles = mission_builder.profiles_for(info.body, info.mission_type)
@@ -2080,8 +2021,10 @@ def _goal_dv(name: str, mission_builder: MissionBuilder) -> float:
     return min(sum(e.base_dv for e in profile) for profile in profiles)
 
 
-def _predictable_spheres(world: "KSP1World") -> list[tuple[str, str]]:
-    """Return (label, location_name) tuples for the always-enforced spheres.
+def _predictable_spheres(
+        world: "KSP1World") -> list[tuple[str, str, LocationDescriptor]]:
+    """Return (label, location_name, descriptor) tuples for the always-enforced
+    spheres.
 
     S_launch + S_orbit anchor the bootstrap.  Then **every** physics-gated
     goal location becomes its own S_goal sphere.  For multi-mission goals
@@ -2113,18 +2056,24 @@ def _predictable_spheres(world: "KSP1World") -> list[tuple[str, str]]:
     """
     from .rules import goal_spec_location_names
     home = str(world.mission_builder.home)
-    out: list[tuple[str, str]] = [
-        ("S_launch", f"{home} First Launch"),
-        ("S_orbit", f"{home} Orbit 1"),
+
+    def _desc(name: str) -> "LocationDescriptor | None":
+        # AP's registry is the name -> real-object resolver; the physics comes
+        # off the object's descriptor, never from decoding the name.
+        return world.get_location(name).descriptor
+
+    out: list[tuple[str, str, LocationDescriptor]] = [
+        ("S_launch", f"{home} First Launch", _desc(f"{home} First Launch")),
+        ("S_orbit", f"{home} Orbit 1", _desc(f"{home} Orbit 1")),
     ]
     goal_names = list(goal_spec_location_names(world.goal_spec))
     infeasible = world.model_infeasible_locations
-    feasible_goals = [
-        n for n in goal_names
-        if n not in infeasible and _parse_location(n) is not None
-    ]
-    for goal_name in feasible_goals:
-        out.append((f"S_goal[{goal_name}]", goal_name))
+    for goal_name in goal_names:
+        if goal_name in infeasible:
+            continue
+        d = _desc(goal_name)
+        if d is not None:  # physics-gated (skips tech-leaf goals)
+            out.append((f"S_goal[{goal_name}]", goal_name, d))
     # Tech-tree anchors (only for complete_tech_tree).  These are body-orbit
     # locations the chain extends through so cumulative science covers
     # cumulative_tier_cost(MAX_TIER).  Builder validates feasibility.
@@ -2149,8 +2098,9 @@ def _predictable_spheres(world: "KSP1World") -> list[tuple[str, str]]:
             GoalContractMode.option_progressive_unlock):
         for spec in world.contract_specs:
             name = spec.location_name  # slot 1; both slots share one signature
-            if name not in infeasible and _parse_location(name) is not None:
-                out.append((f"S_contract[{name}]", name))
+            if name not in infeasible:  # contracts are always physics-gated
+                out.append((f"S_contract[{name}]", name,
+                            LocationDescriptor.from_spec(spec)))
     return out
 
 
@@ -2177,8 +2127,9 @@ _TIER_ANCHOR_DV_BAND_FRAC: float = 0.20
 
 def _pick_tech_tree_anchors(
     world: "KSP1World",
-) -> list[tuple[str, str]]:
-    """Return (label, location_name) anchor spheres for complete_tech_tree.
+) -> list[tuple[str, str, LocationDescriptor]]:
+    """Return (label, location_name, descriptor) anchor spheres for
+    complete_tech_tree.
 
     Greedy ``"X Return 1"`` selection: starting from home-system science
     (with PSI=3 + full crew/instrument kit), add interplanetary body
@@ -2251,8 +2202,14 @@ def _pick_tech_tree_anchors(
         and b.name != BodyName.KERBOL
         and b.can_land
     ]
+    # Descriptor for each candidate's RETURN slot-1 location — resolved through
+    # AP's registry (the name is the identity; physics is the object).
+    desc_for = {
+        b.name: world.get_location(f"{b.name} Return 1").descriptor
+        for b in interp_bodies
+    }
     dv_for = {
-        b.name: _goal_dv(f"{b.name} Return 1", world.mission_builder)
+        b.name: _goal_dv(desc_for[b.name], world.mission_builder)
         for b in interp_bodies
     }
     interp_bodies.sort(key=lambda b: (dv_for[b.name], b.name.value))
@@ -2261,7 +2218,7 @@ def _pick_tech_tree_anchors(
     # ``cheapest * (1 + _TIER_ANCHOR_DV_BAND_FRAC)`` of the current
     # cheapest unpicked, pick randomly via ``world.random`` (seed-derived,
     # so the pick is deterministic per seed).
-    anchors: list[tuple[str, str]] = []
+    anchors: list[tuple[str, str, LocationDescriptor]] = []
     remaining = list(interp_bodies)
     while accumulated < target_raw and remaining:
         cheapest_dv = dv_for[remaining[0].name]
@@ -2270,7 +2227,8 @@ def _pick_tech_tree_anchors(
         picked = world.random.choice(band)
         remaining.remove(picked)
         accumulated += body_max_yield(picked)
-        anchors.append((f"S_tier_anchor[{picked.name}]", f"{picked.name} Return 1"))
+        anchors.append((f"S_tier_anchor[{picked.name}]",
+                        f"{picked.name} Return 1", desc_for[picked.name]))
 
     if accumulated < target_raw:
         from Options import OptionError
@@ -2622,7 +2580,7 @@ def _needs_to_counted(
 
 
 def _mission_building_reqs(
-    info: "_LocationMissionInfo", *,
+    info: "LocationDescriptor", *,
     local_needs_conics: bool, local_needs_nodes: bool,
     mission_builder: MissionBuilder, buildings_in_logic: bool,
 ) -> tuple[tuple[str, int], ...]:
@@ -2733,7 +2691,7 @@ def _install_ladder_rules(
             continue
         if loc.name not in location_signatures:
             continue  # not capability-gated (proxy) — leave rule
-        info = _parse_location(loc.name)
+        info = loc.descriptor
         if info is None:
             continue  # tech anchor — gates on science, not capability
         mkey = _mission_key(info)
@@ -2928,13 +2886,12 @@ def _install_cheap_mission_reps(
     for loc in world.multiworld.get_locations(world.player):
         if loc.address is None:
             continue
-        ml = MissionLocation.parse(loc.name)
-        if ml is None:
-            continue
-        key = (ml.body, ml.event.value)
+        info = loc.descriptor
+        if info is None or info.event is None:
+            continue  # mission-only (home specials / contracts carry event=None)
+        key = (info.body, info.event.value)
         if key not in counted_by_event:
-            info = _parse_location(loc.name)
-            counted_by_event[key] = {} if info is None else dict(_needs_to_counted(
+            counted_by_event[key] = dict(_needs_to_counted(
                 mission_logic_needs(
                     info.body, info.mission_type, info.crewed,
                     info.requires_eva, mb),
@@ -3516,7 +3473,8 @@ def _build_ladder_graph_walk(
         return sum(sig.rank(a) for a in RankAxisKey)
 
     # ---- base: home-orbit kit -------------------------------------------
-    _ko = minimal_ranks_for(f"{home} Orbit 1", Signature.empty(), ctx,
+    _home_orbit_desc = world.get_location(f"{home} Orbit 1").descriptor
+    _ko = minimal_ranks_for(_home_orbit_desc, Signature.empty(), ctx,
                             prior_reps=frozenset(), **_bump_kw)
     ko_sig = _ko.signature if _ko is not None else Signature.empty()
     ko_reps = _ko.reps_collected if _ko is not None else frozenset()
@@ -3525,19 +3483,23 @@ def _build_ladder_graph_walk(
     # All mission locations grouped by (BodyName) -> set of EventName values.
     body_events: dict[str, set[str]] = {}
     # Canonical representative location-name for each (body, event) so the walk
-    # reuses the real slot-1 name the bumper expects.
+    # reuses the real slot-1 name the bumper expects, plus the mission's
+    # descriptor (physics carried off the real location object, never decoded
+    # from the name).
     locname_for: dict[tuple[str, str], str] = {}
+    descriptor_for: dict[tuple[str, str], LocationDescriptor] = {}
     for loc in world.multiworld.get_locations(world.player):
         if loc.address is None or loc.name in infeasible:
             continue
-        parsed = MissionLocation.parse(loc.name)
-        if parsed is None:
-            continue
-        ev = parsed.event.value
+        info = loc.descriptor
+        if info is None or info.event is None:
+            continue  # mission-only (home specials / contracts carry event=None)
+        ev = info.event.value
         if ev not in _GRAPH_WALK_EVENT_ORDER:
             continue
-        body_events.setdefault(parsed.body, set()).add(ev)
-        locname_for.setdefault((parsed.body, ev), f"{parsed.body} {ev} 1")
+        body_events.setdefault(info.body, set()).add(ev)
+        locname_for.setdefault((info.body, ev), f"{info.body} {info.event.value} 1")
+        descriptor_for.setdefault((info.body, ev), info)
 
     # ---- walk: planets/home-moons first, then planet-moons --------------
     bodies = [b for b in ALL_BODIES
@@ -3569,13 +3531,10 @@ def _build_ladder_graph_walk(
         # through these missions in a different order across processes -> the
         # bumper's rep picks (and thus the whole ladder) become non-reproducible.
         for ev in sorted(present, key=lambda e: (_GRAPH_WALK_EVENT_ORDER[e], e)):
-            loc_name = locname_for[(b.name.value, ev)]
-            info = _parse_location(loc_name)
-            if info is None:
-                continue
+            info = descriptor_for[(b.name.value, ev)]
             mkey = _mission_key(info)
             rocket = minimal_ranks_for(
-                loc_name, cum_sig, ctx,
+                info, cum_sig, ctx,
                 prior_reps=cum_reps, **_bump_kw,
             )
             if rocket is None:
@@ -3595,10 +3554,14 @@ def _build_ladder_graph_walk(
 
     # ---- assign every mission location its tree-walk marginal signature --
     location_signatures: dict[str, Signature] = {}
+    # Per-name descriptor for the walk's name-keyed structures (the AP-facing
+    # identity string correlated with its physics object).  Scoped to this walk,
+    # discarded after; kept in sync with ``location_signatures``.
+    walk_descriptors: dict[str, LocationDescriptor] = {}
     for loc in world.multiworld.get_locations(world.player):
         if loc.address is None or loc.name in infeasible:
             continue
-        info = _parse_location(loc.name)
+        info = loc.descriptor
         if info is None:
             continue
         mkey = _mission_key(info)
@@ -3608,7 +3571,7 @@ def _build_ladder_graph_walk(
             # result (infeasible under any kit it was offered) — fall back to a
             # from-empty intrinsic so the location still gets a signature.
             rocket = minimal_ranks_for(
-                loc.name, Signature.empty(), ctx,
+                info, Signature.empty(), ctx,
                 prior_reps=frozenset(), **_bump_kw,
             )
             derived = (Signature.of(rocket.signature.rank_reqs)
@@ -3617,8 +3580,9 @@ def _build_ladder_graph_walk(
         if derived is None:
             continue
         location_signatures[loc.name] = derived
+        walk_descriptors[loc.name] = info
         ladder.location_signatures[loc.name] = LocationSignature(
-            dv=_goal_dv(loc.name, world.mission_builder),
+            dv=_goal_dv(info, world.mission_builder),
             requirements=tuple(),
             body_chain_depth=_body_chain_depth(
                 info.body, world.mission_builder.home),
@@ -3631,7 +3595,11 @@ def _build_ladder_graph_walk(
     # dependency prior is unknown to the body-graph walk — goal/contract anchors
     # may be deep interplanetary returns).  Goal-feasibility semantics mirror the
     # from-empty path's fallback block.
-    predictable_labels = [(label, name) for label, name in _predictable_spheres(world)]
+    predictable_labels = _predictable_spheres(world)
+    # Fold predictable anchors' descriptors into the walk's name->object map so
+    # every walk name (mission signatures + anchors) resolves to its physics.
+    for _lbl, _nm, _desc in predictable_labels:
+        walk_descriptors.setdefault(_nm, _desc)
 
     # ---- deep-space enabler inject (mirrors the from-empty path) --------
     # Folded into cumulative_reps/cumulative_sig the first time the walk reaches a
@@ -3639,10 +3607,11 @@ def _build_ladder_graph_walk(
     # build their high-dv stage.  dv per anchor/mission name via _goal_dv.
     _all_walk_names = (
         list(location_signatures.keys())
-        + [name for _, name in predictable_labels]
+        + [name for _, name, _ in predictable_labels]
     )
     _sphere_dv_by_name = {
-        n: _goal_dv(n, world.mission_builder) for n in _all_walk_names
+        n: _goal_dv(walk_descriptors.get(n), world.mission_builder)
+        for n in _all_walk_names
     }
     _deep_enablers = _DEEP_SPACE_ENABLERS - precollected_names
     _attitude_enablers = _ATTITUDE_ENABLERS - precollected_names
@@ -3663,7 +3632,7 @@ def _build_ladder_graph_walk(
     _attitude_inject_dv = (
         min(
             (dv for n, dv in _sphere_dv_by_name.items()
-             if (_pl := _parse_location(n)) is not None
+             if (_pl := walk_descriptors.get(n)) is not None
              and _pl.body not in _home_body_values),
             default=float("inf"),
         )
@@ -3706,22 +3675,24 @@ def _build_ladder_graph_walk(
     # up by the easier goals before it, not from a thin home-orbit prior — its
     # high-dv transfer stage closes reliably only with that accumulated kit
     # (plus the deep-space enablers, folded into the prior when interplanetary).
-    # (label, location_name, cumulative_sig, cumulative_reps, result, marginal_sig)
-    anchor_entries: list[tuple[str, str, Signature, frozenset[str],
-                               RankBumperResult, Optional[Signature]]] = []
+    # (label, location_name, descriptor, cumulative_sig, cumulative_reps,
+    #  result, marginal_sig)
+    anchor_entries: list[tuple[str, str, LocationDescriptor, Signature,
+                               frozenset[str], RankBumperResult,
+                               Optional[Signature]]] = []
     _anchor_sig = ko_sig
     _anchor_reps = ko_reps
-    for label, name in sorted(
+    for label, name, desc in sorted(
             predictable_labels,
-            key=lambda ln: _goal_dv(ln[1], world.mission_builder)):
-        dv = _goal_dv(name, world.mission_builder)
+            key=lambda ln: _goal_dv(ln[2], world.mission_builder)):
+        dv = _goal_dv(desc, world.mission_builder)
         # Fold the deep-space enablers into the accumulated prior when the anchor
         # is interplanetary-deep (the from-empty path does the same before
         # bumping a deep goal anchor).
         _prior_sig, _prior_reps = _apply_deep_inject(
             _anchor_sig, _anchor_reps, dv)
         rocket = minimal_ranks_for(
-            name, _prior_sig, ctx, prior_reps=_prior_reps, **_bump_kw,
+            desc, _prior_sig, ctx, prior_reps=_prior_reps, **_bump_kw,
         )
         if rocket is not None:
             sig, reps = _apply_deep_inject(
@@ -3740,7 +3711,7 @@ def _build_ladder_graph_walk(
             location_signatures.setdefault(name, marginal)
             cumulative_reps = cumulative_reps | reps
             anchor_entries.append(
-                (label, name, sig, reps, rocket, marginal))
+                (label, name, desc, sig, reps, rocket, marginal))
             # Accumulate into the prior for the next (harder) anchor.
             _anchor_sig = _anchor_sig.merged_max(sig)
             _anchor_reps = _anchor_reps | reps
@@ -3752,7 +3723,7 @@ def _build_ladder_graph_walk(
         intrinsic = location_signatures.get(name)
         if intrinsic is None:
             r2 = minimal_ranks_for(
-                name, Signature.empty(), ctx, prior_reps=frozenset(),
+                desc, Signature.empty(), ctx, prior_reps=frozenset(),
                 **_bump_kw,
             )
             intrinsic = (Signature.of(r2.signature.rank_reqs)
@@ -3786,7 +3757,7 @@ def _build_ladder_graph_walk(
         cumulative_reps = cumulative_reps | m_reps
         _anchor_sig = merged
         _anchor_reps = _anchor_reps | m_reps
-        anchor_entries.append((label, name, merged, m_reps, fb, intrinsic))
+        anchor_entries.append((label, name, desc, merged, m_reps, fb, intrinsic))
 
     # ---- build the linear, monotonic-cumulative ladder ------------------
     # One SphereBoundary per walked mission + per predictable anchor, sorted by
@@ -3808,9 +3779,7 @@ def _build_ladder_graph_walk(
         # bumper's rep picks (and thus the whole ladder) become non-reproducible.
         for ev in sorted(present, key=lambda e: (_GRAPH_WALK_EVENT_ORDER[e], e)):
             loc_name = locname_for[(b.name.value, ev)]
-            info = _parse_location(loc_name)
-            if info is None:
-                continue
+            info = descriptor_for[(b.name.value, ev)]
             mkey = _mission_key(info)
             res = mission_result.get(mkey)
             cum = mission_cumulative.get(mkey)
@@ -3818,7 +3787,7 @@ def _build_ladder_graph_walk(
                 continue
             seen_names.add(loc_name)
             cum_sig, _cum_reps = cum
-            _dv = _goal_dv(loc_name, world.mission_builder)
+            _dv = _goal_dv(info, world.mission_builder)
             cum_sig, _cum_reps = _apply_deep_inject(cum_sig, _cum_reps, _dv)
             ladder_entries.append((
                 cum_sig, _dv,
@@ -3828,13 +3797,13 @@ def _build_ladder_graph_walk(
                     flags=res.flags, profile_dv=res.profile_dv,
                     reps_collected=_cum_reps),
             ))
-    for label, name, cum_sig, reps, res, _marg in anchor_entries:
+    for label, name, desc, cum_sig, reps, res, _marg in anchor_entries:
         if name in seen_names and not label.startswith("S_goal") \
                 and not label.startswith("S_contract"):
             # A plain walked mission already covers this anchor's location.
             continue
         ladder_entries.append((
-            cum_sig, _goal_dv(name, world.mission_builder),
+            cum_sig, _goal_dv(desc, world.mission_builder),
             label, name, True,
             RankBumperResult(
                 signature=cum_sig, delta=res.delta, reps=res.reps,

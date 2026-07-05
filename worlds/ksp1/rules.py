@@ -558,7 +558,7 @@ def _set_contract_rules(world: KSP1World, player: int) -> None:
 
     Contract locations are among the HARDEST in the seed (they need the full
     delivery capability + input parts). The sphere ladder gives them a real
-    signature (see sphere_ladder._parse_location / _evaluate) so its Rule B bans
+    signature (see loc.descriptor / sphere_ladder._evaluate) so its Rule B bans
     only items BELOW the contract's sphere — keeping bootstrap items off them
     (which would otherwise deadlock: a launch engine placed at "Contract: Mine
     Ore on Eve" is unreachable without the very engine it gates) while still

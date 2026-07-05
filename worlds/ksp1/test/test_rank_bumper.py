@@ -13,6 +13,9 @@ import random
 import unittest
 
 from worlds.ksp1.bodies import BodyName, MissionBuilder
+from worlds.ksp1.locations import (
+    EVENT_BY_NAME, LocationBuilder, LocationDescriptor, MissionLocation,
+)
 from worlds.ksp1.parts import DEFAULT_PART_MANAGER
 
 PART_DB = DEFAULT_PART_MANAGER.parts
@@ -28,9 +31,22 @@ from worlds.ksp1.sphere_ladder import (
 MISSION_BUILDER = MissionBuilder(home=BodyName.KERBIN)
 
 
+def _descriptor_for(name: str) -> LocationDescriptor:
+    """Resolve a canonical location name to its descriptor the same way
+    ``create_all_locations`` does — home specials from the LocationBuilder,
+    per-body missions from the MissionLocation grammar.  Test scaffolding: the
+    generator carries ``loc.descriptor`` off the real object; here we rebuild it
+    from a hard-coded canonical name."""
+    hloc = LocationBuilder.all_home_locations().get(name)
+    if hloc is not None:
+        return LocationDescriptor.from_home(hloc)
+    ml = MissionLocation.parse(name)
+    return LocationDescriptor.from_mission(ml, EVENT_BY_NAME[ml.event])
+
+
 def _bumper(loc: str, seed: int = 42, prior: Signature = Signature.empty()):
     return minimal_ranks_for(
-        loc, prior, DEFAULT_CONTEXT,
+        _descriptor_for(loc), prior, DEFAULT_CONTEXT,
         difficulty="comfortable",
         progressive_launch_pad=False,
         start_with_clamps=True,
