@@ -50,10 +50,10 @@ from pathlib import Path
 
 from worlds.ksp1.bodies import (
     ALL_BODIES, BodyName, DIFFICULTY_PROFILES,
-    MissionBuilder,
+    MissionBuilder, MissionType,
 )
 from worlds.ksp1.capability import compute_capability_from_items
-from worlds.ksp1.locations import EVENT_BY_NAME, EventName, MissionLocation
+from worlds.ksp1.locations import EVENT_BY_NAME, EventName
 from worlds.ksp1.parts import ALL_PACKS, part_manager_for
 from worlds.ksp1.parts.packs import (
     STOCK, OPTIONAL_PACKS, DEFAULT_ENABLED_OPTIONAL_PACKS,
@@ -61,9 +61,12 @@ from worlds.ksp1.parts.packs import (
 
 
 # Mission events whose feasibility the script probes.  Each (body, event)
-# pair that fails the capability check expands to every AP location name
-# in that event's scale (e.g. RETURN scale=3 → "Body Return 1..3"),
-# giving the per-location granularity the rules layer can filter on.
+# pair that fails the capability check is recorded as its canonical
+# ``(target_body, mission_type)`` pair — the same shape the world's
+# ``unachievable_missions`` carries; the world expands it back over every
+# matching AP location (all slots of every event sharing that mission type).
+# The probed events map to DISTINCT mission types (RETURN vs SAMPLE_RETURN), so
+# the pair keeps them separable.
 _PROBED_EVENTS: tuple[EventName, ...] = (EventName.RETURN, EventName.SAMPLE_RETURN)
 
 
@@ -125,19 +128,19 @@ def compute_model_infeasible_for_home(
     difficulty_name: str = DEFAULT_DIFFICULTY,
     overhead: float = DEFAULT_OVERHEAD,
     enabled_packs: frozenset[str] = ALL_PACKS,
-) -> frozenset[str]:
-    """AP location names whose mission the dv model can't verify from
-    ``home``, even given a maxed-out parts kit.  Used to drive the
-    all-parts proxy rule for those locations' completion checks.
+) -> frozenset[tuple[BodyName, MissionType]]:
+    """``(target_body, mission_type)`` pairs whose mission the dv model can't
+    verify from ``home``, even given a maxed-out parts kit.  Used to drive the
+    all-parts proxy rule for those missions' completion checks.
 
-    Locations are listed individually (one entry per AP slot — e.g.
-    ``"Eve Return 1"``, ``"Eve Return 2"``, ``"Eve Return 3"``) so
-    callers can filter per-mission-type (Return vs Sample Return vs
-    eventual Flag Plant) if behaviour needs to diverge between them.
+    Canonical as ``(body, mission_type)`` — the exact shape the world's
+    ``unachievable_missions`` set carries — so the world reads the table with no
+    per-name parsing.  A single pair covers every AP slot of every event sharing
+    that mission type; the world expands it back over ``MISSION_LOCATIONS``.
 
     ``overhead`` adds extra ``percent_margin`` on top of the chosen
     difficulty profile — tightens the "what counts as feasible" bar
-    when you need locations that *just barely* pass with maxed reps
+    when you need missions that *just barely* pass with maxed reps
     to still be classified as model-infeasible.
     """
     counts = _max_kit_counts(enabled_packs)
@@ -149,7 +152,7 @@ def compute_model_infeasible_for_home(
         start_with_clamps=True,
         mission_builder=mission_builder,
     )
-    infeasible: set[str] = set()
+    infeasible: set[tuple[BodyName, MissionType]] = set()
     for body in ALL_BODIES:
         if body.name == home or not body.can_land:
             continue
@@ -157,9 +160,7 @@ def compute_model_infeasible_for_home(
         for event in _PROBED_EVENTS:
             if body_cap.access.get(event, False):
                 continue
-            scale = EVENT_BY_NAME[event].scale
-            for slot in range(1, scale + 1):
-                infeasible.add(str(MissionLocation(body.name, event, slot)))
+            infeasible.add((body.name, EVENT_BY_NAME[event].mission_type))
     return frozenset(infeasible)
 
 
@@ -175,7 +176,7 @@ def _candidate_homes() -> list[BodyName]:
 def build_all_tables(
     overhead: float = DEFAULT_OVERHEAD,
     enabled_packs: frozenset[str] = ALL_PACKS,
-) -> dict[str, dict[BodyName, frozenset[str]]]:
+) -> dict[str, dict[BodyName, frozenset[tuple[BodyName, MissionType]]]]:
     """One per-home table per difficulty (see ``DIFFICULTIES``) for a single
     pack configuration."""
     return {
@@ -217,14 +218,17 @@ def _base_optional() -> frozenset[str]:
     return frozenset(DEFAULT_ENABLED_OPTIONAL_PACKS) & relevant
 
 
-# A per-(difficulty, home) signed delta: (added, removed) location names.
-DeltaCell = tuple[frozenset[str], frozenset[str]]
+# A per-(difficulty, home) signed delta: (added, removed) (body, mission_type)
+# pairs.  Computed from the final collapsed per-config sets, so the world can
+# apply ``(base | added) - removed`` as exact set algebra on tuples.
+DeltaCell = tuple[frozenset[tuple[BodyName, MissionType]],
+                  frozenset[tuple[BodyName, MissionType]]]
 
 
 def build_base_and_deltas(
     overhead: float = DEFAULT_OVERHEAD,
 ) -> tuple[tuple[str, ...],
-           dict[str, dict[BodyName, frozenset[str]]],
+           dict[str, dict[BodyName, frozenset[tuple[BodyName, MissionType]]]],
            dict[tuple[str, ...], dict[str, dict[BodyName, DeltaCell]]]]:
     """Compute the BASE table (default config) and signed deltas vs base for
     every other capability-relevant pack subset.  Returns
@@ -258,20 +262,33 @@ def build_base_and_deltas(
     return base_key, base, deltas
 
 
-def _format_base(base: dict[str, dict[BodyName, frozenset[str]]]) -> list[str]:
-    lines = ['MODEL_INFEASIBLE_BASE: '
-             'dict[str, dict[BodyName, frozenset[str]]] = {']
+def _pair_sort_key(pair: tuple[BodyName, MissionType]) -> tuple[str, str]:
+    return (pair[0].name, pair[1].name)
+
+
+def _fmt_pair(pair: tuple[BodyName, MissionType]) -> str:
+    """Render a ``(body, mission_type)`` pair as valid, stable source."""
+    return f"(BodyName.{pair[0].name}, MissionType.{pair[1].name})"
+
+
+def _fmt_pair_set(pairs: frozenset[tuple[BodyName, MissionType]]) -> str:
+    if not pairs:
+        return "frozenset()"
+    body = ", ".join(_fmt_pair(p) for p in sorted(pairs, key=_pair_sort_key))
+    return f"frozenset({{{body}}})"
+
+
+def _format_base(
+    base: dict[str, dict[BodyName, frozenset[tuple[BodyName, MissionType]]]],
+) -> list[str]:
+    lines = ['MODEL_INFEASIBLE_BASE: dict[str, dict[BodyName, '
+             'frozenset[tuple[BodyName, MissionType]]]] = {']
     for difficulty in DIFFICULTIES:
         table = base[difficulty]
         lines.append(f"    {difficulty!r}: {{")
         for home in sorted(table.keys()):
-            entries = sorted(table[home])
-            if not entries:
-                lines.append(f"        BodyName.{home.name}: frozenset(),")
-            else:
-                quoted = ", ".join(f"{e!r}" for e in entries)
-                lines.append(
-                    f"        BodyName.{home.name}: frozenset({{{quoted}}}),")
+            lines.append(
+                f"        BodyName.{home.name}: {_fmt_pair_set(table[home])},")
         lines.append("    },")
     lines.append("}")
     return lines
@@ -287,7 +304,9 @@ def _format_deltas(
         '# capability).',
         'MODEL_INFEASIBLE_DELTAS: dict[',
         '    tuple[str, ...],',
-        '    dict[str, dict[BodyName, tuple[frozenset[str], frozenset[str]]]],',
+        '    dict[str, dict[BodyName, tuple['
+        'frozenset[tuple[BodyName, MissionType]], '
+        'frozenset[tuple[BodyName, MissionType]]]]],',
         '] = {',
     ]
     for key in sorted(deltas):
@@ -299,12 +318,9 @@ def _format_deltas(
             lines.append(f"        {difficulty!r}: {{")
             for home in sorted(cells[difficulty], key=lambda b: b.name):
                 added, removed = cells[difficulty][home]
-                aq = ", ".join(f"{e!r}" for e in sorted(added))
-                rq = ", ".join(f"{e!r}" for e in sorted(removed))
-                a_s = f"frozenset({{{aq}}})" if added else "frozenset()"
-                r_s = f"frozenset({{{rq}}})" if removed else "frozenset()"
                 lines.append(
-                    f"            BodyName.{home.name}: ({a_s}, {r_s}),")
+                    f"            BodyName.{home.name}: "
+                    f"({_fmt_pair_set(added)}, {_fmt_pair_set(removed)}),")
             lines.append("        },")
         lines.append("    },")
     lines.append("}")
@@ -319,12 +335,15 @@ def _format(
     """Serialise base + deltas as a Python source file.  Stable ordering keeps
     the diff minimal across regenerations."""
     header = [
-        '"""Static model-infeasible-locations table — checked in,',
+        '"""Static model-infeasible-missions table — checked in,',
         'regenerated by ``worlds/ksp1/scripts/generate_feasibility.py``.',
         '',
-        'For each (difficulty, home), lists the AP location names whose mission',
-        'the dv model cannot verify even given a maxed-out parts kit; those',
-        'locations fall back to the "all-parts collected" proxy at goal time.',
+        'For each (difficulty, home), lists the ``(target_body, mission_type)``',
+        'pairs whose mission the dv model cannot verify even given a maxed-out',
+        'parts kit; those missions fall back to the "all-parts collected" proxy',
+        'at goal time.  The world reads the pairs directly into',
+        '``unachievable_missions`` — no per-name parsing — and expands them back',
+        'over ``MISSION_LOCATIONS`` for the name-keyed consumers.',
         '',
         'Keyed by which capability-relevant part packs are enabled.',
         '``MODEL_INFEASIBLE_BASE`` is the default config (``BASE_RELEVANT_PACKS``);',
@@ -338,7 +357,7 @@ def _format(
         '"""',
         'from __future__ import annotations',
         '',
-        'from worlds.ksp1.bodies import BodyName',
+        'from worlds.ksp1.bodies import BodyName, MissionType',
         '',
         '',
         f'BASE_RELEVANT_PACKS: tuple[str, ...] = {base_key!r}',

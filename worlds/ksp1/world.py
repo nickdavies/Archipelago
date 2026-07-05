@@ -30,7 +30,7 @@ from .items import (
 from .locations import (
     ALL_EVENTS, EVENT_BY_NAME, EventName, KSC_BIOMES, KSC_LOCATION_PREFIX,
     LOCATION_NAME_TO_ID, LocationBuilder, MAX_TECH_SLOTS, MISSION_LOCATIONS,
-    MissionLocation, THRESHOLD_LOCATION_NAMES, TechTreeLocation, event_locations,
+    THRESHOLD_LOCATION_NAMES, TechTreeLocation, event_locations,
     effective_starting_inv_count, effective_tech_slots_per_node,
 )
 
@@ -398,7 +398,7 @@ class KSP1World(World):
         # Unachievable missions — the SINGLE source of truth, canonical as
         # ``(body, mission_type)`` tuples — from two sources unified here:
         #   1. dv-infeasible: the offline per-difficulty table (capability probed
-        #      at maximal kit), parsed from its location names to missions.
+        #      at maximal kit), read directly as ``(body, mission_type)`` pairs.
         #   2. curated edge bans: graph-derived from ``_BANNED_EDGES``.
         # Set on the MissionBuilder so capability (and everything routing through
         # it) treats them as access=False; ``model_infeasible_locations`` (names)
@@ -411,17 +411,14 @@ class KSP1World(World):
         # capability-relevant packs: base ⊕ signed delta (delta absent for the
         # default config and for any pack set that doesn't change feasibility).
         relevant = tuple(sorted(self.part_manager.capability_relevant_packs()))
-        _table_names = MODEL_INFEASIBLE_BASE.get(diff_name, {}).get(
-            home, frozenset())
+        _table = MODEL_INFEASIBLE_BASE.get(diff_name, {}).get(home, frozenset())
         if relevant != BASE_RELEVANT_PACKS:
             _add, _remove = MODEL_INFEASIBLE_DELTAS.get(relevant, {}).get(
                 diff_name, {}).get(home, (frozenset(), frozenset()))
-            _table_names = (_table_names | _add) - _remove
-        unachievable: set[tuple[BodyName, MissionType]] = {
-            (ml.body, EVENT_BY_NAME[ml.event].mission_type)
-            for name in _table_names
-            if (ml := MissionLocation.parse(name)) is not None
-        }
+            _table = (_table | _add) - _remove
+        # The table stores canonical (body, mission_type) pairs directly — the
+        # deltas are pre-collapsed, so this set algebra needs no name parsing.
+        unachievable: set[tuple[BodyName, MissionType]] = set(_table)
         # Eve curation: only base-expert seeds may opt Eve back in.  Gated on
         # base Difficulty (not Physics Difficulty) so a 'zero' physics run on a
         # casual/normal base can never surface Eve.
