@@ -2319,6 +2319,13 @@ def _evaluate_profile(
                     max_ascent_stages=ESCALATED_MAX_ASCENT_STAGES,
                     booster_counts=ESCALATED_BOOSTER_COUNTS,
                     max_eng_per_col=ESCALATED_MAX_ENG_PER_COL,
+                    # Serial sub-stages may build as asparagus clusters on
+                    # the escalated edges (bug 093) — the architecture real
+                    # 9km/s-class ascents fly.  Scoped here with the other
+                    # escalated bounds: forcing it EVERYWHERE yields a
+                    # byte-identical feasibility table (measured 2026-07-06),
+                    # so the hot path never pays the wider search.
+                    parallel_substages=True,
                 )
             _ascent_kwargs = dict(
                 gravity=body.surface_gravity,

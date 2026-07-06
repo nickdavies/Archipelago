@@ -1783,7 +1783,7 @@ def find_optimal_multistage_ascent(
     atm_scale_height_m: float = 0.0,
     atm_top_m: float = 0.0,
     pad_altitude_m: float = 0.0,  # elevated launch-site altitude (Isp credit)
-    parallel_mode: str = "none",  # asparagus/onion — applied at K=1 only
+    parallel_mode: str = "none",  # asparagus/onion — K=1 only unless parallel_substages
     radial_decoupler_mass: float = 0.0,
     radial_decoupler_name: str = "",
     fuel_line_mass: float = 0.0,
@@ -1799,6 +1799,7 @@ def find_optimal_multistage_ascent(
     max_ascent_stages: Optional[int] = None,
     booster_counts: tuple[int, ...] = _PARALLEL_BOOSTER_COUNTS,
     max_eng_per_col: int = _PARALLEL_MAX_ENG_PER_COL,
+    parallel_substages: bool = False,
 ) -> Optional[list[StageResult]]:
     """Find lowest-total-wet K-stage ascent architecture for an atmospheric
     body.  Returns a list of StageResults from BOTTOM (launch) to TOP
@@ -1807,9 +1808,16 @@ def find_optimal_multistage_ascent(
     Each stage is independently optimised by ``find_optimal_stage``;
     payloads chain top-down, decoupler mass charged on every interstage.
 
-    ``parallel_mode`` (asparagus/onion) only applies to K=1 — at K≥2 the
-    explicit staging supersedes parallel-staging's constant-factor model
-    (mixing them would double-count the dry-mass discount).
+    ``parallel_mode`` (asparagus/onion) applies to K=1 always; with
+    ``parallel_substages`` each serial sub-stage may ALSO build as a real
+    radial cluster (bug 093) — the architecture real high-dv ascents fly
+    (an asparagus launcher delivering an asparagus cruise stage).  Since
+    bf9a2c51 the parallel model sizes each cluster exactly (real column
+    masses, real drop schedule), so composing it with serial staging
+    double-counts nothing: each sub-stage's shed is its own hardware, the
+    interstage decoupler drops the whole sub-stage.  Default False is a
+    SEARCH-COST bound, not physics — every sub-stage build widens to the
+    full parallel-unit search when enabled.
     """
     if required_dv <= 0:
         return None
@@ -1882,10 +1890,14 @@ def find_optimal_multistage_ascent(
                     max_heat_shield_size=max_heat_shield_size,
                     heat_shields=stage_heat_shields,
                     in_atmosphere=stage_in_atm,
-                    # K=1 may build a real radial asparagus/onion unit; K≥2 has
-                    # explicit serial staging which supersedes radial parallel
-                    # (mixing would double-count the shedding).
-                    parallel_mode=parallel_mode if K == 1 else "none",
+                    # K=1 may always build a real radial asparagus/onion unit.
+                    # Sub-stages of a serial stack may too when the caller
+                    # opts in (parallel_substages, bug 093): per-cluster
+                    # sizing is exact, so nothing double-counts — the flag is
+                    # a search-cost bound only.
+                    parallel_mode=(parallel_mode
+                                   if (K == 1 or parallel_substages)
+                                   else "none"),
                     radial_decoupler_mass=radial_decoupler_mass,
                     radial_decoupler_name=radial_decoupler_name,
                     fuel_line_mass=fuel_line_mass,

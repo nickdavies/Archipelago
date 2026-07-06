@@ -19,12 +19,14 @@ from worlds.ksp1.parts import DEFAULT_PART_MANAGER
 from worlds.ksp1.parts.types import CapabilityFlag
 from worlds.ksp1.scripts.generate_feasibility import _profile_with_overhead
 
-# Frozen at the historical +0.25 bar ON PURPOSE (not DEFAULT_OVERHEAD): these
-# tests exercise the assembly machinery and the bugs-110/111 failing-launch
-# pins, which need a bar where the single launch is inexpressible.  At the
-# shipped 0.10 bar the flagship missions close single-launch and the retry
-# never fires — the machinery would go untested.
-_PROBE_PROFILE = _profile_with_overhead("small", 0.25)
+# Frozen bar ON PURPOSE (not DEFAULT_OVERHEAD): the assembly-machinery tests
+# need a bar where Kerbin Eve SSR closes ONLY via multi-launch assembly.
+# With escalated parallel sub-stages (bug 093) the mission closes
+# single-launch at softer bars (incl. the shipped 0.10 overhead), so the
+# retry would never fire and the machinery would go untested.  Verified
+# 2026-07-06: comfortable+0.25 → feasible=True via_assembly=True;
+# comfortable+0.10 closes single-launch, comfortable+0.40 closes nothing.
+_PROBE_PROFILE = _profile_with_overhead("comfortable", 0.25)
 _PART_DB = DEFAULT_PART_MANAGER.parts
 
 
@@ -44,16 +46,18 @@ def _max_kit(exclude: frozenset[str] = frozenset()):
 
 
 class TestEligibilitySet(unittest.TestCase):
-    """Lock the probed set: the Eve-destination tail from the three homes
-    whose single launch can't lift the stack at some difficulty (Kerbin SSR;
-    Laythe SSR; Tylo Return + SSR — Laythe Eve Return closes single-launch
-    at every difficulty since the 0.10 overhead).  A change here means the
-    dv model moved — re-inspect."""
+    """Lock the probed set: the missions some difficulty can close ONLY by
+    multi-launch assembly.  Kerbin/Tylo keep their Eve tails; Laythe's Eve
+    SSR left the set when escalated parallel sub-stages (bug 093) made its
+    single launch expressible; the Eve-home Pol/Vall RETURN triples entered
+    when the same lever made the generous mesa lifter big enough to lift
+    their chunks.  A change here means the dv model moved — re-inspect."""
 
     def test_probed_set_contents(self) -> None:
         self.assertEqual(ASSEMBLY_ELIGIBLE_MISSIONS, frozenset({
+            (BodyName.EVE, BodyName.POL, MissionType.RETURN),
+            (BodyName.EVE, BodyName.VALL, MissionType.RETURN),
             (BodyName.KERBIN, BodyName.EVE, MissionType.SAMPLE_RETURN),
-            (BodyName.LAYTHE, BodyName.EVE, MissionType.SAMPLE_RETURN),
             (BodyName.TYLO, BodyName.EVE, MissionType.RETURN),
             (BodyName.TYLO, BodyName.EVE, MissionType.SAMPLE_RETURN),
         }))
@@ -178,7 +182,13 @@ class TestStandaloneMasses(unittest.TestCase):
     home-launch probe — passive-descent groups included — must appear in
     ``partial_group_mass`` with a POSITIVE standalone mass, and the map must
     telescope exactly to the single-launch payload (so any chunk partition
-    conserves mass, Apollo branches included)."""
+    conserves mass, Apollo branches included).
+
+    The pins need a FAILING home launch above a fully-built orbital stack;
+    at the frozen comfortable+0.25 bar the Tylo launch fails while the
+    escalated Eve legs still build (verified 2026-07-06), and the Kerbin
+    LAND pin disables the home-escalation channel so its launch fails at
+    any bar."""
 
     def _probe(self, home: BodyName, body: BodyName, mt: MissionType,
                crewed: bool):
@@ -210,10 +220,19 @@ class TestStandaloneMasses(unittest.TestCase):
                                places=6)
 
     def test_eve_home_kerbin_land_passive_groups(self) -> None:
-        """Eve-home Kerbin LAND fails on the mesa launch; the Kerbin
-        chute-descent group is passive and must still be in the map."""
-        res = self._probe(BodyName.EVE, BodyName.KERBIN, MissionType.LAND,
-                          crewed=False)
+        """Eve-home Kerbin LAND with the home-escalation channel disabled:
+        the standard-caps mesa launch fails while the (escalation-
+        independent) upper groups all build — and the Kerbin chute-descent
+        group is passive and must still be in the map.  The override pin
+        exists because escalated parallel sub-stages (bug 093) now close
+        this launch at every realistic bar; the bookkeeping under test
+        doesn't depend on the escalation channel."""
+        capability._HOME_ESCALATION_OVERRIDE = frozenset()
+        try:
+            res = self._probe(BodyName.EVE, BodyName.KERBIN,
+                              MissionType.LAND, crewed=False)
+        finally:
+            capability._HOME_ESCALATION_OVERRIDE = None
         self._assert_complete_positive_telescoping(res)
 
     def test_tylo_home_eve_ssr_apollo_branches(self) -> None:
