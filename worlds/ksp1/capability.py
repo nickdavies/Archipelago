@@ -15,6 +15,7 @@ Golden rule: err toward saying something is NOT achievable rather than IS.
 """
 from __future__ import annotations
 
+import copy
 import math
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Optional
@@ -1469,6 +1470,19 @@ def _filter_engines_for_ion(engines: list[Engine],
     return [e for e in engines if e.fuel_type != "xenon"]
 
 
+def _own_stage(sr: StageResult) -> StageResult:
+    """Shallow-copy an optimizer StageResult with a fresh equipment list.
+
+    ``find_optimal_stage`` returns SHARED objects from the FOS cache — every
+    retry (Apollo, assembly, serial/parallel passes) that cache-hits the same
+    stage would otherwise re-append its group equipment onto the same list,
+    polluting manifests across evaluations.  Callers must own a stage before
+    mutating it."""
+    sr = copy.copy(sr)
+    sr.equipment = list(sr.equipment)
+    return sr
+
+
 def _evaluate_profile(
     profile: list[MissionEdge],
     flags: EquipmentFlags,
@@ -2256,6 +2270,8 @@ def _evaluate_profile(
                 **_esc_kwargs,
                 required_dv=req_dv,
                 payload_mass=stage_payload,
+                diagnostic_out=ms_diag_out,
+                partial_stages_out=ms_partial_out,
                 gravity=body.surface_gravity,
                 in_atmosphere=in_atmo,
                 min_twr_liftoff=min_twr,
@@ -2287,6 +2303,8 @@ def _evaluate_profile(
                 fuel_line_name=fl_name,
                 run_parallel=run_parallel,
             )
+            if multistage is not None:
+                multistage = [_own_stage(sr) for sr in multistage]
             if multistage is None:
                 stage_diag = ms_diag_out[0] if ms_diag_out else None
                 # Whole near-miss rocket: stages already built downstream
@@ -2325,6 +2343,8 @@ def _evaluate_profile(
             continue
 
         result = find_optimal_stage(parallel_mode=parallel_mode, **stage_kwargs)
+        if result is not None:
+            result = _own_stage(result)
 
         if result is None:
             stage_diag = diagnostic_out[0] if diagnostic_out else None
