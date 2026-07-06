@@ -17,7 +17,6 @@ from worlds.ksp1.capability import (
 from worlds.ksp1.data.feasibility import ASSEMBLY_ELIGIBLE_MISSIONS
 from worlds.ksp1.parts import DEFAULT_PART_MANAGER
 from worlds.ksp1.parts.types import CapabilityFlag
-from worlds.ksp1.rocket_math import StageResult
 from worlds.ksp1.scripts.generate_feasibility import (
     DEFAULT_OVERHEAD, _profile_with_overhead)
 
@@ -124,26 +123,28 @@ class TestKerbinEveSSR(unittest.TestCase):
 
 
 class TestPartitionEnumerator(unittest.TestCase):
-    """Pure-function invariants of _assembly_partitions."""
+    """Pure-function invariants of _assembly_partitions (standalone-mass
+    input; see _assembly_standalone_masses and bugs 110/111)."""
+
+    _MASSES = {1: 400.0, 2: 300.0, 3: 200.0, 4: 100.0}
 
     @staticmethod
-    def _failed(cum_by_group: dict[int, float], n_groups: int) -> ProfileResult:
-        def stage(m):
-            return StageResult(
-                delta_v=0.0, twr_at_ignition=0.0, twr_at_burnout=0.0,
-                engine_is_throttleable=True, engine_has_gimbal=True,
-                stage_mass_wet=m, stage_mass_dry=m, engine_count=1,
-                fill_fraction=1.0, engine_name="x")
-        stages = [stage(m) for m in cum_by_group.values()]
+    def _failed(mass_by_group: dict[int, float], n_groups: int) -> ProfileResult:
         return ProfileResult(
             False,
-            partial_stages=stages,
-            partial_stage_groups=list(cum_by_group.keys()),
+            partial_group_mass=dict(mass_by_group),
             edge_groups=[[] for _ in range(n_groups)])
 
+    def _chunk_masses(self, bottoms, n_groups=5):
+        out = []
+        for i, b in enumerate(bottoms):
+            hi = bottoms[i + 1] if i + 1 < len(bottoms) else n_groups
+            out.append(sum(self._MASSES[g] for g in range(b, hi)))
+        return out
+
     def test_partitions_shape_and_order(self) -> None:
-        # 4 orbital groups (1..4), cumulative masses descending upward.
-        failed = self._failed({1: 1000.0, 2: 600.0, 3: 300.0, 4: 100.0}, 5)
+        # 4 orbital groups (1..4) with per-group standalone masses.
+        failed = self._failed(self._MASSES, 5)
         parts = _assembly_partitions(failed)
         self.assertTrue(parts)
         for bottoms in parts:
@@ -151,30 +152,71 @@ class TestPartitionEnumerator(unittest.TestCase):
             self.assertLessEqual(len(bottoms), 3)
             self.assertEqual(list(bottoms), sorted(set(bottoms)))
             # chunk masses telescope back to the full stack mass
-            masses = []
-            for i, b in enumerate(bottoms):
-                upper = ({1: 1000.0, 2: 600.0, 3: 300.0, 4: 100.0}
-                         [bottoms[i + 1]] if i + 1 < len(bottoms) else 0.0)
-                masses.append({1: 1000.0, 2: 600.0, 3: 300.0, 4: 100.0}[b]
-                              - upper)
-            self.assertAlmostEqual(sum(masses), 1000.0)
+            self.assertAlmostEqual(sum(self._chunk_masses(bottoms)),
+                                   sum(self._MASSES.values()))
         # best-first: no later candidate has a smaller max chunk
-        def max_chunk(bottoms):
-            cum = {1: 1000.0, 2: 600.0, 3: 300.0, 4: 100.0}
-            return max(cum[b] - (cum[bottoms[i + 1]]
-                                 if i + 1 < len(bottoms) else 0.0)
-                       for i, b in enumerate(bottoms))
-        maxes = [max_chunk(b) for b in parts]
+        maxes = [max(self._chunk_masses(b)) for b in parts]
         self.assertEqual(maxes, sorted(maxes))
 
     def test_incomplete_stack_yields_nothing(self) -> None:
         # Group 2 missing (an upper stage failed): assembly can't help.
-        failed = self._failed({1: 1000.0, 3: 300.0, 4: 100.0}, 5)
+        failed = self._failed({1: 400.0, 3: 200.0, 4: 100.0}, 5)
         self.assertEqual(_assembly_partitions(failed), [])
 
     def test_too_few_groups_yields_nothing(self) -> None:
-        failed = self._failed({1: 1000.0}, 2)
+        failed = self._failed({1: 400.0}, 2)
         self.assertEqual(_assembly_partitions(failed), [])
+
+
+class TestStandaloneMasses(unittest.TestCase):
+    """Regression pins for bugs 110/111: every orbital group of a failed
+    home-launch probe — passive-descent groups included — must appear in
+    ``partial_group_mass`` with a POSITIVE standalone mass, and the map must
+    telescope exactly to the single-launch payload (so any chunk partition
+    conserves mass, Apollo branches included)."""
+
+    def _probe(self, home: BodyName, body: BodyName, mt: MissionType,
+               crewed: bool):
+        mb = MissionBuilder(home=home)
+        cap, flags = compute_capability_from_items(
+            _max_kit(), difficulty_name=_PROBE_PROFILE,
+            start_with_clamps=True, mission_builder=mb)
+        profiles = mb.profiles_for(body, mt)
+        self.assertTrue(profiles)
+        diff = DIFFICULTY_PROFILES[_PROBE_PROFILE]
+        return capability._evaluate_profile(
+            profiles[0], flags, diff, mt, is_crewed=crewed, home=home,
+            requires_rendezvous=True,
+            apollo_split=capability._apollo_candidate(flags, mt))
+
+    def _assert_complete_positive_telescoping(self, res) -> None:
+        self.assertFalse(res.feasible)
+        n_groups = len(res.edge_groups)
+        self.assertGreaterEqual(n_groups, 3)
+        masses = res.partial_group_mass
+        # bug 110: passive-descent groups used to be missing entirely.
+        self.assertEqual(set(masses), set(range(1, n_groups)))
+        # bug 111: Apollo branch boundaries used to yield negative masses.
+        for g, m in masses.items():
+            self.assertGreater(m, 0.0, f"group {g} standalone mass {m}")
+        # Telescoping: the map sums to the single-launch payload the failed
+        # home launch was asked to lift.
+        self.assertAlmostEqual(sum(masses.values()), res.launch_mass,
+                               places=6)
+
+    def test_eve_home_kerbin_land_passive_groups(self) -> None:
+        """Eve-home Kerbin LAND fails on the mesa launch; the Kerbin
+        chute-descent group is passive and must still be in the map."""
+        res = self._probe(BodyName.EVE, BodyName.KERBIN, MissionType.LAND,
+                          crewed=False)
+        self._assert_complete_positive_telescoping(res)
+
+    def test_tylo_home_eve_ssr_apollo_branches(self) -> None:
+        """Tylo-home Eve SSR (Apollo-shaped) fails on the home launch; the
+        parked-stack / lander branch groups must have positive masses."""
+        res = self._probe(BodyName.TYLO, BodyName.EVE,
+                          MissionType.SAMPLE_RETURN, crewed=True)
+        self._assert_complete_positive_telescoping(res)
 
 
 if __name__ == "__main__":

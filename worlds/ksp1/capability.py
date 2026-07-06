@@ -1106,11 +1106,12 @@ class ProfileResult:
     # terminal stage driving a mass cascade) instead of only seeing the
     # single failing-stage diagnostic.  Empty on feasible results.
     partial_stages: list[StageResult] = field(default_factory=list)
-    # Edge-group index for each ``partial_stages`` entry (parallel list, same
-    # convention as ``stage_group_indices``).  Lets the assembly retry read the
-    # per-group cumulative masses of a failed eval's built orbital stack
-    # without re-searching it.
-    partial_stage_groups: list[int] = field(default_factory=list)
+    # Per-group STANDALONE masses of the failed eval's built orbital stack
+    # (see ``_assembly_standalone_masses``) — what the assembly retry
+    # partitions into lifter chunks without re-searching the stack.  Empty
+    # when the walk failed before completing the orbital stack (an upper
+    # stage failed — assembly can't help those).
+    partial_group_mass: dict[int, float] = field(default_factory=dict)
 
     @property
     def failure_reasons(self) -> list[str]:
@@ -1943,10 +1944,13 @@ def _evaluate_profile(
     # ``stage_results_list``).  A multi-stage ascent appends K stages for one
     # group, so this is the only reliable stage→group map for the formatter.
     stage_group_list: list[int] = []
-    # Cumulative wet mass snapshot at each assembly chunk-bottom group (the
-    # running ``payload`` right after that group builds) — chunk standalone
-    # masses for the lifter builds are differences of these.
-    _chunk_cum: dict[int, float] = {}
+    # Per-group OWN mass: what each group's build adds on top of the payload
+    # it inherits, measured across the build section so the Apollo
+    # stash/rejoin bookkeeping is excluded.  Assembly chunk standalone masses
+    # are contiguous sums of these (bugs 110/111: the old cumulative-payload
+    # snapshot diffs missed passive-descent groups entirely and went negative
+    # across Apollo branch boundaries).
+    _group_own: dict[int, float] = {}
 
     # ``reversed(groups)`` iterates terminal → ascent; track the matching
     # flight-order index so we can hook stage-specific behaviour.
@@ -1968,6 +1972,10 @@ def _evaluate_profile(
                 # Rejoin for the outbound legs: everything below the landing
                 # hauls the full lander stack AND the parked return stack.
                 payload += apollo_parked_wet
+
+        # Own-mass baseline: taken AFTER the Apollo adjustments above so the
+        # stash/rejoin payload jumps never read as group mass.
+        _pay_before = payload
 
         body = BODY_BY_NAME[group[0].body]
         solar_au = body.solar_distance_au
@@ -2224,6 +2232,7 @@ def _evaluate_profile(
             ))
             stage_group_list.append(flight_idx)
             payload = passive_mass
+            _group_own[flight_idx] = payload - _pay_before
             continue
 
         if flags.staging_tier >= 2 and flags.has_fuel_lines:
@@ -2355,7 +2364,11 @@ def _evaluate_profile(
                 lifter_req_dv = effective_dv(
                     base_dv + _APOLLO_RENDEZVOUS_DV, diff,
                     plane_change_dv=pc_dv)
-                if any(b not in _chunk_cum for b in assembly_chunks):
+                standalone = _assembly_standalone_masses(
+                    _group_own, len(groups),
+                    terminal_mass + terminal_equip + extra_payload_mass,
+                    apollo.ascent_gidx if apollo is not None else None)
+                if standalone is None:
                     return ProfileResult(False, launch_mass=payload,
                                          blocking=[BlockingInfo(
                                              reason=BlockingReason.NO_VIABLE_STAGE,
@@ -2363,9 +2376,10 @@ def _evaluate_profile(
                                              dv_needed=lifter_req_dv)])
                 chunk_masses: list[float] = []
                 for ci, cb in enumerate(assembly_chunks):
-                    upper = (_chunk_cum[assembly_chunks[ci + 1]]
-                             if ci + 1 < len(assembly_chunks) else 0.0)
-                    chunk_masses.append(_chunk_cum[cb] - upper)
+                    hi = (assembly_chunks[ci + 1]
+                          if ci + 1 < len(assembly_chunks) else len(groups))
+                    chunk_masses.append(
+                        sum(standalone[g] for g in range(cb, hi)))
                 lifters: list[list[StageResult]] = []
                 max_lift = 0.0
                 # Heaviest chunk first: it decides feasibility, fail fast.
@@ -2388,7 +2402,7 @@ def _evaluate_profile(
                                 stage_diag=l_diag[0] if l_diag else None,
                             )],
                             partial_stages=list(stage_results_list),
-                            partial_stage_groups=list(stage_group_list),
+                            partial_group_mass=standalone,
                             edge_groups=groups)
                     lifters.append([_own_stage(sr) for sr in lifter])
                     max_lift = max(max_lift, lifter[0].stage_mass_wet)
@@ -2431,7 +2445,10 @@ def _evaluate_profile(
                 stage_diag = ms_diag_out[0] if ms_diag_out else None
                 # Whole near-miss rocket: stages already built downstream
                 # (terminal -> this group) + the partial ascent that got
-                # furthest before the binding stage failed.
+                # furthest before the binding stage failed.  The standalone
+                # map is complete only when THIS failure is the home launch
+                # (every orbital group already built) — exactly when the
+                # assembly retry can partition it.
                 partial = list(stage_results_list) + ms_partial_out
                 return ProfileResult(False, launch_mass=payload, blocking=[BlockingInfo(
                     reason=BlockingReason.NO_VIABLE_STAGE,
@@ -2439,8 +2456,11 @@ def _evaluate_profile(
                     dv_needed=req_dv,
                     stage_diag=stage_diag,
                 )], partial_stages=partial,
-                    partial_stage_groups=(list(stage_group_list)
-                                          + [flight_idx] * len(ms_partial_out)),
+                    partial_group_mass=(_assembly_standalone_masses(
+                        _group_own, len(groups),
+                        terminal_mass + terminal_equip + extra_payload_mass,
+                        apollo.ascent_gidx if apollo is not None else None)
+                        or {}),
                     edge_groups=groups)
             # Bottom stage carries the group-level equipment (ladder etc.)
             # for the multi-stage ascent.
@@ -2465,8 +2485,7 @@ def _evaluate_profile(
             # The bottom stage's wet mass is the launch mass (running total
             # for the outer loop's next-back-up iteration).
             payload = multistage[0].stage_mass_wet
-            if assembly_chunks is not None and flight_idx in assembly_chunks:
-                _chunk_cum[flight_idx] = payload
+            _group_own[flight_idx] = payload - _pay_before
             continue
 
         result = find_optimal_stage(parallel_mode=parallel_mode, **stage_kwargs)
@@ -2487,7 +2506,6 @@ def _evaluate_profile(
                 dv_needed=req_dv,
                 stage_diag=stage_diag,
             )], partial_stages=list(stage_results_list),
-                partial_stage_groups=list(stage_group_list),
                 edge_groups=groups)
 
         # (Landing-mix chutes were added to stage_equipment before the passive
@@ -2512,8 +2530,7 @@ def _evaluate_profile(
         stage_group_list.append(flight_idx)
         # The stage's wet mass becomes the payload for the next stage back
         payload = result.stage_mass_wet
-        if assembly_chunks is not None and flight_idx in assembly_chunks:
-            _chunk_cum[flight_idx] = payload
+        _group_own[flight_idx] = payload - _pay_before
 
     # Add decouplers to non-terminal stages (not in mass budget, just for build guide)
     num_stages = len(stage_results_list)
@@ -2548,7 +2565,10 @@ def _evaluate_profile(
                 mass_cap=flags.launch_pad_mass_cap,
             )],
             partial_stages=list(stage_results_list),
-            partial_stage_groups=list(stage_group_list),
+            partial_group_mass=(_assembly_standalone_masses(
+                _group_own, len(groups),
+                terminal_mass + terminal_equip + extra_payload_mass,
+                apollo.ascent_gidx if apollo is not None else None) or {}),
             edge_groups=groups,
         )
     reversed_stages = list(reversed(stage_results_list))
@@ -2807,6 +2827,36 @@ def _assembly_chunk_gear(
     return AttitudeBundle(mass=mass, parts=tuple(parts))
 
 
+def _assembly_standalone_masses(
+    group_own: dict[int, float],
+    n_groups: int,
+    terminal_seed: float,
+    apollo_ascent_gidx: Optional[int],
+) -> Optional[dict[int, float]]:
+    """Per-group STANDALONE mass map for assembly chunking (bugs 110/111).
+
+    Each orbital group's own built mass, with the terminal payload (pod +
+    support + delivered equipment) assigned to the terminal-most group — it
+    physically rides whatever chunk is topmost — and, under Apollo, the pod
+    stack's deliberate double-count assigned to the lander ascent group (the
+    pod rides the lander while the parked stack stays sized as if already
+    carrying it home).  Chunk standalone masses are contiguous sums of this
+    map, so any partition telescopes exactly to the single-launch payload —
+    unlike cumulative wet-mass differences, which missed passive-descent
+    groups and went negative across Apollo branch boundaries.  ``None`` when
+    any orbital group is missing (the walk failed before completing the
+    orbital stack)."""
+    if n_groups < 2:
+        return None
+    if any(g not in group_own for g in range(1, n_groups)):
+        return None
+    out = {g: group_own[g] for g in range(1, n_groups)}
+    out[n_groups - 1] += terminal_seed
+    if apollo_ascent_gidx is not None and apollo_ascent_gidx >= 1:
+        out[apollo_ascent_gidx] += terminal_seed
+    return out
+
+
 def _assembly_partitions(failed: "ProfileResult") -> list[tuple[int, ...]]:
     """Candidate chunk partitions from a failed eval's built orbital stack.
 
@@ -2814,27 +2864,24 @@ def _assembly_partitions(failed: "ProfileResult") -> list[tuple[int, ...]]:
     indices (group 0, the home launch, is what assembly replaces, so every
     tuple starts at 1).  Candidates are ordered by smallest heaviest-chunk
     standalone mass — the heaviest chunk decides lifter feasibility — with
-    2-way splits enumerated before adding 3-way ones of equal rank.  Empty
-    when the failure left no complete orbital stack (groups missing above
-    the launch) — assembly cannot help a mission whose UPPER stages already
-    failed to build."""
-    if not failed.partial_stages or not failed.edge_groups:
+    2-way splits enumerated before adding 3-way ones of equal rank.  Masses
+    come from the eval's per-group standalone record
+    (``partial_group_mass``), which is empty when the failure left no
+    complete orbital stack — assembly cannot help a mission whose UPPER
+    stages already failed to build."""
+    masses = failed.partial_group_mass
+    if not masses or not failed.edge_groups:
         return []
     n_groups = len(failed.edge_groups)
     if n_groups < 3:
         return []  # need ≥2 orbital groups to have a stage boundary to split
-    # Cumulative wet mass per group: a stage's wet mass already includes
-    # everything above it, so the group's cumulative is its heaviest stage.
-    cum: dict[int, float] = {}
-    for sr, gidx in zip(failed.partial_stages, failed.partial_stage_groups):
-        cum[gidx] = max(cum.get(gidx, 0.0), sr.stage_mass_wet)
-    if any(g not in cum for g in range(1, n_groups)):
+    if any(g not in masses for g in range(1, n_groups)):
         return []  # orbital stack incomplete — an upper stage failed
     def chunk_masses(bottoms: tuple[int, ...]) -> list[float]:
         out = []
         for i, b in enumerate(bottoms):
-            upper = cum[bottoms[i + 1]] if i + 1 < len(bottoms) else 0.0
-            out.append(cum[b] - upper)
+            hi = bottoms[i + 1] if i + 1 < len(bottoms) else n_groups
+            out.append(sum(masses[g] for g in range(b, hi)))
         return out
     cands: list[tuple[float, tuple[int, ...]]] = []
     for c2 in range(2, n_groups):
