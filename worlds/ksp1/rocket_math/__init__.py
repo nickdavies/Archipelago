@@ -825,6 +825,15 @@ def _find_optimal_parallel_stage(
             attitude_module_mass + aero_steering_mass
             if not engine.has_gimbal else 0.0)
 
+        # Free exact TWR gate: the unit always outweighs its payload, so its
+        # liftoff TWR is strictly below total_thrust/(payload·g).  If even
+        # the max-engine configuration (full core + engine boosters on every
+        # column) can't hold the floor against the payload alone, no grid
+        # point passes parallel_stage_min_twr — skip the engine.
+        if has_twr and (max_eng_per_col * (1 + max(booster_counts))
+                        * thrust) < twr_g * eng_payload:
+            continue
+
         # Cheap, exact lower bound on this engine's lightest possible parallel
         # build: payload + one engine with ZERO effective dry (the unreachable
         # ideal of infinite shedding) needs wet = (payload+engine)·e^(dv/isp·g0).
@@ -853,6 +862,22 @@ def _find_optimal_parallel_stage(
         if pack_ctx is None:
             continue
 
+        # Reachability pre-gate: ONE sizing call at this engine's max-dv
+        # configuration — most boosters, drop-tank columns, a single core
+        # engine.  Every other grid point only adds dry mass (more core or
+        # booster engines) or removes shed events (fewer boosters), so its
+        # achievable dv is strictly lower.  If even this configuration can't
+        # reach the target, no grid point can: skip the engine's whole
+        # booster×type×count scan.  Result-identical by construction — it
+        # prunes only provably-infeasible engines (the escalated
+        # parallel_substages grids made exhaustive failure scans the
+        # dominant cost, bug 093).
+        if _size_parallel_unit(
+                eng_payload, e_mass, 1, 0, decoupler_mass, fuel_line_mass,
+                max(booster_counts), mode, required_dv, isp_g0,
+                pack_ctx) is None:
+            continue
+
         for n_boost in booster_counts:
             # Drop-tanks first (no booster engines); escalate to engine
             # boosters only if drop-tanks were TWR-bound.  If drop-tanks clear
@@ -865,6 +890,13 @@ def _find_optimal_parallel_stage(
                     break
                 for n in range(1, max_eng_per_col + 1):
                     n_be = n if booster_has_engine else 0
+                    # Same exact TWR gate per config: liftoff TWR is bounded
+                    # by these engines' thrust against the payload alone —
+                    # skip the sizing bisection for configs that can't hold
+                    # the floor (huge-payload sub-stage builds were sizing
+                    # every config only to fail parallel_stage_min_twr).
+                    if has_twr and (n + n_boost * n_be) * thrust < twr_g * eng_payload:
+                        continue
                     res = _size_parallel_unit(
                         eng_payload, e_mass, n, n_be, decoupler_mass,
                         fuel_line_mass, n_boost, mode, required_dv, isp_g0,
@@ -1811,6 +1843,13 @@ def find_optimal_multistage_ascent(
             current_payload = payload_mass
             ok = True
             for i in range(K - 1, -1, -1):  # K-1 (top) ... 0 (bottom)
+                # Exact best-so-far prune: every stage's wet mass exceeds
+                # its payload, so once the running payload alone matches the
+                # best launch mass found, no lower stage can improve on it —
+                # abandon this split before paying its remaining builds.
+                if current_payload >= best_launch_wet:
+                    ok = False
+                    break
                 stage_dv = required_dv * split[i]
                 # Stage 1 (i==0): launch (uses the caller's body-aware
                 # in_atmosphere flag — True for atm bodies, False for vac).
