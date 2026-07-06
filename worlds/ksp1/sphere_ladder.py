@@ -360,6 +360,26 @@ def _contract_payload_rep_names(info: "LocationDescriptor",
     return {p.name for p in cp} if cp else set()
 
 
+def _parallel_only_mission(info: _LocationMissionInfo,
+                           mission_builder: MissionBuilder) -> bool:
+    """True for missions whose closure REQUIRES the parallel/asparagus search
+    (the multi-launch assembly tail and the escalated-ascent-edge round
+    trips): every serial trial of such a mission is infeasible, so the
+    bumper's serial guidance proxy has no ranking signal and can only
+    RESCUE — leaving the mission unbracketed (no reps-only gate, no
+    sphere-window item ban, and a dead cheap victory gate; see bugs/108/109).
+    Guidance trials for exactly these missions must pay for the exact
+    parallel build."""
+    from .data.feasibility import (
+        ASSEMBLY_ELIGIBLE_MISSIONS, ESCALATED_ASCENT_EDGES)
+    home = mission_builder.home
+    mt = info.mission_type
+    if (home, info.body, mt) in ASSEMBLY_ELIGIBLE_MISSIONS:
+        return True
+    return (mt in (MissionType.RETURN, MissionType.SAMPLE_RETURN)
+            and any(b == info.body for b, _e in ESCALATED_ASCENT_EDGES))
+
+
 def _evaluate(
     flags: EquipmentFlags,
     info: LocationDescriptor,
@@ -373,7 +393,8 @@ def _evaluate(
     ``run_parallel=False`` (used by the bumper's guidance trials) skips the
     exact asparagus search — serial mass is a cheap, order-preserving proxy for
     ranking candidate bumps; the main-loop feasibility check and rescue keep the
-    exact parallel build.
+    exact parallel build.  Trials for ``_parallel_only_mission`` targets
+    override this back to the exact build (the proxy has no signal there).
     """
     if info.mission_type == MissionType.SOUNDING:
         return _evaluate_sounding(flags, info.threshold_km or 0.0,
@@ -1163,7 +1184,8 @@ def _pick_rank_rep_scored(
             buildings_in_logic=buildings_in_logic, home=home,
         )
         trial_result = _evaluate(trial_flags, info, diff, mission_builder,
-                                 run_parallel=False,
+                                 run_parallel=_parallel_only_mission(
+                                     info, mission_builder),
                                  part_manager=part_manager)
         feasibility = 0 if trial_result.feasible else 1
         mass = trial_result.launch_mass or float("inf")
@@ -1638,12 +1660,25 @@ def minimal_ranks_for(
                     .with_counted(PROGRESSIVE_MISSION_CONTROL_NAME,
                                   PROGRESSIVE_MISSION_CONTROL_COUNT)
                     .with_counted(PROGRESSIVE_RD_NAME, PROGRESSIVE_RD_COUNT))
+            # Parallel-only missions (assembly tail / escalated edges) probe
+            # at MAX pad: their walks are NO_VIABLE_STAGE-dominated, and the
+            # pad bump only fires on LAUNCH_MASS_EXCEEDED (which appears only
+            # when a build succeeds) — so their rescue would inherit an
+            # un-bumped pad and fail the tonnage gate despite being max-kit
+            # feasible (bugs/109 root B).  The tier actually needed is
+            # settled from the final verified build below.  Ordinary
+            # missions keep the inherited tier: their walks do surface
+            # LAUNCH_MASS_EXCEEDED, and widening every rescue measurably
+            # reshaped ladder layouts (a Tier-2 famine tail).
+            _rescue_max_pad = (progressive_launch_pad
+                               and _parallel_only_mission(info, mission_builder))
             rescue_flags = _pre_pass_for_ranks(
                 max_ranks_for_rescue, ctx,
                 start_with_clamps=start_with_clamps,
                 progressive_launch_pad=progressive_launch_pad,
                 launch_pad_caps=mission_builder.launch_pad_caps,
-                pad_tier=sig.counted(PROGRESSIVE_LAUNCH_PAD_NAME),
+                pad_tier=pad_cap_count if _rescue_max_pad
+                else sig.counted(PROGRESSIVE_LAUNCH_PAD_NAME),
                 precollected_names=precollected_names,
                 reps_only=None,
                 buildings_in_logic=buildings_in_logic, home=home,
@@ -1651,6 +1686,13 @@ def minimal_ranks_for(
             rescue_result = _evaluate(rescue_flags, info, diff, mission_builder,
                                       part_manager=part_manager)
             rescue_kit = build_kit_for_result(rescue_flags, rescue_result)
+            if rescue_kit is not None and _rescue_max_pad:
+                _caps = mission_builder.launch_pad_caps
+                _lm = rescue_result.launch_mass or 0.0
+                _need = next((t for t, c in enumerate(_caps) if _lm <= c),
+                             len(_caps) - 1)
+                if _need > sig.counted(PROGRESSIVE_LAUNCH_PAD_NAME):
+                    sig = sig.with_counted(PROGRESSIVE_LAUNCH_PAD_NAME, _need)
             if rescue_kit is not None:
                 kit = rescue_kit
                 _enrich_kit_alternates(kit, ctx)
@@ -1761,6 +1803,24 @@ def minimal_ranks_for(
                             verify_result = _evaluate(
                                 verify_flags, info, diff, mission_builder,
                                 part_manager=part_manager)
+                    # Settle the recorded pad tier from the FINAL verified
+                    # build: the max-pad rescue probe (above) may have bumped
+                    # sig to a tier the minimized kit no longer needs, and an
+                    # over-stated pad requirement shrinks the counted-copy
+                    # placement window enough to famine tight far-home seeds.
+                    # Never drop below the chain's prior requirement.  Scoped
+                    # with the probe: ordinary rescues keep their tier as-is.
+                    if _rescue_max_pad and verify_result.feasible:
+                        _caps = mission_builder.launch_pad_caps
+                        _lm = verify_result.launch_mass or 0.0
+                        _need = max(
+                            next((t for t, c in enumerate(_caps) if _lm <= c),
+                                 len(_caps) - 1),
+                            prior.counted(PROGRESSIVE_LAUNCH_PAD_NAME))
+                        if _need != lifted_ranks.counted(
+                                PROGRESSIVE_LAUNCH_PAD_NAME):
+                            lifted_ranks = lifted_ranks.with_counted(
+                                PROGRESSIVE_LAUNCH_PAD_NAME, _need)
                     return RankBumperResult(
                         signature=lifted_ranks,
                         delta=_signature_delta(prior, lifted_ranks),
@@ -1974,7 +2034,8 @@ def _pick_rank_bump_scored(blocking, ranks: Signature, ctx: RankContext,
                 buildings_in_logic=buildings_in_logic, home=home,
             )
             trial_result = _evaluate(trial_flags, info, diff, mission_builder,
-                                     run_parallel=False,
+                                     run_parallel=_parallel_only_mission(
+                                         info, mission_builder),
                                      part_manager=part_manager)
             feasibility_rank = 0 if trial_result.feasible else 1
             mass = trial_result.launch_mass or float("inf")
