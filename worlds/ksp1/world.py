@@ -22,7 +22,7 @@ from .bodies import (
     home_relative_science_values,
 )
 from .items import (
-    ITEM_NAME_TO_ID, PROGRESSIVE_LAUNCH_PAD_CAPS, _FILLER_ITEMS,
+    ITEM_NAME_TO_ID, PROGRESSIVE_LAUNCH_PAD_CAPS, SCIENCE_PACK_AMOUNTS,
     PROGRESSIVE_RD_NAME, PROGRESSIVE_RD_COUNT,
     PROGRESSIVE_VAB_NAME, PROGRESSIVE_TRACKING_STATION_NAME,
     PROGRESSIVE_ASTRONAUT_COMPLEX_NAME, PROGRESSIVE_MISSION_CONTROL_NAME,
@@ -133,16 +133,15 @@ def _validate_goal_not_excluded(
     """
     from .rules import goal_spec_location_names
     goal_names = set(goal_spec_location_names(spec))
-    # Tech-tree slot names contain " - " (e.g. ``General Rocketry 1``)
-    # vs mission-event names (``Tylo Return 1``).  Strip tech-tree goals
-    # by name prefix membership instead — every node display name is in
-    # ``TECH_NODES``.
-    from .tech_tree import TECH_NODES
-    tech_prefixes = {n.display_name + " " for n in TECH_NODES}
-    mission_goal_names = {
-        n for n in goal_names
-        if not any(n.startswith(p) for p in tech_prefixes)
+    # Tech-tree goal locations are exempt (the player completes them by spending
+    # science, not by AP placing progression).  ``goal_spec_location_names`` adds
+    # them as exactly ``str(TechTreeLocation(leaf, 1))``; subtract that same
+    # structured set rather than prefix-matching the name.
+    from .tech_tree import LEAF_TECH_NODES
+    tech_goal_names = {
+        str(TechTreeLocation(n.display_name, 1)) for n in LEAF_TECH_NODES
     }
+    mission_goal_names = goal_names - tech_goal_names
     conflict = mission_goal_names & exclude_locations
     if not conflict:
         return
@@ -799,10 +798,7 @@ class KSP1World(World):
         # forward; the legacy ``kerbin_altitude_thresholds`` key will be
         # retired in a future breaking release.
         d["kerbin_altitude_thresholds"] = home_altitude_thresholds
-        d["science_packs"] = {
-            name: int(name.split()[-1])
-            for name in _FILLER_ITEMS
-        }
+        d["science_packs"] = dict(SCIENCE_PACK_AMOUNTS)
         # Home-relative science scaling.  Server-side ``science_budget``
         # (rules + sphere-ladder) and the client both consume the SAME
         # ``science_scalar(body, home) * stock_mult`` math; the values

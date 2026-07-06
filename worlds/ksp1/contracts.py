@@ -795,6 +795,14 @@ class ContractSpec:
         td = self.type_def
         return f"Contract: {td.location_noun} {td.location_prep} {self.body}"
 
+    @property
+    def completion_event_name(self) -> str:
+        """The name of this contract's "Contract Complete: ..." event location —
+        built structurally from the same pieces as ``display_name`` (never by
+        editing the display-name string)."""
+        td = self.type_def
+        return f"Contract Complete: {td.location_noun} {td.location_prep} {self.body}"
+
     def mission_transform(self, mission_builder: MissionBuilder):
         """The profile-level edge modifier for this contract (polar ascent
         penalty / stationary raise), bound to this contract's body and home.

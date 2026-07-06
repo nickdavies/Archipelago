@@ -132,15 +132,19 @@ ITEM_TABLE: dict[str, tuple[int, ItemClassification]] = {
     for m in PART_REGISTRY
 }
 
-# Filler items: offsets 100–199 (not in the main part pool)
+# Science-pack filler.  The bankable-science AMOUNT is the source of truth: the
+# item name and the id offset both derive from it, and consumers read the amount
+# from ``SCIENCE_PACK_AMOUNTS`` — never by splitting it back out of the name.
+# Offsets 100–199 (not in the main part pool).
+_SCIENCE_PACK_OFFSETS: dict[int, int] = {
+    1: 107, 5: 108, 10: 100, 25: 101, 50: 102, 100: 103, 250: 104,
+}
+SCIENCE_PACK_AMOUNTS: dict[str, int] = {
+    f"Science Pack {amount}": amount for amount in _SCIENCE_PACK_OFFSETS
+}
 _FILLER_ITEMS: dict[str, tuple[int, ItemClassification]] = {
-    "Science Pack 1":    (107, ItemClassification.filler),
-    "Science Pack 5":    (108, ItemClassification.filler),
-    "Science Pack 10":   (100, ItemClassification.filler),
-    "Science Pack 25":   (101, ItemClassification.filler),
-    "Science Pack 50":   (102, ItemClassification.filler),
-    "Science Pack 100":  (103, ItemClassification.filler),
-    "Science Pack 250":  (104, ItemClassification.filler),
+    f"Science Pack {amount}": (offset, ItemClassification.filler)
+    for amount, offset in _SCIENCE_PACK_OFFSETS.items()
 }
 
 # Victory item: offset 0 (Special range 0–99)

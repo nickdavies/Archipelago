@@ -55,7 +55,7 @@ from .capability_reasons import (
 )
 from .locations import (
     EventName, LocationDescriptor,
-    KSC_BIOME_NAMES, KSC_LOCATION_PREFIX,
+    KSC_BIOME_NAMES, KSC_LOCATION_PREFIX, STARTING_INV_NAME_SET,
 )
 from .contracts import (
     contract_payload_parts, required_part_breakdown,
@@ -3999,7 +3999,7 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
     for loc in world.multiworld.get_locations(world.player):
         if loc.address is None:
             continue
-        if loc.name.startswith("Starting Inventory"):
+        if loc.name in STARTING_INV_NAME_SET:
             bootstrap_locations.add(loc.name)
 
     # Step A: pull the early "ungated" locations into the sphere system, so
@@ -4018,7 +4018,7 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
             continue
         if loc.name == "Splashdown":
             _gate_early[loc.name] = _capsule_kit
-        elif loc.name.startswith("Starting Inventory"):
+        elif loc.name in STARTING_INV_NAME_SET:
             _gate_early[loc.name] = Signature.empty()
     for _name, _need in _gate_early.items():
         location_signatures.setdefault(_name, _need)

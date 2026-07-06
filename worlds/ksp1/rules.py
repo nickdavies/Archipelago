@@ -691,8 +691,7 @@ def _set_contract_rules(world: KSP1World, player: int) -> None:
         # reachable iff the contract is completable, so it contributes one to the
         # "Contract Count Progress" count exactly when the contract is done in logic.
         if counts_contracts and not spec.is_goal:
-            ev_name = spec.display_name.replace("Contract: ", "Contract Complete: ", 1)
-            _apply(ev_name)
+            _apply(spec.completion_event_name)
 
         # A goal contract's matching mission event(s) share its EXACT rule, so
         # the (now ordinary) event is reachable iff the goal contract is
@@ -1297,7 +1296,7 @@ def create_threshold_locations(world: KSP1World) -> None:
 
     # Contract-completion events: one per non-goal contract, address None.
     for spec in world.contract_specs:
-        ev_name = spec.display_name.replace("Contract: ", "Contract Complete: ", 1)
+        ev_name = spec.completion_event_name
         ev_loc = Location(world.player, ev_name, None, menu)
         menu.locations.append(ev_loc)
         ev_loc.place_locked_item(

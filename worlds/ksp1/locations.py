@@ -222,6 +222,9 @@ def effective_starting_inv_count(options, difficulty: int) -> int:
 STARTING_INV_NAMES: list[str] = [
     f"Starting Inventory {i + 1}" for i in range(MAX_STARTING_INV)
 ]
+# Exact-membership set for consumers that need to recognise a starting-inventory
+# location — treat the name as an opaque identifier, never a prefix to match.
+STARTING_INV_NAME_SET: frozenset[str] = frozenset(STARTING_INV_NAMES)
 
 # Structured tech tree locations and their string names.
 TECH_TREE_LOCATIONS: list[TechTreeLocation] = [
