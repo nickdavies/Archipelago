@@ -99,6 +99,27 @@ class PartManager:
                        for p in parts)),
         }
 
+    def assembly_gear_candidates(self) -> dict[str, frozenset[str]]:
+        """Per-role candidate part names for the multi-launch assembly
+        parked-chunk gear under these packs: every chunk waiting in home low
+        orbit is a pilotless craft needing a command source, an attitude
+        source, and power (capability's ``_assembly_chunk_gear``).  The
+        docking port / RCS / monoprop roles come from
+        ``docking_gear_candidates`` — this covers what assembly needs ON TOP
+        of the Apollo set.  Consumers pick ONE candidate per role per seed
+        (variance), same contract as the docking gear."""
+        def _providing(flag: CapabilityFlag) -> frozenset[str]:
+            return frozenset(
+                nm for nm, parts in self.parts.items()
+                if any(flag in getattr(p, "provides", ()) for p in parts))
+
+        return {
+            "probe_core": _providing(CapabilityFlag.PROBE_CORE),
+            "reaction_wheel": _providing(CapabilityFlag.REACTION_WHEEL),
+            "power_source": (_providing(CapabilityFlag.SOLAR_FIXED)
+                             | _providing(CapabilityFlag.SOLAR_RETRACTABLE)),
+        }
+
     def _fuel_line_info(self) -> tuple[Optional[str], float]:
         if self._fuel_line is None:
             part: Optional[str] = None

@@ -51,6 +51,7 @@ from .rocket_math import (
 from .rocket_math import aero
 from .data.feasibility import (
     ESCALATED_ASCENT_EDGES, ESCALATED_HOME_ASCENT_EDGES,
+    ASSEMBLY_ELIGIBLE_MISSIONS,
 )
 
 if TYPE_CHECKING:
@@ -1083,6 +1084,13 @@ class ProfileResult:
     # (e.g. Laythe-home Tylo Return) would otherwise under-gate to
     # CAN_NAVIGATE_LOCAL's weaker building set.
     via_apollo: bool = False
+    # True when feasibility came from the multi-launch orbital-assembly retry:
+    # the orbital stack was lifted in ≤_MAX_ASSEMBLY_LAUNCHES chunks docked in
+    # home low orbit.  ``launch_mass`` is then the HEAVIEST single lifter's
+    # wet mass (what the pad must actually support), not the stack total.
+    # Bracket-side consumers union the rendezvous buildings into the gate,
+    # exactly like via_apollo.
+    via_assembly: bool = False
     # Command module + support equipment for the terminal stage: [(count, part_id), ...]
     terminal_parts: list[tuple[int, str]] = field(default_factory=list)
     # The flown pod.  On passive aero-entry profiles this is pair-picked with
@@ -1098,6 +1106,11 @@ class ProfileResult:
     # terminal stage driving a mass cascade) instead of only seeing the
     # single failing-stage diagnostic.  Empty on feasible results.
     partial_stages: list[StageResult] = field(default_factory=list)
+    # Edge-group index for each ``partial_stages`` entry (parallel list, same
+    # convention as ``stage_group_indices``).  Lets the assembly retry read the
+    # per-group cumulative masses of a failed eval's built orbital stack
+    # without re-searching it.
+    partial_stage_groups: list[int] = field(default_factory=list)
 
     @property
     def failure_reasons(self) -> list[str]:
@@ -1498,6 +1511,7 @@ def _evaluate_profile(
     requires_precise_pointing: bool = False,
     gameplay: GameplayDifficulty = CONSERVATIVE_GAMEPLAY,
     apollo_split: bool = False,
+    assembly_chunks: Optional[tuple[int, ...]] = None,
 ) -> ProfileResult:
     """
     Run the two-pass evaluation on a single mission profile alternative.
@@ -1521,6 +1535,16 @@ def _evaluate_profile(
     docking port + docking attitude gear — wheels always, +RCS below expert
     gameplay (see ``_apollo_split_for``); callers try the standard
     architecture first and only retry with this on failure.
+
+    ``assembly_chunks`` evaluates the multi-launch orbital-assembly
+    architecture: an ascending tuple of chunk-bottom flight-group indices
+    (each ≥1) partitioning the orbital stack at stage boundaries.  Each
+    chunk-bottom group charges its joint docking port(s) + parked-craft
+    control gear as real equipment (the cascade below pays to haul them),
+    and the home launch (group 0) is replaced by one lifter per chunk —
+    a surface→LO build whose dv additionally pays the rendezvous — with
+    ``launch_mass`` reporting the HEAVIEST lifter.  Failure-path retry
+    only, scoped by ``_assembly_candidate``.
     """
     # EVA / rendezvous / surface-sample requirements.  An explicit override wins
     # (EVA-in-orbit forces requires_eva=True; docking/station contracts force
@@ -1919,6 +1943,10 @@ def _evaluate_profile(
     # ``stage_results_list``).  A multi-stage ascent appends K stages for one
     # group, so this is the only reliable stage→group map for the formatter.
     stage_group_list: list[int] = []
+    # Cumulative wet mass snapshot at each assembly chunk-bottom group (the
+    # running ``payload`` right after that group builds) — chunk standalone
+    # masses for the lifter builds are differences of these.
+    _chunk_cum: dict[int, float] = {}
 
     # ``reversed(groups)`` iterates terminal → ascent; track the matching
     # flight-order index so we can hook stage-specific behaviour.
@@ -2083,6 +2111,25 @@ def _evaluate_profile(
                 equip_mass += apollo.port.mass + apollo.parked_gear_mass
                 stage_equipment.append((1, apollo.port.name))
                 stage_equipment.extend(apollo.parked_gear_parts)
+        # Assembly chunk-bottom: charge the joint docking ports (2 per joint,
+        # both sides, carried by the upper chunk's bottom group — the joint
+        # below this chunk) + the parked-craft control gear as REAL equipment
+        # on this group's manifest, so the cascade below hauls their mass and
+        # the launch manifests show the assembly cost explicitly (operator
+        # requirement).  The bottom-most chunk has no joint below it; its top
+        # joint's ports ride the chunk above.
+        if assembly_chunks is not None and flight_idx in assembly_chunks:
+            _n_ports = 0 if flight_idx == assembly_chunks[0] else 2
+            _own_cmd = (terminal_pod
+                        if flight_idx == assembly_chunks[-1] else None)
+            _chunk_gear = _assembly_chunk_gear(
+                flags, groups, home, gameplay, _n_ports, _own_cmd)
+            if _chunk_gear is None:
+                return ProfileResult(False, launch_mass=payload, blocking=[
+                    BlockingInfo(reason=BlockingReason.NO_ATTITUDE_CONTROL,
+                                 detail="assembly parked chunk gear")])
+            equip_mass += _chunk_gear.mass
+            stage_equipment.extend(_chunk_gear.parts)
         # Staged atmospheric landing: the whole descent kit (coverage shield +
         # chutes) is fixed PAYLOAD mass on this stage.  The shield protects the
         # pod during the aero bleed and is jettisoned before any touchdown burn,
@@ -2264,14 +2311,7 @@ def _evaluate_profile(
                     booster_counts=ESCALATED_BOOSTER_COUNTS,
                     max_eng_per_col=ESCALATED_MAX_ENG_PER_COL,
                 )
-            ms_diag_out: list = []
-            ms_partial_out: list = []
-            multistage = find_optimal_multistage_ascent(
-                **_esc_kwargs,
-                required_dv=req_dv,
-                payload_mass=stage_payload,
-                diagnostic_out=ms_diag_out,
-                partial_stages_out=ms_partial_out,
+            _ascent_kwargs = dict(
                 gravity=body.surface_gravity,
                 in_atmosphere=in_atmo,
                 min_twr_liftoff=min_twr,
@@ -2303,6 +2343,88 @@ def _evaluate_profile(
                 fuel_line_name=fl_name,
                 run_parallel=run_parallel,
             )
+
+            if assembly_chunks is not None and flight_idx == 0:
+                # Multi-launch assembly: the home launch is one lifter per
+                # chunk instead of a single stack.  Every lifter flies the
+                # same ascent plus the rendezvous to the assembly orbit
+                # (Apollo precedent: dv added to base so margins apply);
+                # its payload is the chunk's standalone mass, whose gear
+                # surcharges (ports + parked control) were already charged
+                # into the cascade at the chunk-bottom groups above.
+                lifter_req_dv = effective_dv(
+                    base_dv + _APOLLO_RENDEZVOUS_DV, diff,
+                    plane_change_dv=pc_dv)
+                if any(b not in _chunk_cum for b in assembly_chunks):
+                    return ProfileResult(False, launch_mass=payload,
+                                         blocking=[BlockingInfo(
+                                             reason=BlockingReason.NO_VIABLE_STAGE,
+                                             body=body.name,
+                                             dv_needed=lifter_req_dv)])
+                chunk_masses: list[float] = []
+                for ci, cb in enumerate(assembly_chunks):
+                    upper = (_chunk_cum[assembly_chunks[ci + 1]]
+                             if ci + 1 < len(assembly_chunks) else 0.0)
+                    chunk_masses.append(_chunk_cum[cb] - upper)
+                lifters: list[list[StageResult]] = []
+                max_lift = 0.0
+                # Heaviest chunk first: it decides feasibility, fail fast.
+                for cm in sorted(chunk_masses, reverse=True):
+                    l_diag: list = []
+                    lifter = find_optimal_multistage_ascent(
+                        **_esc_kwargs,
+                        required_dv=lifter_req_dv,
+                        payload_mass=cm,
+                        diagnostic_out=l_diag,
+                        **_ascent_kwargs,
+                    )
+                    if lifter is None:
+                        return ProfileResult(
+                            False, launch_mass=payload,
+                            blocking=[BlockingInfo(
+                                reason=BlockingReason.NO_VIABLE_STAGE,
+                                body=body.name,
+                                dv_needed=lifter_req_dv,
+                                stage_diag=l_diag[0] if l_diag else None,
+                            )],
+                            partial_stages=list(stage_results_list),
+                            partial_stage_groups=list(stage_group_list),
+                            edge_groups=groups)
+                    lifters.append([_own_stage(sr) for sr in lifter])
+                    max_lift = max(max_lift, lifter[0].stage_mass_wet)
+                # Group-level launch equipment rides the first lifter's
+                # bottom; per-lifter control surcharges land exactly where
+                # the optimizer charged them (same as the single-launch
+                # path below).
+                lifters[0][0].equipment = (stage_equipment
+                                           + lifters[0][0].equipment)
+                for lifter in lifters:
+                    for sr in lifter:
+                        if sr.carries_attitude_module:
+                            sr.equipment = (sr.equipment
+                                            + list(global_attitude_bundle.parts))
+                        if sr.carries_aero_steering:
+                            sr.equipment = (sr.equipment
+                                            + [(4, flags.lightest_aero_control.name)])
+                    for sr in reversed(lifter):
+                        stage_results_list.append(sr)
+                        stage_group_list.append(flight_idx)
+                # The pad must support the HEAVIEST single launch — that is
+                # this architecture's launch mass (feeds the final pad-cap
+                # check and the bracket's pad requirement).
+                payload = max_lift
+                continue
+
+            ms_diag_out: list = []
+            ms_partial_out: list = []
+            multistage = find_optimal_multistage_ascent(
+                **_esc_kwargs,
+                required_dv=req_dv,
+                payload_mass=stage_payload,
+                diagnostic_out=ms_diag_out,
+                partial_stages_out=ms_partial_out,
+                **_ascent_kwargs,
+            )
             if multistage is not None:
                 multistage = [_own_stage(sr) for sr in multistage]
             if multistage is None:
@@ -2316,7 +2438,10 @@ def _evaluate_profile(
                     body=body.name,
                     dv_needed=req_dv,
                     stage_diag=stage_diag,
-                )], partial_stages=partial)
+                )], partial_stages=partial,
+                    partial_stage_groups=(list(stage_group_list)
+                                          + [flight_idx] * len(ms_partial_out)),
+                    edge_groups=groups)
             # Bottom stage carries the group-level equipment (ladder etc.)
             # for the multi-stage ascent.
             multistage[0].equipment = stage_equipment + multistage[0].equipment
@@ -2340,6 +2465,8 @@ def _evaluate_profile(
             # The bottom stage's wet mass is the launch mass (running total
             # for the outer loop's next-back-up iteration).
             payload = multistage[0].stage_mass_wet
+            if assembly_chunks is not None and flight_idx in assembly_chunks:
+                _chunk_cum[flight_idx] = payload
             continue
 
         result = find_optimal_stage(parallel_mode=parallel_mode, **stage_kwargs)
@@ -2359,7 +2486,9 @@ def _evaluate_profile(
                 body=body.name,
                 dv_needed=req_dv,
                 stage_diag=stage_diag,
-            )], partial_stages=list(stage_results_list))
+            )], partial_stages=list(stage_results_list),
+                partial_stage_groups=list(stage_group_list),
+                edge_groups=groups)
 
         # (Landing-mix chutes were added to stage_equipment before the passive
         # branch above; a burn-landing group falls through to here with them
@@ -2383,6 +2512,8 @@ def _evaluate_profile(
         stage_group_list.append(flight_idx)
         # The stage's wet mass becomes the payload for the next stage back
         payload = result.stage_mass_wet
+        if assembly_chunks is not None and flight_idx in assembly_chunks:
+            _chunk_cum[flight_idx] = payload
 
     # Add decouplers to non-terminal stages (not in mass budget, just for build guide)
     num_stages = len(stage_results_list)
@@ -2405,6 +2536,9 @@ def _evaluate_profile(
     terminal_parts.extend((1, p.name) for p in extra_payload_parts)
 
     if payload > flags.launch_pad_mass_cap:
+        # Under assembly ``payload`` is already the heaviest single lifter,
+        # so this check (and the bumper's pad guidance off mass_actual)
+        # applies per launch, exactly as the pad works physically.
         return ProfileResult(
             feasible=False,
             launch_mass=payload,
@@ -2413,6 +2547,9 @@ def _evaluate_profile(
                 mass_actual=payload,
                 mass_cap=flags.launch_pad_mass_cap,
             )],
+            partial_stages=list(stage_results_list),
+            partial_stage_groups=list(stage_group_list),
+            edge_groups=groups,
         )
     reversed_stages = list(reversed(stage_results_list))
     return ProfileResult(
@@ -2569,6 +2706,146 @@ def _escalated_home_edges() -> frozenset:
     ascent exceeds the standard caps at the table's probe bar."""
     return (_HOME_ESCALATION_OVERRIDE if _HOME_ESCALATION_OVERRIDE is not None
             else ESCALATED_HOME_ASCENT_EDGES)
+
+
+# ---------------------------------------------------------------------------
+# Multi-launch orbital assembly (tail-only)
+# ---------------------------------------------------------------------------
+# When the single-launch optimizer cannot express the home launch of a
+# mission's orbital stack at ANY pad (the max Progressive Launch Pad level is
+# unlimited, so the tail fails on expressiveness, not tonnage), the stack may
+# instead be lifted in up to _MAX_ASSEMBLY_LAUNCHES chunks — split at stage
+# boundaries only — and docked together in home low orbit.  Docking ports
+# stand in for the stack decouplers at the chunk joints; every chunk that
+# waits in orbit is a pilotless craft and charges real control gear.
+# Failure-path only, and scoped to the offline-probed eligibility set
+# (ESCALATED_ASCENT_EDGES discipline): the bumper's mid-game pad behaviour is
+# untouched — assembly exists strictly for missions a single launch can never
+# close.
+_MAX_ASSEMBLY_LAUNCHES: int = 3
+# Partition candidates actually evaluated per profile (best-first by smallest
+# heaviest-chunk); bounds the retry at ~a handful of extra cascade walks.
+_MAX_ASSEMBLY_PARTITION_TRIES: int = 4
+
+# Generator hook, same contract as _ESCALATION_OVERRIDE: the offline probe
+# pins this while measuring which missions assembly flips (the checked-in set
+# is that probe's OUTPUT).  Production code never touches it.
+_ASSEMBLY_OVERRIDE: Optional[frozenset] = None
+
+
+def _assembly_missions() -> frozenset:
+    """(home, destination, MissionType) triples eligible for the assembly
+    retry — missions the offline probe verified single-launch can never
+    close at max kit but ≤3 docked launches can."""
+    return (_ASSEMBLY_OVERRIDE if _ASSEMBLY_OVERRIDE is not None
+            else ASSEMBLY_ELIGIBLE_MISSIONS)
+
+
+def _assembly_candidate(flags: EquipmentFlags, home: BodyName,
+                        body_name: Optional[BodyName],
+                        mission_type: MissionType) -> bool:
+    """Cheap pre-gate for the assembly retry: eligibility-listed missions
+    only, on kits that own a docking port.  Everything else costs nothing."""
+    return (body_name is not None
+            and flags.has_docking_port
+            and (home, body_name, mission_type) in _assembly_missions())
+
+
+def _assembly_chunk_gear(
+    flags: EquipmentFlags,
+    groups: list[list[MissionEdge]],
+    home: BodyName,
+    gameplay: GameplayDifficulty,
+    n_ports: int,
+    own_command: Optional[MiscEquipment],
+) -> Optional[AttitudeBundle]:
+    """Concrete hardware one assembly chunk carries: its joint docking
+    port(s) plus the parked-craft control gear.
+
+    Between launches the chunk is a pilotless craft parked in home low orbit
+    (the no-passive-parked-craft rule): it needs a command source (a probe
+    core, unless ``own_command`` — the chunk that carries the mission's
+    terminal pod — already provides one), an attitude source (wheel unless
+    the command part has built-in wheels, else an RCS kit), its own power,
+    and below expert gameplay the RCS translation kit to actually dock
+    (``docking_needs_rcs``).  All real PART_DB parts; the masses ride the
+    mission from low orbit on, charged as the chunk's bottom-group equipment
+    so the cascade below pays for hauling them.  Returns None when the kit
+    cannot control a parked chunk — assembly is then not flyable."""
+    parts: list[tuple[int, str]] = []
+    mass = 0.0
+    if n_ports > 0:
+        port = flags.lightest_docking_port
+        if port is None:
+            return None
+        parts.append((n_ports, port.name))
+        mass += port.mass * n_ports
+    command = own_command
+    if command is None:
+        command = flags.lightest_probe
+        if command is None:
+            return None
+        parts.append((1, command.name))
+        mass += command.mass
+    if not _pod_has_built_in_wheels(command):
+        wheel = flags.lightest_reaction_wheel
+        if wheel is None:
+            return None
+        parts.append((1, wheel.name))
+        mass += wheel.mass
+    if gameplay.docking_needs_rcs:
+        rcs = _rcs_bundle(flags, command)
+        if rcs is None:
+            return None
+        parts.extend(rcs.parts)
+        mass += rcs.mass
+    power = _required_power_source(
+        flags, [e for g in groups for e in g], home)
+    if power is not None:
+        parts.append((1, power.name))
+        mass += power.mass
+    return AttitudeBundle(mass=mass, parts=tuple(parts))
+
+
+def _assembly_partitions(failed: "ProfileResult") -> list[tuple[int, ...]]:
+    """Candidate chunk partitions from a failed eval's built orbital stack.
+
+    Each candidate is an ascending tuple of chunk-BOTTOM flight-group
+    indices (group 0, the home launch, is what assembly replaces, so every
+    tuple starts at 1).  Candidates are ordered by smallest heaviest-chunk
+    standalone mass — the heaviest chunk decides lifter feasibility — with
+    2-way splits enumerated before adding 3-way ones of equal rank.  Empty
+    when the failure left no complete orbital stack (groups missing above
+    the launch) — assembly cannot help a mission whose UPPER stages already
+    failed to build."""
+    if not failed.partial_stages or not failed.edge_groups:
+        return []
+    n_groups = len(failed.edge_groups)
+    if n_groups < 3:
+        return []  # need ≥2 orbital groups to have a stage boundary to split
+    # Cumulative wet mass per group: a stage's wet mass already includes
+    # everything above it, so the group's cumulative is its heaviest stage.
+    cum: dict[int, float] = {}
+    for sr, gidx in zip(failed.partial_stages, failed.partial_stage_groups):
+        cum[gidx] = max(cum.get(gidx, 0.0), sr.stage_mass_wet)
+    if any(g not in cum for g in range(1, n_groups)):
+        return []  # orbital stack incomplete — an upper stage failed
+    def chunk_masses(bottoms: tuple[int, ...]) -> list[float]:
+        out = []
+        for i, b in enumerate(bottoms):
+            upper = cum[bottoms[i + 1]] if i + 1 < len(bottoms) else 0.0
+            out.append(cum[b] - upper)
+        return out
+    cands: list[tuple[float, tuple[int, ...]]] = []
+    for c2 in range(2, n_groups):
+        bottoms = (1, c2)
+        cands.append((max(chunk_masses(bottoms)), bottoms))
+        if _MAX_ASSEMBLY_LAUNCHES >= 3:
+            for c3 in range(c2 + 1, n_groups):
+                bottoms3 = (1, c2, c3)
+                cands.append((max(chunk_masses(bottoms3)), bottoms3))
+    cands.sort(key=lambda t: (t[0], len(t[1])))
+    return [b for _m, b in cands]
 
 
 @dataclass(frozen=True)
@@ -3333,6 +3610,7 @@ def _assess_one_body(
             profiles, flags, diff, event.mission_type,
             crewed=event.crewed, home=mission_builder.home,
             requires_eva=event.requires_eva, gameplay=gameplay,
+            body_name=body.name,
         )
         prof.access[event.name] = ok
         if not ok and not prof.blocking:
@@ -3383,6 +3661,60 @@ def _crewed_options(crewed: bool | None, flags: EquipmentFlags) -> list[bool]:
     return opts
 
 
+def _try_assembly_profiles(
+    profiles: list[list[MissionEdge]],
+    flags: EquipmentFlags,
+    diff: DifficultyProfile,
+    mission_type: MissionType,
+    crewed: bool | None,
+    home: BodyName,
+    extra_payload_parts: tuple[MiscEquipment, ...] = (),
+    requires_eva: bool | None = None,
+    requires_samples: bool | None = None,
+    requires_precise_pointing: bool = False,
+    gameplay: GameplayDifficulty = CONSERVATIVE_GAMEPLAY,
+    run_parallel: bool = True,
+) -> Optional[ProfileResult]:
+    """Multi-launch assembly retry (failure path only; caller pre-gates with
+    ``_assembly_candidate``).  Per profile: one probe evaluation captures the
+    built orbital stack (FOS-cache-warm — the standard/Apollo attempts just
+    built the same stages), then the best few stage-boundary partitions are
+    evaluated with ``assembly_chunks`` until one closes.  Returns the first
+    feasible ProfileResult stamped ``via_assembly``, else None.  Rendezvous
+    is required — the chunks dock in home low orbit."""
+    asm_apollo = _apollo_candidate(flags, mission_type)
+    for is_crewed in _crewed_options(crewed, flags):
+        for profile in profiles:
+            probe = _evaluate_profile(
+                profile, flags, diff, mission_type, is_crewed=is_crewed,
+                home=home, extra_payload_parts=extra_payload_parts,
+                run_parallel=run_parallel, requires_eva=requires_eva,
+                requires_rendezvous=True, requires_samples=requires_samples,
+                requires_precise_pointing=requires_precise_pointing,
+                gameplay=gameplay, apollo_split=asm_apollo)
+            if probe.feasible:
+                return probe  # closed without assembly after all
+            candidates = _assembly_partitions(probe)
+            for chunks in candidates[:_MAX_ASSEMBLY_PARTITION_TRIES]:
+                result = _evaluate_profile(
+                    profile, flags, diff, mission_type, is_crewed=is_crewed,
+                    home=home, extra_payload_parts=extra_payload_parts,
+                    run_parallel=run_parallel, requires_eva=requires_eva,
+                    requires_rendezvous=True,
+                    requires_samples=requires_samples,
+                    requires_precise_pointing=requires_precise_pointing,
+                    gameplay=gameplay, apollo_split=asm_apollo,
+                    assembly_chunks=chunks)
+                if result.feasible:
+                    result.via_assembly = True
+                    # The assembly eval keeps the Apollo split when the
+                    # mission is Apollo-shaped — record both markers so the
+                    # bracket unions every imposed supplement.
+                    result.via_apollo = asm_apollo
+                    return result
+    return None
+
+
 def _try_profiles(
     profiles: list[list[MissionEdge]],
     flags: EquipmentFlags,
@@ -3393,6 +3725,7 @@ def _try_profiles(
     extra_payload_parts: tuple[MiscEquipment, ...] = (),
     requires_eva: bool = False,
     gameplay: GameplayDifficulty = CONSERVATIVE_GAMEPLAY,
+    body_name: Optional[BodyName] = None,
 ) -> bool:
     """Return True if any profile alternative is feasible.
 
@@ -3433,6 +3766,15 @@ def _try_profiles(
                                                apollo_split=True)
                     if result.feasible:
                         return True
+    # Assembly retry — deeper failure path still: eligibility-listed missions
+    # on docking-port kits lift the orbital stack in ≤3 docked launches.
+    if _assembly_candidate(flags, home, body_name, mission_type):
+        result = _try_assembly_profiles(
+            profiles, flags, diff, mission_type, crewed, home,
+            extra_payload_parts=extra_payload_parts,
+            requires_eva=requires_eva, gameplay=gameplay)
+        if result is not None:
+            return True
     return False
 
 
@@ -3446,6 +3788,7 @@ def _try_profiles_reason(
     extra_payload_parts: tuple[MiscEquipment, ...] = (),
     requires_eva: bool = False,
     gameplay: GameplayDifficulty = CONSERVATIVE_GAMEPLAY,
+    body_name: Optional[BodyName] = None,
 ) -> tuple[bool, list[BlockingInfo]]:
     """
     Like _try_profiles but also returns deduplicated blocking entries
@@ -3496,6 +3839,15 @@ def _try_profiles_reason(
                                                apollo_split=True)
                     if result.feasible:
                         return True, []
+    # Assembly retry (see _try_profiles).  Blocking stays the standard
+    # architecture's, same rationale as the Apollo retry above.
+    if _assembly_candidate(flags, home, body_name, mission_type):
+        result = _try_assembly_profiles(
+            profiles, flags, diff, mission_type, crewed, home,
+            extra_payload_parts=extra_payload_parts,
+            requires_eva=requires_eva, gameplay=gameplay)
+        if result is not None:
+            return True, []
     return False, all_blocking
 
 
@@ -3703,6 +4055,23 @@ def evaluate_mission_detailed(
                 if result.feasible:
                     result.via_apollo = True
                     return result
+
+    # Assembly retry — same failure-path-only order as the gating layer, so
+    # a mission gated feasible-via-assembly reproduces here with its real
+    # lifter stage list (spoiler / post_fill cross-check).
+    if _assembly_candidate(flags, mission_builder.home, body_name,
+                           mission_type):
+        result = _try_assembly_profiles(
+            profiles, flags, diff, mission_type, crewed,
+            mission_builder.home,
+            extra_payload_parts=extra_payload_parts,
+            requires_eva=requires_eva, requires_samples=requires_samples,
+            requires_precise_pointing=requires_precise_pointing,
+            gameplay=gameplay, run_parallel=run_parallel)
+        if result is not None:
+            if result.feasible and not result.via_assembly:
+                result.via_apollo = _apollo_candidate(flags, mission_type)
+            return result
 
     return ProfileResult(False, blocking=all_blocking)
 

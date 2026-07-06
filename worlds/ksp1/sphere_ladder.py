@@ -2611,6 +2611,7 @@ def _mission_building_reqs(
     local_needs_conics: bool, local_needs_nodes: bool,
     mission_builder: MissionBuilder, buildings_in_logic: bool,
     via_apollo: bool = False,
+    via_assembly: bool = False,
 ) -> tuple[tuple[str, int], ...]:
     """Per-mission curated-building requirements as ``(item_name, level)``.
 
@@ -2621,19 +2622,22 @@ def _mission_building_reqs(
     a contract's access rule gate on the SAME requirements and neither can drift
     from the real evaluator.  ``()`` when buildings aren't in logic.
 
-    ``via_apollo`` is the bracket-derived (kit-dependent) supplement the
-    kit-independent needs model cannot see: a mission whose bracket sphere
-    closed it only through the Apollo-split retry additionally requires
-    rendezvous (``requires_rendezvous=True`` in the real evaluator), so
-    ``CAN_RENDEZVOUS`` joins the needs before translation.  Same pattern as
-    the pad: prove-what-you-enforce, derived where the kit is known.
+    ``via_apollo`` / ``via_assembly`` are the bracket-derived (kit-dependent)
+    supplements the kit-independent needs model cannot see: a mission whose
+    bracket sphere closed it only through the Apollo-split or multi-launch
+    assembly retry additionally requires rendezvous
+    (``requires_rendezvous=True`` in the real evaluator — assembly docks its
+    chunks in home low orbit), so ``CAN_RENDEZVOUS`` joins the needs before
+    translation.  Same pattern as the pad: prove-what-you-enforce, derived
+    where the kit is known.
     """
     from .capability import MissionLogicNeeds, mission_logic_needs
     from .effects import Capability
     needs = mission_logic_needs(
         info.body, info.mission_type, info.crewed, info.requires_eva,
         mission_builder)
-    if via_apollo and Capability.CAN_RENDEZVOUS not in needs.capabilities:
+    if ((via_apollo or via_assembly)
+            and Capability.CAN_RENDEZVOUS not in needs.capabilities):
         needs = MissionLogicNeeds(
             needs.capabilities | {Capability.CAN_RENDEZVOUS},
             needs.min_ts_dsn_level)
@@ -2775,7 +2779,8 @@ def _install_ladder_rules(
                             world, "local_needs_conics", True),
                         local_needs_nodes=getattr(
                             world, "local_needs_nodes", True),
-                        via_apollo=r.via_apollo)
+                        via_apollo=r.via_apollo,
+                        via_assembly=r.via_assembly)
                     break
             if j is None:
                 # Unbracketed mission (beyond the chain's reps-only reach, e.g.
@@ -3690,6 +3695,23 @@ def _build_ladder_graph_walk(
         world.random.choice(sorted(_gear[role]))
         for role in sorted(_gear) if _gear[role]
     ) - precollected_names
+    # Multi-launch assembly enablers, only when this seed actually contains
+    # an assembly-eligible mission (its home matches and the mission isn't
+    # policy-banned): every parked chunk is a pilotless craft, so the reps
+    # kit must also prove a probe core, a reaction wheel, and a power source
+    # (the bracket gate enforces exactly the reps — bugs/101 discipline).
+    from .data.feasibility import ASSEMBLY_ELIGIBLE_MISSIONS as _ASM_MISSIONS
+    _seed_has_assembly = any(
+        h == bn_home and world.mission_builder.is_achievable(b, mt)
+        for (h, b, mt) in _ASM_MISSIONS)
+    if _seed_has_assembly:
+        _asm_gear = _pm.assembly_gear_candidates()
+        _assembly_enablers = frozenset(
+            world.random.choice(sorted(_asm_gear[role]))
+            for role in sorted(_asm_gear) if _asm_gear[role]
+        ) - precollected_names
+    else:
+        _assembly_enablers = frozenset()
     _deep_max_dv = max(_sphere_dv_by_name.values(), default=0.0)
     _deep_inject_dv = (
         _DEEP_INJECT_DV_FRAC * _deep_max_dv
@@ -3733,8 +3755,10 @@ def _build_ladder_graph_walk(
                         sig = sig.with_rank(_ax, _rk)
             # Apollo docking gear rides the same band, reps-only (see the
             # _DOCKING_ENABLERS comment): the deep round trips that need
-            # capability's Apollo retry live past this threshold.
-            reps = reps | _docking_enablers
+            # capability's Apollo retry live past this threshold.  Assembly
+            # parked-chunk gear (probe core / wheel / power) rides with it —
+            # assembly-eligible missions are the deepest in the seed.
+            reps = reps | _docking_enablers | _assembly_enablers
         if dv >= _attitude_inject_dv:
             reps = reps | _attitude_enablers
         return sig, reps
@@ -3743,7 +3767,8 @@ def _build_ladder_graph_walk(
     # global keep-set (the per-mission cumulative inject is applied below when
     # each sphere is assembled, where the location's dv is in hand).
     if _deep_inject_dv != float("inf"):
-        cumulative_reps = cumulative_reps | _deep_enablers | _docking_enablers
+        cumulative_reps = (cumulative_reps | _deep_enablers
+                           | _docking_enablers | _assembly_enablers)
     if _attitude_inject_dv != float("inf"):
         cumulative_reps = cumulative_reps | _attitude_enablers
 

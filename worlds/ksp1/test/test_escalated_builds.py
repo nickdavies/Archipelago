@@ -117,14 +117,13 @@ class TestEveCeiling(unittest.TestCase):
             self.cap.bodies[BodyName.EVE].access[EventName.RETURN],
             "Eve Return should close via Apollo + escalated ascent",
         )
-        # Crewed Eve SSR is OUT at the small probe bar since the dv
-        # recalibration (lander ascent 8,000 → ~8,996 highlands-in-logic):
-        # the pod+ladder payload on the escalated ascent no longer fits.
-        # It survives only at zero physics, and not from Kerbin — see the
-        # regenerated table.
-        self.assertFalse(
+        # Crewed Eve SSR from Kerbin closes at the small probe bar ONLY via
+        # the multi-launch assembly retry (single launch of the ~1,300 t
+        # orbital stack is inexpressible even at unlimited pad).  The access
+        # map says feasible; TestAssembly pins the via_assembly mechanism.
+        self.assertTrue(
             self.cap.bodies[BodyName.EVE].access[EventName.SAMPLE_RETURN],
-            "crewed Eve SSR at small+bar should be excluded post-recalibration",
+            "crewed Eve SSR at small+bar should close via assembly",
         )
 
     def test_no_docking_port_no_escalation(self) -> None:
