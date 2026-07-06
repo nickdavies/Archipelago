@@ -29,17 +29,16 @@ from worlds.ksp1.capability import (
 )
 from worlds.ksp1.locations import EventName
 from worlds.ksp1.parts import CapabilityFlag, DEFAULT_PART_MANAGER
-from worlds.ksp1.scripts.generate_feasibility import (
-    DEFAULT_OVERHEAD, _profile_with_overhead,
-)
+from worlds.ksp1.scripts.generate_feasibility import _profile_with_overhead
 
 _PART_DB = DEFAULT_PART_MANAGER.parts
 
-# The feasibility table probes at difficulty + rep-selection overhead; that is
-# the bar at which Tylo SSR is standard-infeasible and Apollo closes it.  At
-# PLAIN generous the whole-stack architecture already closes Tylo SSR, so the
-# ceiling tests must probe exactly like the table generator does.
-_PROBE_PROFILE = _profile_with_overhead("generous", DEFAULT_OVERHEAD)
+# Frozen at the historical +0.25 bar ON PURPOSE (not DEFAULT_OVERHEAD): these
+# tests need a bar at which Tylo SSR is standard-infeasible and Apollo closes
+# it.  At plain generous — and at the shipped 0.10 overhead — the whole-stack
+# architecture already closes it, so tracking the shipping bar would leave
+# the Apollo machinery untested.
+_PROBE_PROFILE = _profile_with_overhead("generous", 0.25)
 
 _PORT_NAMES = frozenset(
     nm for nm, parts in _PART_DB.items()

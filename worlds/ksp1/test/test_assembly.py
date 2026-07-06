@@ -17,10 +17,14 @@ from worlds.ksp1.capability import (
 from worlds.ksp1.data.feasibility import ASSEMBLY_ELIGIBLE_MISSIONS
 from worlds.ksp1.parts import DEFAULT_PART_MANAGER
 from worlds.ksp1.parts.types import CapabilityFlag
-from worlds.ksp1.scripts.generate_feasibility import (
-    DEFAULT_OVERHEAD, _profile_with_overhead)
+from worlds.ksp1.scripts.generate_feasibility import _profile_with_overhead
 
-_PROBE_PROFILE = _profile_with_overhead("small", DEFAULT_OVERHEAD)
+# Frozen at the historical +0.25 bar ON PURPOSE (not DEFAULT_OVERHEAD): these
+# tests exercise the assembly machinery and the bugs-110/111 failing-launch
+# pins, which need a bar where the single launch is inexpressible.  At the
+# shipped 0.10 bar the flagship missions close single-launch and the retry
+# never fires — the machinery would go untested.
+_PROBE_PROFILE = _profile_with_overhead("small", 0.25)
 _PART_DB = DEFAULT_PART_MANAGER.parts
 
 
@@ -41,13 +45,14 @@ def _max_kit(exclude: frozenset[str] = frozenset()):
 
 class TestEligibilitySet(unittest.TestCase):
     """Lock the probed set: the Eve-destination tail from the three homes
-    whose single launch can't lift the stack (Kerbin SSR; Laythe/Tylo
-    Return + SSR).  A change here means the dv model moved — re-inspect."""
+    whose single launch can't lift the stack at some difficulty (Kerbin SSR;
+    Laythe SSR; Tylo Return + SSR — Laythe Eve Return closes single-launch
+    at every difficulty since the 0.10 overhead).  A change here means the
+    dv model moved — re-inspect."""
 
     def test_probed_set_contents(self) -> None:
         self.assertEqual(ASSEMBLY_ELIGIBLE_MISSIONS, frozenset({
             (BodyName.KERBIN, BodyName.EVE, MissionType.SAMPLE_RETURN),
-            (BodyName.LAYTHE, BodyName.EVE, MissionType.RETURN),
             (BodyName.LAYTHE, BodyName.EVE, MissionType.SAMPLE_RETURN),
             (BodyName.TYLO, BodyName.EVE, MissionType.RETURN),
             (BodyName.TYLO, BodyName.EVE, MissionType.SAMPLE_RETURN),
