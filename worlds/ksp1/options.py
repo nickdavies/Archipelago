@@ -138,10 +138,12 @@ class StartingBody(Choice):
     generation aborts with OptionError — e.g. ``mun_flag`` with
     ``home = mun`` is rejected at gen time.
 
-    ``eve`` is rejected at generation in this release: the recalibrated
-    Eve ascent (~9,000 m/s from the mesa pad) leaves too little of the
-    solar system verifiable by the capability model.  Planned to reopen
-    with orbital assembly / ISRU support.
+    ``eve`` launches from the 6,140 m mesa pad (~8,996 m/s ascent);
+    heavy departures are lifted across up to three launches and docked
+    in Eve orbit (multi-launch assembly).  The deepest casual-margin
+    Return/Sample Return targets stay out of logic and route through the
+    proxy; comfortable/expert are fully in logic.  Expect the hardest
+    seeds in the game.
 
     Default ``kerbin`` preserves the existing single-home behaviour.
 
@@ -151,8 +153,9 @@ class StartingBody(Choice):
     atmospheric -- Kerbin, Duna, Laythe.
     standard    -- Kerbin, Duna, Laythe, Moho, Eeloo.
     planets     -- Moho, Kerbin, Duna, Dres, Eeloo (planets only).
-    all         -- Every landable body except Eve.  Includes Tylo and
-                   Laythe; expect punishing seeds.
+    all         -- Every landable body except Eve (Eve is opt-in only via
+                   the explicit ``eve`` key).  Includes Tylo and Laythe;
+                   expect punishing seeds.
 
     For custom weights, use the standard AP weighted-random YAML form
     over the concrete body keys, e.g. ``kerbin: 40, duna: 20,

@@ -14,20 +14,17 @@ tabulated ``dvGL`` is 12,000.  No in-logic ascent pays that raw figure:
   Splashdown corollary: an ocean landing is ONE-WAY (see the field's
   caveat in bodies.py).
 
-Eve-as-HOME is CLOSED for this release (operator decision, 2026-07-03):
-even with the escalated home-ascent builds the recalibrated table keeps
-expert without returns/flags beyond Gilly, so ``starting_body=eve`` is
-rejected at generation until orbital assembly / ISRU raise the ceiling.
-The mesa-pad model and the ESCALATED_HOME_ASCENT_EDGES machinery stay
-live so reopening is a one-gate flip.
+Eve-as-HOME is supported: the mesa-pad ascent closes under escalated
+home-ascent builds with asparagus sub-stages, and heavier departure
+stacks are composed by multi-launch orbital assembly.  The feasibility
+table gates per physics difficulty (fully in logic at comfortable/small/
+zero; the generous deep-tail Return/SSR stay proxy-routed).
 """
 from __future__ import annotations
 
 import random
 import unittest
 from argparse import Namespace
-
-from Options import OptionError
 
 from worlds.ksp1.bodies import (
     ALL_BODIES, BodyName, EdgeType, EVE, MissionBuilder, MissionType,
@@ -77,12 +74,12 @@ class TestAscentEdgeCalibration(unittest.TestCase):
                                8996.4, delta=1.0)
 
 
-class TestEveHomeClosed(unittest.TestCase):
-    """The product gate: ``starting_body=eve`` must be rejected in
-    generate_early with a clear OptionError (not strand into an empty or
-    unwinnable seed)."""
+class TestEveHomeGenerates(unittest.TestCase):
+    """Eve-as-home generates cleanly through generate_early — the home body
+    is exempt from the curated Eve ban (picking Eve IS the opt-in), so a
+    non-Eve goal from an Eve home resolves without raising."""
 
-    def test_eve_home_rejected(self) -> None:
+    def _generate_early(self, difficulty: str) -> "object":
         import worlds  # noqa: F401
         import worlds.AutoWorld as AutoWorld
         from BaseClasses import CollectionState, MultiWorld
@@ -98,14 +95,29 @@ class TestEveHomeClosed(unittest.TestCase):
         world_type = AutoWorld.AutoWorldRegister.world_types[
             "Kerbal Space Program 1"]
         opts = {"goal": "duna_return", "starting_body": "eve",
-                "difficulty": "expert"}
+                "difficulty": difficulty}
         for name, option in world_type.options_dataclass.type_hints.items():
             setattr(args, name,
                     {1: option.from_any(opts.get(name, option.default))})
         mw.set_options(args)
         mw.state = CollectionState(mw)
-        with self.assertRaisesRegex(OptionError, "starting_body=eve"):
-            AutoWorld.call_all(mw, "generate_early")
+        AutoWorld.call_all(mw, "generate_early")
+        return mw.worlds[1]
+
+    def test_eve_home_generates_expert(self) -> None:
+        world = self._generate_early("expert")
+        self.assertEqual(world.mission_builder.home, BodyName.EVE)
+        # Comfortable/small tables are fully open, so the Eve-home seed
+        # carries no model-infeasible mission classes at expert.
+        self.assertEqual(world.unachievable_missions, frozenset())
+
+    def test_eve_home_generates_casual_with_proxy_tail(self) -> None:
+        # Casual → generous physics: the deep-tail Return/SSR stay
+        # model-infeasible and route through the proxy (graceful, not a
+        # strand).  Generation must still succeed.
+        world = self._generate_early("casual")
+        self.assertEqual(world.mission_builder.home, BodyName.EVE)
+        self.assertTrue(world.unachievable_missions)
 
 
 if __name__ == "__main__":

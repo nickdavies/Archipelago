@@ -362,22 +362,15 @@ class KSP1World(World):
         # (``option_mun`` → key ``"mun"`` → ``BodyName.MUN``).  The
         # title-case round-trip rebuilds the canonical ``StrEnum`` value.
         home = BodyName(self.options.starting_body.current_key.title())
-        # Eve-as-home is CLOSED for this release (operator decision,
-        # 2026-07-03): the recalibrated ascent (12,000 sea level / ~9,000
-        # mesa pad) leaves the feasibility table too thin to ship at any
-        # difficulty, even with escalated home-ascent builds (at the table's
-        # +25% bar, expert keeps no returns/flags beyond Gilly).  The
-        # mesa-pad model and the home-ascent escalation machinery stay live
-        # — this gate is the single switch to flip when multi-launch
-        # assembly / ISRU (plan phases 4-5) raise the ceiling.
-        if home is BodyName.EVE:
-            raise OptionError(
-                "KSP1: starting_body=eve is not supported in this release — "
-                "Eve's recalibrated ascent (~9,000 m/s from the mesa pad) "
-                "cannot be verified widely enough by the capability model. "
-                "Eve-as-home is planned to reopen with orbital assembly / "
-                "ISRU support."
-            )
+        # Eve-as-home is supported: the mesa pad ascent (~8,996 m/s) closes
+        # under escalated home-ascent builds with asparagus sub-stages
+        # (ESCALATED_HOME_ASCENT_EDGES + parallel_substages), and any stack
+        # the single mesa launch can't lift is composed by multi-launch
+        # orbital assembly in Eve low orbit.  The feasibility table gates
+        # per physics difficulty (fully open at comfortable/small/zero; the
+        # generous deep-tail Return/SSR stay model-infeasible and route
+        # through the proxy), so an Eve-home seed is verified honestly, not
+        # assumed winnable.
         self.mission_builder = MissionBuilder(home=home)
         # Player skill/equipment gates (reaction-wheel/RCS/nav assists) from the
         # base Difficulty option.  Carried on the mission_builder so capability +
