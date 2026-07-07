@@ -362,15 +362,25 @@ class KSP1World(World):
         # (``option_mun`` → key ``"mun"`` → ``BodyName.MUN``).  The
         # title-case round-trip rebuilds the canonical ``StrEnum`` value.
         home = BodyName(self.options.starting_body.current_key.title())
-        # Eve-as-home is supported: the mesa pad ascent (~8,996 m/s) closes
-        # under escalated home-ascent builds with asparagus sub-stages
+        # Eve-as-home is supported, but ONLY at expert difficulty (operator
+        # decision, 2026-07-06): flying an Eve ascent for every mission is an
+        # expert-player undertaking — claiming a casual/normal skill level
+        # while planning to complete Eve-home missions is incoherent, and the
+        # softer physics margins also make the generous-tail deep missions
+        # fragile.  The mesa pad ascent (~8,996 m/s) closes under escalated
+        # home-ascent builds with asparagus sub-stages
         # (ESCALATED_HOME_ASCENT_EDGES + parallel_substages), and any stack
         # the single mesa launch can't lift is composed by multi-launch
-        # orbital assembly in Eve low orbit.  The feasibility table gates
-        # per physics difficulty (fully open at comfortable/small/zero; the
-        # generous deep-tail Return/SSR stay model-infeasible and route
-        # through the proxy), so an Eve-home seed is verified honestly, not
-        # assumed winnable.
+        # orbital assembly in Eve low orbit — verified honestly by the
+        # feasibility table (fully open at the expert 'small' profile).
+        if (home is BodyName.EVE
+                and self.options.difficulty.value != Difficulty.option_expert):
+            raise OptionError(
+                "KSP1: starting_body=eve is only supported at "
+                "difficulty=expert — an Eve ascent is an expert-player "
+                "mission.  Raise the difficulty to expert, or pick a "
+                "different starting body."
+            )
         self.mission_builder = MissionBuilder(home=home)
         # Player skill/equipment gates (reaction-wheel/RCS/nav assists) from the
         # base Difficulty option.  Carried on the mission_builder so capability +

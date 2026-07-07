@@ -74,10 +74,10 @@ class TestAscentEdgeCalibration(unittest.TestCase):
                                8996.4, delta=1.0)
 
 
-class TestEveHomeGenerates(unittest.TestCase):
-    """Eve-as-home generates cleanly through generate_early — the home body
-    is exempt from the curated Eve ban (picking Eve IS the opt-in), so a
-    non-Eve goal from an Eve home resolves without raising."""
+class TestEveHomeExpertOnly(unittest.TestCase):
+    """Eve-as-home generates cleanly at expert (the home body is exempt from
+    the curated Eve ban — picking Eve IS the opt-in), and is rejected at any
+    softer difficulty (an Eve ascent is an expert-player mission)."""
 
     def _generate_early(self, difficulty: str) -> "object":
         import worlds  # noqa: F401
@@ -107,17 +107,15 @@ class TestEveHomeGenerates(unittest.TestCase):
     def test_eve_home_generates_expert(self) -> None:
         world = self._generate_early("expert")
         self.assertEqual(world.mission_builder.home, BodyName.EVE)
-        # Comfortable/small tables are fully open, so the Eve-home seed
-        # carries no model-infeasible mission classes at expert.
+        # The expert 'small' table is fully open, so the Eve-home seed
+        # carries no model-infeasible mission classes.
         self.assertEqual(world.unachievable_missions, frozenset())
 
-    def test_eve_home_generates_casual_with_proxy_tail(self) -> None:
-        # Casual → generous physics: the deep-tail Return/SSR stay
-        # model-infeasible and route through the proxy (graceful, not a
-        # strand).  Generation must still succeed.
-        world = self._generate_early("casual")
-        self.assertEqual(world.mission_builder.home, BodyName.EVE)
-        self.assertTrue(world.unachievable_missions)
+    def test_eve_home_rejected_below_expert(self) -> None:
+        from Options import OptionError
+        for difficulty in ("casual", "normal"):
+            with self.assertRaisesRegex(OptionError, "difficulty=expert"):
+                self._generate_early(difficulty)
 
 
 if __name__ == "__main__":
