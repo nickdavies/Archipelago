@@ -369,15 +369,31 @@ def _parallel_only_mission(info: _LocationMissionInfo,
     RESCUE — leaving the mission unbracketed (no reps-only gate, no
     sphere-window item ban, and a dead cheap victory gate; see bugs/108/109).
     Guidance trials for exactly these missions must pay for the exact
-    parallel build."""
+    parallel build, and their rescue must probe at max pad (bug 109 root B).
+    """
     from .data.feasibility import (
-        ASSEMBLY_ELIGIBLE_MISSIONS, ESCALATED_ASCENT_EDGES)
+        ASSEMBLY_ELIGIBLE_MISSIONS, ESCALATED_ASCENT_EDGES,
+        ESCALATED_HOME_ASCENT_EDGES)
     home = mission_builder.home
     mt = info.mission_type
     if (home, info.body, mt) in ASSEMBLY_ELIGIBLE_MISSIONS:
         return True
-    return (mt in (MissionType.RETURN, MissionType.SAMPLE_RETURN)
-            and any(b == info.body for b, _e in ESCALATED_ASCENT_EDGES))
+    if (mt in (MissionType.RETURN, MissionType.SAMPLE_RETURN)
+            and any(b == info.body for b, _e in ESCALATED_ASCENT_EDGES)):
+        return True
+    # Heavy-delivery contracts from a home whose ascent is escalated (Eve's
+    # mesa launch): the delivered station/base/lab mass makes even the home
+    # ascent asparagus-only, so serial trials are all infeasible and the
+    # launch (2000t+ at generous margins) needs the max pad tier.  Both are
+    # the bug-109 failure modes on the HOME-ascent channel — the anchor
+    # would otherwise raise "unreachable under any rank kit".  Scoped to
+    # payload-bearing contracts so ordinary Eve-home missions keep the cheap
+    # serial proxy.
+    if (info.spec is not None
+            and info.spec.type_def.required_categories
+            and any(home == b for b, _e in ESCALATED_HOME_ASCENT_EDGES)):
+        return True
+    return False
 
 
 def _evaluate(
