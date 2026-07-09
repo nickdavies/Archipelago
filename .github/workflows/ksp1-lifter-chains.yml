@@ -1,0 +1,55 @@
+name: KSP1 Lifter Chains
+
+# Drift-guard for the checked-in lifter-chain tables (worlds/ksp1/data/lifter_chains/).
+# The tables are generated offline from the dv model, mission graph, part DB AND
+# the binding/optimizer source; if any of those change without regeneration, the
+# bumper's pre-cached home-ascent builds silently go out of sync.
+#
+# The gate is a DIGEST comparison, not a regeneration: generate_lifter_chains
+# embeds a sha256 fingerprint of every input the tables derive from — the model
+# data (parts, bodies, difficulties, cluster map, ladder params) AND the source
+# of the binding code (rocket_math, lifter_binding, the generator, the capability
+# bind-helpers).  `--check` recomputes that fingerprint and compares; a match
+# proves the data is current with ZERO physics (seconds).  It also runs the
+# structural invariants over every stored row.
+#
+# Regenerating the tables is CPU-expensive (a full re-bind, minutes on many
+# cores), so it deliberately never runs here — a digest mismatch fails the gate
+# and asks the author to regenerate locally (`python -m
+# worlds.ksp1.scripts.generate_lifter_chains --write`) and, before shipping,
+# run the deep `--check --full` (re-bind + compare) themselves.
+#
+# Runs on every branch push / PR touching worlds/ksp1/, and is called by
+# release-apworld.yml as a required gate — a stale table blocks the .apworld build.
+
+on:
+  push:
+    branches:
+      - '**'
+    paths:
+      - 'worlds/ksp1/**'
+      - '.github/workflows/ksp1-lifter-chains.yml'
+  pull_request:
+    paths:
+      - 'worlds/ksp1/**'
+      - '.github/workflows/ksp1-lifter-chains.yml'
+  workflow_call: {}
+
+permissions:
+  contents: read
+
+jobs:
+  lifter-chains:
+    runs-on: ubuntu-latest
+    name: Lifter-chain tables are current
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python ModuleUpdate.py --yes --force
+      - name: Check lifter-chain tables match generator (digest + structural)
+        run: python -m worlds.ksp1.scripts.generate_lifter_chains --check

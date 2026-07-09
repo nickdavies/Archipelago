@@ -445,6 +445,11 @@ def _evaluate(
             info.spec is not None
             and info.spec.contract_type in PRECISE_POINTING_TYPES),
         run_parallel=run_parallel,
+        # The sphere-ladder evaluator is the ONE opt-in to the pre-cached
+        # home-ascent lifter table (mission_builder.lifter_table).  post_fill
+        # cross-check / spoiler / get_capability keep use_lifter_table=False
+        # and stay on raw physics — the table never gates a shipped seed alone.
+        use_lifter_table=True,
     )
 
 
@@ -757,6 +762,23 @@ _RANK_BUMP_TABLE: dict[BlockingReason, tuple[RankAxisKey, ...]] = {
     # wheel-bearing probe or capsule) satisfies the precise-pointing gate.
     BlockingReason.NO_PRECISE_ATTITUDE: (
         RankAxisKey.SAS, RankAxisKey.PROBE_SAS, RankAxisKey.CAPSULE,
+    ),
+    # Pre-cached home lifter (offline chains).  PREFIX_MISSING is normally
+    # resolved by the dedicated chain-bump branch (adds the exact chain
+    # delta); this fallback mapping mirrors NO_VIABLE_STAGE's propulsion axes
+    # so the axis machinery can still make progress if the chain-bump can't.
+    # OVER_CEILING is a payload problem: only a lighter command module helps a
+    # single launch (assembly handles the rest), so it keeps the payload-
+    # reducing axes.
+    BlockingReason.LIFTER_PREFIX_MISSING: (
+        RankAxisKey.LFO_TANK, RankAxisKey.LF_TANK, RankAxisKey.XENON_TANK,
+        RankAxisKey.LAUNCH_ENGINE, RankAxisKey.VAC_ENGINE,
+        RankAxisKey.STACK_DECOUPLER, RankAxisKey.SRB,
+        RankAxisKey.RADIAL_DECOUPLER,
+        RankAxisKey.CAPSULE, RankAxisKey.PROBE_SAS,
+    ),
+    BlockingReason.LIFTER_PAYLOAD_OVER_CEILING: (
+        RankAxisKey.CAPSULE, RankAxisKey.PROBE_SAS,
     ),
 }
 
@@ -1423,6 +1445,34 @@ def minimal_ranks_for(
             if cur_pad < pad_cap_count:
                 sig = sig.with_counted(PROGRESSIVE_LAUNCH_PAD_NAME, cur_pad + 1)
                 continue
+
+        # Pre-cached home lifter: the served build needs chain-prefix parts the
+        # kit doesn't own yet (LIFTER_PREFIX_MISSING).  Add the exact delta in
+        # chain order — the cache already proved this prefix lifts the payload,
+        # so this replaces the group-0 tier-1 axis-trial + rep-pick for the
+        # home ascent (the dominant bump cost).  No rng draw: the chain order
+        # is fixed, so the main draw sequence is untouched by this branch.
+        # Ordered right after the Pad bump so it fires before the generic axis
+        # machinery, exactly like the counted-progressive bumps.
+        chain_deltas = [b.chain_delta for b in result.blocking
+                        if b.reason == BlockingReason.LIFTER_PREFIX_MISSING
+                        and b.chain_delta is not None]
+        if chain_deltas:
+            added_chain = False
+            for part in chain_deltas[0].missing_parts:
+                if part in reps_collected or part not in PART_DB:
+                    continue
+                reps_collected.add(part)
+                for _ax, _rk in rank_sig_for(part, ctx).axes:
+                    if (_ax, _rk) not in reps:
+                        reps[(_ax, _rk)] = part
+                    if _rk > sig.rank(_ax):
+                        sig = sig.with_rank(_ax, _rk)
+                added_chain = True
+            if added_chain:
+                continue
+            # No progress (all delta parts already collected) — fall through
+            # to the axis machinery below.
         # Curated-building blockers (buildings_in_logic): bump the building
         # Counted level outside the rank model, mirroring the Pad mass-cap
         # bump above.  DSN_POWER_INSUFFICIENT / conics -> Tracking Station,

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import copy
 import math
+from functools import lru_cache
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Optional
 
@@ -427,6 +428,13 @@ class EquipmentFlags:
     # Pre-indexed tanks by fuel type (built once after pre-pass)
     tanks_by_fuel_type: Optional[dict[str, list[FuelTank]]] = None
 
+    # Every PART_DB item name this evaluation admits (the reps the kit owns in
+    # reps-only mode, or the full rank-admitted set otherwise).  The bound
+    # lifter table's prefix check compares against this: a rung is servable
+    # only when its chain prefix ⊆ admitted parts, so precollected/owned parts
+    # count automatically.  Empty by default = no lifter table consulted.
+    admitted_part_names: frozenset[str] = frozenset()
+
 
 # ---------------------------------------------------------------------------
 # Top-level result dataclasses (public API)
@@ -674,12 +682,18 @@ def _pre_pass(item_count_fn: Callable[[str], int],
 
     # Process every part in the installed universe; ``item_count_fn`` gates to
     # what the player actually has (so a disabled pack's parts are excluded).
+    _admitted: set[str] = set()
     for item_name, parts in DEFAULT_PART_MANAGER.parts.items():
         count = item_count_fn(item_name)
         if count == 0:
             continue
+        _admitted.add(item_name)
         for part in parts:
             _add_part_to_flags(flags, part, count)
+    # Snapshot the admitted part names for the bound lifter table's prefix
+    # check (a chain rung serves only when its prefix ⊆ these).  This is the
+    # single chokepoint where the item-count gate is already enumerated.
+    flags.admitted_part_names = frozenset(_admitted)
 
     # Binary gate flags are derived from concrete parts (no more progressive
     # binary checks).
@@ -1112,6 +1126,11 @@ class ProfileResult:
     # when the walk failed before completing the orbital stack (an upper
     # stage failed — assembly can't help those).
     partial_group_mass: dict[int, float] = field(default_factory=dict)
+    # Chain-prefix part names the home-ascent build was SERVED from the bound
+    # lifter table (empty when raw physics built it).  The minimization pass
+    # protects these reps (dropping one forces a live escalated rebuild), and
+    # they land in the recorded kit like any other rep.
+    lifter_prefix_used: frozenset[str] = frozenset()
 
     @property
     def failure_reasons(self) -> list[str]:
@@ -1497,6 +1516,237 @@ def _own_stage(sr: StageResult) -> StageResult:
     return sr
 
 
+def _parallel_staging_inputs(
+    flags: EquipmentFlags,
+) -> tuple[str, float, str, float, str]:
+    """Kit-derived parallel-staging inputs: the staging mode plus the parts
+    the real parallel builder needs — a radial decoupler to shed boosters and
+    the fuel line for asparagus crossfeed (onion has none).
+
+        staging_tier >= 2 + fuel lines -> asparagus (radial crossfeed build)
+        staging_tier >= 2, no fuel lines -> onion (radial ring drop)
+        staging_tier < 2 -> none
+
+    Shared by ``_evaluate_profile`` and the offline lifter-chain generator so
+    the two derivations can never drift."""
+    if flags.staging_tier >= 2 and flags.has_fuel_lines:
+        parallel_mode = "asparagus"
+    elif flags.staging_tier >= 2:
+        parallel_mode = "onion"
+    else:
+        parallel_mode = "none"
+    _radial_decs = [d for d in flags.available_decouplers if d.kind == "radial"]
+    _rdec = min(_radial_decs, key=lambda d: d.mass) if _radial_decs else None
+    rdec_mass = _rdec.mass if _rdec else 0.0
+    rdec_name = _rdec.name if _rdec else ""
+    fl_mass = _FUEL_LINE_MASS if flags.has_fuel_lines else 0.0
+    fl_name = _FUEL_LINE_PART if (flags.has_fuel_lines and _FUEL_LINE_PART) else ""
+    return parallel_mode, rdec_mass, rdec_name, fl_mass, fl_name
+
+
+def _ascent_stage_kwargs(
+    flags: EquipmentFlags,
+    body: Body,
+    *,
+    in_atmo: bool,
+    min_twr: float,
+    eligible_engines: list[Engine],
+    stack_decoupler: Optional[Decoupler],
+    needs_hs: bool,
+    heat_shields_arg: tuple[tuple[float, float, str], ...],
+    req_throttle: bool,
+    needs_gimbal_engine: bool,
+    srb_needs_rcs: bool,
+    stage_attitude_mass: float,
+    stage_aero_mass: float,
+    parallel_mode: str,
+    rdec_mass: float,
+    rdec_name: str,
+    fl_mass: float,
+    fl_name: str,
+    run_parallel: bool,
+) -> dict:
+    """The ``find_optimal_multistage_ascent`` parameter set for an ascent
+    group.  Single source of truth shared by ``_evaluate_profile`` and the
+    offline lifter-chain generator (its bind-time builds must be exactly the
+    builds the live path would run)."""
+    return dict(
+        gravity=body.surface_gravity,
+        in_atmosphere=in_atmo,
+        min_twr_liftoff=min_twr,
+        available_engines=eligible_engines,
+        available_tanks=flags.available_tanks,
+        available_srbs=flags.available_srbs,
+        tanks_by_fuel_type=flags.tanks_by_fuel_type,
+        available_multi_mounts=flags.available_multi_mounts,
+        stack_decoupler=stack_decoupler,
+        staging_tier=flags.staging_tier,
+        needs_heat_shield=needs_hs,
+        max_heat_shield_size=flags.best_heat_shield.size_class if flags.best_heat_shield else None,
+        heat_shields=heat_shields_arg,
+        requires_throttleable=req_throttle,
+        require_gimbal=needs_gimbal_engine,
+        srb_needs_rcs=srb_needs_rcs,
+        player_has_rcs=flags.has_rcs,
+        attitude_module_mass=stage_attitude_mass,
+        aero_steering_mass=stage_aero_mass,
+        body_name=body.name,
+        launch_pad_mass_cap=flags.launch_pad_mass_cap,
+        atm_scale_height_m=body.atm_scale_height_m,
+        atm_top_m=body.safe_altitude_km * 1000.0 if body.has_atmosphere else 0.0,
+        pad_altitude_m=body.pad_altitude_m,
+        parallel_mode=parallel_mode,
+        radial_decoupler_mass=rdec_mass,
+        radial_decoupler_name=rdec_name,
+        fuel_line_mass=fl_mass,
+        fuel_line_name=fl_name,
+        run_parallel=run_parallel,
+    )
+
+
+def _consult_home_lifter(lifter_table, flags: EquipmentFlags, body: Body, *,
+                         in_atmo: bool, min_twr: float, req_throttle: bool,
+                         needs_gimbal_engine: bool, needs_hs: bool,
+                         gameplay: GameplayDifficulty, required_dv: float,
+                         payload_t: float):
+    """Consult the bound lifter table for a home-ascent build.  Returns a
+    ``LifterConsult`` (SERVED carries the hint; the caller rebuilds the real
+    stages via ``guide=``).  The ``AscentConstraints`` fingerprint mirrors the
+    generator's bind-time settings exactly (``srb_needs_rcs=True`` there)."""
+    from .lifter_binding import AscentConstraints, consult
+    live = AscentConstraints(
+        in_atmosphere=in_atmo,
+        min_twr_liftoff=min_twr,
+        requires_throttleable=req_throttle,
+        srb_needs_rcs=gameplay.srb_needs_rcs,
+        needs_heat_shield=needs_hs,
+        pad_altitude_m=body.pad_altitude_m,
+    )
+    return consult(lifter_table, phys_profile=lifter_table.phys_profile,
+                   required_dv=required_dv, payload_t=payload_t,
+                   admitted_parts=flags.admitted_part_names, live=live)
+
+
+@lru_cache(maxsize=2048)
+def _kit_ascent_flags(kit: frozenset) -> EquipmentFlags:
+    """``_pre_pass`` for a fixed part KIT, memoized by set membership.  Flags
+    are a pure function of the kit and read-only afterwards, so caching is safe
+    and lets the SERVED rebuild re-derive a chain prefix's equipment without
+    re-running the pre-pass on every consult."""
+    return _pre_pass(lambda n: 1 if n in kit else 0, start_with_clamps=True)
+
+
+def _ascent_kwargs_for_kit(
+    kit: frozenset, body: Body, *,
+    in_atmo: bool, min_twr: float, req_throttle: bool,
+    requires_attitude: bool, srb_needs_rcs: bool, run_parallel: bool,
+) -> tuple[dict, Optional[AttitudeBundle], EquipmentFlags]:
+    """Produce the ``find_optimal_multistage_ascent`` kwargs for a home-ascent
+    built from exactly ``kit`` (no terminal-pod context — a bare ascent group).
+
+    Single source of truth for the offline lifter-chain bind AND the runtime
+    SERVED rebuild: both derive every mass/mode input (engines, tanks,
+    parallel mode, decoupler/fuel-line/attitude/aero masses, gimbal need) from
+    the SAME pre-pass over the SAME part set, so a served rung is byte-identical
+    to what the generator bound.  Returns ``(kwargs, attitude_bundle, flags)``;
+    the bundle/flags let the caller attach control surcharges to the winning
+    sub-stages exactly as they were charged."""
+    flags = _kit_ascent_flags(kit)
+    needs_gimbal = in_atmo and not flags.has_aero_control_surface
+    aero_mass = (4.0 * flags.lightest_aero_control.mass
+                 if in_atmo and flags.lightest_aero_control else 0.0)
+    bundle = None
+    att_mass = 0.0
+    if requires_attitude:
+        bundle = _attitude_bundle_for_stage(flags, None)
+        if bundle is None:
+            needs_gimbal = True
+        else:
+            att_mass = bundle.mass
+    stacks = [d for d in flags.available_decouplers if d.kind == "stack"]
+    (parallel_mode, rdec_mass, rdec_name,
+     fl_mass, fl_name) = _parallel_staging_inputs(flags)
+    kwargs = _ascent_stage_kwargs(
+        flags, body,
+        in_atmo=in_atmo,
+        min_twr=min_twr,
+        eligible_engines=_filter_engines_for_ion(
+            flags.available_engines, body.solar_distance_au, flags),
+        stack_decoupler=(min(stacks, key=lambda d: d.mass) if stacks else None),
+        needs_hs=False,
+        heat_shields_arg=(),
+        req_throttle=req_throttle,
+        needs_gimbal_engine=needs_gimbal,
+        srb_needs_rcs=srb_needs_rcs,
+        stage_attitude_mass=att_mass,
+        stage_aero_mass=aero_mass,
+        parallel_mode=parallel_mode,
+        rdec_mass=rdec_mass,
+        rdec_name=rdec_name,
+        fl_mass=fl_mass,
+        fl_name=fl_name,
+        run_parallel=run_parallel,
+    )
+    return kwargs, bundle, flags
+
+
+def _guided_ascent_build(
+    kit: frozenset, body: Body, *,
+    in_atmo: bool, min_twr: float, req_throttle: bool,
+    requires_attitude: bool, srb_needs_rcs: bool, run_parallel: bool,
+    required_dv: float, payload_mass: float, guide, esc_kwargs: dict,
+) -> Optional[list]:
+    """Build one home-ascent from a fixed part ``kit`` under a pinned ``guide``,
+    with the control surcharges attached to the winning sub-stages and their
+    carry-flags cleared (so callers don't re-attach).  Shared by the offline
+    generator and the runtime SERVED rebuild — same kit + same guide + same
+    bounds => identical stages.  Returns bottom->top stages or None."""
+    kwargs, bundle, flags = _ascent_kwargs_for_kit(
+        kit, body, in_atmo=in_atmo, min_twr=min_twr, req_throttle=req_throttle,
+        requires_attitude=requires_attitude, srb_needs_rcs=srb_needs_rcs,
+        run_parallel=run_parallel)
+    stages = find_optimal_multistage_ascent(
+        required_dv=required_dv, payload_mass=payload_mass,
+        guide=guide, **kwargs, **esc_kwargs)
+    if stages is None:
+        return None
+    out = []
+    for sr in stages:
+        sr = _own_stage(sr)
+        if sr.carries_attitude_module and bundle is not None:
+            sr.equipment = sr.equipment + list(bundle.parts)
+            sr.carries_attitude_module = False
+        if sr.carries_aero_steering and flags.lightest_aero_control is not None:
+            sr.equipment = (sr.equipment
+                            + [(4, flags.lightest_aero_control.name)])
+            sr.carries_aero_steering = False
+        out.append(sr)
+    return out
+
+
+def _rebuild_served_lifter(consult_result, required_dv: float,
+                           payload_mass: float, body: Body, *,
+                           in_atmo: bool, min_twr: float, req_throttle: bool,
+                           requires_attitude: bool, srb_needs_rcs: bool,
+                           run_parallel: bool, esc_kwargs: dict):
+    """Rebuild the real bottom->top stages for a SERVED consult via the guided
+    optimizer, from the chain PREFIX the rung was bound against.  Re-deriving
+    the kwargs from the prefix (not the live full kit) is what makes the served
+    build reproduce the bind: the full kit is a SUPERSET (it also holds the
+    upper-stage / lander / relay parts the bumper added for other groups), and
+    letting the guided search see those extra tanks/mounts pulls the build off
+    the bind (a bigger owned tank -> heavier -> TWR-short).  Restricting to the
+    prefix makes serve == bind by construction.  Returns the stages or None
+    (a None here means the checked-in table drifted from the code)."""
+    return _guided_ascent_build(
+        frozenset(consult_result.prefix_used), body,
+        in_atmo=in_atmo, min_twr=min_twr, req_throttle=req_throttle,
+        requires_attitude=requires_attitude, srb_needs_rcs=srb_needs_rcs,
+        run_parallel=run_parallel,
+        required_dv=required_dv, payload_mass=payload_mass,
+        guide=consult_result.hint.to_guide(), esc_kwargs=esc_kwargs)
+
+
 def _evaluate_profile(
     profile: list[MissionEdge],
     flags: EquipmentFlags,
@@ -1513,6 +1763,7 @@ def _evaluate_profile(
     gameplay: GameplayDifficulty = CONSERVATIVE_GAMEPLAY,
     apollo_split: bool = False,
     assembly_chunks: Optional[tuple[int, ...]] = None,
+    lifter_table=None,
 ) -> ProfileResult:
     """
     Run the two-pass evaluation on a single mission profile alternative.
@@ -1951,6 +2202,10 @@ def _evaluate_profile(
     # snapshot diffs missed passive-descent groups entirely and went negative
     # across Apollo branch boundaries).
     _group_own: dict[int, float] = {}
+    # Chain-prefix parts the home ascent was SERVED from the bound table
+    # (empty when raw physics built it). Recorded on the feasible result so the
+    # minimization pass protects these reps and the kit owns them.
+    _lifter_prefix_used: frozenset = frozenset()
 
     # ``reversed(groups)`` iterates terminal → ascent; track the matching
     # flight-order index so we can hook stage-specific behaviour.
@@ -2197,7 +2452,13 @@ def _evaluate_profile(
         # If no bundle is available anywhere on the rocket, the stage must
         # self-provide via a gimballed engine/SRB.  Atmospheric ascent stages
         # have their own gimbal-or-aero gate above (separate concern).
-        group_needs_attitude = (any(e.requires_attitude_control for e in group)
+        # Raw ascent-group attitude requirement (no terminal-pod credit) — the
+        # lifter chain binds a bare ascent group, so its SERVED rebuild charges
+        # attitude the same conservative way regardless of what the payload pod
+        # carries.  ``group_needs_attitude`` (below) keeps the terminal credit
+        # for the live full-kit build path.
+        ascent_requires_attitude = any(e.requires_attitude_control for e in group)
+        group_needs_attitude = (ascent_requires_attitude
                                 and not attitude_covered_by_terminal)
         stage_attitude_mass = (
             global_attitude_bundle.mass
@@ -2235,21 +2496,8 @@ def _evaluate_profile(
             _group_own[flight_idx] = payload - _pay_before
             continue
 
-        if flags.staging_tier >= 2 and flags.has_fuel_lines:
-            parallel_mode = "asparagus"
-        elif flags.staging_tier >= 2:
-            parallel_mode = "onion"
-        else:
-            parallel_mode = "none"
-
-        # Parts the real parallel builder needs: a radial decoupler to shed
-        # boosters, and the fuel line for asparagus crossfeed (onion has none).
-        _radial_decs = [d for d in flags.available_decouplers if d.kind == "radial"]
-        _rdec = min(_radial_decs, key=lambda d: d.mass) if _radial_decs else None
-        rdec_mass = _rdec.mass if _rdec else 0.0
-        rdec_name = _rdec.name if _rdec else ""
-        fl_mass = _FUEL_LINE_MASS if flags.has_fuel_lines else 0.0
-        fl_name = _FUEL_LINE_PART if (flags.has_fuel_lines and _FUEL_LINE_PART) else ""
+        (parallel_mode, rdec_mass, rdec_name,
+         fl_mass, fl_name) = _parallel_staging_inputs(flags)
 
         diagnostic_out: list = []
         stage_kwargs = dict(
@@ -2327,36 +2575,24 @@ def _evaluate_profile(
                     # so the hot path never pays the wider search.
                     parallel_substages=True,
                 )
-            _ascent_kwargs = dict(
-                gravity=body.surface_gravity,
-                in_atmosphere=in_atmo,
-                min_twr_liftoff=min_twr,
-                available_engines=eligible_engines,
-                available_tanks=flags.available_tanks,
-                available_srbs=flags.available_srbs,
-                tanks_by_fuel_type=flags.tanks_by_fuel_type,
-                available_multi_mounts=flags.available_multi_mounts,
+            _ascent_kwargs = _ascent_stage_kwargs(
+                flags, body,
+                in_atmo=in_atmo,
+                min_twr=min_twr,
+                eligible_engines=eligible_engines,
                 stack_decoupler=stack_decoupler_for_ascent,
-                staging_tier=flags.staging_tier,
-                needs_heat_shield=needs_hs,
-                max_heat_shield_size=flags.best_heat_shield.size_class if flags.best_heat_shield else None,
-                heat_shields=heat_shields_arg,
-                requires_throttleable=req_throttle,
-                require_gimbal=needs_gimbal_engine,
+                needs_hs=needs_hs,
+                heat_shields_arg=heat_shields_arg,
+                req_throttle=req_throttle,
+                needs_gimbal_engine=needs_gimbal_engine,
                 srb_needs_rcs=gameplay.srb_needs_rcs,
-                player_has_rcs=flags.has_rcs,
-                attitude_module_mass=stage_attitude_mass,
-                aero_steering_mass=stage_aero_mass,
-                body_name=body.name,
-                launch_pad_mass_cap=flags.launch_pad_mass_cap,
-                atm_scale_height_m=body.atm_scale_height_m,
-                atm_top_m=body.safe_altitude_km * 1000.0 if body.has_atmosphere else 0.0,
-                pad_altitude_m=body.pad_altitude_m,
+                stage_attitude_mass=stage_attitude_mass,
+                stage_aero_mass=stage_aero_mass,
                 parallel_mode=parallel_mode,
-                radial_decoupler_mass=rdec_mass,
-                radial_decoupler_name=rdec_name,
-                fuel_line_mass=fl_mass,
-                fuel_line_name=fl_name,
+                rdec_mass=rdec_mass,
+                rdec_name=rdec_name,
+                fl_mass=fl_mass,
+                fl_name=fl_name,
                 run_parallel=run_parallel,
             )
 
@@ -2389,29 +2625,60 @@ def _evaluate_profile(
                         sum(standalone[g] for g in range(cb, hi)))
                 lifters: list[list[StageResult]] = []
                 max_lift = 0.0
+                _lifter_ok = (lifter_table is not None
+                              and body.name == home
+                              and flags.staging_tier >= 1
+                              and run_parallel)
                 # Heaviest chunk first: it decides feasibility, fail fast.
                 for cm in sorted(chunk_masses, reverse=True):
-                    l_diag: list = []
-                    lifter = find_optimal_multistage_ascent(
-                        **_esc_kwargs,
-                        required_dv=lifter_req_dv,
-                        payload_mass=cm,
-                        diagnostic_out=l_diag,
-                        **_ascent_kwargs,
-                    )
+                    lifter = None
+                    if _lifter_ok:
+                        from .lifter_binding import ServeResult
+                        _c = _consult_home_lifter(
+                            lifter_table, flags, body,
+                            in_atmo=in_atmo, min_twr=min_twr,
+                            req_throttle=req_throttle,
+                            needs_gimbal_engine=needs_gimbal_engine,
+                            needs_hs=needs_hs, gameplay=gameplay,
+                            required_dv=lifter_req_dv, payload_t=cm)
+                        # OVER_CEILING / PREFIX_MISSING here mean this chunking
+                        # can't serve; the assembly driver already fails fast
+                        # on the heaviest chunk, so fall to live for the exact
+                        # near-miss diagnostic rather than a chain reason.
+                        if _c.result is ServeResult.SERVED:
+                            lifter = _rebuild_served_lifter(
+                                _c, lifter_req_dv, cm, body,
+                                in_atmo=in_atmo, min_twr=min_twr,
+                                req_throttle=req_throttle,
+                                requires_attitude=ascent_requires_attitude,
+                                srb_needs_rcs=gameplay.srb_needs_rcs,
+                                run_parallel=run_parallel,
+                                esc_kwargs=_esc_kwargs)
+                            if lifter is not None:
+                                _lifter_prefix_used |= _c.prefix_used
                     if lifter is None:
-                        return ProfileResult(
-                            False, launch_mass=payload,
-                            blocking=[BlockingInfo(
-                                reason=BlockingReason.NO_VIABLE_STAGE,
-                                body=body.name,
-                                dv_needed=lifter_req_dv,
-                                stage_diag=l_diag[0] if l_diag else None,
-                            )],
-                            partial_stages=list(stage_results_list),
-                            partial_group_mass=standalone,
-                            edge_groups=groups)
-                    lifters.append([_own_stage(sr) for sr in lifter])
+                        l_diag: list = []
+                        lifter = find_optimal_multistage_ascent(
+                            **_esc_kwargs,
+                            required_dv=lifter_req_dv,
+                            payload_mass=cm,
+                            diagnostic_out=l_diag,
+                            **_ascent_kwargs,
+                        )
+                        if lifter is None:
+                            return ProfileResult(
+                                False, launch_mass=payload,
+                                blocking=[BlockingInfo(
+                                    reason=BlockingReason.NO_VIABLE_STAGE,
+                                    body=body.name,
+                                    dv_needed=lifter_req_dv,
+                                    stage_diag=l_diag[0] if l_diag else None,
+                                )],
+                                partial_stages=list(stage_results_list),
+                                partial_group_mass=standalone,
+                                edge_groups=groups)
+                        lifter = [_own_stage(sr) for sr in lifter]
+                    lifters.append(lifter)
                     max_lift = max(max_lift, lifter[0].stage_mass_wet)
                 # Group-level launch equipment rides the first lifter's
                 # bottom; per-lifter control surcharges land exactly where
@@ -2436,18 +2703,114 @@ def _evaluate_profile(
                 payload = max_lift
                 continue
 
+            # Bound lifter table: consult first for the HOME pad launch
+            # (group 0).  A hit rebuilds the real stage via the pinned guide
+            # (no search); the two structured misses feed bumper guidance and
+            # keep the assembly retry reachable.  Absent table / mismatch =>
+            # fall through to the live search below (byte-identical to before).
+            multistage = None
+            _lifter_fallback = True
+            # The chain serves the home LIFTER — the pad->low-orbit ascent as
+            # its own stage.  ``staging_tier >= 1`` is exactly that condition:
+            # with any decoupler the ascent is always its own group (grouping
+            # sets max_stages=len(groups), no merging), so group 0 is the pure
+            # ascent.  At staging_tier 0 (no decouplers) the whole mission
+            # collapses into one un-staged stage — not a lifter at all — so the
+            # general capability path handles it (not a lifter fallback).
+            #
+            # ``run_parallel`` gates it too: the chain's rungs are AUTHORITATIVE
+            # (parallel/asparagus) builds.  The bumper's serial-guidance trials
+            # pass run_parallel=False, which by design skips the parallel search
+            # — so a parallel-architecture rung can't be reproduced serially.
+            # Those cheap ranking trials use the serial proxy directly (not the
+            # home lifter); the chain serves only the authoritative decision,
+            # where the parallel build always reproduces.
+            if (lifter_table is not None and flight_idx == 0
+                    and body.name == home and flags.staging_tier >= 1
+                    and run_parallel):
+                _c = _consult_home_lifter(
+                    lifter_table, flags, body,
+                    in_atmo=in_atmo, min_twr=min_twr,
+                    req_throttle=req_throttle,
+                    needs_gimbal_engine=needs_gimbal_engine,
+                    needs_hs=needs_hs, gameplay=gameplay,
+                    required_dv=req_dv, payload_t=stage_payload)
+                from .lifter_binding import ServeResult
+                from .capability_reasons import LifterChainDelta
+                if _c.result is ServeResult.SERVED:
+                    # 100% chain for the authoritative staged home lifter — no
+                    # live fallback.  The guide is an authoritative build under
+                    # this home's own bounds, so it always reproduces; a None
+                    # here means the checked-in table drifted from the code.
+                    multistage = _rebuild_served_lifter(
+                        _c, req_dv, stage_payload, body,
+                        in_atmo=in_atmo, min_twr=min_twr,
+                        req_throttle=req_throttle,
+                        requires_attitude=ascent_requires_attitude,
+                        srb_needs_rcs=gameplay.srb_needs_rcs,
+                        run_parallel=run_parallel,
+                        esc_kwargs=_esc_kwargs)
+                    if multistage is None:
+                        raise RuntimeError(
+                            f"lifter chain SERVED but the pinned guide failed "
+                            f"to rebuild (home={home} dv={req_dv:.0f} "
+                            f"payload={stage_payload:.1f}t) — stale/corrupt "
+                            f"lifter table; regenerate")
+                    _lifter_prefix_used |= _c.prefix_used
+                    _lifter_fallback = False
+                elif _c.result is ServeResult.OVER_CEILING:
+                    return ProfileResult(
+                        False, launch_mass=stage_payload,
+                        blocking=[BlockingInfo(
+                            reason=BlockingReason.LIFTER_PAYLOAD_OVER_CEILING,
+                            body=body.name, dv_needed=req_dv,
+                            mass_actual=stage_payload, mass_cap=_c.ceiling_t)],
+                        partial_stages=list(stage_results_list),
+                        partial_group_mass=(_assembly_standalone_masses(
+                            _group_own, len(groups),
+                            terminal_mass + terminal_equip + extra_payload_mass,
+                            apollo.ascent_gidx if apollo is not None else None)
+                            or {}),
+                        edge_groups=groups)
+                elif _c.result is ServeResult.PREFIX_MISSING:
+                    return ProfileResult(
+                        False, launch_mass=stage_payload,
+                        blocking=[BlockingInfo(
+                            reason=BlockingReason.LIFTER_PREFIX_MISSING,
+                            body=body.name, dv_needed=req_dv,
+                            mass_actual=stage_payload,
+                            chain_delta=LifterChainDelta(
+                                profile_id=lifter_table.profile_id,
+                                missing_parts=_c.missing_parts,
+                                threshold_t=stage_payload,
+                                dv_bound=_c.dv_bound))],
+                        partial_stages=list(stage_results_list),
+                        partial_group_mass=(_assembly_standalone_masses(
+                            _group_own, len(groups),
+                            terminal_mass + terminal_equip + extra_payload_mass,
+                            apollo.ascent_gidx if apollo is not None else None)
+                            or {}),
+                        edge_groups=groups)
+                else:  # NOT_COVERED — impossible for an authoritative staged
+                    # home ascent (every such dv variant is bound).
+                    raise RuntimeError(
+                        f"lifter chain left an authoritative staged home ascent "
+                        f"uncovered (home={home} dv={req_dv:.0f}) — a required "
+                        f"dv variant is unbound; regenerate the lifter table")
+
             ms_diag_out: list = []
             ms_partial_out: list = []
-            multistage = find_optimal_multistage_ascent(
-                **_esc_kwargs,
-                required_dv=req_dv,
-                payload_mass=stage_payload,
-                diagnostic_out=ms_diag_out,
-                partial_stages_out=ms_partial_out,
-                **_ascent_kwargs,
-            )
-            if multistage is not None:
-                multistage = [_own_stage(sr) for sr in multistage]
+            if _lifter_fallback:
+                multistage = find_optimal_multistage_ascent(
+                    **_esc_kwargs,
+                    required_dv=req_dv,
+                    payload_mass=stage_payload,
+                    diagnostic_out=ms_diag_out,
+                    partial_stages_out=ms_partial_out,
+                    **_ascent_kwargs,
+                )
+                if multistage is not None:
+                    multistage = [_own_stage(sr) for sr in multistage]
             if multistage is None:
                 stage_diag = ms_diag_out[0] if ms_diag_out else None
                 # Whole near-miss rocket: stages already built downstream
@@ -2587,6 +2950,7 @@ def _evaluate_profile(
         stage_group_indices=list(reversed(stage_group_list)),
         terminal_parts=terminal_parts,
         terminal_pod_name=terminal_pod.name if terminal_pod else "",
+        lifter_prefix_used=_lifter_prefix_used,
         # kit_used is NOT built here — it's expensive and only two call
         # sites consume it.  They call ``build_kit_for_result`` explicitly.
     )
@@ -3728,6 +4092,7 @@ def _try_assembly_profiles(
     requires_precise_pointing: bool = False,
     gameplay: GameplayDifficulty = CONSERVATIVE_GAMEPLAY,
     run_parallel: bool = True,
+    lifter_table=None,
 ) -> Optional[ProfileResult]:
     """Multi-launch assembly retry (failure path only; caller pre-gates with
     ``_assembly_candidate``).  Per profile: one probe evaluation captures the
@@ -3745,7 +4110,8 @@ def _try_assembly_profiles(
                 run_parallel=run_parallel, requires_eva=requires_eva,
                 requires_rendezvous=True, requires_samples=requires_samples,
                 requires_precise_pointing=requires_precise_pointing,
-                gameplay=gameplay, apollo_split=asm_apollo)
+                gameplay=gameplay, apollo_split=asm_apollo,
+                lifter_table=lifter_table)
             if probe.feasible:
                 return probe  # closed without assembly after all
             candidates = _assembly_partitions(probe)
@@ -3758,7 +4124,7 @@ def _try_assembly_profiles(
                     requires_samples=requires_samples,
                     requires_precise_pointing=requires_precise_pointing,
                     gameplay=gameplay, apollo_split=asm_apollo,
-                    assembly_chunks=chunks)
+                    assembly_chunks=chunks, lifter_table=lifter_table)
                 if result.feasible:
                     result.via_assembly = True
                     # The assembly eval keeps the Apollo split when the
@@ -3920,6 +4286,7 @@ def evaluate_mission_detailed(
     requires_samples: bool | None = None,
     requires_precise_pointing: bool = False,
     run_parallel: bool = True,
+    use_lifter_table: bool = False,
 ) -> ProfileResult:
     """
     Evaluate a specific mission and return the winning ProfileResult
@@ -3942,6 +4309,11 @@ def evaluate_mission_detailed(
     """
     home = mission_builder.home_body
     gameplay = mission_builder.gameplay  # world-carried skill/equipment gates
+    # Pre-cached home-ascent lifter: consulted only when the caller opts in
+    # (the sphere-ladder evaluator).  post_fill cross-check / spoiler /
+    # get_capability leave it None and stay on raw physics, so the table never
+    # gates a shipped seed on its own.
+    _lifter_table = mission_builder.lifter_table if use_lifter_table else None
 
     # --- Sounding rocket (altitude milestones, first crash) ---
     if mission_type == MissionType.SOUNDING:
@@ -4079,7 +4451,8 @@ def evaluate_mission_detailed(
                                        requires_rendezvous=requires_rendezvous,
                                        requires_samples=requires_samples,
                                        requires_precise_pointing=requires_precise_pointing,
-                                       gameplay=gameplay)
+                                       gameplay=gameplay,
+                                       lifter_table=_lifter_table)
             if result.feasible:
                 return result
             for b in result.blocking:
@@ -4105,7 +4478,8 @@ def evaluate_mission_detailed(
                                            requires_precise_pointing=(
                                                requires_precise_pointing),
                                            gameplay=gameplay,
-                                           apollo_split=True)
+                                           apollo_split=True,
+                                           lifter_table=_lifter_table)
                 if result.feasible:
                     result.via_apollo = True
                     return result
@@ -4121,7 +4495,8 @@ def evaluate_mission_detailed(
             extra_payload_parts=extra_payload_parts,
             requires_eva=requires_eva, requires_samples=requires_samples,
             requires_precise_pointing=requires_precise_pointing,
-            gameplay=gameplay, run_parallel=run_parallel)
+            gameplay=gameplay, run_parallel=run_parallel,
+            lifter_table=_lifter_table)
         if result is not None:
             if result.feasible and not result.via_assembly:
                 result.via_apollo = _apollo_candidate(flags, mission_type)

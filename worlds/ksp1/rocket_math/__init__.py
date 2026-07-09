@@ -1800,6 +1800,14 @@ def find_optimal_multistage_ascent(
     booster_counts: tuple[int, ...] = _PARALLEL_BOOSTER_COUNTS,
     max_eng_per_col: int = _PARALLEL_MAX_ENG_PER_COL,
     parallel_substages: bool = False,
+    # Architecture guide (offline lifter-chain bindings): pins the search to
+    # one known-good architecture — (dv_split, per-stage
+    # (n_boosters, booster_engines, engine_name)) — turning the K x splits x
+    # engines x booster-grid search into K single-architecture stage sizings
+    # (~150x measured).  The guided result is a real optimizer build; only
+    # the SEARCH is skipped.
+    guide: Optional[tuple[tuple[float, ...],
+                          tuple[tuple[int, int, str], ...]]] = None,
 ) -> Optional[list[StageResult]]:
     """Find lowest-total-wet K-stage ascent architecture for an atmospheric
     body.  Returns a list of StageResults from BOTTOM (launch) to TOP
@@ -1829,6 +1837,11 @@ def find_optimal_multistage_ascent(
         max_K = max(1, max_ascent_stages)
     else:
         max_K = min(_F4_MAX_K, max(1, staging_tier + 1))
+    if guide is not None:
+        guide_split, guide_stages = guide
+        # The no-stack-decoupler ⇒ K=1 gate is physics, never bypassed.
+        if stack_decoupler is None and len(guide_stages) > 1:
+            return None
     deco_mass = stack_decoupler.mass if stack_decoupler else 0.0
 
     best: Optional[list[StageResult]] = None
@@ -1843,8 +1856,13 @@ def find_optimal_multistage_ascent(
     closest_partial: list[StageResult] = []
     closest_score: tuple[int, float] = (-1, -float("inf"))  # (stages_built, -dv_gap)
 
-    for K in range(1, max_K + 1):
-        for split in _F4_DV_SPLITS[K]:
+    if guide is not None:
+        k_splits: list[tuple[int, tuple[tuple[float, ...], ...]]] = [
+            (len(guide_stages), (guide_split,))]
+    else:
+        k_splits = [(K, _F4_DV_SPLITS[K]) for K in range(1, max_K + 1)]
+    for K, splits in k_splits:
+        for split in splits:
             # Build top-down: top stage first (carries mission payload),
             # lower stages carry wet of stages above + decoupler.
             stages_top_to_bot: list[StageResult] = []
@@ -1876,10 +1894,44 @@ def find_optimal_multistage_ascent(
                 # see it propagated via current_payload (no double-charge).
                 stage_heat_shields = heat_shields if i == 0 else ()
                 stage_needs_heat_shield = needs_heat_shield if i == 0 else False
+                stage_engines = available_engines
+                stage_srbs = available_srbs if stage_in_atm else []
+                stage_bc = booster_counts
+                stage_mec = max_eng_per_col
+                stage_pmode = (parallel_mode
+                               if (K == 1 or parallel_substages) else "none")
+                if guide is not None:
+                    g_nb, g_beng, g_eng = guide_stages[i]
+                    if g_nb > 0:
+                        # This stage WAS a parallel cluster at bind time —
+                        # force the parallel build regardless of the
+                        # parallel_substages search-cost bound (the guide
+                        # already picked the architecture, so there is no
+                        # search to bound).
+                        stage_bc = (g_nb,)
+                        stage_pmode = parallel_mode
+                        if g_beng:
+                            stage_mec = min(max_eng_per_col, max(1, g_beng))
+                    else:
+                        stage_pmode = "none"
+                    if any(s.name == g_eng for s in stage_srbs):
+                        stage_srbs = [s for s in stage_srbs
+                                      if s.name == g_eng]
+                        stage_engines = []
+                    else:
+                        stage_engines = [e for e in stage_engines
+                                         if e.name == g_eng]
+                        stage_srbs = []
+                    if not stage_engines and not stage_srbs:
+                        # Guide references a part outside this kit — the
+                        # caller's prefix guarantee was violated; fail the
+                        # architecture rather than silently widening.
+                        ok = False
+                        break
                 inner_diag: list[StageDiagnostic] = []
                 stage = find_optimal_stage(
-                    available_engines=available_engines,
-                    available_srbs=available_srbs if stage_in_atm else [],
+                    available_engines=stage_engines,
+                    available_srbs=stage_srbs,
                     available_tanks=available_tanks,
                     required_dv=stage_dv,
                     payload_mass=current_payload,
@@ -1895,16 +1947,14 @@ def find_optimal_multistage_ascent(
                     # opts in (parallel_substages, bug 093): per-cluster
                     # sizing is exact, so nothing double-counts — the flag is
                     # a search-cost bound only.
-                    parallel_mode=(parallel_mode
-                                   if (K == 1 or parallel_substages)
-                                   else "none"),
+                    parallel_mode=stage_pmode,
                     radial_decoupler_mass=radial_decoupler_mass,
                     radial_decoupler_name=radial_decoupler_name,
                     fuel_line_mass=fuel_line_mass,
                     fuel_line_name=fuel_line_name,
                     run_parallel=run_parallel,
-                    booster_counts=booster_counts,
-                    max_eng_per_col=max_eng_per_col,
+                    booster_counts=stage_bc,
+                    max_eng_per_col=stage_mec,
                     srb_needs_rcs=srb_needs_rcs,
                     player_has_rcs=player_has_rcs,
                     tanks_by_fuel_type=tanks_by_fuel_type,

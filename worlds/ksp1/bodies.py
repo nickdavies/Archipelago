@@ -1498,6 +1498,14 @@ class MissionBuilder:
         # to charge the dv to reach the orbit and by build_parameters to tell the
         # client where to spawn the stranded Kerbal.
         self.rescue_orbit_params: dict[BodyName, float] = {}
+        # Per-seed bound lifter table (pad -> home low orbit), or None to use
+        # raw physics for the home-ascent build.  Populated by the world in
+        # generate_early (same lifecycle as random_orbit_params); read only by
+        # the sphere-ladder evaluator path (``use_lifter_table=True``), never
+        # by the post_fill cross-check / spoiler / feasibility generator, which
+        # stay on raw physics.  ``Optional[BoundLifterTable]`` — untyped here to
+        # avoid importing lifter_binding at module import.
+        self.lifter_table = None
         # Precomputed relay-tier table keyed by destination BodyName.
         # Built before edge construction so ``_edge`` can stamp the
         # value onto every ``MissionEdge.relay_tier`` directly — the
