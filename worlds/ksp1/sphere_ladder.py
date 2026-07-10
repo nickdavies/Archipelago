@@ -360,7 +360,7 @@ def _contract_payload_rep_names(info: "LocationDescriptor",
     return {p.name for p in cp} if cp else set()
 
 
-def _parallel_only_mission(info: _LocationMissionInfo,
+def _parallel_only_mission(info: LocationDescriptor,
                            mission_builder: MissionBuilder) -> bool:
     """True for missions whose closure REQUIRES the parallel/asparagus search
     (the multi-launch assembly tail and the escalated-ascent-edge round

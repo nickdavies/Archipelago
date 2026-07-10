@@ -8,9 +8,9 @@ locations behind a permanently-false access rule (the strand that kills a
 seed).
 
 There is no shipped ultra-hard body, so this simulates one by injecting a
-full body subtree's location names into ``MODEL_INFEASIBLE_BASE`` — the
-exact shape ``scripts/generate_feasibility.py`` emits for a real
-ceiling-exceeding body: it probes every event of every body, and parent
+full body subtree's ``(body, mission_type)`` missions into
+``MODEL_INFEASIBLE_BASE`` — the exact shape ``scripts/generate_feasibility.py``
+emits for a real ceiling-exceeding body: it probes every event of every body, and parent
 gating cascades an unreachable parent into all-False access on its moons,
 so the whole subtree lands in the table together.  The Jool system stands
 in for the hypothetical body here.
@@ -22,7 +22,9 @@ from unittest.mock import patch
 from BaseClasses import LocationProgressType
 from worlds.ksp1.bodies import BodyName
 from worlds.ksp1.data.feasibility import MODEL_INFEASIBLE_BASE
-from worlds.ksp1.locations import MISSION_LOCATIONS, MissionLocation
+from worlds.ksp1.locations import (
+    EVENT_BY_NAME, MISSION_LOCATIONS, MissionLocation,
+)
 from worlds.ksp1.test.base import KSP1TestBase
 
 # The simulated ultra-hard body and its (parent-gated) subtree.
@@ -31,8 +33,9 @@ _SYNTH_BODIES = frozenset({
     BodyName.TYLO, BodyName.BOP, BodyName.POL,
 })
 
-_SYNTH_LOCATIONS = frozenset(
-    str(ml) for ml in MISSION_LOCATIONS if ml.body in _SYNTH_BODIES
+_SYNTH_MISSIONS = frozenset(
+    (ml.body, EVENT_BY_NAME[ml.event].mission_type)
+    for ml in MISSION_LOCATIONS if ml.body in _SYNTH_BODIES
 )
 
 
@@ -48,7 +51,7 @@ class TestUltraHardBodyGracefulExclusion(KSP1TestBase):
 
     def setUp(self) -> None:
         patched = {
-            diff: {home: names | _SYNTH_LOCATIONS
+            diff: {home: names | _SYNTH_MISSIONS
                    for home, names in homes.items()}
             for diff, homes in MODEL_INFEASIBLE_BASE.items()
         }

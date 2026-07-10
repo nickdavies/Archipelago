@@ -213,11 +213,11 @@ class TestApolloBracketBuildingGate(unittest.TestCase):
     """
 
     def test_via_apollo_adds_rendezvous_buildings(self) -> None:
-        from worlds.ksp1.sphere_ladder import (
-            _LocationMissionInfo, _mission_building_reqs)
+        from worlds.ksp1.sphere_ladder import _mission_building_reqs
+        from worlds.ksp1.locations import LocationDescriptor
         from worlds.ksp1.items import PROGRESSIVE_MISSION_CONTROL_NAME
         mb = MissionBuilder(home=BodyName.LAYTHE)
-        info = _LocationMissionInfo(
+        info = LocationDescriptor(
             body=BodyName.TYLO, mission_type=MissionType.RETURN,
             crewed=None, threshold_km=None)
         # Options leave home-system nav ungated: the kit-independent needs
