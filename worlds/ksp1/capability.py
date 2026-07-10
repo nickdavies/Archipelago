@@ -1736,15 +1736,53 @@ def _rebuild_served_lifter(consult_result, required_dv: float,
     upper-stage / lander / relay parts the bumper added for other groups), and
     letting the guided search see those extra tanks/mounts pulls the build off
     the bind (a bigger owned tank -> heavier -> TWR-short).  Restricting to the
-    prefix makes serve == bind by construction.  Returns the stages or None
-    (a None here means the checked-in table drifted from the code)."""
+    prefix makes serve == bind by construction.
+
+    The pinned guide is the argmin architecture the generator bound at this
+    rung's ``(dv_bound, threshold_t)``.  Two rebuild points are possible and the
+    order matters for PACING, not just correctness:
+
+      1. ACTUAL ``(required_dv, payload_mass)`` — the real mission demand.  This
+         is the launch mass the player actually flies, so it decides the pad
+         tier they're granted.  Rebuilding at the threshold instead would serve
+         the top-of-band mass for every payload in the band (rungs are ~x2 in
+         payload, so up to ~2x heavier): measured on Kerbin, that over-grants
+         the launch-pad tier on ~17% of serves (e.g. a 1.4t payload whose real
+         build is 12t -> tier-0 20t pad gets the 23t threshold build -> tier-1
+         100t pad).  The pad is a PACING lever, so a too-big pad handed out too
+         early makes the run too powerful — a regression solve-rate can't see.
+         So attempt the accurate per-payload build FIRST.
+
+      2. BIND point ``(dv_bound, threshold_t)`` — only if (1) returns None.  An
+         extreme architecture sized for the threshold (Eve's wide asparagus:
+         12+12 boosters) can fail to down-size to a much lighter payload even
+         though the rung is genuinely buildable; (2) is the exact
+         ``canonical_hint`` computation, so it always reproduces (guaranteed
+         non-None), and threshold >= payload keeps it conservative.  This path
+         is rare (~1% of serves, ~all Eve) and its pad over-grant there is
+         unavoidable — there is no lighter build of that architecture.
+
+    Kwargs are re-derived from the chain PREFIX, not the live full kit (a
+    SUPERSET holding other groups' parts): letting the guided search see those
+    extra tanks/mounts would pull the build off the bind (bigger owned tank ->
+    heavier -> TWR-short).  Restricting to the prefix makes serve == bind.
+    Still 100% chain — neither path drops to live physics; a None from (2) means
+    the checked-in table drifted from the code."""
+    prefix = frozenset(consult_result.prefix_used)
+    kw = dict(in_atmo=in_atmo, min_twr=min_twr, req_throttle=req_throttle,
+              requires_attitude=requires_attitude, srb_needs_rcs=srb_needs_rcs,
+              run_parallel=run_parallel,
+              guide=consult_result.hint.to_guide(), esc_kwargs=esc_kwargs)
+    # Attempt 1: accurate per-payload build (correct pad-tier / pacing).
+    stages = _guided_ascent_build(
+        prefix, body, required_dv=required_dv, payload_mass=payload_mass, **kw)
+    if stages is not None:
+        return stages
+    # Attempt 2: exact bind point — guaranteed reproduction for architectures
+    # that can't down-size to the lighter payload (rare; ~all Eve).
     return _guided_ascent_build(
-        frozenset(consult_result.prefix_used), body,
-        in_atmo=in_atmo, min_twr=min_twr, req_throttle=req_throttle,
-        requires_attitude=requires_attitude, srb_needs_rcs=srb_needs_rcs,
-        run_parallel=run_parallel,
-        required_dv=required_dv, payload_mass=payload_mass,
-        guide=consult_result.hint.to_guide(), esc_kwargs=esc_kwargs)
+        prefix, body, required_dv=consult_result.dv_bound,
+        payload_mass=consult_result.threshold_t, **kw)
 
 
 def _evaluate_profile(

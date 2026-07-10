@@ -144,6 +144,10 @@ class LifterConsult:
     missing_parts: tuple[str, ...] = ()
     ceiling_t: float = 0.0
     dv_bound: float = 0.0
+    # The served rung's threshold payload — the mass the guide was BOUND at.
+    # The rebuild falls back to (dv_bound, threshold_t) if the pinned guide
+    # can't down-size to the lighter actual payload (Eve's wide asparagus).
+    threshold_t: float = 0.0
 
 
 # Requests within this many m/s above a bound dv still serve from it (float
@@ -249,6 +253,7 @@ def consult(table: BoundLifterTable, *, phys_profile: str, required_dv: float,
             launch_mass=best.launch_mass,
             prefix_used=table.prefix_set(best.prefix_len),
             dv_bound=ladder.dv,
+            threshold_t=best.threshold_t,
         )
     if first_missing is not None:
         missing = tuple(p for p in table.chain[:first_missing.prefix_len]
