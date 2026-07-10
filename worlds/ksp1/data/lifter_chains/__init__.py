@@ -69,11 +69,11 @@ def load_lifter_table(home: "BodyName", pack_key: tuple[str, ...],
     ladders = tuple(
         BoundLadder(
             dv=dv, ceiling_t=ceiling, constraints=constraints,
-            rungs=tuple(BoundRung(threshold_t=thresholds[r[0]],
+            rungs=tuple(BoundRung(threshold_t=r[0],
                                   prefix_len=r[1],
                                   launch_mass=r[2], hint=hints[r[3]])
                         for r in rungs),
-        ) for (dv, ceiling, thresholds), rungs in zip(meta, rows))
+        ) for (dv, ceiling), rungs in zip(meta, rows))
     chain = tuple(OFFSET_TO_NAME[o] for o in chains[profile_id])
     return BoundLifterTable(
         home=home, profile_id=profile_id, chain=chain,
