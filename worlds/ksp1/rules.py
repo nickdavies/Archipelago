@@ -135,8 +135,19 @@ def _make_goal_event_rule(
     uses (``world._cheap_mission_reps``).  Keeps the victory condition on the
     cheap system instead of a live ``get_capability`` per goal body/event.
 
-    A body/event with no bracket entry (e.g. model-infeasible) falls back to the
-    all-parts proxy — conservative, matching the proxy access rule.
+    A body/event with no bracket entry splits two ways, mirroring the location
+    layer exactly:
+
+    * model-infeasible → the all-parts proxy (its original purpose: "the
+      player owns everything, we can't verify" — such goals are normally
+      filtered anyway);
+    * feasible-but-unbracketed (no sphere's reps-only kit proved it — e.g.
+      an assembly-closed mission the bumper could only RESCUE) → the real
+      capability check, the same correct-but-slow fallback unbracketed
+      LOCATIONS keep.  ``get_capability`` is state-cached, so the marginal
+      cost is a dict lookup.  The old behaviour fell to the all-parts proxy
+      here, which is unsatisfiable under advancement sweeps (useful-class
+      parts are never auto-collected) — Victory deadlocked.
 
     Beyond the physics parts, each body/event carries its capability counted gate
     (nav / EVA / samples / DSN / pad, from ``world._cheap_mission_counted``), so
@@ -145,6 +156,7 @@ def _make_goal_event_rule(
     """
     bt = tuple(bodies)
     ev = event.value
+    mt = EVENT_BY_NAME[ev].mission_type
 
     def rule(state: CollectionState) -> bool:
         world = state.multiworld.worlds[player]
@@ -154,9 +166,17 @@ def _make_goal_event_rule(
         counted_map = getattr(world, "_cheap_mission_counted", {})
         for b in bt:
             reps = reps_map.get((b.value, ev))
-            need = reps if reps is not None else _ALL_PROGRESSION_ITEMS
-            if not state.has_all(need, player):
-                return False
+            if reps is not None:
+                if not state.has_all(reps, player):
+                    return False
+            elif (b, mt) in world.unachievable_missions:
+                if not state.has_all(_ALL_PROGRESSION_ITEMS, player):
+                    return False
+            else:
+                from .capability import get_capability
+                cap = get_capability(state, player)
+                if not cap.bodies[b].access.get(ev, False):
+                    return False
             counted = counted_map.get((b.value, ev), ())
             if not all(state.has(kind, player, lvl) for kind, lvl in counted):
                 return False

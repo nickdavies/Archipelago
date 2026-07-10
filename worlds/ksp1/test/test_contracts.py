@@ -61,9 +61,11 @@ class TestPreciseOrbitAttitude(unittest.TestCase):
     """
 
     ASSIST = GameplayDifficulty(precise_pointing_needs_reaction_control=True,
-                                srb_needs_rcs=True)      # casual / normal
+                                srb_needs_rcs=True,
+                                docking_needs_rcs=True)   # casual / normal
     NO_ASSIST = GameplayDifficulty(precise_pointing_needs_reaction_control=False,
-                                   srb_needs_rcs=False)  # expert
+                                   srb_needs_rcs=False,
+                                   docking_needs_rcs=False)  # expert
 
     def _mb(self, gameplay):
         mb = MissionBuilder(home=BodyName.KERBIN)

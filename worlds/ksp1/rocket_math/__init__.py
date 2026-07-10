@@ -33,6 +33,7 @@ def _isp_for_ascent(
     in_atmosphere: bool,
     atm_scale_height_m: float,
     atm_top_m: float,
+    pad_altitude_m: float = 0.0,
 ) -> float:
     """Effective Isp for an ascent stage.
 
@@ -41,17 +42,28 @@ def _isp_for_ascent(
     near the top of the atmosphere.
 
     Vacuum bodies (or any call with ``in_atmosphere=False``) get ``vac_isp``
-    directly.  Atmospheric bodies get a pressure-weighted average over
-    the [0, atm_top_m] column.  All atmospheric parameters come from the
-    Body — nothing here is Kerbin-specific.
+    directly.  Atmospheric bodies get a pressure-weighted average of the
+    pressure fraction over the ascent column ``[pad_altitude_m, atm_top_m]``.
+    An elevated launch site starts the burn where ambient pressure is already
+    ``exp(-pad_altitude_m/H)`` of sea level, so the engines run nearer ``vac_isp``
+    from the start — charging the sea-level column (pad=0) over-charges an
+    elevated ascent (Eve's ~6.1 km mesa pad).  ``pad_altitude_m == 0`` (every
+    sea-level pad) reduces to the original ``[0, atm_top_m]`` average, so this
+    is byte-identical off the elevated-pad path.  All atmospheric parameters
+    come from the Body — nothing here is Kerbin-specific.
     """
     if not in_atmosphere:
         return vac_isp
     if atm_scale_height_m <= 0.0 or atm_top_m <= 0.0:
         return atm_isp  # body has no atmospheric model — be conservative
+    a = pad_altitude_m if pad_altitude_m > 0.0 else 0.0
+    if a >= atm_top_m:
+        return vac_isp  # pad above the modelled atmosphere → vacuum-Isp launch
+    # Average pressure fraction over [a, atm_top_m]: ∫ exp(-h/H) dh / (top - a).
     avg_p = (atm_scale_height_m
-             * (1.0 - math.exp(-atm_top_m / atm_scale_height_m))
-             / atm_top_m)
+             * (math.exp(-a / atm_scale_height_m)
+                - math.exp(-atm_top_m / atm_scale_height_m))
+             / (atm_top_m - a))
     return atm_isp * avg_p + vac_isp * (1.0 - avg_p)
 
 
@@ -108,7 +120,7 @@ def _tank_ratio(t):
     return t.fuel_mass / t.dry_mass if t.dry_mass > 0.0 else float("inf")
 
 
-def _packable_tanks(tanks, engine):
+def _packable_tanks(tanks, engine, max_tank_size=None):
     """Return ``(pack_ctx, rho_star)``: the packing context for this engine
     and the best fuel:dry ratio among its mountable tanks.  ``pack_ctx`` is
     ``(packable, boundaries, cov_fuels, cov_tanks)`` — or ``None`` when the
@@ -127,6 +139,15 @@ def _packable_tanks(tanks, engine):
     tanks, single-node tanks like the FL-C1000, slanted/coupler adapters) can't
     form a central stackable column and are excluded, and the optimizer's size
     gate (``engine.size_class <= tank.size_class``) is applied.
+
+    ``max_tank_size`` (set on shielded stages to the largest owned heat shield's
+    size) excludes tanks WIDER than any shield can cover.  A reentry stage's
+    widest tank must fit under a shield; a tank wider than every shield can never
+    be shielded, so it can't be part of a coverable pack.  Without this the
+    greedy pack (fuel-descending) could pick a wide un-coverable tank when a
+    NARROWER pack of the same set was shieldable — and adding a mid-width tank to
+    the kit would flip a feasible shielded stage infeasible (bug-092 shape,
+    bugs/106).  Constraining the set keeps the pack coverable and monotone.
 
     Sort order is (ratio tier, fuel desc), NOT plain largest-first: a large
     tank whose ratio is materially worse (Mk3 fuselages, ~7:1 vs the 8:1
@@ -148,7 +169,8 @@ def _packable_tanks(tanks, engine):
     heavier than a smaller one)."""
     mountable = [t for t in tanks
                  if PartRole.SPINE in t.roles and t.fuel_mass > 0.0
-                 and engine.size_class <= t.size_class]
+                 and engine.size_class <= t.size_class
+                 and (max_tank_size is None or t.size_class <= max_tank_size)]
     if not mountable:
         return None, 0.0
     rho_star = max(_tank_ratio(t) for t in mountable)
@@ -698,6 +720,19 @@ _PARALLEL_BOOSTER_COUNTS: tuple[int, ...] = (2, 4, 6, 8)
 # Engines per column to escalate through for per-phase TWR before giving up.
 _PARALLEL_MAX_ENG_PER_COL: int = 4
 
+# Escalated build caps — the wider search space capability threads in ONLY for
+# ascent edges named in ``data.feasibility.ESCALATED_ASCENT_EDGES``, and only
+# inside Apollo-split evaluations.  Never the defaults: the common home-ascent
+# path keeps the caps above (bug 094: a global K=3 cost 53-54% of all
+# multistage builds for 0.3-1.3% mass wins and zero feasibility rescues — the
+# rescues live on the hard tail these edges name, e.g. Eve's ~8 km/s ascent).
+# Values are the smallest set measured to close Eve Return/Sample Return at
+# max kit (probe 2026-07-02: uncrewed 124.5-355.2t, crewed 273.8-966.2t
+# across zero/small/comfortable).
+ESCALATED_BOOSTER_COUNTS: tuple[int, ...] = (2, 4, 6, 8, 10, 12, 16)
+ESCALATED_MAX_ENG_PER_COL: int = 6
+ESCALATED_MAX_ASCENT_STAGES: int = 3
+
 
 def _lightest_covering_shield(
     size_class: float,
@@ -728,6 +763,7 @@ def _find_optimal_parallel_stage(
     in_atmosphere: bool = False,
     atm_scale_height_m: float = 0.0,
     atm_top_m: float = 0.0,
+    pad_altitude_m: float = 0.0,
     requires_throttleable: bool = False,
     require_gimbal: bool = False,
     attitude_module_mass: float = 0.0,
@@ -736,6 +772,8 @@ def _find_optimal_parallel_stage(
     max_heat_shield_size: Optional[float] = None,
     heat_shields: tuple[tuple[float, float, str], ...] = (),
     best_wet_bound: float = float("inf"),
+    booster_counts: tuple[int, ...] = _PARALLEL_BOOSTER_COUNTS,
+    max_eng_per_col: int = _PARALLEL_MAX_ENG_PER_COL,
 ) -> Optional[StageResult]:
     """Lowest-wet-mass parallel-staged build (a core column ringed by identical
     radial boosters dropped progressively) for this stage, or None.
@@ -768,7 +806,7 @@ def _find_optimal_parallel_stage(
         if requires_throttleable and not engine.throttleable:
             continue
         isp = _isp_for_ascent(engine.atm_isp, engine.vac_isp, in_atmosphere,
-                              atm_scale_height_m, atm_top_m)
+                              atm_scale_height_m, atm_top_m, pad_altitude_m)
         if isp <= 0:
             continue
         isp_g0 = isp * G0
@@ -786,6 +824,15 @@ def _find_optimal_parallel_stage(
         eng_payload = payload_mass + hs_mass + (
             attitude_module_mass + aero_steering_mass
             if not engine.has_gimbal else 0.0)
+
+        # Free exact TWR gate: the unit always outweighs its payload, so its
+        # liftoff TWR is strictly below total_thrust/(payload·g).  If even
+        # the max-engine configuration (full core + engine boosters on every
+        # column) can't hold the floor against the payload alone, no grid
+        # point passes parallel_stage_min_twr — skip the engine.
+        if has_twr and (max_eng_per_col * (1 + max(booster_counts))
+                        * thrust) < twr_g * eng_payload:
+            continue
 
         # Cheap, exact lower bound on this engine's lightest possible parallel
         # build: payload + one engine with ZERO effective dry (the unreachable
@@ -806,11 +853,32 @@ def _find_optimal_parallel_stage(
             continue
         if engine.size_class > max(t.size_class for t in compatible):
             continue
-        pack_ctx, _rho = _packable_tanks(compatible, engine)
+        # Shielded stage: exclude tanks wider than any owned shield can cover,
+        # same monotone constraint as the serial path (bugs/106).
+        _cap = (max_heat_shield_size
+                if (needs_heat_shield and max_heat_shield_size is not None)
+                else None)
+        pack_ctx, _rho = _packable_tanks(compatible, engine, max_tank_size=_cap)
         if pack_ctx is None:
             continue
 
-        for n_boost in _PARALLEL_BOOSTER_COUNTS:
+        # Reachability pre-gate: ONE sizing call at this engine's max-dv
+        # configuration — most boosters, drop-tank columns, a single core
+        # engine.  Every other grid point only adds dry mass (more core or
+        # booster engines) or removes shed events (fewer boosters), so its
+        # achievable dv is strictly lower.  If even this configuration can't
+        # reach the target, no grid point can: skip the engine's whole
+        # booster×type×count scan.  Result-identical by construction — it
+        # prunes only provably-infeasible engines (the escalated
+        # parallel_substages grids made exhaustive failure scans the
+        # dominant cost, bug 093).
+        if _size_parallel_unit(
+                eng_payload, e_mass, 1, 0, decoupler_mass, fuel_line_mass,
+                max(booster_counts), mode, required_dv, isp_g0,
+                pack_ctx) is None:
+            continue
+
+        for n_boost in booster_counts:
             # Drop-tanks first (no booster engines); escalate to engine
             # boosters only if drop-tanks were TWR-bound.  If drop-tanks clear
             # TWR with a SINGLE core engine, the stage isn't thrust-bound, so
@@ -820,8 +888,15 @@ def _find_optimal_parallel_stage(
             for booster_has_engine in (False, True):
                 if booster_has_engine and droptank_single_eng:
                     break
-                for n in range(1, _PARALLEL_MAX_ENG_PER_COL + 1):
+                for n in range(1, max_eng_per_col + 1):
                     n_be = n if booster_has_engine else 0
+                    # Same exact TWR gate per config: liftoff TWR is bounded
+                    # by these engines' thrust against the payload alone —
+                    # skip the sizing bisection for configs that can't hold
+                    # the floor (huge-payload sub-stage builds were sizing
+                    # every config only to fail parallel_stage_min_twr).
+                    if has_twr and (n + n_boost * n_be) * thrust < twr_g * eng_payload:
+                        continue
                     res = _size_parallel_unit(
                         eng_payload, e_mass, n, n_be, decoupler_mass,
                         fuel_line_mass, n_boost, mode, required_dv, isp_g0,
@@ -907,6 +982,7 @@ def _find_optimal_stage_uncached(
     launch_pad_mass_cap: float = float("inf"),  # for MASS_CAP_EXCEEDED diagnostic
     atm_scale_height_m: float = 0.0,    # body atmosphere model (0 = no atm)
     atm_top_m: float = 0.0,             # body atmosphere top in metres
+    pad_altitude_m: float = 0.0,        # launch-site altitude (elevated-pad Isp credit)
     # Parallel-staging parts (as hashable primitives so the cache key stays
     # valid).  When present and parallel_mode != "none", a real radial
     # asparagus/onion build is tried alongside the serial search.
@@ -919,6 +995,11 @@ def _find_optimal_stage_uncached(
     # probes use the conservative serial mass; the final build / display
     # leave it True for the exact asparagus rocket.
     run_parallel: bool = True,
+    # Parallel-build search bounds.  Defaults are the hot-path caps; the
+    # ESCALATED_* values arrive here only via capability's Apollo/eligible-
+    # edge scoping.  Hashable, so they join the memo key automatically.
+    booster_counts: tuple[int, ...] = _PARALLEL_BOOSTER_COUNTS,
+    max_eng_per_col: int = _PARALLEL_MAX_ENG_PER_COL,
 ) -> Optional[StageResult]:
     """
     Find the minimum-mass engine+tank configuration that meets *required_dv*
@@ -1003,6 +1084,16 @@ def _find_optimal_stage_uncached(
     has_twr = min_twr > 0 and gravity > 0
     twr_g = min_twr * gravity  # reused per engine
 
+    # On a shielded stage every packed tank must fit under a shield: the widest
+    # coverable tank is the largest owned shield's size.  Wider tanks can never
+    # be shielded, so excluding them from the pack keeps it coverable AND
+    # monotone (a wide un-coverable tank in the kit can't flip a shielded stage
+    # infeasible — bugs/106).  ``None`` off the shielded path (no constraint).
+    _shield_tank_cap = (max_heat_shield_size
+                        if (needs_heat_shield
+                            and max_heat_shield_size is not None)
+                        else None)
+
     # Local refs to avoid repeated global/attribute lookups in hot loop
     _exp = math.exp
     _log = math.log
@@ -1073,7 +1164,7 @@ def _find_optimal_stage_uncached(
         # atmospheric column rather than flat atm_isp — the burn spans
         # both regimes and Isp climbs to vacuum near the top of the column.
         isp = _isp_for_ascent(engine.atm_isp, engine.vac_isp, in_atmosphere,
-                              atm_scale_height_m, atm_top_m)
+                              atm_scale_height_m, atm_top_m, pad_altitude_m)
         if isp <= 0:
             _diag_engines_isp_blocked += 1
             continue
@@ -1117,7 +1208,8 @@ def _find_optimal_stage_uncached(
         _pk_key = (engine.fuel_type, e_size)
         cached = _packable_cache.get(_pk_key)
         if cached is None:
-            cached = _packable_tanks(compatible_tanks, engine)
+            cached = _packable_tanks(compatible_tanks, engine,
+                                     max_tank_size=_shield_tank_cap)
             _packable_cache[_pk_key] = cached
         pack_ctx, rho_star = cached
         if pack_ctx is None:
@@ -1274,7 +1366,7 @@ def _find_optimal_stage_uncached(
 
         # Same pressure-weighted Isp treatment as the engine loop.
         srb_isp = _isp_for_ascent(srb.atm_isp, srb.vac_isp, in_atmosphere,
-                                  atm_scale_height_m, atm_top_m)
+                                  atm_scale_height_m, atm_top_m, pad_altitude_m)
         if srb_isp <= 0:
             continue
         srb_thrust = (srb.atm_thrust if in_atmosphere else srb.vac_thrust)
@@ -1354,6 +1446,7 @@ def _find_optimal_stage_uncached(
             in_atmosphere=in_atmosphere,
             atm_scale_height_m=atm_scale_height_m,
             atm_top_m=atm_top_m,
+            pad_altitude_m=pad_altitude_m,
             requires_throttleable=requires_throttleable,
             require_gimbal=require_gimbal,
             attitude_module_mass=attitude_module_mass,
@@ -1362,6 +1455,8 @@ def _find_optimal_stage_uncached(
             max_heat_shield_size=max_heat_shield_size,
             heat_shields=heat_shields,
             best_wet_bound=best.stage_mass_wet if best is not None else float("inf"),
+            booster_counts=booster_counts,
+            max_eng_per_col=max_eng_per_col,
         )
         if par is not None:
             best = par
@@ -1627,6 +1722,21 @@ _F4_DV_SPLITS: dict[int, tuple[tuple[float, ...], ...]] = {
         (0.6, 0.4),
         (0.7, 0.3),
     ),
+    # K=3 is reachable only via ``max_ascent_stages`` (the escalated bound —
+    # _F4_MAX_K stays 2 on the hot path, bug 094).  Grid covers bottom-heavy
+    # through top-heavy allocations (index 0 = bottom/launch stage); the
+    # coarse 6-entry grid of the old K=3 era undervalued staging on high-dv
+    # ascents (bug 094 cause #3).
+    3: (
+        (0.2, 0.3, 0.5),
+        (0.25, 0.25, 0.5),
+        (0.3, 0.3, 0.4),
+        (0.3, 0.4, 0.3),
+        (0.34, 0.33, 0.33),
+        (0.4, 0.3, 0.3),
+        (0.5, 0.25, 0.25),
+        (0.5, 0.3, 0.2),
+    ),
 }
 
 # Per-stage TWR floor.  Stage 1 (liftoff) uses whatever the caller passes
@@ -1672,7 +1782,8 @@ def find_optimal_multistage_ascent(
     launch_pad_mass_cap: float = float("inf"),
     atm_scale_height_m: float = 0.0,
     atm_top_m: float = 0.0,
-    parallel_mode: str = "none",  # asparagus/onion — applied at K=1 only
+    pad_altitude_m: float = 0.0,  # elevated launch-site altitude (Isp credit)
+    parallel_mode: str = "none",  # asparagus/onion — K=1 only unless parallel_substages
     radial_decoupler_mass: float = 0.0,
     radial_decoupler_name: str = "",
     fuel_line_mass: float = 0.0,
@@ -1680,6 +1791,23 @@ def find_optimal_multistage_ascent(
     run_parallel: bool = True,
     diagnostic_out: Optional[list[StageDiagnostic]] = None,
     partial_stages_out: Optional[list[StageResult]] = None,
+    # Escalated search bounds (capability's Apollo/eligible-edge scoping).
+    # ``max_ascent_stages`` None = the hot-path default: _F4_MAX_K, further
+    # bounded by staging_tier+1.  An explicit value bypasses the tier bound
+    # (a search-cost choice, not physics — stack decouplers permit arbitrary
+    # serial depth) but never the no-stack-decoupler ⇒ K=1 kit gate.
+    max_ascent_stages: Optional[int] = None,
+    booster_counts: tuple[int, ...] = _PARALLEL_BOOSTER_COUNTS,
+    max_eng_per_col: int = _PARALLEL_MAX_ENG_PER_COL,
+    parallel_substages: bool = False,
+    # Architecture guide (offline lifter-chain bindings): pins the search to
+    # one known-good architecture — (dv_split, per-stage
+    # (n_boosters, booster_engines, engine_name)) — turning the K x splits x
+    # engines x booster-grid search into K single-architecture stage sizings
+    # (~150x measured).  The guided result is a real optimizer build; only
+    # the SEARCH is skipped.
+    guide: Optional[tuple[tuple[float, ...],
+                          tuple[tuple[int, int, str], ...]]] = None,
 ) -> Optional[list[StageResult]]:
     """Find lowest-total-wet K-stage ascent architecture for an atmospheric
     body.  Returns a list of StageResults from BOTTOM (launch) to TOP
@@ -1688,17 +1816,32 @@ def find_optimal_multistage_ascent(
     Each stage is independently optimised by ``find_optimal_stage``;
     payloads chain top-down, decoupler mass charged on every interstage.
 
-    ``parallel_mode`` (asparagus/onion) only applies to K=1 — at K≥2 the
-    explicit staging supersedes parallel-staging's constant-factor model
-    (mixing them would double-count the dry-mass discount).
+    ``parallel_mode`` (asparagus/onion) applies to K=1 always; with
+    ``parallel_substages`` each serial sub-stage may ALSO build as a real
+    radial cluster (bug 093) — the architecture real high-dv ascents fly
+    (an asparagus launcher delivering an asparagus cruise stage).  Since
+    bf9a2c51 the parallel model sizes each cluster exactly (real column
+    masses, real drop schedule), so composing it with serial staging
+    double-counts nothing: each sub-stage's shed is its own hardware, the
+    interstage decoupler drops the whole sub-stage.  Default False is a
+    SEARCH-COST bound, not physics — every sub-stage build widens to the
+    full parallel-unit search when enabled.
     """
     if required_dv <= 0:
         return None
-    # K cap from kit: no stack decoupler ⇒ K=1; otherwise up to _F4_MAX_K.
+    # K cap from kit: no stack decoupler ⇒ K=1; otherwise up to _F4_MAX_K
+    # (or the caller's escalated bound).
     if stack_decoupler is None:
         max_K = 1
+    elif max_ascent_stages is not None:
+        max_K = max(1, max_ascent_stages)
     else:
         max_K = min(_F4_MAX_K, max(1, staging_tier + 1))
+    if guide is not None:
+        guide_split, guide_stages = guide
+        # The no-stack-decoupler ⇒ K=1 gate is physics, never bypassed.
+        if stack_decoupler is None and len(guide_stages) > 1:
+            return None
     deco_mass = stack_decoupler.mass if stack_decoupler else 0.0
 
     best: Optional[list[StageResult]] = None
@@ -1713,14 +1856,26 @@ def find_optimal_multistage_ascent(
     closest_partial: list[StageResult] = []
     closest_score: tuple[int, float] = (-1, -float("inf"))  # (stages_built, -dv_gap)
 
-    for K in range(1, max_K + 1):
-        for split in _F4_DV_SPLITS[K]:
+    if guide is not None:
+        k_splits: list[tuple[int, tuple[tuple[float, ...], ...]]] = [
+            (len(guide_stages), (guide_split,))]
+    else:
+        k_splits = [(K, _F4_DV_SPLITS[K]) for K in range(1, max_K + 1)]
+    for K, splits in k_splits:
+        for split in splits:
             # Build top-down: top stage first (carries mission payload),
             # lower stages carry wet of stages above + decoupler.
             stages_top_to_bot: list[StageResult] = []
             current_payload = payload_mass
             ok = True
             for i in range(K - 1, -1, -1):  # K-1 (top) ... 0 (bottom)
+                # Exact best-so-far prune: every stage's wet mass exceeds
+                # its payload, so once the running payload alone matches the
+                # best launch mass found, no lower stage can improve on it —
+                # abandon this split before paying its remaining builds.
+                if current_payload >= best_launch_wet:
+                    ok = False
+                    break
                 stage_dv = required_dv * split[i]
                 # Stage 1 (i==0): launch (uses the caller's body-aware
                 # in_atmosphere flag — True for atm bodies, False for vac).
@@ -1739,10 +1894,44 @@ def find_optimal_multistage_ascent(
                 # see it propagated via current_payload (no double-charge).
                 stage_heat_shields = heat_shields if i == 0 else ()
                 stage_needs_heat_shield = needs_heat_shield if i == 0 else False
+                stage_engines = available_engines
+                stage_srbs = available_srbs if stage_in_atm else []
+                stage_bc = booster_counts
+                stage_mec = max_eng_per_col
+                stage_pmode = (parallel_mode
+                               if (K == 1 or parallel_substages) else "none")
+                if guide is not None:
+                    g_nb, g_beng, g_eng = guide_stages[i]
+                    if g_nb > 0:
+                        # This stage WAS a parallel cluster at bind time —
+                        # force the parallel build regardless of the
+                        # parallel_substages search-cost bound (the guide
+                        # already picked the architecture, so there is no
+                        # search to bound).
+                        stage_bc = (g_nb,)
+                        stage_pmode = parallel_mode
+                        if g_beng:
+                            stage_mec = min(max_eng_per_col, max(1, g_beng))
+                    else:
+                        stage_pmode = "none"
+                    if any(s.name == g_eng for s in stage_srbs):
+                        stage_srbs = [s for s in stage_srbs
+                                      if s.name == g_eng]
+                        stage_engines = []
+                    else:
+                        stage_engines = [e for e in stage_engines
+                                         if e.name == g_eng]
+                        stage_srbs = []
+                    if not stage_engines and not stage_srbs:
+                        # Guide references a part outside this kit — the
+                        # caller's prefix guarantee was violated; fail the
+                        # architecture rather than silently widening.
+                        ok = False
+                        break
                 inner_diag: list[StageDiagnostic] = []
                 stage = find_optimal_stage(
-                    available_engines=available_engines,
-                    available_srbs=available_srbs if stage_in_atm else [],
+                    available_engines=stage_engines,
+                    available_srbs=stage_srbs,
                     available_tanks=available_tanks,
                     required_dv=stage_dv,
                     payload_mass=current_payload,
@@ -1753,15 +1942,19 @@ def find_optimal_multistage_ascent(
                     max_heat_shield_size=max_heat_shield_size,
                     heat_shields=stage_heat_shields,
                     in_atmosphere=stage_in_atm,
-                    # K=1 may build a real radial asparagus/onion unit; K≥2 has
-                    # explicit serial staging which supersedes radial parallel
-                    # (mixing would double-count the shedding).
-                    parallel_mode=parallel_mode if K == 1 else "none",
+                    # K=1 may always build a real radial asparagus/onion unit.
+                    # Sub-stages of a serial stack may too when the caller
+                    # opts in (parallel_substages, bug 093): per-cluster
+                    # sizing is exact, so nothing double-counts — the flag is
+                    # a search-cost bound only.
+                    parallel_mode=stage_pmode,
                     radial_decoupler_mass=radial_decoupler_mass,
                     radial_decoupler_name=radial_decoupler_name,
                     fuel_line_mass=fuel_line_mass,
                     fuel_line_name=fuel_line_name,
                     run_parallel=run_parallel,
+                    booster_counts=stage_bc,
+                    max_eng_per_col=stage_mec,
                     srb_needs_rcs=srb_needs_rcs,
                     player_has_rcs=player_has_rcs,
                     tanks_by_fuel_type=tanks_by_fuel_type,
@@ -1776,6 +1969,7 @@ def find_optimal_multistage_ascent(
                     launch_pad_mass_cap=launch_pad_mass_cap,
                     atm_scale_height_m=atm_scale_height_m if stage_in_atm else 0.0,
                     atm_top_m=atm_top_m if stage_in_atm else 0.0,
+                    pad_altitude_m=pad_altitude_m if stage_in_atm else 0.0,
                     diagnostic_out=inner_diag,
                 )
                 if stage is None:

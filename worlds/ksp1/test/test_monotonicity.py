@@ -50,6 +50,27 @@ _CONFIGS = [
     # Guards the tank-pack monotonicity fix end to end.
     ("duna_return", "kerbin", "count", 17074417405164113416,
      {"buildings_in_logic": 1}),
+    # Bugs/101's strand seed: the bracket scan proved missions against
+    # spheres[i].flags — the defining mission's own kit, or a fallback
+    # anchor's full rank-admit kit — while the installed gate enforces
+    # has_all(reps_collected), a thinner kit nobody proved.  Here that
+    # stranded 64 progression items behind a "Moho Orbit 1" gate whose
+    # enforced kit couldn't fly the mission.  Guards SphereBoundary.flags
+    # being built reps-only from exactly reps_collected.
+    ("complete_tech_tree", "duna", "count", 6903591710897770246, {}),
+    # Bugs/102's strand seed: the relay CHARGE ignored the relay GATE's
+    # crewed exemption, so only kits that OWNED a tier-2 antenna paid its
+    # mass on crewed missions — acquiring RelayAntenna5 pushed "Kerbin EVA
+    # in Orbit 1" (from Moho) past the pad cap (a strictly larger kit
+    # losing a mission).  Guards charge-mirrors-gate for support equipment.
+    ("flag_every_body", "moho", "count", 10721509650795190484, {}),
+    # Bugs/103's strand seed: the relay charge scanned tiers
+    # range(required, 4), EXCLUDING tier 4 — a kit whose only adequate
+    # antenna was the tier-4 dish charged NO antenna mass (under-charge)
+    # while a kit that also owned the tier-3 antenna paid its real mass
+    # (bigger kit, heavier rocket → over Moho's pad cap).  Guards the
+    # scan-all-owned-tiers charge.
+    ("mun_flag", "moho", "count", 11551505357908101103, {}),
 ]
 
 
@@ -115,3 +136,12 @@ class TestCapabilityCrossCheck:
 
     def test_bug_092_duna_return_buildings(self):
         self._check(*_CONFIGS[3])
+
+    def test_bug_101_complete_tech_tree_duna(self):
+        self._check(*_CONFIGS[4])
+
+    def test_bug_102_flag_every_body_moho(self):
+        self._check(*_CONFIGS[5])
+
+    def test_bug_103_mun_flag_moho(self):
+        self._check(*_CONFIGS[6])

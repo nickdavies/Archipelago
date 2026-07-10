@@ -20,7 +20,7 @@ the dv model, mission graph, or part database changes.
 """
 from __future__ import annotations
 
-from worlds.ksp1.bodies import BodyName, MissionType
+from worlds.ksp1.bodies import BodyName, EdgeType, MissionType
 
 
 BASE_RELEVANT_PACKS: tuple[str, ...] = ('MakingHistory', 'Stock')
@@ -28,72 +28,72 @@ BASE_RELEVANT_PACKS: tuple[str, ...] = ('MakingHistory', 'Stock')
 
 MODEL_INFEASIBLE_BASE: dict[str, dict[BodyName, frozenset[tuple[BodyName, MissionType]]]] = {
     'generous': {
-        BodyName.BOP: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.DRES: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.DUNA: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.EELOO: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.EVE: frozenset({(BodyName.BOP, MissionType.RETURN), (BodyName.BOP, MissionType.SAMPLE_RETURN), (BodyName.DRES, MissionType.RETURN), (BodyName.DRES, MissionType.SAMPLE_RETURN), (BodyName.DUNA, MissionType.RETURN), (BodyName.DUNA, MissionType.SAMPLE_RETURN), (BodyName.EELOO, MissionType.RETURN), (BodyName.EELOO, MissionType.SAMPLE_RETURN), (BodyName.GILLY, MissionType.RETURN), (BodyName.GILLY, MissionType.SAMPLE_RETURN), (BodyName.IKE, MissionType.RETURN), (BodyName.IKE, MissionType.SAMPLE_RETURN), (BodyName.KERBIN, MissionType.RETURN), (BodyName.KERBIN, MissionType.SAMPLE_RETURN), (BodyName.LAYTHE, MissionType.RETURN), (BodyName.LAYTHE, MissionType.SAMPLE_RETURN), (BodyName.MINMUS, MissionType.RETURN), (BodyName.MINMUS, MissionType.SAMPLE_RETURN), (BodyName.MOHO, MissionType.RETURN), (BodyName.MOHO, MissionType.SAMPLE_RETURN), (BodyName.MUN, MissionType.RETURN), (BodyName.MUN, MissionType.SAMPLE_RETURN), (BodyName.POL, MissionType.RETURN), (BodyName.POL, MissionType.SAMPLE_RETURN), (BodyName.TYLO, MissionType.RETURN), (BodyName.TYLO, MissionType.SAMPLE_RETURN), (BodyName.VALL, MissionType.RETURN), (BodyName.VALL, MissionType.SAMPLE_RETURN)}),
-        BodyName.GILLY: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.IKE: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.KERBIN: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN), (BodyName.TYLO, MissionType.SAMPLE_RETURN)}),
-        BodyName.LAYTHE: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN), (BodyName.MOHO, MissionType.RETURN), (BodyName.MOHO, MissionType.SAMPLE_RETURN)}),
-        BodyName.MINMUS: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.MOHO: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.MUN: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.POL: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.TYLO: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN), (BodyName.MOHO, MissionType.RETURN), (BodyName.MOHO, MissionType.SAMPLE_RETURN)}),
-        BodyName.VALL: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
+        BodyName.BOP: frozenset(),
+        BodyName.DRES: frozenset(),
+        BodyName.DUNA: frozenset(),
+        BodyName.EELOO: frozenset(),
+        BodyName.EVE: frozenset({(BodyName.BOP, MissionType.RETURN), (BodyName.BOP, MissionType.SAMPLE_RETURN), (BodyName.EELOO, MissionType.SAMPLE_RETURN), (BodyName.LAYTHE, MissionType.RETURN), (BodyName.LAYTHE, MissionType.SAMPLE_RETURN), (BodyName.MOHO, MissionType.SAMPLE_RETURN), (BodyName.POL, MissionType.SAMPLE_RETURN), (BodyName.TYLO, MissionType.RETURN), (BodyName.TYLO, MissionType.SAMPLE_RETURN), (BodyName.VALL, MissionType.SAMPLE_RETURN)}),
+        BodyName.GILLY: frozenset(),
+        BodyName.IKE: frozenset(),
+        BodyName.KERBIN: frozenset(),
+        BodyName.LAYTHE: frozenset({(BodyName.EVE, MissionType.SAMPLE_RETURN)}),
+        BodyName.MINMUS: frozenset(),
+        BodyName.MOHO: frozenset(),
+        BodyName.MUN: frozenset(),
+        BodyName.POL: frozenset(),
+        BodyName.TYLO: frozenset(),
+        BodyName.VALL: frozenset(),
     },
     'comfortable': {
-        BodyName.BOP: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.DRES: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.DUNA: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.EELOO: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.EVE: frozenset({(BodyName.BOP, MissionType.RETURN), (BodyName.BOP, MissionType.SAMPLE_RETURN), (BodyName.DRES, MissionType.RETURN), (BodyName.DRES, MissionType.SAMPLE_RETURN), (BodyName.DUNA, MissionType.RETURN), (BodyName.DUNA, MissionType.SAMPLE_RETURN), (BodyName.EELOO, MissionType.RETURN), (BodyName.EELOO, MissionType.SAMPLE_RETURN), (BodyName.GILLY, MissionType.RETURN), (BodyName.GILLY, MissionType.SAMPLE_RETURN), (BodyName.IKE, MissionType.RETURN), (BodyName.IKE, MissionType.SAMPLE_RETURN), (BodyName.KERBIN, MissionType.RETURN), (BodyName.KERBIN, MissionType.SAMPLE_RETURN), (BodyName.LAYTHE, MissionType.RETURN), (BodyName.LAYTHE, MissionType.SAMPLE_RETURN), (BodyName.MINMUS, MissionType.RETURN), (BodyName.MINMUS, MissionType.SAMPLE_RETURN), (BodyName.MOHO, MissionType.RETURN), (BodyName.MOHO, MissionType.SAMPLE_RETURN), (BodyName.MUN, MissionType.RETURN), (BodyName.MUN, MissionType.SAMPLE_RETURN), (BodyName.POL, MissionType.RETURN), (BodyName.POL, MissionType.SAMPLE_RETURN), (BodyName.TYLO, MissionType.RETURN), (BodyName.TYLO, MissionType.SAMPLE_RETURN), (BodyName.VALL, MissionType.RETURN), (BodyName.VALL, MissionType.SAMPLE_RETURN)}),
-        BodyName.GILLY: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.IKE: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.KERBIN: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.LAYTHE: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.MINMUS: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.MOHO: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.MUN: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.POL: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.TYLO: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.VALL: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
+        BodyName.BOP: frozenset(),
+        BodyName.DRES: frozenset(),
+        BodyName.DUNA: frozenset(),
+        BodyName.EELOO: frozenset(),
+        BodyName.EVE: frozenset(),
+        BodyName.GILLY: frozenset(),
+        BodyName.IKE: frozenset(),
+        BodyName.KERBIN: frozenset(),
+        BodyName.LAYTHE: frozenset(),
+        BodyName.MINMUS: frozenset(),
+        BodyName.MOHO: frozenset(),
+        BodyName.MUN: frozenset(),
+        BodyName.POL: frozenset(),
+        BodyName.TYLO: frozenset(),
+        BodyName.VALL: frozenset(),
     },
     'small': {
-        BodyName.BOP: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.DRES: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.DUNA: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.EELOO: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.EVE: frozenset({(BodyName.BOP, MissionType.RETURN), (BodyName.BOP, MissionType.SAMPLE_RETURN), (BodyName.DRES, MissionType.RETURN), (BodyName.DRES, MissionType.SAMPLE_RETURN), (BodyName.DUNA, MissionType.RETURN), (BodyName.DUNA, MissionType.SAMPLE_RETURN), (BodyName.EELOO, MissionType.RETURN), (BodyName.EELOO, MissionType.SAMPLE_RETURN), (BodyName.GILLY, MissionType.RETURN), (BodyName.GILLY, MissionType.SAMPLE_RETURN), (BodyName.IKE, MissionType.RETURN), (BodyName.IKE, MissionType.SAMPLE_RETURN), (BodyName.KERBIN, MissionType.RETURN), (BodyName.KERBIN, MissionType.SAMPLE_RETURN), (BodyName.LAYTHE, MissionType.RETURN), (BodyName.LAYTHE, MissionType.SAMPLE_RETURN), (BodyName.MINMUS, MissionType.RETURN), (BodyName.MINMUS, MissionType.SAMPLE_RETURN), (BodyName.MOHO, MissionType.RETURN), (BodyName.MOHO, MissionType.SAMPLE_RETURN), (BodyName.MUN, MissionType.RETURN), (BodyName.MUN, MissionType.SAMPLE_RETURN), (BodyName.POL, MissionType.RETURN), (BodyName.POL, MissionType.SAMPLE_RETURN), (BodyName.TYLO, MissionType.RETURN), (BodyName.TYLO, MissionType.SAMPLE_RETURN), (BodyName.VALL, MissionType.RETURN), (BodyName.VALL, MissionType.SAMPLE_RETURN)}),
-        BodyName.GILLY: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.IKE: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.KERBIN: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.LAYTHE: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.MINMUS: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.MOHO: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.MUN: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.POL: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.TYLO: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.VALL: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
+        BodyName.BOP: frozenset(),
+        BodyName.DRES: frozenset(),
+        BodyName.DUNA: frozenset(),
+        BodyName.EELOO: frozenset(),
+        BodyName.EVE: frozenset(),
+        BodyName.GILLY: frozenset(),
+        BodyName.IKE: frozenset(),
+        BodyName.KERBIN: frozenset(),
+        BodyName.LAYTHE: frozenset(),
+        BodyName.MINMUS: frozenset(),
+        BodyName.MOHO: frozenset(),
+        BodyName.MUN: frozenset(),
+        BodyName.POL: frozenset(),
+        BodyName.TYLO: frozenset(),
+        BodyName.VALL: frozenset(),
     },
     'zero': {
-        BodyName.BOP: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.DRES: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.DUNA: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.EELOO: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.EVE: frozenset({(BodyName.BOP, MissionType.RETURN), (BodyName.BOP, MissionType.SAMPLE_RETURN), (BodyName.DRES, MissionType.RETURN), (BodyName.DRES, MissionType.SAMPLE_RETURN), (BodyName.DUNA, MissionType.SAMPLE_RETURN), (BodyName.EELOO, MissionType.RETURN), (BodyName.EELOO, MissionType.SAMPLE_RETURN), (BodyName.IKE, MissionType.SAMPLE_RETURN), (BodyName.KERBIN, MissionType.RETURN), (BodyName.KERBIN, MissionType.SAMPLE_RETURN), (BodyName.LAYTHE, MissionType.RETURN), (BodyName.LAYTHE, MissionType.SAMPLE_RETURN), (BodyName.MINMUS, MissionType.SAMPLE_RETURN), (BodyName.MOHO, MissionType.RETURN), (BodyName.MOHO, MissionType.SAMPLE_RETURN), (BodyName.MUN, MissionType.RETURN), (BodyName.MUN, MissionType.SAMPLE_RETURN), (BodyName.POL, MissionType.RETURN), (BodyName.POL, MissionType.SAMPLE_RETURN), (BodyName.TYLO, MissionType.RETURN), (BodyName.TYLO, MissionType.SAMPLE_RETURN), (BodyName.VALL, MissionType.RETURN), (BodyName.VALL, MissionType.SAMPLE_RETURN)}),
-        BodyName.GILLY: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.IKE: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.KERBIN: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.LAYTHE: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.MINMUS: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.MOHO: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.MUN: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.POL: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.TYLO: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
-        BodyName.VALL: frozenset({(BodyName.EVE, MissionType.RETURN), (BodyName.EVE, MissionType.SAMPLE_RETURN)}),
+        BodyName.BOP: frozenset(),
+        BodyName.DRES: frozenset(),
+        BodyName.DUNA: frozenset(),
+        BodyName.EELOO: frozenset(),
+        BodyName.EVE: frozenset(),
+        BodyName.GILLY: frozenset(),
+        BodyName.IKE: frozenset(),
+        BodyName.KERBIN: frozenset(),
+        BodyName.LAYTHE: frozenset(),
+        BodyName.MINMUS: frozenset(),
+        BodyName.MOHO: frozenset(),
+        BodyName.MUN: frozenset(),
+        BodyName.POL: frozenset(),
+        BodyName.TYLO: frozenset(),
+        BodyName.VALL: frozenset(),
     },
 }
 
@@ -107,8 +107,47 @@ MODEL_INFEASIBLE_DELTAS: dict[
     dict[str, dict[BodyName, tuple[frozenset[tuple[BodyName, MissionType]], frozenset[tuple[BodyName, MissionType]]]]],
 ] = {
     ('Stock',): {
-        'zero': {
-            BodyName.EVE: (frozenset(), frozenset({(BodyName.MUN, MissionType.RETURN)})),
+        'generous': {
+            BodyName.EVE: (frozenset({(BodyName.MOHO, MissionType.RETURN)}), frozenset()),
+            BodyName.LAYTHE: (frozenset({(BodyName.EVE, MissionType.RETURN)}), frozenset()),
+            BodyName.TYLO: (frozenset({(BodyName.EVE, MissionType.SAMPLE_RETURN)}), frozenset()),
         },
     },
 }
+
+
+# Ascent edges eligible for the ESCALATED build caps (rocket_math
+# ESCALATED_*), applied by capability ONLY inside Apollo-split
+# evaluations.  Probed offline by compute_escalated_edges — an edge is
+# listed iff escalating it flips some max-kit mission feasible.  Home
+# ascents are never listed here (hot-path constraint) — the separate
+# allowlisted ESCALATED_HOME_ASCENT_EDGES below carries the approved
+# exceptions.
+ESCALATED_ASCENT_EDGES: frozenset[tuple[BodyName, EdgeType]] = frozenset({
+    (BodyName.EVE, EdgeType.ATMOSPHERIC_ASCENT),
+})
+
+# HOME-ascent edges eligible for the ESCALATED caps on the PRIMARY
+# evaluation (every mission from that home traverses its ascent, so
+# this is a deliberate hot-path exception).  Operator-allowlisted in
+# generate_feasibility._HOME_ESCALATION_ALLOWLIST and probe-verified
+# to still flip feasibility; the probe can never add a home on its
+# own.
+ESCALATED_HOME_ASCENT_EDGES: frozenset[tuple[BodyName, EdgeType]] = frozenset({
+    (BodyName.EVE, EdgeType.ATMOSPHERIC_ASCENT),
+})
+
+
+# (home, destination, mission_type) triples eligible for the multi-launch
+# orbital-assembly retry: missions the probe verified a single launch can
+# NEVER close at max kit (unlimited pad) but ≤3 docked launches can.
+# Probed offline by compute_assembly_missions; consulted by capability's
+# _assembly_candidate on the failure path only.
+ASSEMBLY_ELIGIBLE_MISSIONS: frozenset[
+    tuple[BodyName, BodyName, MissionType]] = frozenset({
+    (BodyName.EVE, BodyName.POL, MissionType.RETURN),
+    (BodyName.EVE, BodyName.VALL, MissionType.RETURN),
+    (BodyName.KERBIN, BodyName.EVE, MissionType.SAMPLE_RETURN),
+    (BodyName.TYLO, BodyName.EVE, MissionType.RETURN),
+    (BodyName.TYLO, BodyName.EVE, MissionType.SAMPLE_RETURN),
+})

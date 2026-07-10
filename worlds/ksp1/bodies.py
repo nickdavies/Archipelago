@@ -134,20 +134,27 @@ class GameplayDifficulty:
     """Player skill/equipment gates, resolved from the base Difficulty option
     (casual/normal/expert) — NOT the physics PhysicsDifficulty profile. These are
     orthogonal to dv margins: whether holding a precise attitude needs a reaction
-    wheel or RCS (gimbal alone suffices on expert), and whether an SRB-steered
-    ascent needs RCS. A player can run forgiving physics at an expert skill
-    setting, so these must track base Difficulty, not the margins."""
+    wheel or RCS (gimbal alone suffices on expert), whether an SRB-steered
+    ascent needs RCS, and whether a docking approach needs an RCS translation
+    kit (an expert player can dock on main-engine translation with wheels
+    alone; docking always needs at least wheels). A player can run forgiving
+    physics at an expert skill setting, so these must track base Difficulty,
+    not the margins."""
     precise_pointing_needs_reaction_control: bool
     srb_needs_rcs: bool
+    docking_needs_rcs: bool
 
 
 # Base Difficulty.value → gameplay gates.  Raw-int keys (mirrors
 # _AUTO_PHYSICS_BY_DIFFICULTY) so bodies.py stays free of an options import.
 # casual/normal expect the assists; expert flies without them.
 _GAMEPLAY_BY_DIFFICULTY: dict[int, GameplayDifficulty] = {
-    0: GameplayDifficulty(precise_pointing_needs_reaction_control=True,  srb_needs_rcs=True),   # casual
-    1: GameplayDifficulty(precise_pointing_needs_reaction_control=True,  srb_needs_rcs=True),   # normal
-    2: GameplayDifficulty(precise_pointing_needs_reaction_control=False, srb_needs_rcs=False),  # expert
+    0: GameplayDifficulty(precise_pointing_needs_reaction_control=True,  srb_needs_rcs=True,
+                          docking_needs_rcs=True),   # casual
+    1: GameplayDifficulty(precise_pointing_needs_reaction_control=True,  srb_needs_rcs=True,
+                          docking_needs_rcs=True),   # normal
+    2: GameplayDifficulty(precise_pointing_needs_reaction_control=False, srb_needs_rcs=False,
+                          docking_needs_rcs=False),  # expert
 }
 
 # Strictest gates — the conservative default for callers that don't resolve a
@@ -284,6 +291,25 @@ class Body:
     # ``low_orbit_alt_km`` so science/capability "in space low" semantics don't
     # move.  0.0 = no data (no terrain floor applied; falls back to low orbit).
     max_terrain_km: float = 0.0
+    # Elevation (m ASL) of this body's designated HOME launch site (the
+    # AP_KSC_Sites pad the client places when this body is the starting
+    # body).  0.0 = at/near sea level (no adjustment).  Consumed by
+    # ``home_pad_ascent_dv`` — the HOME ascent starts from the pad, so an
+    # elevated site skips the densest atmosphere slab.
+    pad_altitude_m: float = 0.0
+    # Destination-lander ascents assume a HIGHLANDS touchdown at roughly the
+    # home pad's elevation band (operator decision, 2026-07-03): the landing
+    # site is player-controlled and aiming for high ground is the universal
+    # Eve strategy, so charging the full sea-level ascent would be a
+    # false-negative machine.  When True, the trunk ascent edge uses
+    # ``home_pad_ascent_dv()`` for destination landers too (else sea-level
+    # ``dvGL``).
+    #
+    # DURABLE CAVEAT: a splashdown on such a body is ONE-WAY.  Logic assumes
+    # the ascent starts from highlands, so no mission may ever assume an
+    # ascent after an ocean landing — future biome/splashed-science work must
+    # keep splashdown-reachable checks strictly non-return.
+    assume_highlands_landing: bool = False
 
     # --- Science budget (for tech-tree access rules) ---
     has_ocean: bool = False         # body has splashable liquid surface
@@ -323,6 +349,39 @@ class Body:
     def lo_radius_m(self) -> float:
         """Low-orbit radius (m) from body centre."""
         return (self.radius_km + self.low_orbit_alt_km) * 1000.0
+
+    # Vacuum-ascent gravity-loss allowance: surface→orbit from an airless
+    # start costs ~10% over circular orbital velocity at a modelled TWR.
+    # Used as the altitude-independent floor when scaling ``dvGL`` down for
+    # an elevated home pad.
+    _VAC_ASCENT_LOSS_FACTOR = 1.1
+
+    def home_pad_ascent_dv(self) -> float:
+        """Surface→low-orbit dv (m/s) from this body's designated HOME pad.
+
+        ``dvGL`` is tabulated at sea level.  An elevated pad starts above
+        the densest atmosphere, so the ATMOSPHERIC EXCESS — everything
+        ``dvGL`` charges beyond the vacuum-ascent floor
+        (``_VAC_ASCENT_LOSS_FACTOR × v_circ``) — shrinks with the pressure
+        remaining above the pad.  The excess scales by **√(pressure
+        fraction)**, not linearly: pure drag loss tracks the remaining
+        column pressure, but much of the excess is drag-LIMITED gravity
+        loss (terminal velocity ∝ 1/√ρ caps the climb rate), which decays
+        as the square root.  √p errs on the conservative (higher-dv) side
+        of community highland-ascent data — Eve's 6,140 m mesa pad yields
+        ~6,415 m/s vs ~6,000-6,500 community figures for that band.
+
+        Sea-level pads (``pad_altitude_m == 0``) and vacuum bodies return
+        ``dvGL`` unchanged.
+        """
+        if (self.pad_altitude_m <= 0.0 or not self.has_atmosphere
+                or self.atm_scale_height_m <= 0.0 or self.dv.dvGL <= 0.0):
+            return self.dv.dvGL
+        v_circ = math.sqrt(self.gm / self.lo_radius_m)
+        vac_floor = self._VAC_ASCENT_LOSS_FACTOR * v_circ
+        excess = max(0.0, self.dv.dvGL - vac_floor)
+        p_frac = math.exp(-self.pad_altitude_m / self.atm_scale_height_m)
+        return vac_floor + excess * math.sqrt(p_frac)
 
     @property
     def min_orbit_radius_m(self) -> float:
@@ -668,12 +727,25 @@ EVE = Body(
     power_requirement="solar",
     eva_jetpack_twr=_jetpack_twr(16.7),
     dv=BodyDeltaV(
-        dvGL=8000, dvLE=1330, dvEI=80, dvK=90,
+        # Sea-level ascent is ~11,500-12,000 m/s (community-verified: modern
+        # dv maps and sea-level ascent reports).  The long-tabulated 8,000 was
+        # implicitly a HIGHLANDS figure — keeping it as "sea level" while the
+        # elevated-pad derivation also discounted altitude double-counted the
+        # terrain benefit.  In-logic Eve ascents never pay this raw figure:
+        # the home ascent launches from the mesa pad, and destination landers
+        # assume a highlands touchdown (assume_highlands_landing) — both
+        # resolve to ~9,000 via home_pad_ascent_dv().
+        dvGL=12000, dvLE=1330, dvEI=80, dvK=90,
         dvLI=None, dvPL=None, dvPE=None, dvPlaneChange=430,
     ),
     radius_km=700,
     safe_altitude_km=90.0,  # Kármán line; atmosphere edge
     atm_scale_height_m=7000.0,
+    # The AP home pad sits on the 25°S/-159° mesa at 6,140 m ASL
+    # (AP_KSC_Sites/generate.py: "OFF-EQUATOR mesa: +536m vs equator") —
+    # the recommender deliberately targets Eve's highest usable ground.
+    pad_altitude_m=6140.0,
+    assume_highlands_landing=True,
     # 4 land_only + 1 water_only + 8 mixed per BiomeSplit dump.
     # Two tiny biomes (Craters, Akatsuki Lake) weren't sampled by the
     # 5° grid; conservatively excluded.
@@ -1078,18 +1150,23 @@ _PROGRESSIVE_LAUNCH_PAD_ISP_REF: float = 3000.0
 def progressive_launch_pad_caps_for(home: BodyName) -> tuple[float, ...]:
     """Per-home tonnage caps for the Progressive Launch Pad item.
 
-    Scales the Kerbin baseline by ``exp((home.dvGL - kerbin.dvGL) / Isp_ref)``.
+    Scales the Kerbin baseline by ``exp(Δ(pad ascent dv) / Isp_ref)``.
     This matches the rocket equation's ``payload * exp(Δdv / Isp_eff)``
     mass scaling so each cap tier opens up a similar "effective span of
-    missions" regardless of home gravity well.
+    missions" regardless of home gravity well.  The scaling input is
+    ``home_pad_ascent_dv()`` — the dv a pad launch actually pays — not raw
+    sea-level ``dvGL``: for an elevated home pad (Eve's mesa) the raw
+    figure would inflate the caps past what any home launch needs
+    (12,000 → 17.6× Kerbin vs the pad's ~9,000 → 6.5×).  Identical for
+    sea-level pads, where the two values coincide.
 
     The infinity entry stays as infinity — that final cap removes the
     constraint entirely so heavy goal missions stay feasible after the
     player collects all copies.
     """
     import math
-    kerbin_dv = BODY_BY_NAME[BodyName.KERBIN].dv.dvGL or 3400.0
-    home_dv = BODY_BY_NAME[home].dv.dvGL or kerbin_dv
+    kerbin_dv = BODY_BY_NAME[BodyName.KERBIN].home_pad_ascent_dv() or 3400.0
+    home_dv = BODY_BY_NAME[home].home_pad_ascent_dv() or kerbin_dv
     ratio = math.exp((home_dv - kerbin_dv) / _PROGRESSIVE_LAUNCH_PAD_ISP_REF)
     return tuple(
         cap * ratio if cap != float("inf") else cap
@@ -1421,6 +1498,14 @@ class MissionBuilder:
         # to charge the dv to reach the orbit and by build_parameters to tell the
         # client where to spawn the stranded Kerbal.
         self.rescue_orbit_params: dict[BodyName, float] = {}
+        # Per-seed bound lifter table (pad -> home low orbit), or None to use
+        # raw physics for the home-ascent build.  Populated by the world in
+        # generate_early (same lifecycle as random_orbit_params); read only by
+        # the sphere-ladder evaluator path (``use_lifter_table=True``), never
+        # by the post_fill cross-check / spoiler / feasibility generator, which
+        # stay on raw physics.  ``Optional[BoundLifterTable]`` — untyped here to
+        # avoid importing lifter_binding at module import.
+        self.lifter_table = None
         # Precomputed relay-tier table keyed by destination BodyName.
         # Built before edge construction so ``_edge`` can stamp the
         # value onto every ``MissionEdge.relay_tier`` directly — the
@@ -1692,12 +1777,21 @@ class MissionBuilder:
         soi = f"{bnl}_soi"
         ic  = f"{bnl}_intercept"
 
-        # Ascent — surface → low orbit (atmospheric or vacuum).
+        # Ascent — surface → low orbit (atmospheric or vacuum).  The HOME
+        # body's ascent starts from its designated pad (an elevated site
+        # pays less than the sea-level ``dvGL`` — Eve's mesa).  Destination
+        # landers pay sea level, EXCEPT on assume_highlands_landing bodies
+        # (Eve), where logic assumes a player-controlled highlands touchdown
+        # at the pad's elevation band — see the field's one-way-splashdown
+        # caveat.
         if body.can_land and body.dv.dvGL > 0:
             ascent_type = self._AT if body.has_atmosphere else self._VA
             min_twr_ascent = 1.3 if body.has_atmosphere else 1.2
+            ascent_dv = (body.home_pad_ascent_dv()
+                         if bn == self.home or body.assume_highlands_landing
+                         else body.dv.dvGL)
             ascent = self._edge(
-                s, lo, ascent_type, body.dv.dvGL, bn,
+                s, lo, ascent_type, ascent_dv, bn,
                 min_twr=min_twr_ascent, throttle=True, attitude=True,
             )
             self._add_out(ascent)

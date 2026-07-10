@@ -12,10 +12,13 @@ overhead.  For every body that can serve as a starting body, the script:
    possibly worse than the best part).
 2. Runs ``compute_capability_from_items`` against a ``MissionBuilder``
    rooted at that home, at each difficulty profile.
-3. Records which non-home landable bodies have ``RETURN`` or
-   ``SAMPLE_RETURN`` reported as unreachable (False access).  These
-   bodies get the "all-parts collected" proxy rule at goal-evaluation
-   time instead of the dv-based capability check.
+3. Records EVERY non-home body event reported as unreachable (False
+   access) — all events ``locations.py`` exposes for the body, not just
+   returns.  A body harder than the maximal kit's ceiling (even for
+   plain orbit) therefore excludes gracefully instead of leaving
+   progression-eligible locations behind a permanently-false rule.
+   These locations get the "all-parts collected" proxy rule at
+   goal-evaluation time instead of the dv-based capability check.
 
 The output is checked in at ``worlds/ksp1/data/feasibility.py`` and
 read by ``world.py`` at generation time as a pure lookup — no per-seed
@@ -50,24 +53,19 @@ from pathlib import Path
 
 from worlds.ksp1.bodies import (
     ALL_BODIES, BodyName, DIFFICULTY_PROFILES,
-    MissionBuilder, MissionType,
+    EdgeType, MissionBuilder, MissionType,
 )
-from worlds.ksp1.capability import compute_capability_from_items
-from worlds.ksp1.locations import EVENT_BY_NAME, EventName
+import worlds.ksp1.capability as capability
+from worlds.ksp1.capability import (
+    compute_capability_from_items, evaluate_mission_detailed,
+)
+from worlds.ksp1.locations import (
+    EVENT_BY_NAME, get_body_events,
+)
 from worlds.ksp1.parts import ALL_PACKS, part_manager_for
 from worlds.ksp1.parts.packs import (
     STOCK, OPTIONAL_PACKS, DEFAULT_ENABLED_OPTIONAL_PACKS,
 )
-
-
-# Mission events whose feasibility the script probes.  Each (body, event)
-# pair that fails the capability check is recorded as its canonical
-# ``(target_body, mission_type)`` pair — the same shape the world's
-# ``unachievable_missions`` carries; the world expands it back over every
-# matching AP location (all slots of every event sharing that mission type).
-# The probed events map to DISTINCT mission types (RETURN vs SAMPLE_RETURN), so
-# the pair keeps them separable.
-_PROBED_EVENTS: tuple[EventName, ...] = (EventName.RETURN, EventName.SAMPLE_RETURN)
 
 
 # One table is baked per PHYSICS difficulty.  Feasibility genuinely depends on
@@ -84,10 +82,21 @@ DIFFICULTIES: tuple[str, ...] = ("generous", "comfortable", "small", "zero")
 # per category that may be heavier or weaker, so a mission that *just barely*
 # closes with the best parts could fail with the reps actually granted.  The
 # buffer keeps such marginal missions classified infeasible.  Uniform across
-# difficulties because rep variance is difficulty-independent.  At 25% the
-# marginal deep sample-returns that widen the fill-famine tail (e.g. expert SSR
-# requiring Tylo+Laythe) drop back to the proxy, restoring the zero-reject bar.
-DEFAULT_OVERHEAD: float = 0.25
+# difficulties because rep variance is difficulty-independent.
+#
+# Lowered 0.25 -> 0.10 (2026-07-06, operator decision): the 9km/s-class Eve
+# ascents sit just past a Tsiolkovsky cliff at +25% (the escalated Eve-home
+# mesa lifter's payload ceiling collapses from full stacks at 1.25x effective
+# dv to 1.8t at 1.30x), so the old buffer was excluding whole mission classes
+# (Eve-home at small: 169 location names) that close comfortably at the real
+# seed margins.  At 0.10 nothing is newly excluded anywhere and the measured
+# solve rate holds the zero-reject bar: expert+AllowEve {SSR, flag, ctt} x
+# {kerbin, laythe, tylo} 9/9 configs x 40/40 strict CLEAN, casual tylo SSR
+# 40/40 CLEAN, Tier 2 rows byte-identical (see solve_rate_log 2026-07-06).
+# The historic fill-famine tail the 25% figure was sized against (expert deep
+# SSR) predates the location-signature and HomeContractFloor fixes that now
+# carry that load.
+DEFAULT_OVERHEAD: float = 0.10
 
 # Default physics difficulty for the single-home helper (the per-home probe
 # still takes an explicit difficulty; this only covers callers that omit it).
@@ -142,6 +151,16 @@ def compute_model_infeasible_for_home(
     difficulty profile — tightens the "what counts as feasible" bar
     when you need missions that *just barely* pass with maxed reps
     to still be classified as model-infeasible.
+
+    Probing is per-event, but ``world.py`` canonicalises the table's
+    location names back to ``(body, mission_type)`` tuples — and several
+    events SHARE a mission_type (Landing/Crewed Landing → LAND,
+    Orbit/EVA in Orbit → ORBIT, Flyby/SOI Leave → ESCAPE).  One
+    infeasible event therefore excludes its mission_type siblings on
+    that body too.  That collapse is deliberate and must stay in the
+    conservative direction: the alternative (excluding only the failing
+    sibling) would leave the feasible sibling's locations progression-
+    eligible while the infeasible one strands.
     """
     counts = _max_kit_counts(enabled_packs)
     mission_builder = MissionBuilder(home=home)
@@ -154,10 +173,15 @@ def compute_model_infeasible_for_home(
     )
     infeasible: set[tuple[BodyName, MissionType]] = set()
     for body in ALL_BODIES:
-        if body.name == home or not body.can_land:
+        if body.name == home:
+            continue
+        # Probe exactly the events locations.py exposes for this body —
+        # Jool contributes its orbital events, Kerbol contributes none.
+        events = get_body_events(body)
+        if not events:
             continue
         body_cap = cap.bodies[body.name]
-        for event in _PROBED_EVENTS:
+        for event in events:
             if body_cap.access.get(event, False):
                 continue
             infeasible.add((body.name, EVENT_BY_NAME[event].mission_type))
@@ -171,6 +195,234 @@ def _candidate_homes() -> list[BodyName]:
     """
     return [b.name for b in ALL_BODIES
             if b.can_land and b.name != BodyName.KERBOL]
+
+
+# ---------------------------------------------------------------------------
+# Escalated-build eligibility — which ascent edges may use the ESCALATED_*
+# caps (rocket_math), applied by capability ONLY inside Apollo-split
+# evaluations.  Probed offline HERE so generation never pays a
+# try-fail-retry: the checked-in set is the single source the escalation
+# predicate reads.  Home ascents are NEVER candidates (operator constraint:
+# a home ascent is that seed's hottest search path).
+# ---------------------------------------------------------------------------
+
+_ASCENT_EDGE_TYPES = (EdgeType.ATMOSPHERIC_ASCENT, EdgeType.VACUUM_ASCENT)
+
+
+def compute_escalated_edges(
+    overhead: float = DEFAULT_OVERHEAD,
+    enabled_packs: frozenset[str] = ALL_PACKS,
+) -> frozenset[tuple[BodyName, EdgeType]]:
+    """(body, EdgeType) ascent edges whose escalation flips some max-kit
+    mission from infeasible to feasible, at any (difficulty, home).
+
+    Two passes per (difficulty, home), both with the escalation override
+    pinned (so the checked-in set — this function's own previous output —
+    can never influence the result):
+
+    * baseline (override = ∅): collect the infeasible missions and the
+      non-home ascent edges their profiles traverse (the candidates);
+    * per candidate edge (override = {edge}): re-evaluate just those
+      missions; any flip marks the edge eligible.
+
+    Eligibility is a permission, not a feasibility claim — the table pass
+    afterwards decides per config what actually closes.
+    """
+    counts = _max_kit_counts(enabled_packs)
+    eligible: set[tuple[BodyName, EdgeType]] = set()
+    try:
+        for difficulty in DIFFICULTIES:
+            probe_difficulty = _profile_with_overhead(difficulty, overhead)
+            for home in _candidate_homes():
+                capability._ESCALATION_OVERRIDE = frozenset()
+                mission_builder = MissionBuilder(home=home)
+                cap, flags = compute_capability_from_items(
+                    lambda name: counts.get(name, 0),
+                    difficulty_name=probe_difficulty,
+                    start_with_clamps=True,
+                    mission_builder=mission_builder,
+                )
+                # Baseline-infeasible missions and their candidate edges.
+                probes: list[tuple[BodyName, object, tuple]] = []
+                for body in ALL_BODIES:
+                    if body.name == home:
+                        continue
+                    events = get_body_events(body)
+                    if not events:
+                        continue
+                    body_cap = cap.bodies[body.name]
+                    for event in events:
+                        if body_cap.access.get(event, False):
+                            continue
+                        ev = EVENT_BY_NAME[event]
+                        edges = {
+                            (e.body, e.edge_type)
+                            for profile in mission_builder.profiles_for(
+                                body.name, ev.mission_type)
+                            for e in profile
+                            if e.edge_type in _ASCENT_EDGE_TYPES
+                            and e.body != home
+                        }
+                        if edges:
+                            probes.append((body.name, ev, tuple(sorted(
+                                edges, key=lambda t: (t[0].name, t[1].name)))))
+                for body_name, ev, edges in probes:
+                    for edge in edges:
+                        if edge in eligible:
+                            continue  # union semantics — already proven
+                        capability._ESCALATION_OVERRIDE = frozenset({edge})
+                        res = evaluate_mission_detailed(
+                            flags, DIFFICULTY_PROFILES[probe_difficulty],
+                            body_name, ev.mission_type, crewed=ev.crewed,
+                            mission_builder=mission_builder,
+                        )
+                        if res.feasible:
+                            eligible.add(edge)
+    finally:
+        capability._ESCALATION_OVERRIDE = None
+    return frozenset(eligible)
+
+
+# HOME-ascent escalation is a hot-path exception (every mission from that
+# home pays the bigger search), so eligibility is OPERATOR-ALLOWLISTED here —
+# the probe below only verifies an allowlisted edge still flips feasibility
+# (dropping it if it stops mattering); it can never add a new home to the
+# escalated set on its own.  Approved 2026-07-03: Eve (recalibrated ~9,000
+# m/s mesa-pad ascent exceeds standard caps at the probe bar).
+_HOME_ESCALATION_ALLOWLIST: frozenset[tuple[BodyName, EdgeType]] = frozenset({
+    (BodyName.EVE, EdgeType.ATMOSPHERIC_ASCENT),
+})
+
+
+def compute_escalated_home_edges(
+    apollo_escalated: frozenset[tuple[BodyName, EdgeType]],
+    overhead: float = DEFAULT_OVERHEAD,
+    enabled_packs: frozenset[str] = ALL_PACKS,
+) -> frozenset[tuple[BodyName, EdgeType]]:
+    """Allowlisted HOME-ascent edges whose escalation flips some max-kit
+    mission feasible from that home, at any difficulty.
+
+    Runs with the Apollo escalation set pinned (production behaviour) and
+    the home override pinned per candidate, mirroring
+    :func:`compute_escalated_edges`'s override discipline.
+    """
+    counts = _max_kit_counts(enabled_packs)
+    eligible: set[tuple[BodyName, EdgeType]] = set()
+    try:
+        capability._ESCALATION_OVERRIDE = apollo_escalated
+        for edge_body, edge_type in sorted(
+                _HOME_ESCALATION_ALLOWLIST,
+                key=lambda t: (t[0].name, t[1].name)):
+            home = edge_body
+            mission_builder = MissionBuilder(home=home)
+            for difficulty in DIFFICULTIES:
+                if (edge_body, edge_type) in eligible:
+                    break
+                probe_difficulty = _profile_with_overhead(difficulty, overhead)
+                capability._HOME_ESCALATION_OVERRIDE = frozenset()
+                cap, flags = compute_capability_from_items(
+                    lambda name: counts.get(name, 0),
+                    difficulty_name=probe_difficulty,
+                    start_with_clamps=True,
+                    mission_builder=mission_builder,
+                )
+                # Collect the baseline-infeasible missions BEFORE flipping
+                # the override: ``cap.bodies`` is a LAZY mapping (assessed
+                # on first read), so reads made after the flip would be the
+                # escalated verdicts, not the baseline.
+                baseline_infeasible: list = []
+                for body in ALL_BODIES:
+                    if body.name == home:
+                        continue
+                    events = get_body_events(body)
+                    if not events:
+                        continue
+                    body_cap = cap.bodies[body.name]
+                    for event in events:
+                        if not body_cap.access.get(event, False):
+                            baseline_infeasible.append(
+                                (body.name, EVENT_BY_NAME[event]))
+                capability._HOME_ESCALATION_OVERRIDE = frozenset(
+                    {(edge_body, edge_type)})
+                for body_name, ev in baseline_infeasible:
+                    res = evaluate_mission_detailed(
+                        flags, DIFFICULTY_PROFILES[probe_difficulty],
+                        body_name, ev.mission_type, crewed=ev.crewed,
+                        mission_builder=mission_builder,
+                    )
+                    if res.feasible:
+                        eligible.add((edge_body, edge_type))
+                        break
+    finally:
+        capability._ESCALATION_OVERRIDE = None
+        capability._HOME_ESCALATION_OVERRIDE = None
+    return frozenset(eligible)
+
+
+def compute_assembly_missions(
+    apollo_escalated: frozenset[tuple[BodyName, EdgeType]],
+    home_escalated: frozenset[tuple[BodyName, EdgeType]],
+    overhead: float = DEFAULT_OVERHEAD,
+    enabled_packs: frozenset[str] = ALL_PACKS,
+) -> frozenset[tuple[BodyName, BodyName, MissionType]]:
+    """(home, destination, MissionType) triples the multi-launch assembly
+    retry flips from infeasible to feasible at max kit, at any difficulty.
+
+    Runs with both escalation sets pinned (production behaviour) and the
+    assembly override pinned per candidate, mirroring
+    :func:`compute_escalated_edges`'s override discipline.  A candidate that
+    doesn't fail on the home launch costs one evaluation — the retry's
+    partition enumerator returns nothing when an UPPER stage failed, so
+    assembly is only ever priced where it can actually help.
+    """
+    counts = _max_kit_counts(enabled_packs)
+    eligible: set[tuple[BodyName, BodyName, MissionType]] = set()
+    try:
+        capability._ESCALATION_OVERRIDE = apollo_escalated
+        capability._HOME_ESCALATION_OVERRIDE = home_escalated
+        for difficulty in DIFFICULTIES:
+            probe_difficulty = _profile_with_overhead(difficulty, overhead)
+            for home in _candidate_homes():
+                capability._ASSEMBLY_OVERRIDE = frozenset()
+                mission_builder = MissionBuilder(home=home)
+                cap, flags = compute_capability_from_items(
+                    lambda name: counts.get(name, 0),
+                    difficulty_name=probe_difficulty,
+                    start_with_clamps=True,
+                    mission_builder=mission_builder,
+                )
+                # Collect the baseline-infeasible missions BEFORE flipping
+                # the override (``cap.bodies`` is lazy — see
+                # compute_escalated_home_edges).
+                baseline_infeasible: list = []
+                for body in ALL_BODIES:
+                    if body.name == home:
+                        continue
+                    events = get_body_events(body)
+                    if not events:
+                        continue
+                    body_cap = cap.bodies[body.name]
+                    for event in events:
+                        if not body_cap.access.get(event, False):
+                            baseline_infeasible.append(
+                                (body.name, EVENT_BY_NAME[event]))
+                for body_name, ev in baseline_infeasible:
+                    key = (home, body_name, ev.mission_type)
+                    if key in eligible:
+                        continue  # union semantics — already proven
+                    capability._ASSEMBLY_OVERRIDE = frozenset({key})
+                    res = evaluate_mission_detailed(
+                        flags, DIFFICULTY_PROFILES[probe_difficulty],
+                        body_name, ev.mission_type, crewed=ev.crewed,
+                        mission_builder=mission_builder,
+                    )
+                    if res.feasible:
+                        eligible.add(key)
+    finally:
+        capability._ASSEMBLY_OVERRIDE = None
+        capability._ESCALATION_OVERRIDE = None
+        capability._HOME_ESCALATION_OVERRIDE = None
+    return frozenset(eligible)
 
 
 def build_all_tables(
@@ -229,37 +481,60 @@ def build_base_and_deltas(
     overhead: float = DEFAULT_OVERHEAD,
 ) -> tuple[tuple[str, ...],
            dict[str, dict[BodyName, frozenset[tuple[BodyName, MissionType]]]],
-           dict[tuple[str, ...], dict[str, dict[BodyName, DeltaCell]]]]:
-    """Compute the BASE table (default config) and signed deltas vs base for
-    every other capability-relevant pack subset.  Returns
-    ``(base_key, base_tables, deltas)``; ``deltas`` keeps only configs that
-    differ and only their non-empty (difficulty, home) cells."""
+           dict[tuple[str, ...], dict[str, dict[BodyName, DeltaCell]]],
+           frozenset[tuple[BodyName, EdgeType]],
+           frozenset[tuple[BodyName, EdgeType]],
+           frozenset[tuple[BodyName, BodyName, MissionType]]]:
+    """Compute escalation eligibility (Apollo + allowlisted home) and the
+    assembly-mission eligibility, then the BASE table (default config) and
+    signed deltas vs base for every other capability-relevant pack subset —
+    all table passes run WITH every eligibility set active, exactly as
+    generation will.  Returns ``(base_key, base_tables, deltas,
+    escalated_edges, escalated_home_edges, assembly_missions)``; ``deltas``
+    keeps only configs that differ and only their non-empty (difficulty,
+    home) cells."""
     opt = _capability_relevant_optional_packs()
     base_optional = _base_optional()
     base_key = _config_key(base_optional)
-    base = build_all_tables(
+    escalated = compute_escalated_edges(
         overhead=overhead, enabled_packs=frozenset({STOCK}) | base_optional)
+    escalated_home = compute_escalated_home_edges(
+        escalated, overhead=overhead,
+        enabled_packs=frozenset({STOCK}) | base_optional)
+    assembly = compute_assembly_missions(
+        escalated, escalated_home, overhead=overhead,
+        enabled_packs=frozenset({STOCK}) | base_optional)
+    capability._ESCALATION_OVERRIDE = escalated
+    capability._HOME_ESCALATION_OVERRIDE = escalated_home
+    capability._ASSEMBLY_OVERRIDE = assembly
+    try:
+        base = build_all_tables(
+            overhead=overhead, enabled_packs=frozenset({STOCK}) | base_optional)
 
-    deltas: dict[tuple[str, ...], dict[str, dict[BodyName, DeltaCell]]] = {}
-    for r in range(len(opt) + 1):
-        for combo in itertools.combinations(opt, r):
-            enabled_optional = frozenset(combo)
-            if enabled_optional == base_optional:
-                continue
-            cfg = build_all_tables(
-                overhead=overhead,
-                enabled_packs=frozenset({STOCK}) | enabled_optional)
-            cells: dict[str, dict[BodyName, DeltaCell]] = {}
-            for difficulty in DIFFICULTIES:
-                for home in _candidate_homes():
-                    b = base[difficulty][home]
-                    c = cfg[difficulty][home]
-                    added, removed = c - b, b - c
-                    if added or removed:
-                        cells.setdefault(difficulty, {})[home] = (added, removed)
-            if cells:
-                deltas[_config_key(enabled_optional)] = cells
-    return base_key, base, deltas
+        deltas: dict[tuple[str, ...], dict[str, dict[BodyName, DeltaCell]]] = {}
+        for r in range(len(opt) + 1):
+            for combo in itertools.combinations(opt, r):
+                enabled_optional = frozenset(combo)
+                if enabled_optional == base_optional:
+                    continue
+                cfg = build_all_tables(
+                    overhead=overhead,
+                    enabled_packs=frozenset({STOCK}) | enabled_optional)
+                cells: dict[str, dict[BodyName, DeltaCell]] = {}
+                for difficulty in DIFFICULTIES:
+                    for home in _candidate_homes():
+                        b = base[difficulty][home]
+                        c = cfg[difficulty][home]
+                        added, removed = c - b, b - c
+                        if added or removed:
+                            cells.setdefault(difficulty, {})[home] = (added, removed)
+                if cells:
+                    deltas[_config_key(enabled_optional)] = cells
+    finally:
+        capability._ESCALATION_OVERRIDE = None
+        capability._HOME_ESCALATION_OVERRIDE = None
+        capability._ASSEMBLY_OVERRIDE = None
+    return base_key, base, deltas, escalated, escalated_home, assembly
 
 
 def _pair_sort_key(pair: tuple[BodyName, MissionType]) -> tuple[str, str]:
@@ -327,10 +602,67 @@ def _format_deltas(
     return lines
 
 
+def _format_escalated(
+    escalated: frozenset[tuple[BodyName, EdgeType]],
+    escalated_home: frozenset[tuple[BodyName, EdgeType]],
+) -> list[str]:
+    lines = [
+        '# Ascent edges eligible for the ESCALATED build caps (rocket_math',
+        '# ESCALATED_*), applied by capability ONLY inside Apollo-split',
+        '# evaluations.  Probed offline by compute_escalated_edges — an edge is',
+        '# listed iff escalating it flips some max-kit mission feasible.  Home',
+        '# ascents are never listed here (hot-path constraint) — the separate',
+        '# allowlisted ESCALATED_HOME_ASCENT_EDGES below carries the approved',
+        '# exceptions.',
+        'ESCALATED_ASCENT_EDGES: frozenset[tuple[BodyName, EdgeType]] = frozenset({',
+    ]
+    for b, et in sorted(escalated, key=lambda t: (t[0].name, t[1].name)):
+        lines.append(f"    (BodyName.{b.name}, EdgeType.{et.name}),")
+    lines.append("})")
+    lines += [
+        '',
+        '# HOME-ascent edges eligible for the ESCALATED caps on the PRIMARY',
+        '# evaluation (every mission from that home traverses its ascent, so',
+        '# this is a deliberate hot-path exception).  Operator-allowlisted in',
+        '# generate_feasibility._HOME_ESCALATION_ALLOWLIST and probe-verified',
+        '# to still flip feasibility; the probe can never add a home on its',
+        '# own.',
+        'ESCALATED_HOME_ASCENT_EDGES: '
+        'frozenset[tuple[BodyName, EdgeType]] = frozenset({',
+    ]
+    for b, et in sorted(escalated_home, key=lambda t: (t[0].name, t[1].name)):
+        lines.append(f"    (BodyName.{b.name}, EdgeType.{et.name}),")
+    lines.append("})")
+    return lines
+
+
+def _format_assembly(
+    assembly: frozenset[tuple[BodyName, BodyName, MissionType]],
+) -> list[str]:
+    lines = [
+        '# (home, destination, mission_type) triples eligible for the multi-launch',
+        '# orbital-assembly retry: missions the probe verified a single launch can',
+        '# NEVER close at max kit (unlimited pad) but ≤3 docked launches can.',
+        '# Probed offline by compute_assembly_missions; consulted by capability\'s',
+        '# _assembly_candidate on the failure path only.',
+        'ASSEMBLY_ELIGIBLE_MISSIONS: frozenset[',
+        '    tuple[BodyName, BodyName, MissionType]] = frozenset({',
+    ]
+    for h, b, mt in sorted(assembly,
+                           key=lambda t: (t[0].name, t[1].name, t[2].name)):
+        lines.append(
+            f"    (BodyName.{h.name}, BodyName.{b.name}, MissionType.{mt.name}),")
+    lines.append("})")
+    return lines
+
+
 def _format(
     base_key: tuple[str, ...],
     base: dict[str, dict[BodyName, frozenset[str]]],
     deltas: dict[tuple[str, ...], dict[str, dict[BodyName, DeltaCell]]],
+    escalated: frozenset[tuple[BodyName, EdgeType]],
+    escalated_home: frozenset[tuple[BodyName, EdgeType]],
+    assembly: frozenset[tuple[BodyName, BodyName, MissionType]],
 ) -> str:
     """Serialise base + deltas as a Python source file.  Stable ordering keeps
     the diff minimal across regenerations."""
@@ -357,14 +689,16 @@ def _format(
         '"""',
         'from __future__ import annotations',
         '',
-        'from worlds.ksp1.bodies import BodyName, MissionType',
+        'from worlds.ksp1.bodies import BodyName, EdgeType, MissionType',
         '',
         '',
         f'BASE_RELEVANT_PACKS: tuple[str, ...] = {base_key!r}',
         '',
         '',
     ]
-    lines = header + _format_base(base) + ['', ''] + _format_deltas(deltas)
+    lines = (header + _format_base(base) + ['', ''] + _format_deltas(deltas)
+             + ['', ''] + _format_escalated(escalated, escalated_home)
+             + ['', ''] + _format_assembly(assembly))
     lines.append("")
     return "\n".join(lines)
 
@@ -388,8 +722,10 @@ def main(argv: list[str] | None = None) -> int:
                              f"(default: {DEFAULT_OVERHEAD}).")
     args = parser.parse_args(argv)
 
-    base_key, base, deltas = build_base_and_deltas(overhead=args.overhead)
-    rendered = _format(base_key, base, deltas)
+    (base_key, base, deltas, escalated, escalated_home,
+     assembly) = build_base_and_deltas(overhead=args.overhead)
+    rendered = _format(base_key, base, deltas, escalated, escalated_home,
+                       assembly)
 
     if args.write and args.check:
         parser.error("--write and --check are mutually exclusive")

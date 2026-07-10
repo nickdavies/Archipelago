@@ -8,6 +8,7 @@ from Options import OptionError
 from worlds.AutoWorld import LogicMixin, WebWorld, World
 
 from . import contracts, items, locations, regions, rules
+from .data import lifter_chains
 from .parts import part_manager_for
 from .ksc_sites import ksc_site_slot_data
 from .rules import GoalSpec, resolve_goal_spec, goal_spec_location_names
@@ -362,6 +363,25 @@ class KSP1World(World):
         # (``option_mun`` → key ``"mun"`` → ``BodyName.MUN``).  The
         # title-case round-trip rebuilds the canonical ``StrEnum`` value.
         home = BodyName(self.options.starting_body.current_key.title())
+        # Eve-as-home is supported, but ONLY at expert difficulty (operator
+        # decision, 2026-07-06): flying an Eve ascent for every mission is an
+        # expert-player undertaking — claiming a casual/normal skill level
+        # while planning to complete Eve-home missions is incoherent, and the
+        # softer physics margins also make the generous-tail deep missions
+        # fragile.  The mesa pad ascent (~8,996 m/s) closes under escalated
+        # home-ascent builds with asparagus sub-stages
+        # (ESCALATED_HOME_ASCENT_EDGES + parallel_substages), and any stack
+        # the single mesa launch can't lift is composed by multi-launch
+        # orbital assembly in Eve low orbit — verified honestly by the
+        # feasibility table (fully open at the expert 'small' profile).
+        if (home is BodyName.EVE
+                and self.options.difficulty.value != Difficulty.option_expert):
+            raise OptionError(
+                "KSP1: starting_body=eve is only supported at "
+                "difficulty=expert — an Eve ascent is an expert-player "
+                "mission.  Raise the difficulty to expert, or pick a "
+                "different starting body."
+            )
         self.mission_builder = MissionBuilder(home=home)
         # Player skill/equipment gates (reaction-wheel/RCS/nav assists) from the
         # base Difficulty option.  Carried on the mission_builder so capability +
@@ -424,7 +444,14 @@ class KSP1World(World):
         eve_allowed = (self.options.allow_eve_on_expert.value
                        and self.options.difficulty.value == Difficulty.option_expert)
         if not eve_allowed:
-            unachievable |= self.mission_builder.missions_using_edges(_BANNED_EDGES)
+            # The HOME body is exempt from the curated ban: picking a banned
+            # body as the starting body IS the opt-in (every mission from an
+            # Eve home traverses the Eve ascent as its pad launch — the ban,
+            # written for Eve-as-destination round trips, would otherwise
+            # void the whole seed).  The dv feasibility table still gates
+            # honestly per difficulty.
+            banned = frozenset(e for e in _BANNED_EDGES if e[0] != home)
+            unachievable |= self.mission_builder.missions_using_edges(banned)
         self.unachievable_missions = frozenset(unachievable)
         self.mission_builder.unachievable = self.unachievable_missions
         # Name-keyed view derived from the canonical tuple set (one source).
@@ -463,6 +490,34 @@ class KSP1World(World):
         else:
             self.mission_builder.rescue_orbit_params = generate_rescue_orbit_params(
                 random.Random(self.random.getrandbits(64)), ALL_BODIES)
+
+        # Pre-cached home-ascent lifter: pick one of the offline-generated
+        # chains for this (home, pack set) and load its bound table.  The
+        # sphere-ladder evaluator consults it instead of re-searching the
+        # pad->low-orbit stage (the dominant generation cost).  A derived RNG
+        # draw keeps the profile choice off the main sequence (same discipline
+        # as the orbit draws above); UT regen restores the exact profile_id.
+        # None (no data for this home/pack/difficulty) => raw physics, so this
+        # is a pure no-op wherever the table hasn't been generated.
+        # KSP_NO_LIFTER_TABLE forces raw physics everywhere (A/B measurement +
+        # safety switch); the profile_id draw is still consumed so seed numbers
+        # match a table-on run for like-for-like comparison.
+        _lifter_off = os.environ.get("KSP_NO_LIFTER_TABLE") == "1"
+        pack_key = tuple(sorted(self.part_manager.capability_relevant_packs()))
+        n_lifter = lifter_chains.n_profiles(home, pack_key)
+        if n_lifter > 0:
+            ut_lifter = getattr(self, "_ut_lifter_profile_id", None)
+            if ut_lifter is not None:
+                self.lifter_profile_id = ut_lifter
+            else:
+                self.lifter_profile_id = random.Random(
+                    self.random.getrandbits(64)).randrange(n_lifter)
+            if not _lifter_off:
+                self.mission_builder.lifter_table = lifter_chains.load_lifter_table(
+                    home, pack_key, self.lifter_profile_id,
+                    effective_physics_profile_name(self.options))
+        else:
+            self.lifter_profile_id = None
 
         # Generate this seed's contracts (deterministic from the world seed).
         # UT regen restores the exact set from slot_data instead of re-rolling.
@@ -883,6 +938,10 @@ class KSP1World(World):
         for loc_name, count, _item in self.contract_threshold_defs:
             thresholds_map.setdefault(str(count), []).append(loc_name)
         d["contract_thresholds"] = thresholds_map
+        # Pre-cached lifter profile chosen this seed (or None when no table
+        # covers this home/pack/difficulty).  Carried only so UT regen picks
+        # the same chain and reproduces the fill; the client ignores it.
+        d["lifter_profile_id"] = self.lifter_profile_id
         return d
 
     # ------------------------------------------------------------------
@@ -969,6 +1028,12 @@ class KSP1World(World):
             self._ut_rescue_orbit_params = {
                 BodyName(body): float(r) for body, r in rescue_op.items()
             }
+
+        # Restore the chosen lifter profile so regen consults the same bound
+        # chain (re-rolling would diverge the fill).  Absent on pre-feature
+        # seeds -> generate_early re-picks from the seed RNG.
+        if "lifter_profile_id" in slot_data:
+            self._ut_lifter_profile_id = slot_data["lifter_profile_id"]
 
         # A custom goal isn't a single enum value — its body lists ARE the goal,
         # and resolve_goal_spec rebuilds the spec from those option values during

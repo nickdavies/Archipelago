@@ -65,6 +65,19 @@ class BlockingReason(str, Enum):
     # --- Mass / pad -----------------------------------------------------
     LAUNCH_MASS_EXCEEDED = "launch_mass_exceeded"
 
+    # --- Pre-cached home lifter (offline lifter-chain bindings) ----------
+    # The home-ascent build was served from the bound lifter table.  The kit
+    # doesn't yet own the chain prefix that lifts this payload: carries the
+    # ordered ``chain_delta`` the bumper should collect (a guided variant of
+    # NO_VIABLE_STAGE, scoped to the group-0 lifter).
+    LIFTER_PREFIX_MISSING = "lifter_prefix_missing"
+    # The payload exceeds the full-pool ceiling for the home ascent — exactly
+    # infeasible for ANY kit at this dv (the ceiling is computed under
+    # maximally permissive settings).  The natural trigger for orbital
+    # assembly: this failure carries the partial stack so ``_assembly_partitions``
+    # can split the payload across multiple lifters.
+    LIFTER_PAYLOAD_OVER_CEILING = "lifter_payload_over_ceiling"
+
     # --- Curated buildings (buildings_in_logic) -------------------------
     # EVA required but the Astronaut Complex isn't upgraded enough.
     CANNOT_EVA = "cannot_eva"
@@ -143,6 +156,18 @@ class StageDiagnostic:
 
 
 @dataclass(frozen=True)
+class LifterChainDelta:
+    """The ordered part-adds the bumper should collect to serve a home-ascent
+    payload from the bound lifter table.  ``missing_parts`` is in chain order
+    (deterministic, no rng) so the chain-bump branch can add them directly to
+    ``reps_collected``."""
+    profile_id: int
+    missing_parts: tuple[str, ...]
+    threshold_t: float
+    dv_bound: float
+
+
+@dataclass(frozen=True)
 class BlockingInfo:
     """Structured detail of a single profile-evaluation failure.
 
@@ -185,6 +210,9 @@ class BlockingInfo:
     # Lets the bumper target the actual near-miss instead of guessing
     # from a catchall candidate list.
     stage_diag: Optional["StageDiagnostic"] = None
+    # Ordered chain delta for ``LIFTER_PREFIX_MISSING`` — the parts the bumper
+    # must collect to serve the group-0 lifter from the bound table.
+    chain_delta: Optional["LifterChainDelta"] = None
 
     def __str__(self) -> str:
         r = self.reason
@@ -192,6 +220,13 @@ class BlockingInfo:
         if r == BlockingReason.NO_VIABLE_STAGE:
             return (f"no viable stage for group dv={self.dv_needed:.0f} m/s "
                     f"at {self.body}")
+        if r == BlockingReason.LIFTER_PREFIX_MISSING:
+            n = len(self.chain_delta.missing_parts) if self.chain_delta else 0
+            return (f"home lifter needs {n} more chain part(s) to lift "
+                    f"{self.mass_actual:.1f} t at {self.body}")
+        if r == BlockingReason.LIFTER_PAYLOAD_OVER_CEILING:
+            return (f"home lifter payload {self.mass_actual:.1f} t exceeds "
+                    f"ceiling {self.mass_cap:.1f} t at {self.body}")
         if r == BlockingReason.NO_ENGINE:
             return f"no engine for {self.edge_type}"
         if r == BlockingReason.NO_LAUNCH_ENGINE:

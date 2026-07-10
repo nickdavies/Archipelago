@@ -64,7 +64,7 @@ def _cover(flags, pod_size=1.25):
 
 
 def _solve(payload, body, flags, diff_name="comfortable", reentry=False,
-           pod_size=1.25):
+           pod_size=1.25, ground_altitude_m=0.0):
     diff = DIFFICULTY_PROFILES[diff_name]
     twr = max(1.3, diff.min_twr_atmo)
     v = (1.4 * body.lo_escape_velocity) if reentry else body.lo_circular_velocity
@@ -72,7 +72,8 @@ def _solve(payload, body, flags, diff_name="comfortable", reentry=False,
                                twr_floor=twr, v_entry=v,
                                dvGL_cap=body.dv.dvGL or 0.0,
                                coverage_shield=_cover(flags, pod_size),
-                               pod_size=pod_size)
+                               pod_size=pod_size,
+                               ground_altitude_m=ground_altitude_m)
 
 
 class TestPerBodyExpectations(unittest.TestCase):
@@ -146,6 +147,45 @@ class TestPerBodyExpectations(unittest.TestCase):
         mix = _solve(15.0, self.DUNA, _flags(shields=[_HS1], chutes=[_MK16]))
         self.assertFalse(mix.feasible)
         self.assertGreater(mix.residual_speed, 6.0)
+
+
+class TestHeavyStackAndSiteAltitude(unittest.TestCase):
+    """Pins from the operator's Eve calibration flight (2026-07-05, 729 t
+    landed passively on 5 inflatable shields + chutes) and the site-altitude
+    model (highlands landings happen in thinner air)."""
+    EVE = BODY_BY_NAME[BodyName.EVE]
+    KIT = dict(shields=[_HS1, _INFLATABLE], chutes=[_MK2R, _MK12R], engine=True)
+
+    def test_eve_heavy_stack_small_burn_multi_shield(self) -> None:
+        # A mission-scale (600 t) Eve descent must not charge the old multi-
+        # km/s phantom bridge burn: multiple inflatables + chutes bring it
+        # down with at most a modest braking burn (receipt: 729 t needed none).
+        mix = _solve(600.0, self.EVE, _flags(**self.KIT))
+        self.assertTrue(mix.feasible)
+        self.assertLess(mix.burn_dv, 400.0)
+        self.assertGreater(mix.shield_count, 1)
+
+    def test_site_altitude_never_easier(self) -> None:
+        # An elevated landing site (thinner air, less braking column) may only
+        # increase the required burn, at any payload scale.
+        for payload in (5.0, 50.0, 600.0):
+            lo = _solve(payload, self.EVE, _flags(**self.KIT))
+            hi = _solve(payload, self.EVE, _flags(**self.KIT),
+                        ground_altitude_m=6140.0)
+            self.assertGreaterEqual(hi.burn_dv, lo.burn_dv - 1e-6,
+                                    f"{payload}t: highlands landing easier "
+                                    f"than sea level")
+
+    def test_site_above_pressure_gate_bans_chute(self) -> None:
+        # A landing site above a chute's semi-deploy pressure altitude means
+        # the chute can never open before impact — the solver must not credit
+        # it (Duna's thin air puts the mains' gate low).
+        from worlds.ksp1.capability import _chute_role_stages
+        duna = BODY_BY_NAME[BodyName.DUNA]
+        stages_sea, _ = _chute_role_stages(_MK2R, 4, duna, "main", 0.0)
+        self.assertIsNotNone(stages_sea)
+        stages_high, _ = _chute_role_stages(_MK2R, 4, duna, "main", 12000.0)
+        self.assertIsNone(stages_high)
 
 
 class TestKitMonotonicity(unittest.TestCase):

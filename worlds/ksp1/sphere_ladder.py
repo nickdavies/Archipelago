@@ -111,17 +111,24 @@ _BASIC_SCIENCE_INSTRUMENTS: frozenset[str] = frozenset(
 # anchor raises OptionError.  See ``project_060_deep_interplanetary_enablers``.
 # nuclear + fuel line are named (critical, present in every pack — user-approved);
 # the radial decoupler (sheds the asparagus booster ring) is derived by property.
+#
+# PACK SCOPING: enabler sets are derived PER SEED from ``world.part_manager``,
+# never from the full installed universe.  The inject adds part names straight
+# into reps, bypassing the item-grant mechanism that normally does per-seed
+# pack filtering — a disabled pack's part here would demand an item the pool
+# can't grant.  (The rest of the ladder's full-universe PART_DB reasoning is
+# fine: possession filtering happens through item grants and the rank table.)
 _NUCLEAR_ENGINE_NAME = "nuclearEngine"
 _FUEL_LINE_NAME = "fuelLine"
-_LIGHTEST_RADIAL_DECOUPLER: Optional[str] = min(
-    (nm for nm, parts in PART_DB.items()
-     if any(isinstance(p, Decoupler) and p.kind == "radial" for p in parts)),
-    key=lambda nm: PART_DB[nm][0].mass, default=None,
-)
-_DEEP_SPACE_ENABLERS: frozenset[str] = frozenset(
-    n for n in (_NUCLEAR_ENGINE_NAME, _FUEL_LINE_NAME, _LIGHTEST_RADIAL_DECOUPLER)
-    if n is not None and n in PART_DB
-)
+
+
+def _deep_space_enablers_for(pm) -> frozenset[str]:
+    """Deep-space enabler names available under ``pm``'s enabled packs."""
+    return frozenset(
+        n for n in (_NUCLEAR_ENGINE_NAME, _FUEL_LINE_NAME,
+                    pm.lightest_decoupler("radial"))
+        if n is not None and n in pm.parts
+    )
 # Inject once the chain's dv crosses this fraction of its max (mid-run band), and
 # only when that max is interplanetary-deep — keeps Mun/Minmus/simple seeds free
 # of the enablers (preserves early-game variance; the bumper finds its own kit).
@@ -144,8 +151,22 @@ _DEEP_INJECT_MIN_DV: float = 12000.0
 # rank-bumped leave-home inject reordered spheres and stranded near missions).
 # The REAL fix is a torque model (bug 004); this does not model torque.
 _ATTITUDE_ENABLER_NAME = "advSasModule"
-_ATTITUDE_ENABLERS: frozenset[str] = frozenset(
-    {_ATTITUDE_ENABLER_NAME} & set(PART_DB))
+
+# Apollo docking gear (``PartManager.docking_gear_candidates``) is injected
+# REPS-ONLY at the deep-space band (same dv threshold as the deep-space
+# enablers).  Deep round trips that exceed the whole-stack ceiling close only
+# via capability's Apollo-split retry, which gates on a docking port + RCS +
+# monopropellant (``_apollo_candidate`` / ``_apollo_split_for``); without
+# these in the cumulative kit the bumper never proposes them and the anchor
+# dead-ends.  ONE candidate per role is picked PER SEED with the world rng —
+# no part is hardcoded into every run (kit-variant precedent); capability
+# itself accepts whichever suitable parts are actually collected.  The
+# parked stack's command part needs no inject (the mission kit's capsule /
+# probe core covers it), its attitude comes from the attitude enabler
+# (wheel, leave-home band) or the pod, and power from the mission's own
+# power gate.  Reps-only (the attitude-enabler precedent): the gear carries
+# no meaningful rank axes, and skipping the rank bump avoids reordering
+# spheres.
 
 
 if TYPE_CHECKING:
@@ -232,15 +253,21 @@ class SphereBoundary:
     ``(MinimumRanks ranks, dict extras)`` into one :class:`Signature`.
     ``reps_collected`` is the union of all bumper-selected reps through
     this sphere — used by chain-walker reps-only feasibility proofs and
-    by downstream tech-tier band funding.
+    by downstream tech-tier band funding.  ``flags`` is the
+    :class:`EquipmentFlags` for EXACTLY that enforced kit
+    (``reps_collected`` + precollected): the bracket scan proves mission
+    feasibility against these flags and then installs
+    ``has_all(reps_collected)`` as the access rule, so flags built from
+    any broader kit let the cheap gate pass missions the enforced kit
+    cannot actually fly (bugs/101).
     """
     name: str
     location_name: str
     is_predictable: bool
     provides: Signature
     delta: Signature
+    flags: EquipmentFlags
     reps_collected: frozenset[str] = frozenset()
-    flags: EquipmentFlags = field(default_factory=lambda: None)  # type: ignore[arg-type]
     profile_dv: float = 0.0
     signature: Optional[LocationSignature] = None
 
@@ -333,6 +360,42 @@ def _contract_payload_rep_names(info: "LocationDescriptor",
     return {p.name for p in cp} if cp else set()
 
 
+def _parallel_only_mission(info: LocationDescriptor,
+                           mission_builder: MissionBuilder) -> bool:
+    """True for missions whose closure REQUIRES the parallel/asparagus search
+    (the multi-launch assembly tail and the escalated-ascent-edge round
+    trips): every serial trial of such a mission is infeasible, so the
+    bumper's serial guidance proxy has no ranking signal and can only
+    RESCUE — leaving the mission unbracketed (no reps-only gate, no
+    sphere-window item ban, and a dead cheap victory gate; see bugs/108/109).
+    Guidance trials for exactly these missions must pay for the exact
+    parallel build, and their rescue must probe at max pad (bug 109 root B).
+    """
+    from .data.feasibility import (
+        ASSEMBLY_ELIGIBLE_MISSIONS, ESCALATED_ASCENT_EDGES,
+        ESCALATED_HOME_ASCENT_EDGES)
+    home = mission_builder.home
+    mt = info.mission_type
+    if (home, info.body, mt) in ASSEMBLY_ELIGIBLE_MISSIONS:
+        return True
+    if (mt in (MissionType.RETURN, MissionType.SAMPLE_RETURN)
+            and any(b == info.body for b, _e in ESCALATED_ASCENT_EDGES)):
+        return True
+    # Heavy-delivery contracts from a home whose ascent is escalated (Eve's
+    # mesa launch): the delivered station/base/lab mass makes even the home
+    # ascent asparagus-only, so serial trials are all infeasible and the
+    # launch (2000t+ at generous margins) needs the max pad tier.  Both are
+    # the bug-109 failure modes on the HOME-ascent channel — the anchor
+    # would otherwise raise "unreachable under any rank kit".  Scoped to
+    # payload-bearing contracts so ordinary Eve-home missions keep the cheap
+    # serial proxy.
+    if (info.spec is not None
+            and info.spec.type_def.required_categories
+            and any(home == b for b, _e in ESCALATED_HOME_ASCENT_EDGES)):
+        return True
+    return False
+
+
 def _evaluate(
     flags: EquipmentFlags,
     info: LocationDescriptor,
@@ -346,7 +409,8 @@ def _evaluate(
     ``run_parallel=False`` (used by the bumper's guidance trials) skips the
     exact asparagus search — serial mass is a cheap, order-preserving proxy for
     ranking candidate bumps; the main-loop feasibility check and rescue keep the
-    exact parallel build.
+    exact parallel build.  Trials for ``_parallel_only_mission`` targets
+    override this back to the exact build (the proxy has no signal there).
     """
     if info.mission_type == MissionType.SOUNDING:
         return _evaluate_sounding(flags, info.threshold_km or 0.0,
@@ -381,6 +445,11 @@ def _evaluate(
             info.spec is not None
             and info.spec.contract_type in PRECISE_POINTING_TYPES),
         run_parallel=run_parallel,
+        # The sphere-ladder evaluator is the ONE opt-in to the pre-cached
+        # home-ascent lifter table (mission_builder.lifter_table).  post_fill
+        # cross-check / spoiler / get_capability keep use_lifter_table=False
+        # and stay on raw physics — the table never gates a shipped seed alone.
+        use_lifter_table=True,
     )
 
 
@@ -693,6 +762,23 @@ _RANK_BUMP_TABLE: dict[BlockingReason, tuple[RankAxisKey, ...]] = {
     # wheel-bearing probe or capsule) satisfies the precise-pointing gate.
     BlockingReason.NO_PRECISE_ATTITUDE: (
         RankAxisKey.SAS, RankAxisKey.PROBE_SAS, RankAxisKey.CAPSULE,
+    ),
+    # Pre-cached home lifter (offline chains).  PREFIX_MISSING is normally
+    # resolved by the dedicated chain-bump branch (adds the exact chain
+    # delta); this fallback mapping mirrors NO_VIABLE_STAGE's propulsion axes
+    # so the axis machinery can still make progress if the chain-bump can't.
+    # OVER_CEILING is a payload problem: only a lighter command module helps a
+    # single launch (assembly handles the rest), so it keeps the payload-
+    # reducing axes.
+    BlockingReason.LIFTER_PREFIX_MISSING: (
+        RankAxisKey.LFO_TANK, RankAxisKey.LF_TANK, RankAxisKey.XENON_TANK,
+        RankAxisKey.LAUNCH_ENGINE, RankAxisKey.VAC_ENGINE,
+        RankAxisKey.STACK_DECOUPLER, RankAxisKey.SRB,
+        RankAxisKey.RADIAL_DECOUPLER,
+        RankAxisKey.CAPSULE, RankAxisKey.PROBE_SAS,
+    ),
+    BlockingReason.LIFTER_PAYLOAD_OVER_CEILING: (
+        RankAxisKey.CAPSULE, RankAxisKey.PROBE_SAS,
     ),
 }
 
@@ -1136,7 +1222,8 @@ def _pick_rank_rep_scored(
             buildings_in_logic=buildings_in_logic, home=home,
         )
         trial_result = _evaluate(trial_flags, info, diff, mission_builder,
-                                 run_parallel=False,
+                                 run_parallel=_parallel_only_mission(
+                                     info, mission_builder),
                                  part_manager=part_manager)
         feasibility = 0 if trial_result.feasible else 1
         mass = trial_result.launch_mass or float("inf")
@@ -1358,6 +1445,34 @@ def minimal_ranks_for(
             if cur_pad < pad_cap_count:
                 sig = sig.with_counted(PROGRESSIVE_LAUNCH_PAD_NAME, cur_pad + 1)
                 continue
+
+        # Pre-cached home lifter: the served build needs chain-prefix parts the
+        # kit doesn't own yet (LIFTER_PREFIX_MISSING).  Add the exact delta in
+        # chain order — the cache already proved this prefix lifts the payload,
+        # so this replaces the group-0 tier-1 axis-trial + rep-pick for the
+        # home ascent (the dominant bump cost).  No rng draw: the chain order
+        # is fixed, so the main draw sequence is untouched by this branch.
+        # Ordered right after the Pad bump so it fires before the generic axis
+        # machinery, exactly like the counted-progressive bumps.
+        chain_deltas = [b.chain_delta for b in result.blocking
+                        if b.reason == BlockingReason.LIFTER_PREFIX_MISSING
+                        and b.chain_delta is not None]
+        if chain_deltas:
+            added_chain = False
+            for part in chain_deltas[0].missing_parts:
+                if part in reps_collected or part not in PART_DB:
+                    continue
+                reps_collected.add(part)
+                for _ax, _rk in rank_sig_for(part, ctx).axes:
+                    if (_ax, _rk) not in reps:
+                        reps[(_ax, _rk)] = part
+                    if _rk > sig.rank(_ax):
+                        sig = sig.with_rank(_ax, _rk)
+                added_chain = True
+            if added_chain:
+                continue
+            # No progress (all delta parts already collected) — fall through
+            # to the axis machinery below.
         # Curated-building blockers (buildings_in_logic): bump the building
         # Counted level outside the rank model, mirroring the Pad mass-cap
         # bump above.  DSN_POWER_INSUFFICIENT / conics -> Tracking Station,
@@ -1611,12 +1726,25 @@ def minimal_ranks_for(
                     .with_counted(PROGRESSIVE_MISSION_CONTROL_NAME,
                                   PROGRESSIVE_MISSION_CONTROL_COUNT)
                     .with_counted(PROGRESSIVE_RD_NAME, PROGRESSIVE_RD_COUNT))
+            # Parallel-only missions (assembly tail / escalated edges) probe
+            # at MAX pad: their walks are NO_VIABLE_STAGE-dominated, and the
+            # pad bump only fires on LAUNCH_MASS_EXCEEDED (which appears only
+            # when a build succeeds) — so their rescue would inherit an
+            # un-bumped pad and fail the tonnage gate despite being max-kit
+            # feasible (bugs/109 root B).  The tier actually needed is
+            # settled from the final verified build below.  Ordinary
+            # missions keep the inherited tier: their walks do surface
+            # LAUNCH_MASS_EXCEEDED, and widening every rescue measurably
+            # reshaped ladder layouts (a Tier-2 famine tail).
+            _rescue_max_pad = (progressive_launch_pad
+                               and _parallel_only_mission(info, mission_builder))
             rescue_flags = _pre_pass_for_ranks(
                 max_ranks_for_rescue, ctx,
                 start_with_clamps=start_with_clamps,
                 progressive_launch_pad=progressive_launch_pad,
                 launch_pad_caps=mission_builder.launch_pad_caps,
-                pad_tier=sig.counted(PROGRESSIVE_LAUNCH_PAD_NAME),
+                pad_tier=pad_cap_count if _rescue_max_pad
+                else sig.counted(PROGRESSIVE_LAUNCH_PAD_NAME),
                 precollected_names=precollected_names,
                 reps_only=None,
                 buildings_in_logic=buildings_in_logic, home=home,
@@ -1624,6 +1752,13 @@ def minimal_ranks_for(
             rescue_result = _evaluate(rescue_flags, info, diff, mission_builder,
                                       part_manager=part_manager)
             rescue_kit = build_kit_for_result(rescue_flags, rescue_result)
+            if rescue_kit is not None and _rescue_max_pad:
+                _caps = mission_builder.launch_pad_caps
+                _lm = rescue_result.launch_mass or 0.0
+                _need = next((t for t, c in enumerate(_caps) if _lm <= c),
+                             len(_caps) - 1)
+                if _need > sig.counted(PROGRESSIVE_LAUNCH_PAD_NAME):
+                    sig = sig.with_counted(PROGRESSIVE_LAUNCH_PAD_NAME, _need)
             if rescue_kit is not None:
                 kit = rescue_kit
                 _enrich_kit_alternates(kit, ctx)
@@ -1734,6 +1869,24 @@ def minimal_ranks_for(
                             verify_result = _evaluate(
                                 verify_flags, info, diff, mission_builder,
                                 part_manager=part_manager)
+                    # Settle the recorded pad tier from the FINAL verified
+                    # build: the max-pad rescue probe (above) may have bumped
+                    # sig to a tier the minimized kit no longer needs, and an
+                    # over-stated pad requirement shrinks the counted-copy
+                    # placement window enough to famine tight far-home seeds.
+                    # Never drop below the chain's prior requirement.  Scoped
+                    # with the probe: ordinary rescues keep their tier as-is.
+                    if _rescue_max_pad and verify_result.feasible:
+                        _caps = mission_builder.launch_pad_caps
+                        _lm = verify_result.launch_mass or 0.0
+                        _need = max(
+                            next((t for t, c in enumerate(_caps) if _lm <= c),
+                                 len(_caps) - 1),
+                            prior.counted(PROGRESSIVE_LAUNCH_PAD_NAME))
+                        if _need != lifted_ranks.counted(
+                                PROGRESSIVE_LAUNCH_PAD_NAME):
+                            lifted_ranks = lifted_ranks.with_counted(
+                                PROGRESSIVE_LAUNCH_PAD_NAME, _need)
                     return RankBumperResult(
                         signature=lifted_ranks,
                         delta=_signature_delta(prior, lifted_ranks),
@@ -1947,7 +2100,8 @@ def _pick_rank_bump_scored(blocking, ranks: Signature, ctx: RankContext,
                 buildings_in_logic=buildings_in_logic, home=home,
             )
             trial_result = _evaluate(trial_flags, info, diff, mission_builder,
-                                     run_parallel=False,
+                                     run_parallel=_parallel_only_mission(
+                                         info, mission_builder),
                                      part_manager=part_manager)
             feasibility_rank = 0 if trial_result.feasible else 1
             mass = trial_result.launch_mass or float("inf")
@@ -2583,6 +2737,8 @@ def _mission_building_reqs(
     info: "LocationDescriptor", *,
     local_needs_conics: bool, local_needs_nodes: bool,
     mission_builder: MissionBuilder, buildings_in_logic: bool,
+    via_apollo: bool = False,
+    via_assembly: bool = False,
 ) -> tuple[tuple[str, int], ...]:
     """Per-mission curated-building requirements as ``(item_name, level)``.
 
@@ -2592,11 +2748,26 @@ def _mission_building_reqs(
     (``_needs_to_counted`` — the mapping).  So a mission location's signature and
     a contract's access rule gate on the SAME requirements and neither can drift
     from the real evaluator.  ``()`` when buildings aren't in logic.
+
+    ``via_apollo`` / ``via_assembly`` are the bracket-derived (kit-dependent)
+    supplements the kit-independent needs model cannot see: a mission whose
+    bracket sphere closed it only through the Apollo-split or multi-launch
+    assembly retry additionally requires rendezvous
+    (``requires_rendezvous=True`` in the real evaluator — assembly docks its
+    chunks in home low orbit), so ``CAN_RENDEZVOUS`` joins the needs before
+    translation.  Same pattern as the pad: prove-what-you-enforce, derived
+    where the kit is known.
     """
-    from .capability import mission_logic_needs
+    from .capability import MissionLogicNeeds, mission_logic_needs
+    from .effects import Capability
     needs = mission_logic_needs(
         info.body, info.mission_type, info.crewed, info.requires_eva,
         mission_builder)
+    if ((via_apollo or via_assembly)
+            and Capability.CAN_RENDEZVOUS not in needs.capabilities):
+        needs = MissionLogicNeeds(
+            needs.capabilities | {Capability.CAN_RENDEZVOUS},
+            needs.min_ts_dsn_level)
     return _needs_to_counted(
         needs, buildings_in_logic=buildings_in_logic,
         local_needs_conics=local_needs_conics,
@@ -2685,6 +2856,11 @@ def _install_ladder_rules(
     # contract's own launch-pad requirement off its bracketed reward slot without
     # re-parsing the location name back into a mission key.
     pad_by_loc: dict[str, int] = {}
+    # Per-location bracket building reqs (incl. the kit-dependent via_apollo
+    # rendezvous supplement the spec-direct channel cannot see), so
+    # ``_install_cheap_mission_reps`` can fold them into a bracketed contract's
+    # counted access reqs the same way it folds the bracket pad.
+    breq_by_loc: dict[str, tuple] = {}
     rebracketed = 0
     for loc in world.multiworld.get_locations(player):
         if loc.address is None or loc.name in bootstrap_locations:
@@ -2702,8 +2878,6 @@ def _install_ladder_rules(
             pad_req = 0
             building_reqs: tuple[tuple[str, int], ...] = ()
             for i, s in enumerate(spheres):
-                if s.flags is None:
-                    continue
                 r = _evaluate(s.flags, info, diff, mb,
                               part_manager=world.part_manager)
                 if r.feasible:
@@ -2721,14 +2895,19 @@ def _install_ladder_rules(
                                     if r.launch_mass <= c), len(caps) - 1)
                     # Precise per-mission building reqs (buildings_in_logic) —
                     # the same self-gate the pad gets, derived from THIS
-                    # mission's capability needs (target + type, kit-independent).
+                    # mission's capability needs (target + type, kit-independent)
+                    # plus the bracket-derived Apollo supplement: a sphere that
+                    # closed the mission only via the Apollo-split retry proved
+                    # feasibility WITH rendezvous, so the gate must require it.
                     building_reqs = _mission_building_reqs(
                         info, mission_builder=mb,
                         buildings_in_logic=buildings_in_logic,
                         local_needs_conics=getattr(
                             world, "local_needs_conics", True),
                         local_needs_nodes=getattr(
-                            world, "local_needs_nodes", True))
+                            world, "local_needs_nodes", True),
+                        via_apollo=r.via_apollo,
+                        via_assembly=r.via_assembly)
                     break
             if j is None:
                 # Unbracketed mission (beyond the chain's reps-only reach, e.g.
@@ -2761,6 +2940,7 @@ def _install_ladder_rules(
             continue
         bracket_by_loc[loc.name] = j
         pad_by_loc[loc.name] = pad_req
+        breq_by_loc[loc.name] = building_reqs
         # Counted-progressive requirements, recorded so the unified placement
         # window can never drop a counted copy behind a location that needs it
         # (and so the cheap access rule gates on them explicitly), exactly as for
@@ -2840,12 +3020,13 @@ def _install_ladder_rules(
         # missions, closing the long-standing contract blind spot.
         saved.update(getattr(world, "_contract_real_rules", {}))
         world._strict_ladder_saved_rules = saved
-    _install_cheap_mission_reps(world, ladder, location_signatures, pad_by_loc)
+    _install_cheap_mission_reps(world, ladder, location_signatures, pad_by_loc,
+                                breq_by_loc)
 
 
 def _install_cheap_mission_reps(
     world: "KSP1World", ladder: SphereLadder,
-    location_signatures: dict, pad_by_loc: dict,
+    location_signatures: dict, pad_by_loc: dict, breq_by_loc: dict,
 ) -> None:
     """Precompute the cheap fill-time gates that stand in for live capability:
 
@@ -2903,12 +3084,20 @@ def _install_cheap_mission_reps(
         prev = reps_by_event.get(key)
         if prev is None or j < prev[0]:
             reps_by_event[key] = (j, frozenset(spheres[j].reps_collected),
-                                  pad_by_loc.get(loc.name, 0))
+                                  pad_by_loc.get(loc.name, 0),
+                                  breq_by_loc.get(loc.name, ()))
     world._cheap_mission_reps = {k: v[1] for k, v in reps_by_event.items()}
-    for _key, (_j, _reps, _pad) in reps_by_event.items():
+    for _key, (_j, _reps, _pad, _breq) in reps_by_event.items():
         if pool_pad and _pad > 0:
             counted_by_event[_key][PROGRESSIVE_LAUNCH_PAD_NAME] = max(
                 counted_by_event[_key].get(PROGRESSIVE_LAUNCH_PAD_NAME, 0), _pad)
+        # Bracket-derived building reqs (the via_apollo rendezvous supplement) —
+        # the goal/victory rule must enforce what the bracket kit was proven
+        # WITH, exactly as the mission location's own gate does.  Max-merge: the
+        # spec-direct entries are already present with the same levels.
+        for _kind, _lvl in _breq:
+            counted_by_event[_key][_kind] = max(
+                counted_by_event[_key].get(_kind, 0), _lvl)
     world._cheap_mission_counted = {
         k: tuple(sorted(v.items())) for k, v in counted_by_event.items()}
 
@@ -2962,6 +3151,14 @@ def _install_cheap_mission_reps(
             if pool_pad and pad_req > 0:
                 counted_levels[PROGRESSIVE_LAUNCH_PAD_NAME] = max(
                     counted_levels.get(PROGRESSIVE_LAUNCH_PAD_NAME, 0), pad_req)
+            # Bracket-derived building reqs (the via_apollo rendezvous
+            # supplement): the cheap rule's ``has_all(reps)`` is the BRACKET
+            # kit, and that kit was proven to fly this contract's mission only
+            # WITH rendezvous — so the counted gate must require it, exactly as
+            # the bracket pad is folded above.  Max-merge: spec-direct entries
+            # are already present with the same levels.
+            for _kind, _lvl in breq_by_loc.get(best[2], ()):
+                counted_levels[_kind] = max(counted_levels.get(_kind, 0), _lvl)
         counted = tuple(sorted(counted_levels.items()))
         if counted:
             contract_counted[spec.contract_id] = counted
@@ -3613,8 +3810,35 @@ def _build_ladder_graph_walk(
         n: _goal_dv(walk_descriptors.get(n), world.mission_builder)
         for n in _all_walk_names
     }
-    _deep_enablers = _DEEP_SPACE_ENABLERS - precollected_names
-    _attitude_enablers = _ATTITUDE_ENABLERS - precollected_names
+    _pm = world.part_manager
+    _deep_enablers = _deep_space_enablers_for(_pm) - precollected_names
+    _attitude_enablers = (frozenset({_ATTITUDE_ENABLER_NAME} & set(_pm.parts))
+                          - precollected_names)
+    # One docking-gear candidate per role, seeded pick (sorted roles AND
+    # sorted candidates — frozenset iteration is hash-randomized, and the
+    # pick must reproduce across solve-check workers).
+    _gear = _pm.docking_gear_candidates()
+    _docking_enablers = frozenset(
+        world.random.choice(sorted(_gear[role]))
+        for role in sorted(_gear) if _gear[role]
+    ) - precollected_names
+    # Multi-launch assembly enablers, only when this seed actually contains
+    # an assembly-eligible mission (its home matches and the mission isn't
+    # policy-banned): every parked chunk is a pilotless craft, so the reps
+    # kit must also prove a probe core, a reaction wheel, and a power source
+    # (the bracket gate enforces exactly the reps — bugs/101 discipline).
+    from .data.feasibility import ASSEMBLY_ELIGIBLE_MISSIONS as _ASM_MISSIONS
+    _seed_has_assembly = any(
+        h == bn_home and world.mission_builder.is_achievable(b, mt)
+        for (h, b, mt) in _ASM_MISSIONS)
+    if _seed_has_assembly:
+        _asm_gear = _pm.assembly_gear_candidates()
+        _assembly_enablers = frozenset(
+            world.random.choice(sorted(_asm_gear[role]))
+            for role in sorted(_asm_gear) if _asm_gear[role]
+        ) - precollected_names
+    else:
+        _assembly_enablers = frozenset()
     _deep_max_dv = max(_sphere_dv_by_name.values(), default=0.0)
     _deep_inject_dv = (
         _DEEP_INJECT_DV_FRAC * _deep_max_dv
@@ -3656,6 +3880,12 @@ def _build_ladder_graph_walk(
                 for _ax, _rk in rank_sig_for(_ep, ctx).axes:
                     if _rk > sig.rank(_ax):
                         sig = sig.with_rank(_ax, _rk)
+            # Apollo docking gear rides the same band, reps-only (see the
+            # _DOCKING_ENABLERS comment): the deep round trips that need
+            # capability's Apollo retry live past this threshold.  Assembly
+            # parked-chunk gear (probe core / wheel / power) rides with it —
+            # assembly-eligible missions are the deepest in the seed.
+            reps = reps | _docking_enablers | _assembly_enablers
         if dv >= _attitude_inject_dv:
             reps = reps | _attitude_enablers
         return sig, reps
@@ -3664,7 +3894,8 @@ def _build_ladder_graph_walk(
     # global keep-set (the per-mission cumulative inject is applied below when
     # each sphere is assembled, where the location's dv is in hand).
     if _deep_inject_dv != float("inf"):
-        cumulative_reps = cumulative_reps | _deep_enablers
+        cumulative_reps = (cumulative_reps | _deep_enablers
+                           | _docking_enablers | _assembly_enablers)
     if _attitude_inject_dv != float("inf"):
         cumulative_reps = cumulative_reps | _attitude_enablers
 
@@ -3820,14 +4051,31 @@ def _build_ladder_graph_walk(
         running_sig = running_sig.merged_max(cum_sig)
         running_reps |= set(res.reps_collected)
         cumulative_sig = running_sig
+        sphere_reps = frozenset(running_reps)
         ladder.spheres.append(SphereBoundary(
             name=label,
             location_name=name,
             is_predictable=is_pred,
             provides=running_sig,
             delta=res.delta,
-            reps_collected=frozenset(running_reps),
-            flags=res.flags,
+            reps_collected=sphere_reps,
+            # The boundary's flags must be the EXACT kit its cheap gate
+            # enforces (sphere_reps + precollected), NOT the defining
+            # mission's own flags (res.flags): walked results carry the
+            # mission's reps at walk time and fallback anchors carry full
+            # rank-admit flags — both broader kits that can fly missions
+            # the enforced kit can't, which made the bracket scan install
+            # unsound gates (bugs/101).
+            flags=_pre_pass_for_ranks(
+                running_sig, ctx,
+                start_with_clamps=start_with_clamps,
+                progressive_launch_pad=progressive_launch_pad,
+                launch_pad_caps=world.mission_builder.launch_pad_caps,
+                pad_tier=running_sig.counted(PROGRESSIVE_LAUNCH_PAD_NAME),
+                precollected_names=precollected_names,
+                reps_only=sphere_reps,
+                buildings_in_logic=buildings_in_logic, home=bn_home,
+            ),
             profile_dv=res.profile_dv,
             signature=ladder.location_signatures.get(name),
         ))
