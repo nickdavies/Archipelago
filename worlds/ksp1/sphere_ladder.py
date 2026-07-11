@@ -315,6 +315,27 @@ def _mission_key(info: "LocationDescriptor") -> tuple:
     return base
 
 
+def _foundational_cumulative(
+    body: "BodyName",
+    mission_cumulative: "dict[tuple, tuple[Signature, frozenset[str]]]",
+) -> "tuple[Signature, frozenset[str]] | None":
+    """The deepest already-walked mission cumulative to ``body`` — the kit that
+    REACHES it.
+
+    A contract to a body is a payload/transform delta on top of reaching that
+    body.  Contracts miss the body-graph walk because ``_mission_key`` keys them
+    on contract_id (deliberate — keeps their distinct payload/transform from
+    collapsing onto the trajectory), so a contract that can't converge from
+    EMPTY (a deep interplanetary one) can build from the body's reach kit
+    instead of re-deriving how to get there from scratch.  Depth is proxied by
+    rep-set size (a return carries more than an orbit)."""
+    best: "tuple[Signature, frozenset[str]] | None" = None
+    for mkey, cum in mission_cumulative.items():
+        if mkey[0] == body and (best is None or len(cum[1]) > len(best[1])):
+            best = cum
+    return best
+
+
 # A chain-guaranteed contract category that has no part at the current kit maps
 # to the chain whose bump unlocks it, so the bumper knows what to add. Promoted
 # standalone categories never land here — contract_payload_parts supplies their
@@ -3789,6 +3810,18 @@ def _build_ladder_graph_walk(
                 info, Signature.empty(), ctx,
                 prior_reps=frozenset(), **_bump_kw,
             )
+            if rocket is None and info.spec is not None:
+                # A contract keys on contract_id, so it misses the body-graph
+                # walk and lands here — and a DEEP interplanetary contract (e.g.
+                # a Jool-moon rescue) can't converge from EMPTY.  Retry from the
+                # body's foundational REACH kit: the walk already solved getting
+                # there; the contract's payload/transform is a delta on top, not
+                # a from-scratch build.  (Only fires when from-empty failed, so
+                # the shallow contracts that already bracket are unchanged.)
+                _cum = _foundational_cumulative(info.body, mission_cumulative)
+                if _cum is not None:
+                    rocket = minimal_ranks_for(
+                        info, _cum[0], ctx, prior_reps=_cum[1], **_bump_kw)
             derived = (Signature.of(rocket.signature.rank_reqs)
                        if rocket is not None else None)
             mission_marginal[mkey] = derived

@@ -28,7 +28,7 @@ from .bodies import (
 )
 from .comms import DSN_POWER_MAX, dsn_required_relay_table
 from .capability import get_capability, cheap_flags, _compute_sounding_altitude
-from .items import ITEM_TABLE, PROGRESSIVE_RD_NAME, SCIENCE_PACK_NAMES
+from .items import PROGRESSIVE_RD_NAME, SCIENCE_PACK_NAMES
 from .locations import (
     EVENT_BY_NAME,
     EventName,
@@ -74,15 +74,6 @@ _TRANSMIT_ONLY_DISCOUNT: float = 0.75
 
 # Science needed to declare the tech tree complete (buy all 62 nodes)
 _TECH_TREE_COMPLETE_SCIENCE = cumulative_tier_cost(MAX_TIER)
-
-# Every part item (no longer wrapped behind progressives).  The
-# goal-infeasible "all-parts proxy" that used to lean on this is gone —
-# infeasible goals are now rejected at resolution (_assert_goal_feasible).
-# The one remaining use is the UNBRACKETED-contract fallback in
-# _set_contract_rules (a conservative fill gate for a contract the sphere
-# ladder couldn't bracket), tracked separately for its own audit.
-_ALL_PROGRESSION_ITEMS: frozenset[str] = frozenset(ITEM_TABLE.keys())
-
 
 # ---------------------------------------------------------------------------
 # Gate chokepoint — the ONLY sanctioned way to gate a location on held items
@@ -634,14 +625,17 @@ def _set_contract_rules(world: KSP1World, player: int) -> None:
                         .contract_access.get(cid, False)
                 return False  # pre-ladder: conservatively not completable
             # Cheap delivery gate: the contract's bracket reps (has_all ⟹ the
-            # kit delivers, conservative).  An UNBRACKETED contract still falls
-            # back to has_all(every part) here — a separate, more load-bearing
-            # use of the all-parts gate than the killed goal-infeasible proxy;
-            # auditing/killing it is tracked separately.
+            # kit delivers, conservative).  Contracts now always bracket (off
+            # their foundational reach kit, sphere_ladder._foundational_
+            # cumulative), so the no-bracket case can't happen — but if a future
+            # one ever slips through we gate it on the honest live oracle, never
+            # a fake all-parts rule, so it surfaces as a real bracketing gap to
+            # root-cause instead of a green solve.
             reps = creps.get(cid)
-            if not state.has_all(
-                    reps if reps is not None else _ALL_PROGRESSION_ITEMS,
-                    player):
+            if reps is not None:
+                if not state.has_all(reps, player):
+                    return False
+            elif not get_capability(state, player).contract_access.get(cid, False):
                 return False
             # ...plus the CAPABILITY counted gate (nav/EVA/samples/DSN + the
             # pad) the contract really needs — derived spec-direct in

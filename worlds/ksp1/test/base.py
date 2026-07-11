@@ -91,17 +91,12 @@ class KSP1TestBase(WorldTestBase):
         if not (self.run_default_tests and self.constructed):
             return
         world = self.multiworld.worlds[self.player]
+        # No exemptions.  Every contract now brackets (off its foundational
+        # reach kit), infeasible missions aren't emitted, and infeasible goals
+        # are rejected — so there is no longer any all-parts / EXCLUDED-but-
+        # unreachable location.  The invariant is now strict: every emitted
+        # addressed location must be reachable with the full item pool.
         exempt: set[str] = set()
-        # UNBRACKETED contracts fall back to has_all(every part) (the sphere
-        # ladder couldn't bracket them) — filler-only, unreachable on a
-        # location-short pool, so exempt their reward slots.  (The goal-infeasible
-        # all-parts proxy is gone — those goals are now rejected at resolution.)
-        creps = getattr(world, "_cheap_contract_reps", {}) or {}
-        slot_count = getattr(world, "locations_per_contract", 2)
-        for spec in (*getattr(world, "contract_specs", ()),
-                     *getattr(world, "goal_contract_specs", ())):
-            if creps.get(spec.contract_id) is None:
-                exempt.update(spec.location_names(slot_count))
         with self.subTest("Game", game=self.game, seed=self.multiworld.seed):
             state = self.multiworld.get_all_state(False)
             for location in self.multiworld.get_locations():

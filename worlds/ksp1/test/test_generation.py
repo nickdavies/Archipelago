@@ -283,15 +283,6 @@ class TestProgressiveRD(KSP1TestBase):
                 f"Tier {node.tier} location '{loc_name}' unreachable with all items",
             )
 
-    def test_progressive_rd_not_in_all_progression_items(self):
-        """Progressive R&D must NOT be in _ALL_PROGRESSION_ITEMS (Eve/Tylo proxy)."""
-        from worlds.ksp1.rules import _ALL_PROGRESSION_ITEMS
-        self.assertNotIn(
-            PROGRESSIVE_RD_NAME, _ALL_PROGRESSION_ITEMS,
-            "Progressive R&D should not be in _ALL_PROGRESSION_ITEMS "
-            "(built from ITEM_TABLE, not _PROGRESSIVE_ITEMS)",
-        )
-
 
 class TestCompleteTechTreeGoalRD(KSP1TestBase):
     """complete_tech_tree goal requires Progressive R&D x MAX_RD_BAND."""
