@@ -30,7 +30,7 @@ from .items import (
 )
 from .locations import (
     ALL_EVENTS, EVENT_BY_NAME, EventName, KSC_BIOMES, KSC_LOCATION_PREFIX,
-    LOCATION_NAME_TO_ID, LocationBuilder, MAX_TECH_SLOTS, MISSION_LOCATIONS,
+    LOCATION_NAME_TO_ID, LocationBuilder, MAX_TECH_SLOTS,
     THRESHOLD_LOCATION_NAMES, TechTreeLocation, event_locations,
     effective_starting_inv_count, effective_tech_slots_per_node,
 )
@@ -309,10 +309,6 @@ class KSP1World(World):
     # Part ksp_names this seed's contracts require — promoted to progression in
     # items.create_item so AP guarantees them reachable before the contract.
     contract_required_part_names: frozenset[str]
-    # contract_ids whose access rule routes through the all-parts proxy (vs the
-    # physics gate). Recorded by rules._set_contract_rules at rule-set time; read
-    # by /explain so the reported gate is the one actually set, never re-derived.
-    _proxy_contract_ids: set[str]
 
     def generate_early(self) -> None:
         """Resolve goal spec and apply ExcludeLateTechTree."""
@@ -394,7 +390,6 @@ class KSP1World(World):
         # pool, capability, the rank table, and the feasibility lookup.
         self.part_manager = part_manager_for(
             frozenset(self.options.enabled_part_packs.value))
-        self.location_builder = LocationBuilder(home=home)
         # Per-world RankContext for sphere-ladder + item.rank_sig.
         # ``home_has_atmosphere`` drives the SRB axis scorer; ``enabled_packs``
         # scopes the rank table to the parts this seed can actually grant.
@@ -454,11 +449,15 @@ class KSP1World(World):
             unachievable |= self.mission_builder.missions_using_edges(banned)
         self.unachievable_missions = frozenset(unachievable)
         self.mission_builder.unachievable = self.unachievable_missions
-        # Name-keyed view derived from the canonical tuple set (one source).
-        self.model_infeasible_locations = frozenset(
-            str(ml) for ml in MISSION_LOCATIONS
-            if (ml.body, EVENT_BY_NAME[ml.event].mission_type) in self.unachievable_missions
-        )
+        # The builder emits only reachable mission locations — it needs the
+        # unachievable set, so it is built here, once that set is known.  It is
+        # the single owner of the emitted/excluded split; the name-keyed
+        # ``model_infeasible_locations`` (goal spec, contracts) is just its
+        # excluded view.  The offline feasibility generator constructs a RAW
+        # builder (empty ``unachievable``) so it keeps probing true max kit.
+        self.location_builder = LocationBuilder(
+            home=home, unachievable=self.unachievable_missions)
+        self.model_infeasible_locations = self.location_builder.excluded_mission_names
         self.goal_spec = resolve_goal_spec(
             self.options, self.mission_builder.home,
             self.model_infeasible_locations,
@@ -1098,7 +1097,7 @@ class KSP1World(World):
                 contract_spec, in_logic,
                 state.has(contract_spec.item_name, self.player),
                 flags, DIFFICULTY_PROFILES[difficulty_name], difficulty_name,
-                self.mission_builder, proxy=self._contract_uses_proxy(contract_spec),
+                self.mission_builder, proxy=False,
                 part_manager=self.part_manager,
             )
             return [{"type": "text", "text": "\n".join(lines)}]
@@ -1127,13 +1126,6 @@ class KSP1World(World):
             if name in spec.location_names(self.locations_per_contract):
                 return spec
         return None
-
-    def _contract_uses_proxy(self, spec) -> bool:
-        """True if this contract's access rule routes through the all-parts proxy
-        instead of the physics gate (a goal contract on a model-infeasible body).
-        Reads the set rules._set_contract_rules records when it sets the rule —
-        the single source of truth — so /explain can't drift from the real gate."""
-        return spec.contract_id in self._proxy_contract_ids
 
     def custom_ut_sort(self, region_label: str, location_label: str) -> str:
         """UT hook: sort by body order (ALL_BODIES), then tech tree, then KSC."""

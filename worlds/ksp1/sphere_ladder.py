@@ -54,7 +54,7 @@ from .capability_reasons import (
     BlockingInfo, BlockingReason, StageDiagnostic, StageFailure,
 )
 from .locations import (
-    EventName, LocationDescriptor,
+    EVENT_BY_NAME, EventName, LocationDescriptor,
     KSC_BIOME_NAMES, KSC_LOCATION_PREFIX, STARTING_INV_NAME_SET,
 )
 from .contracts import (
@@ -313,6 +313,27 @@ def _mission_key(info: "LocationDescriptor") -> tuple:
     if info.spec is not None:
         return base + (info.spec.contract_id,)
     return base
+
+
+def _foundational_cumulative(
+    body: "BodyName",
+    mission_cumulative: "dict[tuple, tuple[Signature, frozenset[str]]]",
+) -> "tuple[Signature, frozenset[str]] | None":
+    """The deepest already-walked mission cumulative to ``body`` — the kit that
+    REACHES it.
+
+    A contract to a body is a payload/transform delta on top of reaching that
+    body.  Contracts miss the body-graph walk because ``_mission_key`` keys them
+    on contract_id (deliberate — keeps their distinct payload/transform from
+    collapsing onto the trajectory), so a contract that can't converge from
+    EMPTY (a deep interplanetary one) can build from the body's reach kit
+    instead of re-deriving how to get there from scratch.  Depth is proxied by
+    rep-set size (a return carries more than an orbit)."""
+    best: "tuple[Signature, frozenset[str]] | None" = None
+    for mkey, cum in mission_cumulative.items():
+        if mkey[0] == body and (best is None or len(cum[1]) > len(best[1])):
+            best = cum
+    return best
 
 
 # A chain-guaranteed contract category that has no part at the current kit maps
@@ -2209,16 +2230,22 @@ def _predictable_spheres(
         PSI=3 injected) covers ``cumulative_tier_cost(MAX_TIER)``.
     """
     from .rules import goal_spec_location_names
-    home = str(world.mission_builder.home)
+    lb = world.location_builder
+    home_body = world.mission_builder.home
 
     def _desc(name: str) -> "LocationDescriptor | None":
         # AP's registry is the name -> real-object resolver; the physics comes
         # off the object's descriptor, never from decoding the name.
         return world.get_location(name).descriptor
 
+    # Home launch + orbit seeds: ask the builder for the typed home locations
+    # and read their canonical names / descriptors — never rebuild a name.
+    _launch = lb.home_location(MissionType.FIRST_LAUNCH)
+    _orbit = lb.emitted_mission(home_body, EventName.ORBIT)
     out: list[tuple[str, str, LocationDescriptor]] = [
-        ("S_launch", f"{home} First Launch", _desc(f"{home} First Launch")),
-        ("S_orbit", f"{home} Orbit 1", _desc(f"{home} Orbit 1")),
+        ("S_launch", _launch.name, LocationDescriptor.from_home(_launch)),
+        ("S_orbit", str(_orbit),
+         LocationDescriptor.from_mission(_orbit, EVENT_BY_NAME[_orbit.event])),
     ]
     goal_names = list(goal_spec_location_names(world.goal_spec))
     infeasible = world.model_infeasible_locations
@@ -2348,19 +2375,28 @@ def _pick_tech_tree_anchors(
 
     accumulated = sum(body_max_yield(BODY_BY_NAME[bn]) for bn in home_set)
 
-    # Return-capable interplanetary candidates, cheapest-dv first.
-    # (Exclude home-system, Kerbol, and Jool — no RETURN profile.)
-    interp_bodies = [
-        b for b in ALL_BODIES
+    # Return-capable interplanetary candidates, cheapest-dv first.  Ask the
+    # builder for each body's emitted RETURN location (typed; ``None`` when the
+    # world doesn't emit it because the return is dv-infeasible or curated-
+    # banned).  A body with no emitted return banks no science and isn't a
+    # candidate — this keeps the count honest ("every reachable body return")
+    # and never reconstructs a location name.  (Home-system and Kerbol are
+    # excluded up front; non-landable Jool has no RETURN event.)
+    return_locs = {
+        b.name: ml
+        for b in ALL_BODIES
         if b.name not in home_set
         and b.name != BodyName.KERBOL
         and b.can_land
-    ]
-    # Descriptor for each candidate's RETURN slot-1 location — resolved through
-    # AP's registry (the name is the identity; physics is the object).
+        and (ml := world.location_builder.emitted_mission(
+            b.name, EventName.RETURN)) is not None
+    }
+    interp_bodies = [b for b in ALL_BODIES if b.name in return_locs]
+    # Physics descriptor straight off the typed MissionLocation (the same object
+    # create_regions attaches to the AP location) — no name round-trip.
     desc_for = {
-        b.name: world.get_location(f"{b.name} Return 1").descriptor
-        for b in interp_bodies
+        bn: LocationDescriptor.from_mission(ml, EVENT_BY_NAME[ml.event])
+        for bn, ml in return_locs.items()
     }
     dv_for = {
         b.name: _goal_dv(desc_for[b.name], world.mission_builder)
@@ -2382,7 +2418,7 @@ def _pick_tech_tree_anchors(
         remaining.remove(picked)
         accumulated += body_max_yield(picked)
         anchors.append((f"S_tier_anchor[{picked.name}]",
-                        f"{picked.name} Return 1", desc_for[picked.name]))
+                        str(return_locs[picked.name]), desc_for[picked.name]))
 
     if accumulated < target_raw:
         from Options import OptionError
@@ -2460,8 +2496,8 @@ def _install_bootstrap_local_rule(world: "KSP1World") -> None:
     def local_only(item, _p=player) -> bool:
         return item.player == _p
 
-    home = str(world.mission_builder.home)
-    extra_names = set(world.location_builder.ksc_biome_names) | {f"{home} First Launch"}
+    extra_names = set(world.location_builder.ksc_biome_names) | {
+        world.location_builder.home_location(MissionType.FIRST_LAUNCH).name}
     for loc in world.multiworld.get_locations(player):
         if loc.name in extra_names:
             loc.item_rule = local_only
@@ -3670,7 +3706,10 @@ def _build_ladder_graph_walk(
         return sum(sig.rank(a) for a in RankAxisKey)
 
     # ---- base: home-orbit kit -------------------------------------------
-    _home_orbit_desc = world.get_location(f"{home} Orbit 1").descriptor
+    _home_orbit = world.location_builder.emitted_mission(
+        world.mission_builder.home, EventName.ORBIT)
+    _home_orbit_desc = LocationDescriptor.from_mission(
+        _home_orbit, EVENT_BY_NAME[_home_orbit.event])
     _ko = minimal_ranks_for(_home_orbit_desc, Signature.empty(), ctx,
                             prior_reps=frozenset(), **_bump_kw)
     ko_sig = _ko.signature if _ko is not None else Signature.empty()
@@ -3771,6 +3810,18 @@ def _build_ladder_graph_walk(
                 info, Signature.empty(), ctx,
                 prior_reps=frozenset(), **_bump_kw,
             )
+            if rocket is None and info.spec is not None:
+                # A contract keys on contract_id, so it misses the body-graph
+                # walk and lands here — and a DEEP interplanetary contract (e.g.
+                # a Jool-moon rescue) can't converge from EMPTY.  Retry from the
+                # body's foundational REACH kit: the walk already solved getting
+                # there; the contract's payload/transform is a delta on top, not
+                # a from-scratch build.  (Only fires when from-empty failed, so
+                # the shallow contracts that already bracket are unchanged.)
+                _cum = _foundational_cumulative(info.body, mission_cumulative)
+                if _cum is not None:
+                    rocket = minimal_ranks_for(
+                        info, _cum[0], ctx, prior_reps=_cum[1], **_bump_kw)
             derived = (Signature.of(rocket.signature.rank_reqs)
                        if rocket is not None else None)
             mission_marginal[mkey] = derived
@@ -4243,7 +4294,8 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
 
     # Bootstrap-local rule on starting-inv / KSC / First Launch.
     _install_bootstrap_local_rule(world)
-    bootstrap_locations = set(world.location_builder.ksc_biome_names) | {f"{home} First Launch"}
+    first_launch = world.location_builder.home_location(MissionType.FIRST_LAUNCH).name
+    bootstrap_locations = set(world.location_builder.ksc_biome_names) | {first_launch}
     for loc in world.multiworld.get_locations(world.player):
         if loc.address is None:
             continue
@@ -4260,7 +4312,7 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
     _gate_early: dict[str, Signature] = {
         name: _capsule_kit for name in world.location_builder.ksc_biome_names
     }
-    _gate_early[f"{home} First Launch"] = Signature.empty()
+    _gate_early[first_launch] = Signature.empty()
     for loc in world.multiworld.get_locations(world.player):
         if loc.address is None:
             continue

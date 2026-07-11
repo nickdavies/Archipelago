@@ -121,9 +121,9 @@ class TestDescriptorCoverage(KSP1TestBase):
     needs_real_pre_fill = False  # descriptors are attached in create_regions
 
     def test_missions_and_contracts_have_descriptors(self) -> None:
-        from worlds.ksp1.locations import MISSION_LOCATION_NAMES
+        from worlds.ksp1.locations import LocationBuilder
         world = self.world
-        mission_names = set(MISSION_LOCATION_NAMES)
+        mission_names = set(LocationBuilder.all_mission_location_names())
         contract_names = {
             n for spec in (*world.contract_specs, *world.goal_contract_specs)
             for n in spec.location_names(world.locations_per_contract)
