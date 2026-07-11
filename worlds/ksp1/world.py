@@ -30,7 +30,7 @@ from .items import (
 )
 from .locations import (
     ALL_EVENTS, EVENT_BY_NAME, EventName, KSC_BIOMES, KSC_LOCATION_PREFIX,
-    LOCATION_NAME_TO_ID, LocationBuilder, MAX_TECH_SLOTS, MISSION_LOCATIONS,
+    LOCATION_NAME_TO_ID, LocationBuilder, MAX_TECH_SLOTS,
     THRESHOLD_LOCATION_NAMES, TechTreeLocation, event_locations,
     effective_starting_inv_count, effective_tech_slots_per_node,
 )
@@ -456,7 +456,7 @@ class KSP1World(World):
         self.mission_builder.unachievable = self.unachievable_missions
         # Name-keyed view derived from the canonical tuple set (one source).
         self.model_infeasible_locations = frozenset(
-            str(ml) for ml in MISSION_LOCATIONS
+            str(ml) for ml in self.location_builder.mission_locations
             if (ml.body, EVENT_BY_NAME[ml.event].mission_type) in self.unachievable_missions
         )
         self.goal_spec = resolve_goal_spec(

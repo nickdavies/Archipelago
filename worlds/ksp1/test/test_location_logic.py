@@ -25,7 +25,6 @@ import unittest
 from unittest.mock import patch, MagicMock
 
 from worlds.ksp1.locations import (
-    MISSION_LOCATION_NAMES,
     LocationBuilder,
     KSC_BIOME_NAMES,
     EventName,
@@ -98,7 +97,7 @@ class TestLocationSetStructure(unittest.TestCase):
     """Static assertions on locations.py data — catches wiring mistakes at import time."""
 
     def test_kerbin_sample_return_is_a_location(self):
-        """Kerbin sample return must be in MISSION_LOCATION_NAMES.
+        """Kerbin sample return must be a mission location.
 
         bodies.py registers it with an empty edge list (no rocket needed —
         launchpad EVA + surface sample + vessel recovery).  The capability system
@@ -107,8 +106,8 @@ class TestLocationSetStructure(unittest.TestCase):
         """
         self.assertIn(
             "Kerbin Sample Return 1",
-            MISSION_LOCATION_NAMES,
-            "Kerbin Sample Return 1 must be in MISSION_LOCATION_NAMES "
+            LocationBuilder.all_mission_location_names(),
+            "Kerbin Sample Return 1 must be a mission location "
             "(bodies.py defines it with an empty/always-achievable profile).",
         )
 
@@ -116,8 +115,8 @@ class TestLocationSetStructure(unittest.TestCase):
         """Kerbin Return is handled by the per-body mission system."""
         self.assertIn(
             "Kerbin Return 1",
-            MISSION_LOCATION_NAMES,
-            "Kerbin Return 1 must be in MISSION_LOCATION_NAMES.",
+            LocationBuilder.all_mission_location_names(),
+            "Kerbin Return 1 must be a mission location.",
         )
 
     def test_kerbin_special_section_has_no_return_events(self):
@@ -146,13 +145,13 @@ class TestLocationSetStructure(unittest.TestCase):
             name = f"{body.name} Flyby 1"
             self.assertIn(
                 name,
-                MISSION_LOCATION_NAMES,
-                f"Missing location '{name}' in MISSION_LOCATION_NAMES.",
+                LocationBuilder.all_mission_location_names(),
+                f"Missing location '{name}' in the mission-location set.",
             )
 
     def test_kerbol_has_no_locations(self):
         """Kerbol (root body) must not have any mission locations."""
-        for name in MISSION_LOCATION_NAMES:
+        for name in LocationBuilder.all_mission_location_names():
             self.assertFalse(
                 name.startswith("Kerbol "),
                 f"Unexpected Kerbol location: '{name}'",
@@ -171,14 +170,14 @@ class TestLocationSetStructure(unittest.TestCase):
                 name = f"{body.name} {event} 1"
                 self.assertIn(
                     name,
-                    MISSION_LOCATION_NAMES,
-                    f"Missing location '{name}' in MISSION_LOCATION_NAMES.",
+                    LocationBuilder.all_mission_location_names(),
+                    f"Missing location '{name}' in the mission-location set.",
                 )
 
     def test_crewed_events_only_on_landable_bodies(self):
         """FLAG_PLANT, SAMPLE_RETURN, CREWED_LANDING must only exist for landable bodies."""
         landable = {b.name for b in ALL_BODIES if b.can_land}
-        for name in MISSION_LOCATION_NAMES:
+        for name in LocationBuilder.all_mission_location_names():
             for event in (EventName.FLAG_PLANT, EventName.SAMPLE_RETURN,
                           EventName.CREWED_LANDING):
                 marker = f" {event} "

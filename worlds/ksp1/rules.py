@@ -34,7 +34,6 @@ from .locations import (
     EventName,
     HomeLocationDef,
     KSC_BIOME_NAMES,
-    MISSION_LOCATION_NAMES,
     MissionLocation,
     STARTING_INV_NAMES,
     TechTreeLocation,
@@ -749,8 +748,6 @@ def _set_mission_rules(world: KSP1World, player: int) -> None:
     (``_make_goal_spec_rule``), which routes the same way per body/event.
     """
     from BaseClasses import LocationProgressType
-    from .bodies import ALL_BODIES
-    from .locations import get_body_events
 
     infeasible = world.model_infeasible_locations
 
@@ -773,32 +770,37 @@ def _set_mission_rules(world: KSP1World, player: int) -> None:
         if ev is not None:
             gate_item[(spec.body, ev)] = spec.item_name
 
-    for body in ALL_BODIES:
-        for event in get_body_events(body):
-            cap_rule = _mission_rule_for_event(player, body.name, event)
-            item = gate_item.get((body.name, event))
-            for loc in event_locations(body.name, event):
-                name = str(loc)
-                ap_loc = world.get_location(name)
-                # Unachievable missions (curated edge-ban ∪ dv-infeasible) are
-                # EXCLUDED: AP fill places only filler there (never progression
-                # or useful), so they can't strand items when capability can't
-                # reach them — replacing the old all-parts proxy, which made a
-                # location holding progression circularly unreachable.  The
-                # capability rule still stands as the access rule (honest: the
-                # location IS unreachable; EXCLUDED just keeps progression out).
-                if name in infeasible:
-                    ap_loc.progress_type = LocationProgressType.EXCLUDED
-                if item is None:
-                    ap_loc.access_rule = cap_rule
-                else:
-                    # Goal-contract gate item via the chokepoint (kept
-                    # PROGRESSION) — the event is reachable only with the
-                    # goal-contract item held.
-                    gate = require_item(world, item)
-                    def rule(state: CollectionState, _base=cap_rule, _gate=gate) -> bool:
-                        return _gate(state) and _base(state)
-                    ap_loc.access_rule = rule
+    # Group the world's emitted mission locations by (body, event) so each
+    # event's shared capability rule is built once.  The emitted set is owned
+    # by the LocationBuilder — never reconstructed from module-level data.
+    by_event: dict[tuple[BodyName, EventName], list[MissionLocation]] = {}
+    for ml in world.location_builder.mission_locations:
+        by_event.setdefault((ml.body, ml.event), []).append(ml)
+    for (body, event), locs in by_event.items():
+        cap_rule = _mission_rule_for_event(player, body, event)
+        item = gate_item.get((body, event))
+        for loc in locs:
+            name = str(loc)
+            ap_loc = world.get_location(name)
+            # Unachievable missions (curated edge-ban ∪ dv-infeasible) are
+            # EXCLUDED: AP fill places only filler there (never progression
+            # or useful), so they can't strand items when capability can't
+            # reach them — replacing the old all-parts proxy, which made a
+            # location holding progression circularly unreachable.  The
+            # capability rule still stands as the access rule (honest: the
+            # location IS unreachable; EXCLUDED just keeps progression out).
+            if name in infeasible:
+                ap_loc.progress_type = LocationProgressType.EXCLUDED
+            if item is None:
+                ap_loc.access_rule = cap_rule
+            else:
+                # Goal-contract gate item via the chokepoint (kept
+                # PROGRESSION) — the event is reachable only with the
+                # goal-contract item held.
+                gate = require_item(world, item)
+                def rule(state: CollectionState, _base=cap_rule, _gate=gate) -> bool:
+                    return _gate(state) and _base(state)
+                ap_loc.access_rule = rule
 
 
 def _apply_home_system_local_exclusions(world: KSP1World) -> None:
@@ -812,20 +814,17 @@ def _apply_home_system_local_exclusions(world: KSP1World) -> None:
     so the goal path is never affected.  Filler can still place there.
     """
     from BaseClasses import LocationProgressType
-    from .bodies import ALL_BODIES, home_system_bodies
-    from .locations import get_body_events
+    from .bodies import home_system_bodies
 
     spec = world.goal_spec
     if not spec.home_system_local:
         return
     assert spec.home is not None
     in_system = home_system_bodies(spec.home)
-    for body in ALL_BODIES:
-        if body.name in in_system:
+    for ml in world.location_builder.mission_locations:
+        if ml.body in in_system:
             continue
-        for event in get_body_events(body):
-            for loc in event_locations(body.name, event):
-                world.get_location(str(loc)).progress_type = LocationProgressType.EXCLUDED
+        world.get_location(str(ml)).progress_type = LocationProgressType.EXCLUDED
 
 
 # ---------------------------------------------------------------------------
@@ -955,14 +954,13 @@ def _set_interplanetary_item_rules(world: KSP1World, player: int) -> None:
     can still fill these slots — avoids FillError at higher difficulties.
     """
     from worlds.generic.Rules import add_item_rule
-    from .locations import MISSION_LOCATIONS
 
     home_system = home_system_bodies(world.mission_builder.home)
 
     def no_advancement(item) -> bool:
         return item.player != player or not item.advancement
 
-    for loc in MISSION_LOCATIONS:
+    for loc in world.location_builder.mission_locations:
         if loc.body not in home_system:
             add_item_rule(world.get_location(str(loc)), no_advancement)
 

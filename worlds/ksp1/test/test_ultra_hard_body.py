@@ -23,7 +23,7 @@ from BaseClasses import LocationProgressType
 from worlds.ksp1.bodies import BodyName
 from worlds.ksp1.data.feasibility import MODEL_INFEASIBLE_BASE
 from worlds.ksp1.locations import (
-    EVENT_BY_NAME, MISSION_LOCATIONS, MissionLocation,
+    EVENT_BY_NAME, LocationBuilder, MissionLocation,
 )
 from worlds.ksp1.test.base import KSP1TestBase
 
@@ -35,7 +35,7 @@ _SYNTH_BODIES = frozenset({
 
 _SYNTH_MISSIONS = frozenset(
     (ml.body, EVENT_BY_NAME[ml.event].mission_type)
-    for ml in MISSION_LOCATIONS if ml.body in _SYNTH_BODIES
+    for ml in LocationBuilder.all_mission_locations() if ml.body in _SYNTH_BODIES
 )
 
 

@@ -401,6 +401,11 @@ class LocationBuilder:
     # lazily on first access (see ``all_home_locations``).
     _all_locations: dict[str, "HomeLocationDef"] | None = None
 
+    # The all-possible per-body mission set (every body × event × slot),
+    # memoised.  Owns the derivation that used to live in the module-level
+    # ``MISSION_LOCATIONS`` constant; see ``all_mission_locations``.
+    _all_missions: tuple["MissionLocation", ...] | None = None
+
     # The one body-agnostic location in the home-style set.  Carried by
     # every world regardless of whether the home itself has an ocean —
     # on non-ocean homes the player has to reach Kerbin/Eve/Laythe.
@@ -430,6 +435,14 @@ class LocationBuilder:
         self.ksc_biome_names: list[str] = [
             KSC_LOCATION_PREFIX + name for _, name in self.ksc_biomes
         ]
+        # Per-body mission locations this world emits.  Currently the full
+        # all-possible set; a later change filters it to the feasible subset
+        # for this (home, difficulty).  Consumers read the emitted set here
+        # rather than reconstructing it from module-level data.
+        self.mission_locations: tuple[MissionLocation, ...] = self.all_mission_locations()
+        self.mission_location_names: tuple[str, ...] = tuple(
+            str(ml) for ml in self.mission_locations
+        )
 
     @staticmethod
     def _build_for(home: BodyName) -> tuple[HomeLocationDef, ...]:
@@ -469,6 +482,38 @@ class LocationBuilder:
             cls._all_locations = d
         return cls._all_locations
 
+    @classmethod
+    def all_mission_locations(cls) -> tuple["MissionLocation", ...]:
+        """Every per-body event-scaled mission location, across all bodies.
+
+        The all-possible set — the universe the AP data-package id table and
+        the universal tracker advertise.  A single world emits only its
+        feasible subset (``self.mission_locations``); this static universe is
+        what keeps location ids stable.
+
+        Order is load-bearing: body order in ``ALL_BODIES``, then events, then
+        slots — ``_build_location_table`` assigns mission ids in exactly this
+        order, so it MUST NOT change (would shift every mission-location id).
+        """
+        if cls._all_missions is None:
+            locs: list[MissionLocation] = [
+                MissionLocation(body.name, event, slot)
+                for body in ALL_BODIES
+                for event in get_body_events(body)
+                for slot in range(1, EVENT_BY_NAME[event].scale + 1)
+            ]
+            # 15 landable × 16 + 1 non-landable (Jool) × 4 = 244 (Kerbol excluded)
+            assert len(locs) == 244, (
+                f"Expected 244 per-body mission locations, got {len(locs)}"
+            )
+            cls._all_missions = tuple(locs)
+        return cls._all_missions
+
+    @classmethod
+    def all_mission_location_names(cls) -> tuple[str, ...]:
+        """Name form of :meth:`all_mission_locations` (the all-possible universe)."""
+        return tuple(str(ml) for ml in cls.all_mission_locations())
+
 
 # Kerbin's home set is built eagerly here purely so the AP data package's
 # location id table can keep Kerbin's legacy id range (2100-2110, 11 entries).
@@ -489,26 +534,12 @@ def get_body_events(body) -> tuple[EventName, ...]:
     return tuple(e.name for e in ALL_EVENTS if not e.requires_landing)
 
 
-def _build_mission_locations() -> list[MissionLocation]:
-    """
-    Generate all per-body event-scaled mission locations.
-    Order: body order in ALL_BODIES, then events, then slots.
-    """
-    locs: list[MissionLocation] = []
-    for body in ALL_BODIES:
-        for event in get_body_events(body):
-            for slot in range(1, EVENT_BY_NAME[event].scale + 1):
-                locs.append(MissionLocation(body.name, event, slot))
-    return locs
-
-
-MISSION_LOCATIONS: list[MissionLocation] = _build_mission_locations()
-MISSION_LOCATION_NAMES: list[str] = [str(m) for m in MISSION_LOCATIONS]
-
-# 15 landable × 16 + 1 non-landable (Jool) × 4 = 244  (Kerbol excluded)
-assert len(MISSION_LOCATION_NAMES) == 244, (
-    f"Expected 244 per-body mission locations, got {len(MISSION_LOCATION_NAMES)}"
-)
+# The per-body mission location set is owned by ``LocationBuilder`` — the
+# all-possible universe is ``LocationBuilder.all_mission_locations()`` (id
+# table + tracker) and each world's emitted subset is
+# ``world.location_builder.mission_locations``.  There is deliberately no
+# module-level constant: "what mission locations exist" is a per-world
+# question answered by the builder, not shared global state.
 
 # ---------------------------------------------------------------------------
 # Build the full LOCATION_TABLE (name → id offset)
@@ -536,8 +567,8 @@ def _build_location_table() -> dict[str, int]:
         offset += 1
 
     offset = _MISSION_OFFSET_START
-    for name in MISSION_LOCATION_NAMES:
-        table[name] = offset
+    for ml in LocationBuilder.all_mission_locations():
+        table[str(ml)] = offset
         offset += 1
 
     offset = _TECH_OFFSET_START
@@ -671,8 +702,11 @@ def create_all_locations(world: KSP1World) -> None:
     home_locs = {name: LOCATION_NAME_TO_ID[name] for name in world.location_builder.names}
     menu.add_locations(home_locs, KSP1Location)
 
-    # Per-body mission events
-    mission_locs = {name: LOCATION_NAME_TO_ID[name] for name in MISSION_LOCATION_NAMES}
+    # Per-body mission events (the world's emitted subset, owned by the builder)
+    mission_locs = {
+        name: LOCATION_NAME_TO_ID[name]
+        for name in world.location_builder.mission_location_names
+    }
     menu.add_locations(mission_locs, KSP1Location)
 
     # Tech tree node slots — each node's slots go into its own region.
@@ -703,7 +737,7 @@ def create_all_locations(world: KSP1World) -> None:
     # in ``menu``, so they are untouched here.
     descriptors: dict[str, LocationDescriptor] = {
         str(ml): LocationDescriptor.from_mission(ml, EVENT_BY_NAME[ml.event])
-        for ml in MISSION_LOCATIONS
+        for ml in world.location_builder.mission_locations
     }
     for hloc in world.location_builder.locations:
         home_desc = LocationDescriptor.from_home(hloc)
