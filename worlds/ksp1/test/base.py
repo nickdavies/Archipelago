@@ -75,25 +75,23 @@ class KSP1TestBase(WorldTestBase):
     def test_all_state_can_reach_everything(self):
         """KSP1 override of WorldTestBase's default reachability check.
 
-        Some KSP1 locations are unreachable BY DESIGN (filler-only) and must be
-        exempt from the all-reachable assertion — otherwise this test flakes on
-        seeds that happen to produce them:
+        Model-infeasible missions are no longer emitted at all (the world only
+        creates reachable mission locations), so they need no exemption — if one
+        ever leaks into the location set this test fails, which is the point.
 
-        * Model-infeasible missions (``world.model_infeasible_locations`` —
-          curated edge bans + per-home dv-infeasible) carry an honest capability
-          rule that stays unreachable even with every item (e.g. an Eve surface
-          return while Eve ascent is banned).
-        * Contracts with no sphere-ladder bracket (and the curated goal-contract
-          proxies) gate on the all-parts proxy ``has_all(every part)``, which a
-          location-short pool can't satisfy — they're structurally unreachable
-          filler, not a logic path.
+        The one remaining unreachable-by-design case: contracts with no
+        sphere-ladder bracket (and the curated goal-contract proxies) gate on
+        the all-parts proxy ``has_all(every part)``, which a location-short pool
+        can't satisfy — structurally unreachable filler, not a logic path.  (A
+        follow-up will stop emitting these too, closing the last gap for
+        ``accessibility=full``.)
 
         Everything else must still be reachable, and the seed must be beatable.
         """
         if not (self.run_default_tests and self.constructed):
             return
         world = self.multiworld.worlds[self.player]
-        exempt = set(getattr(world, "model_infeasible_locations", frozenset()))
+        exempt: set[str] = set()
         # Contracts whose access rule falls back to the all-parts proxy
         # (unbracketed, or the curated proxy set) are filler-only and can't be
         # reached on a location-short pool — exempt their reward slots.

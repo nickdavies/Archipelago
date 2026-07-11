@@ -413,7 +413,10 @@ class LocationBuilder:
         SPLASHDOWN_LOCATION_NAME, MissionType.SPLASHDOWN, 1.0, body=None,
     )
 
-    def __init__(self, home: BodyName) -> None:
+    def __init__(
+        self, home: BodyName,
+        unachievable: frozenset[tuple[BodyName, MissionType]] = frozenset(),
+    ) -> None:
         self.home: BodyName = home
         self.locations: tuple[HomeLocationDef, ...] = (
             self._build_for(home) + (self._SPLASHDOWN_DEF,)
@@ -435,13 +438,32 @@ class LocationBuilder:
         self.ksc_biome_names: list[str] = [
             KSC_LOCATION_PREFIX + name for _, name in self.ksc_biomes
         ]
-        # Per-body mission locations this world emits.  Currently the full
-        # all-possible set; a later change filters it to the feasible subset
-        # for this (home, difficulty).  Consumers read the emitted set here
-        # rather than reconstructing it from module-level data.
-        self.mission_locations: tuple[MissionLocation, ...] = self.all_mission_locations()
+        # A world emits only the mission locations it can actually reach: any
+        # whose (body, mission_type) the capability model can't verify
+        # (physics-infeasible ∪ curated ban, passed in as ``unachievable``) is
+        # left out entirely, so every emitted location is reachable and
+        # ``accessibility=full`` holds.  This is the mission case of a general
+        # invariant — a location exists iff its access rule is satisfiable;
+        # contracts apply the same rule at generation (evaluate_contract).
+        all_missions = self.all_mission_locations()
+        self.mission_locations: tuple[MissionLocation, ...] = tuple(
+            ml for ml in all_missions
+            if (ml.body, EVENT_BY_NAME[ml.event].mission_type) not in unachievable
+        )
         self.mission_location_names: tuple[str, ...] = tuple(
             str(ml) for ml in self.mission_locations
+        )
+        # Structured index for ``emitted_mission`` — callers ask by (body,
+        # event, slot), never by reconstructing a location name.
+        self._emitted_by_key: dict[
+            tuple[BodyName, EventName, int], MissionLocation] = {
+            (ml.body, ml.event, ml.slot): ml for ml in self.mission_locations
+        }
+        # The dropped set (the world's ``model_infeasible_locations``): the
+        # unreachable names this world deliberately does not emit.
+        self.excluded_mission_names: frozenset[str] = frozenset(
+            str(ml) for ml in all_missions
+            if (ml.body, EVENT_BY_NAME[ml.event].mission_type) in unachievable
         )
 
     @staticmethod
@@ -513,6 +535,30 @@ class LocationBuilder:
     def all_mission_location_names(cls) -> tuple[str, ...]:
         """Name form of :meth:`all_mission_locations` (the all-possible universe)."""
         return tuple(str(ml) for ml in cls.all_mission_locations())
+
+    def emitted_mission(self, body: BodyName, event: EventName,
+                        slot: int = 1) -> "MissionLocation | None":
+        """The emitted ``MissionLocation`` for ``(body, event, slot)``, or
+        ``None`` when this world does not emit it (the mission is unreachable).
+
+        The typed way to ask whether a mission exists for this seed: callers
+        get the object back (and its canonical name via ``str`` only where AP's
+        name-keyed API forces it) instead of reconstructing a location name.
+        """
+        return self._emitted_by_key.get((body, event, slot))
+
+    def home_location(self, mission_type: MissionType) -> "HomeLocationDef | None":
+        """The home-body special of ``mission_type`` (e.g. ``FIRST_LAUNCH``),
+        or ``None``.  Typed lookup into this world's home set — callers read
+        ``.name`` off the returned def rather than reconstructing a name.
+
+        Returns the first match; the milestone types used this way
+        (FIRST_LAUNCH / FIRST_LANDING / FIRST_STAGING) are unique per home.
+        """
+        for loc in self.locations:
+            if loc.mission_type == mission_type:
+                return loc
+        return None
 
 
 # Kerbin's home set is built eagerly here purely so the AP data package's

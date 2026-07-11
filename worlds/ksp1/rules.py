@@ -738,19 +738,16 @@ def _set_threshold_rules(world: KSP1World, player: int) -> None:
 
 def _set_mission_rules(world: KSP1World, player: int) -> None:
     """
-    Apply access rules to all per-body mission event locations.
+    Apply access rules to the per-body mission event locations this world
+    emits.
 
-    Per location: if it's listed in ``world.model_infeasible_locations``
-    (the home-specific set the dv model can't verify), fall back to the
-    "all progression items collected" proxy.  Otherwise the location
-    shares the capability-based rule for its (body, event) pair.  This
-    keeps location reachability aligned with the victory rule
+    The LocationBuilder emits only reachable missions — infeasible
+    ``(body, mission_type)`` pairs (dv-infeasible ∪ curated ban) are not
+    created at all — so every location here carries its real capability-based
+    rule for its (body, event) pair, aligned with the victory rule
     (``_make_goal_spec_rule``), which routes the same way per body/event.
+    Goal-contract events additionally gate on the contract item.
     """
-    from BaseClasses import LocationProgressType
-
-    infeasible = world.model_infeasible_locations
-
     # Migrated-type contracts gate their MATCHING event equal-or-after the
     # contract item, so a player who has the contract does one mission for both
     # (never forced to double-run) and can't clear the event before the contract.
@@ -782,15 +779,6 @@ def _set_mission_rules(world: KSP1World, player: int) -> None:
         for loc in locs:
             name = str(loc)
             ap_loc = world.get_location(name)
-            # Unachievable missions (curated edge-ban ∪ dv-infeasible) are
-            # EXCLUDED: AP fill places only filler there (never progression
-            # or useful), so they can't strand items when capability can't
-            # reach them — replacing the old all-parts proxy, which made a
-            # location holding progression circularly unreachable.  The
-            # capability rule still stands as the access rule (honest: the
-            # location IS unreachable; EXCLUDED just keeps progression out).
-            if name in infeasible:
-                ap_loc.progress_type = LocationProgressType.EXCLUDED
             if item is None:
                 ap_loc.access_rule = cap_rule
             else:

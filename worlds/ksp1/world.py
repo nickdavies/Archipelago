@@ -394,7 +394,6 @@ class KSP1World(World):
         # pool, capability, the rank table, and the feasibility lookup.
         self.part_manager = part_manager_for(
             frozenset(self.options.enabled_part_packs.value))
-        self.location_builder = LocationBuilder(home=home)
         # Per-world RankContext for sphere-ladder + item.rank_sig.
         # ``home_has_atmosphere`` drives the SRB axis scorer; ``enabled_packs``
         # scopes the rank table to the parts this seed can actually grant.
@@ -454,11 +453,15 @@ class KSP1World(World):
             unachievable |= self.mission_builder.missions_using_edges(banned)
         self.unachievable_missions = frozenset(unachievable)
         self.mission_builder.unachievable = self.unachievable_missions
-        # Name-keyed view derived from the canonical tuple set (one source).
-        self.model_infeasible_locations = frozenset(
-            str(ml) for ml in self.location_builder.mission_locations
-            if (ml.body, EVENT_BY_NAME[ml.event].mission_type) in self.unachievable_missions
-        )
+        # The builder emits only reachable mission locations — it needs the
+        # unachievable set, so it is built here, once that set is known.  It is
+        # the single owner of the emitted/excluded split; the name-keyed
+        # ``model_infeasible_locations`` (goal spec, contracts) is just its
+        # excluded view.  The offline feasibility generator constructs a RAW
+        # builder (empty ``unachievable``) so it keeps probing true max kit.
+        self.location_builder = LocationBuilder(
+            home=home, unachievable=self.unachievable_missions)
+        self.model_infeasible_locations = self.location_builder.excluded_mission_names
         self.goal_spec = resolve_goal_spec(
             self.options, self.mission_builder.home,
             self.model_infeasible_locations,

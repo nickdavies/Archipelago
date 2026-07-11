@@ -1,11 +1,11 @@
 """Fire-drill for the "future harder planet" guarantee.
 
 A body whose missions exceed the max-kit capability ceiling must flow
-through the feasibility table into graceful exclusion — every one of its
-locations marked EXCLUDED (filler-only), goals and contracts routed away,
-seed still fillable and beatable.  It must NEVER leave progression-eligible
-locations behind a permanently-false access rule (the strand that kills a
-seed).
+through the feasibility table into graceful exclusion — none of its
+locations emitted at all, goals and contracts routed away, seed still
+fillable and beatable.  It must NEVER emit a progression-eligible location
+behind a permanently-false access rule (the strand that kills a seed, and
+what would break ``accessibility=full``).
 
 There is no shipped ultra-hard body, so this simulates one by injecting a
 full body subtree's ``(body, mission_type)`` missions into
@@ -19,7 +19,6 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from BaseClasses import LocationProgressType
 from worlds.ksp1.bodies import BodyName
 from worlds.ksp1.data.feasibility import MODEL_INFEASIBLE_BASE
 from worlds.ksp1.locations import (
@@ -42,7 +41,7 @@ _SYNTH_MISSIONS = frozenset(
 class TestUltraHardBodyGracefulExclusion(KSP1TestBase):
     # Inherited default tests (fill + the all-reachable/beatable override in
     # KSP1TestBase) are the no-strand assertion: fill must complete and the
-    # seed must be beatable with the entire subtree excluded.
+    # seed must be beatable with the entire subtree left unemitted.
     run_default_tests = True
     needs_real_pre_fill = True
     # A goal outside the simulated ban, as a real seed's goal resolution
@@ -63,24 +62,25 @@ class TestUltraHardBodyGracefulExclusion(KSP1TestBase):
     def _world(self):
         return self.multiworld.worlds[self.player]
 
-    def test_subtree_locations_excluded(self) -> None:
-        """Every location of the ultra-hard subtree is EXCLUDED and in the
-        world's model-infeasible set — fill can only place filler there."""
+    def test_subtree_locations_not_emitted(self) -> None:
+        """No location of the ultra-hard subtree is emitted — the world leaves
+        infeasible missions out of its location set entirely (they can't strand
+        progression, and ``accessibility=full`` stays satisfiable)."""
         world = self._world()
-        seen = 0
-        for location in self.multiworld.get_locations(self.player):
-            ml = MissionLocation.parse(location.name)
-            if ml is None or ml.body not in _SYNTH_BODIES:
-                continue
-            seen += 1
-            self.assertEqual(
-                location.progress_type, LocationProgressType.EXCLUDED,
-                f"{location.name} not EXCLUDED",
-            )
-            self.assertIn(location.name, world.model_infeasible_locations)
+        emitted = {loc.name for loc in self.multiworld.get_locations(self.player)}
+        # The whole synthetic subtree lands in the model-infeasible set...
+        subtree_infeasible = {
+            name for name in world.model_infeasible_locations
+            if (ml := MissionLocation.parse(name)) is not None
+            and ml.body in _SYNTH_BODIES
+        }
         # The Jool system exposes locations for 5 landable moons + Jool's
-        # orbital events; if this is 0 the simulation itself is broken.
-        self.assertGreater(seen, 50)
+        # orbital events; if this is small the simulation itself is broken.
+        self.assertGreater(len(subtree_infeasible), 50)
+        # ...and NONE of them are emitted as AP locations.
+        for name in subtree_infeasible:
+            self.assertNotIn(
+                name, emitted, f"{name} should not be emitted at all")
 
     def test_no_contracts_on_subtree(self) -> None:
         """Contract generation must route away from the infeasible bodies."""
