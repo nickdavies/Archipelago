@@ -1074,6 +1074,23 @@ class KitUsed:
 
 
 @dataclass
+class AssemblyLaunch:
+    """One launch of a multi-launch orbital assembly (``via_assembly`` results).
+
+    Each launch is an independent lifter flying the home ascent (plus the
+    rendezvous to the assembly orbit) carrying ONE chunk of the mission's
+    orbital stack, then docking in home low orbit.  ``stages`` are that
+    lifter's own ascent stages (optimizer order — bottom stage, the one whose
+    ``stage_mass_wet`` is the full launch mass, is the largest); the delivered
+    chunk's PARTS are deliberately NOT duplicated here — they appear once in
+    the assembled stack (the ``group > 0`` entries of
+    ``ProfileResult.stage_results``) that continues the mission after docking.
+    """
+    stages: list[StageResult]
+    chunk_payload_mass: float   # standalone mass of the chunk this launch lifts
+
+
+@dataclass
 class ProfileResult:
     feasible: bool
     launch_mass: float = 0.0          # total wet mass at kerbin_surface
@@ -1105,6 +1122,12 @@ class ProfileResult:
     # Bracket-side consumers union the rendezvous buildings into the gate,
     # exactly like via_apollo.
     via_assembly: bool = False
+    # For ``via_assembly`` results: the independent launches whose docked chunks
+    # form the orbital stack (see ``AssemblyLaunch``), heaviest launch first.
+    # Empty on single-launch results.  ``/explain`` renders each as its own
+    # rocket and the ``group > 0`` ``stage_results`` as the assembled stack that
+    # continues the mission.
+    assembly_launches: list["AssemblyLaunch"] = field(default_factory=list)
     # Command module + support equipment for the terminal stage: [(count, part_id), ...]
     terminal_parts: list[tuple[int, str]] = field(default_factory=list)
     # The flown pod.  On passive aero-entry profiles this is pair-picked with
@@ -2220,6 +2243,10 @@ def _evaluate_profile(
     # (empty when raw physics built it). Recorded on the feasible result so the
     # minimization pass protects these reps and the kit owns them.
     _lifter_prefix_used: frozenset = frozenset()
+    # Populated only under multi-launch assembly (the group-0 block below):
+    # one AssemblyLaunch per docked chunk, heaviest first.  Threaded onto the
+    # feasible ProfileResult so /explain can render the launches distinctly.
+    _assembly_launches: list[AssemblyLaunch] = []
 
     # ``reversed(groups)`` iterates terminal → ascent; track the matching
     # flight-order index so we can hook stage-specific behaviour.
@@ -2644,7 +2671,8 @@ def _evaluate_profile(
                               and flags.staging_tier >= 1
                               and run_parallel)
                 # Heaviest chunk first: it decides feasibility, fail fast.
-                for cm in sorted(chunk_masses, reverse=True):
+                _sorted_chunks = sorted(chunk_masses, reverse=True)
+                for cm in _sorted_chunks:
                     lifter = None
                     if _lifter_ok:
                         from .lifter_binding import ServeResult
@@ -2711,6 +2739,14 @@ def _evaluate_profile(
                     for sr in reversed(lifter):
                         stage_results_list.append(sr)
                         stage_group_list.append(flight_idx)
+                # Record the launches (heaviest first, aligned with
+                # _sorted_chunks) for the /explain formatter.  References the
+                # same StageResult objects now in stage_results_list, so the
+                # later stack-decoupler pass shows through to both views.
+                _assembly_launches = [
+                    AssemblyLaunch(stages=list(lifter), chunk_payload_mass=cm)
+                    for lifter, cm in zip(lifters, _sorted_chunks)
+                ]
                 # The pad must support the HEAVIEST single launch — that is
                 # this architecture's launch mass (feeds the final pad-cap
                 # check and the bracket's pad requirement).
@@ -2965,6 +3001,7 @@ def _evaluate_profile(
         terminal_parts=terminal_parts,
         terminal_pod_name=terminal_pod.name if terminal_pod else "",
         lifter_prefix_used=_lifter_prefix_used,
+        assembly_launches=_assembly_launches,
         # kit_used is NOT built here — it's expensive and only two call
         # sites consume it.  They call ``build_kit_for_result`` explicitly.
     )

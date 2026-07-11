@@ -1080,11 +1080,16 @@ class KSP1World(World):
         info = CHECK_MAP.get(target_name)
         difficulty_name = effective_physics_profile_name(self.options)
 
+        # Pass the SAME pad-cap gate the live access rules use
+        # (_compute_capability), or /explain would render at unlimited pad —
+        # disagreeing with the real "In logic" verdict and never showing the
+        # multi-launch assembly a constrained pad forces.
         cap, flags = compute_capability_from_items(
             lambda name: state.count(name, self.player),
             difficulty_name,
             bool(self.options.start_with_launch_clamps.value),
             self.mission_builder,
+            progressive_launch_pad=bool(self.options.progressive_launch_pad.value),
         )
 
         # Contract locations aren't in CHECK_MAP — their feasibility needs the

@@ -277,8 +277,7 @@ def format_rocket_output(
                      f"(need {info.threshold_km:.0f} km)")
     lines.append(f"  Feasible: {'YES' if result.feasible else 'NO'}")
     if result.feasible:
-        if result.launch_mass > 0:
-            lines.append(f"  Launch mass: {result.launch_mass:.2f} t")
+        lines.extend(architecture_lines(result))
     elif result.failure_reasons:
         if len(result.failure_reasons) == 1:
             lines.append(f"  Failure reason: {result.failure_reasons[0]}")
@@ -295,6 +294,221 @@ def format_rocket_output(
     return lines
 
 
+# Mission types with no per-stage build (evaluated by flags/altitude, not a
+# staged rocket).
+_NON_PROFILE_TYPES = {
+    MissionType.SOUNDING, MissionType.FIRST_LAUNCH, MissionType.FIRST_LANDING,
+    MissionType.FIRST_STAGING, MissionType.SPLASHDOWN,
+}
+
+
+def architecture_lines(result: ProfileResult) -> list[str]:
+    """Header lines naming the flight architecture the capability layer used.
+
+    A single-launch build reports its ``Launch mass``.  The two multi-launch
+    architectures the capability-ceiling retries can pick — the Apollo split
+    and multi-launch orbital assembly — are otherwise invisible in the stage
+    list, so name them here and relabel the mass (under assembly ``launch_mass``
+    is the HEAVIEST single launch, not the stack total).
+    """
+    lines: list[str] = []
+    via_assembly = bool(getattr(result, "via_assembly", False)
+                        and result.assembly_launches)
+    via_apollo = bool(getattr(result, "via_apollo", False))
+
+    if via_assembly:
+        n = len(result.assembly_launches)
+        lines.append(f"  Architecture: multi-launch orbital assembly "
+                     f"({n} launches docked in low orbit)")
+        if result.launch_mass > 0:
+            lines.append(f"  Heaviest launch: {result.launch_mass:.2f} t "
+                         f"(the pad supports the largest single launch, not "
+                         f"the stack total)")
+    elif result.launch_mass > 0:
+        lines.append(f"  Launch mass: {result.launch_mass:.2f} t")
+
+    if via_apollo:
+        lines.append("  Architecture: Apollo split -- the lander separates in "
+                     "destination orbit,")
+        lines.append("                descends and re-ascends with only the "
+                     "pod, then rejoins the")
+        lines.append("                parked return stage (rendezvous + "
+                     "docking) for the trip home.")
+    return lines
+
+
+def _format_one_stage(
+    stage,                          # rocket_math.StageResult
+    ksp_stage_num: int,
+    header: str,
+    is_terminal: bool,
+    terminal_parts: list[tuple[int, str]],
+    asparagus: bool,
+    edges: Optional[list[MissionEdge]] = None,
+) -> list[str]:
+    """Render a single stage's tag / parts / (optional) edges / stats block."""
+    lines: list[str] = []
+
+    tags: list[str] = []
+    if stage.n_boosters > 0:
+        # Real parallel build on this stage (not the old blanket flag).
+        mode = "ASPARAGUS" if asparagus else "ONION"
+        kind = "engine-boost" if stage.booster_engines > 0 else "drop-tank"
+        tags.append(f"{mode}: {stage.n_boosters} {kind} boosters")
+    elif stage.engine_count > 1:
+        tags.append(f"{stage.engine_count}-WAY")
+    tag_str = f"  [{', '.join(tags)}]" if tags else ""
+    lines.append(f"\n  Stage {ksp_stage_num} ({header}):{tag_str}")
+    lines.append(f"    Parts:")
+
+    if is_terminal:
+        for count, part_id in terminal_parts:
+            lines.append(f"      {count}x {titled(part_id)}")
+
+    if stage.engine_count > 0 and stage.engine_name != "none":
+        lines.append(f"      {stage.engine_count}x {titled(stage.engine_name)}")
+    for count, tank_name in stage.tank_manifest:
+        if tank_name and tank_name != "none":
+            lines.append(f"      {count}x {titled(tank_name)}")
+
+    # Coalesce identical parts: the optimizer appends equipment from several
+    # sites (fins, decouplers, attitude bundles) so the same part_id can
+    # recur. Sum counts per part_id, preserving first-seen order.
+    coalesced_equip: dict[str, int] = {}
+    for count, part_id in stage.equipment:
+        coalesced_equip[part_id] = coalesced_equip.get(part_id, 0) + count
+    for part_id, count in coalesced_equip.items():
+        lines.append(f"      {count}x {titled(part_id)}")
+
+    # The heat shield the optimizer charged for this stage (it lives in
+    # stage_mass but isn't an engine/tank/equipment entry) — without it the
+    # reported build can't survive the reentry/aerocapture edge.
+    if stage.heat_shield_name:
+        lines.append(f"      1x {titled(stage.heat_shield_name)}")
+
+    if edges is not None:
+        lines.append(f"    Edges:")
+        for edge in edges:
+            lines.append(f"      {edge_desc(edge)}")
+
+    lines.append(f"    Stats:")
+    lines.append(f"      dv: {stage.delta_v:.0f} m/s | TWR: {stage.twr_at_ignition:.2f} -> {stage.twr_at_burnout:.2f}")
+    lines.append(f"      Wet: {stage.stage_mass_wet:.2f}t | Dry: {stage.stage_mass_dry:.2f}t")
+    return lines
+
+
+def _format_stack(
+    stages: list,                   # list[StageResult]
+    group_indices: list[int],
+    edge_groups: list[list[MissionEdge]],
+    terminal_parts: list[tuple[int, str]],
+    flags: EquipmentFlags,
+    skip_empty_groups: bool = False,
+) -> list[str]:
+    """Render one staged rocket: its stages (KSP-numbered top=0) + an
+    edge→stage summary.
+
+    ``group_indices[i]`` is the ``edge_groups`` index the i-th stage performs
+    (a multi-stage ascent maps several stages to one group).  ``skip_empty_groups``
+    omits groups no stage in ``stages`` serves — used when rendering only the
+    assembled orbital stack (the home-ascent group 0 is flown by the separate
+    launches, not by any stage here).
+    """
+    lines: list[str] = []
+    num_stages = len(stages)
+    asparagus = (flags.staging_tier >= 2 and flags.has_fuel_lines)
+
+    def _group_idx(i: int) -> int:
+        if i < len(group_indices):
+            return group_indices[i]
+        return i
+
+    for i, stage in enumerate(stages):
+        gi = _group_idx(i)
+        group = edge_groups[gi] if 0 <= gi < len(edge_groups) else []
+        edge_names = [f"{e.source} -> {e.destination}" for e in group]
+        header = ", ".join(edge_names) if edge_names else "unknown"
+        lines.extend(_format_one_stage(
+            stage, num_stages - 1 - i, header,
+            is_terminal=(i == num_stages - 1),
+            terminal_parts=terminal_parts, asparagus=asparagus, edges=group))
+
+    lines.append(f"\n  Edge -> Stage Summary:")
+    # Invert the stage→group map: each group may be served by >1 stage (a
+    # multi-stage ascent), so list every stage that performs the edge.
+    group_to_stages: dict[int, list[int]] = defaultdict(list)
+    for i in range(num_stages):
+        group_to_stages[_group_idx(i)].append(num_stages - 1 - i)
+    for gi, group in enumerate(edge_groups):
+        stage_nums = sorted(set(group_to_stages.get(gi, [])), reverse=True)
+        if not stage_nums and skip_empty_groups:
+            continue
+        label = ", ".join(f"Stage {n}" for n in stage_nums) if stage_nums else "Stage ?"
+        for edge in group:
+            lines.append(f"    {edge.source} -> {edge.destination}: {label}")
+
+    return lines
+
+
+def _format_assembly_breakdown(
+    result: ProfileResult,
+    flags: EquipmentFlags,
+) -> list[str]:
+    """Render a ``via_assembly`` result as N distinct launches followed by the
+    assembled orbital stack that continues the mission.
+
+    Each launch is its own lifter (a separate rocket that reaches the assembly
+    orbit and docks its chunk); the delivered chunks' parts are NOT repeated
+    under the launches — they appear once in the assembled stack (every
+    ``group > 0`` stage of ``result.stage_results``).
+    """
+    lines: list[str] = []
+    launches = result.assembly_launches
+    n = len(launches)
+    asparagus = (flags.staging_tier >= 2 and flags.has_fuel_lines)
+    total_chunk = sum(L.chunk_payload_mass for L in launches)
+
+    ascent = result.edge_groups[0] if result.edge_groups else []
+    ascent_desc = ", ".join(f"{e.source} -> {e.destination}"
+                            for e in ascent) or "home ascent"
+
+    lines.append(f"\n  ===== Multi-launch orbital assembly: {n} launches "
+                 f"=====")
+    lines.append("  Each launch below is a SEPARATE rocket that reaches the "
+                 "assembly orbit and")
+    lines.append("  docks its chunk; the combined stack (further down) then "
+                 "flies the mission.")
+
+    for idx, launch in enumerate(launches, 1):
+        launch_wet = max((s.stage_mass_wet for s in launch.stages), default=0.0)
+        lines.append(f"\n  --- Launch {idx} of {n}: pad mass {launch_wet:.2f} t "
+                     f"-> delivers {launch.chunk_payload_mass:.2f} t chunk to "
+                     f"orbit ---")
+        lines.append(f"    flies: {ascent_desc} (+ rendezvous to assembly orbit)")
+        nstg = len(launch.stages)
+        for j, stage in enumerate(launch.stages):
+            # Pure ascent lifters: no terminal command parts, and the ascent
+            # edge is named once in the launch header above (edges=None here).
+            lines.extend(_format_one_stage(
+                stage, nstg - 1 - j, "ascent", is_terminal=False,
+                terminal_parts=[], asparagus=asparagus, edges=None))
+
+    lines.append(f"\n  ===== Assembled orbital stack ({total_chunk:.2f} t "
+                 f"docked) -- continues the mission =====")
+    # Mission-continuation stages: everything that reached orbit (group > 0);
+    # the home-ascent group 0 is the launches above.
+    m_stages: list = []
+    m_groups: list[int] = []
+    for stage, gi in zip(result.stage_results, result.stage_group_indices):
+        if gi != 0:
+            m_stages.append(stage)
+            m_groups.append(gi)
+    lines.extend(_format_stack(
+        m_stages, m_groups, result.edge_groups, result.terminal_parts,
+        flags, skip_empty_groups=True))
+    return lines
+
+
 def format_stage_breakdown(
     result: ProfileResult,
     flags: EquipmentFlags,
@@ -308,98 +522,24 @@ def format_stage_breakdown(
     trivial (no-propulsion) mission. Contract-required parts ride
     ``result.terminal_parts`` (the capability layer appends ``extra_payload_parts``
     there), so they show on the terminal stage with no special-casing here.
-    """
-    lines: list[str] = []
 
-    # Non-profile mission types (sounding, first_launch, etc.) have no stage breakdown
-    _NON_PROFILE_TYPES = {MissionType.SOUNDING, MissionType.FIRST_LAUNCH, MissionType.FIRST_LANDING, MissionType.FIRST_STAGING, MissionType.SPLASHDOWN}
+    A ``via_assembly`` result is rendered as its distinct launches plus the
+    assembled orbital stack (see ``_format_assembly_breakdown``) instead of one
+    flat stage list, which would otherwise show several independent launches as
+    an impossible single stack.
+    """
     if mission_type in _NON_PROFILE_TYPES:
-        return lines
+        return []
 
     if not result.stage_results:
-        lines.append("\n  (Trivial mission -- no propulsion required.)")
-        return lines
+        return ["\n  (Trivial mission -- no propulsion required.)"]
 
-    num_stages = len(result.stage_results)
-    asparagus = (flags.staging_tier >= 2 and flags.has_fuel_lines)
+    if getattr(result, "via_assembly", False) and result.assembly_launches:
+        return _format_assembly_breakdown(result, flags)
 
-    # Stage→group map.  A multi-stage ascent expands one edge-group into K
-    # stages, so ``stage_results`` and ``edge_groups`` are NOT 1:1 — zipping
-    # by position misattributes every stage above the ascent.  Use the
-    # producer's explicit per-stage group index; fall back to positional only
-    # for legacy results that predate the field.
-    def _group_idx(i: int) -> int:
-        if i < len(result.stage_group_indices):
-            return result.stage_group_indices[i]
-        return i
-
-    for i, stage in enumerate(result.stage_results):
-        gi = _group_idx(i)
-        group = result.edge_groups[gi] if 0 <= gi < len(result.edge_groups) else []
-        is_terminal = (i == num_stages - 1)
-
-        edge_names = [f"{e.source} -> {e.destination}" for e in group]
-        header = ", ".join(edge_names) if edge_names else "unknown"
-        ksp_stage_num = num_stages - 1 - i
-
-        tags: list[str] = []
-        if stage.n_boosters > 0:
-            # Real parallel build on this stage (not the old blanket flag).
-            mode = "ASPARAGUS" if asparagus else "ONION"
-            kind = "engine-boost" if stage.booster_engines > 0 else "drop-tank"
-            tags.append(f"{mode}: {stage.n_boosters} {kind} boosters")
-        elif stage.engine_count > 1:
-            tags.append(f"{stage.engine_count}-WAY")
-        tag_str = f"  [{', '.join(tags)}]" if tags else ""
-        lines.append(f"\n  Stage {ksp_stage_num} ({header}):{tag_str}")
-        lines.append(f"    Parts:")
-
-        if is_terminal:
-            for count, part_id in result.terminal_parts:
-                lines.append(f"      {count}x {titled(part_id)}")
-
-        if stage.engine_count > 0 and stage.engine_name != "none":
-            lines.append(f"      {stage.engine_count}x {titled(stage.engine_name)}")
-        for count, tank_name in stage.tank_manifest:
-            if tank_name and tank_name != "none":
-                lines.append(f"      {count}x {titled(tank_name)}")
-
-        # Coalesce identical parts: the optimizer appends equipment from several
-        # sites (fins, decouplers, attitude bundles) so the same part_id can
-        # recur. Sum counts per part_id, preserving first-seen order.
-        coalesced_equip: dict[str, int] = {}
-        for count, part_id in stage.equipment:
-            coalesced_equip[part_id] = coalesced_equip.get(part_id, 0) + count
-        for part_id, count in coalesced_equip.items():
-            lines.append(f"      {count}x {titled(part_id)}")
-
-        # The heat shield the optimizer charged for this stage (it lives in
-        # stage_mass but isn't an engine/tank/equipment entry) — without it the
-        # reported build can't survive the reentry/aerocapture edge.
-        if stage.heat_shield_name:
-            lines.append(f"      1x {titled(stage.heat_shield_name)}")
-
-        lines.append(f"    Edges:")
-        for edge in group:
-            lines.append(f"      {edge_desc(edge)}")
-
-        lines.append(f"    Stats:")
-        lines.append(f"      dv: {stage.delta_v:.0f} m/s | TWR: {stage.twr_at_ignition:.2f} -> {stage.twr_at_burnout:.2f}")
-        lines.append(f"      Wet: {stage.stage_mass_wet:.2f}t | Dry: {stage.stage_mass_dry:.2f}t")
-
-    lines.append(f"\n  Edge -> Stage Summary:")
-    # Invert the stage→group map: each group may be served by >1 stage (a
-    # multi-stage ascent), so list every stage that performs the edge.
-    group_to_stages: dict[int, list[int]] = defaultdict(list)
-    for i in range(num_stages):
-        group_to_stages[_group_idx(i)].append(num_stages - 1 - i)
-    for gi, group in enumerate(result.edge_groups):
-        stage_nums = sorted(set(group_to_stages.get(gi, [])), reverse=True)
-        label = ", ".join(f"Stage {n}" for n in stage_nums) if stage_nums else "Stage ?"
-        for edge in group:
-            lines.append(f"    {edge.source} -> {edge.destination}: {label}")
-
-    return lines
+    return _format_stack(
+        result.stage_results, result.stage_group_indices, result.edge_groups,
+        result.terminal_parts, flags)
 
 
 # ---------------------------------------------------------------------------
@@ -496,9 +636,12 @@ def format_contract_output(
         lines.append(f"      - {kind}" + (f": {detail}" if detail else ""))
 
     # Delivery rocket — only when feasible; the contract parts ride
-    # result.terminal_parts onto the terminal stage.
+    # result.terminal_parts onto the terminal stage.  architecture_lines names
+    # the flight architecture and the (possibly per-launch) mass, so an
+    # assembly-delivered contract isn't mislabelled with a single launch mass.
     if feasible:
-        lines.append(f"\n  --- Delivery rocket (launch mass {result.launch_mass:.2f} t) ---")
+        lines.append("\n  --- Delivery rocket ---")
+        lines.extend(architecture_lines(result))
         lines.extend(format_stage_breakdown(result, flags, td.base_mission_type))
 
     return lines
