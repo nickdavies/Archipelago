@@ -75,21 +75,13 @@ _TRANSMIT_ONLY_DISCOUNT: float = 0.75
 # Science needed to declare the tech tree complete (buy all 62 nodes)
 _TECH_TREE_COMPLETE_SCIENCE = cumulative_tier_cost(MAX_TIER)
 
-# Phase 2: every part item (no longer wrapped behind progressives).
-# Eve / Tylo / Laythe Return + Sample Return use this as a proxy for "you
-# have everything the capability solver can't model from physics."  Per
-# the design, these missions are hard-banned outside their target homes,
-# so the strictness of "every part" is academic in practice.  Progressive
-# R&D is excluded (separate tech-tree gate, not rocket capability); the
-# remaining kept progressives (Pad, PSI) are also excluded because they
-# don't represent rocket parts.
+# Every part item (no longer wrapped behind progressives).  The
+# goal-infeasible "all-parts proxy" that used to lean on this is gone —
+# infeasible goals are now rejected at resolution (_assert_goal_feasible).
+# The one remaining use is the UNBRACKETED-contract fallback in
+# _set_contract_rules (a conservative fill gate for a contract the sphere
+# ladder couldn't bracket), tracked separately for its own audit.
 _ALL_PROGRESSION_ITEMS: frozenset[str] = frozenset(ITEM_TABLE.keys())
-
-
-def _make_all_parts_rule(player: int) -> Callable[[CollectionState], bool]:
-    def rule(state: CollectionState) -> bool:
-        return state.has_all(_ALL_PROGRESSION_ITEMS, player)
-    return rule
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +147,6 @@ def _make_goal_event_rule(
     """
     bt = tuple(bodies)
     ev = event.value
-    mt = EVENT_BY_NAME[ev].mission_type
 
     def rule(state: CollectionState) -> bool:
         world = state.multiworld.worlds[player]
@@ -167,9 +158,6 @@ def _make_goal_event_rule(
             reps = reps_map.get((b.value, ev))
             if reps is not None:
                 if not state.has_all(reps, player):
-                    return False
-            elif (b, mt) in world.unachievable_missions:
-                if not state.has_all(_ALL_PROGRESSION_ITEMS, player):
                     return False
             else:
                 from .capability import get_capability
@@ -583,13 +571,7 @@ def _set_contract_rules(world: KSP1World, player: int) -> None:
     Ore on Eve" is unreachable without the very engine it gates) while still
     letting LATE progression land there, so contracts remain real pacing gates.
     """
-    infeasible = world.model_infeasible_locations
-    proxy_rule = _make_all_parts_rule(player)
     event_of = _migrated_event_map()
-    # The single record of which contracts route through the all-parts proxy.
-    # /explain reads this set (world._contract_uses_proxy) rather than re-deriving
-    # the predicate, so the reported gate can't drift from the rule actually set.
-    world._proxy_contract_ids = set()
     # Single record of which locations carry a contract rule (completion slots,
     # completion events, and goal-contract mission events).  The sphere-ladder
     # rule installer reads this to LEAVE these rules in place during fill instead
@@ -604,10 +586,7 @@ def _set_contract_rules(world: KSP1World, player: int) -> None:
     # name) so the sphere-ladder can merge it into ``_strict_ladder_saved_rules``;
     # the post_fill cross-check then swaps it in — verifying contract capability
     # exactly as it verifies missions, instead of re-checking contracts on the
-    # same cheap rule the fill used (the old contract blind spot).  Proxy
-    # contracts are omitted: their cheap all-parts rule already IS their real rule
-    # (the dv model can't verify the achievement, so contract_access is False and
-    # a swap would wrongly close the goal).
+    # same cheap rule the fill used (the old contract blind spot).
     world._contract_real_rules = {}
     # In count / progressive_unlock each non-goal contract has a completion-event
     # location; it shares the contract's rule so has("Contract Count Progress", X)
@@ -618,15 +597,6 @@ def _set_contract_rules(world: KSP1World, player: int) -> None:
     )
     for spec in (*world.contract_specs, *world.goal_contract_specs):
         ev = event_of.get(spec.contract_type)
-        # A goal contract on a model-infeasible achievement (e.g. Eve/Laythe
-        # return from a far home, which the dv model can't verify) routes to the
-        # all-parts proxy, exactly as the matching milestone event and the
-        # victory rule do — keeping the contract location reachable-in-logic
-        # whenever its achievement is, rather than a dead filler-only slot.
-        # Non-goal contracts are feasibility-filtered at generation, so they
-        # never land on a model-infeasible body and keep the capability gate.
-        uses_proxy = (spec.is_goal and ev is not None
-                      and _all_locations_infeasible(spec.body, ev, infeasible))
         # The contract's gate item, routed through the chokepoint so it's
         # recorded logic-required (kept PROGRESSION) — you can't complete a
         # contract without first finding its item, and a demoted gate item
@@ -635,63 +605,55 @@ def _set_contract_rules(world: KSP1World, player: int) -> None:
         # The real-rule swap the post_fill cross-check installs for a non-proxy
         # contract: award gate AND the live capability oracle.  ``None`` for proxy
         # contracts (kept on their cheap all-parts rule during the cross-check).
-        real_rule = None
-        if uses_proxy:
-            world._proxy_contract_ids.add(spec.contract_id)
-            def rule(state: CollectionState, cid=spec.contract_id, _gate=gate,
-                     _proxy=proxy_rule) -> bool:
-                if not (_gate(state) and _proxy(state)):
-                    return False
-                # A model-infeasible goal contract still has real capability gates
-                # (nav / EVA / samples).  ``has_all(ALL parts)`` can't express a
-                # count>=2 building level, so check the counted reqs explicitly.
-                world = state.multiworld.worlds[player]
-                counted = getattr(
-                    world, "_cheap_contract_counted_reqs", {}).get(cid, ())
-                return all(state.has(kind, player, lvl) for kind, lvl in counted)
-        else:
-            def real_rule(state: CollectionState, cid=spec.contract_id,
-                          _gate=gate) -> bool:
-                return _gate(state) and get_capability(
-                    state, player).contract_access.get(cid, False)
+        # Every contract targets a feasible achievement now — a goal on a
+        # model-infeasible mission is rejected at resolution (_assert_goal_
+        # feasible), and non-goal contracts are feasibility-filtered at
+        # generation — so every contract gets the real capability rule.  The
+        # old all-parts proxy for goal-on-infeasible contracts is gone.
+        def real_rule(state: CollectionState, cid=spec.contract_id,
+                      _gate=gate) -> bool:
+            return _gate(state) and get_capability(
+                state, player).contract_access.get(cid, False)
 
-            def rule(state: CollectionState, cid=spec.contract_id,
-                     _gate=gate) -> bool:
-                if not _gate(state):
-                    return False
-                world = state.multiworld.worlds[player]
-                creps = getattr(world, "_cheap_contract_reps", None)
-                if creps is None:
-                    # The cheap proxy is built in pre_fill.  Universal Tracker
-                    # rebuilds logic through set_rules only (no pre_fill), so the
-                    # proxy is absent — fall back to the live capability oracle it
-                    # approximates (get_capability works under UT; ordinary
-                    # mission rules already use it).  Off the UT path this stays
-                    # the conservative pre-ladder floor, so normal fill is
-                    # unchanged.
-                    if getattr(world, "_ut_active", False):
-                        return get_capability(state, player) \
-                            .contract_access.get(cid, False)
-                    return False  # pre-ladder: conservatively not completable
-                # Cheap delivery gate: the contract's bracket reps (has_all ⟹ the
-                # kit delivers, conservative).  An unbracketed non-proxy contract
-                # falls back to the all-parts proxy.
-                reps = creps.get(cid)
-                if not state.has_all(
-                        reps if reps is not None else _ALL_PROGRESSION_ITEMS,
-                        player):
-                    return False
-                # ...plus the CAPABILITY counted gate (nav/EVA/samples/DSN + the
-                # pad) the contract really needs — derived spec-direct in
-                # sphere_ladder._install_cheap_mission_reps, NOT from the sphere
-                # position.  has_all above only covers the physics RANK reps;
-                # without this a contract is reachable with no Mission Control
-                # (interplanetary), no pad tier, etc.  R&D/PSI placement artifacts
-                # are deliberately NOT here (they'd bind the contract to its
-                # physics position; see _install_cheap_mission_reps).
-                counted = getattr(
-                    world, "_cheap_contract_counted_reqs", {}).get(cid, ())
-                return all(state.has(kind, player, lvl) for kind, lvl in counted)
+        def rule(state: CollectionState, cid=spec.contract_id,
+                 _gate=gate) -> bool:
+            if not _gate(state):
+                return False
+            world = state.multiworld.worlds[player]
+            creps = getattr(world, "_cheap_contract_reps", None)
+            if creps is None:
+                # The cheap proxy is built in pre_fill.  Universal Tracker
+                # rebuilds logic through set_rules only (no pre_fill), so the
+                # proxy is absent — fall back to the live capability oracle it
+                # approximates (get_capability works under UT; ordinary
+                # mission rules already use it).  Off the UT path this stays
+                # the conservative pre-ladder floor, so normal fill is
+                # unchanged.
+                if getattr(world, "_ut_active", False):
+                    return get_capability(state, player) \
+                        .contract_access.get(cid, False)
+                return False  # pre-ladder: conservatively not completable
+            # Cheap delivery gate: the contract's bracket reps (has_all ⟹ the
+            # kit delivers, conservative).  An UNBRACKETED contract still falls
+            # back to has_all(every part) here — a separate, more load-bearing
+            # use of the all-parts gate than the killed goal-infeasible proxy;
+            # auditing/killing it is tracked separately.
+            reps = creps.get(cid)
+            if not state.has_all(
+                    reps if reps is not None else _ALL_PROGRESSION_ITEMS,
+                    player):
+                return False
+            # ...plus the CAPABILITY counted gate (nav/EVA/samples/DSN + the
+            # pad) the contract really needs — derived spec-direct in
+            # sphere_ladder._install_cheap_mission_reps, NOT from the sphere
+            # position.  has_all above only covers the physics RANK reps;
+            # without this a contract is reachable with no Mission Control
+            # (interplanetary), no pad tier, etc.  R&D/PSI placement artifacts
+            # are deliberately NOT here (they'd bind the contract to its
+            # physics position; see _install_cheap_mission_reps).
+            counted = getattr(
+                world, "_cheap_contract_counted_reqs", {}).get(cid, ())
+            return all(state.has(kind, player, lvl) for kind, lvl in counted)
         def _apply(name: str, _rule=rule, _real=real_rule) -> None:
             """Install the cheap contract rule on ``name``, record it
             contract-ruled, and stash its real-rule swap (non-proxy only)."""
@@ -1175,6 +1137,7 @@ def resolve_goal_spec(options, home: BodyName,
 
     materialized = _filter_home_from_spec(spec, home)
     _validate_home_system_local(materialized)
+    _assert_goal_feasible(materialized, model_infeasible_locations)
     return materialized
 
 
@@ -1322,6 +1285,41 @@ def _all_locations_infeasible(
                               for loc in locs)
 
 
+def _assert_goal_feasible(
+    spec: GoalSpec, model_infeasible_locations: frozenset[str],
+) -> None:
+    """Reject a goal that targets a mission the dv model can't verify feasible.
+
+    Replaces the old all-parts proxy, which laundered such goals into
+    "completable once you hold literally every part" — a fiction that hid a
+    real capability gap behind a green solve.  If the model can't verify the
+    goal, we say so instead of faking it.  Standard/preset goals never trip
+    this (they filter or don't target infeasible achievements); it only fires
+    for a custom goal that explicitly names an infeasible achievement (e.g.
+    Eve return/sample-return from a far home at casual margins).
+    """
+    from Options import OptionError
+    bad = [
+        f"{b.name} {event}"
+        for bodies, event in (
+            (spec.return_bodies, EventName.RETURN),
+            (spec.sample_return_bodies, EventName.SAMPLE_RETURN),
+            (spec.flag_bodies, EventName.FLAG_PLANT),
+            (spec.orbit_bodies, EventName.ORBIT),
+            (spec.flyby_bodies, EventName.FLYBY),
+        )
+        for b in bodies
+        if _all_locations_infeasible(b, event, model_infeasible_locations)
+    ]
+    if bad:
+        raise OptionError(
+            f"KSP1 goal '{spec.display_name}' targets missions the dv model "
+            f"cannot verify feasible from this home/difficulty: "
+            f"{', '.join(bad)}. Choose a different body/goal or a harder "
+            f"difficulty (bigger margins make far-home returns infeasible)."
+        )
+
+
 def _set_victory_rules(
     world: KSP1World, player: int, spec: GoalSpec, safety: float
 ) -> None:
@@ -1334,8 +1332,7 @@ def _set_victory_rules(
     you cannot complete a goal mission without first finding its contract.
     """
     base_rule = _make_goal_spec_rule(
-        player, spec, safety, world.model_infeasible_locations,
-        world.mission_builder.home,
+        player, spec, safety, world.mission_builder.home,
     )
     # Goal-contract items gate Victory; route through the chokepoint so they're
     # kept PROGRESSION (a demoted goal item the beatability sweep never collects
@@ -1354,16 +1351,13 @@ def _set_victory_rules(
 
 def _make_goal_spec_rule(
     player: int, spec: GoalSpec, safety: float,
-    model_infeasible_locations: frozenset[str],
     home: BodyName,
 ) -> Callable[[CollectionState], bool]:
     """Build a composite access rule from a GoalSpec.
 
-    ``model_infeasible_locations`` is the per-world set of AP location
-    names whose mission the dv model can't verify.  Mission classes
-    where *every* slot for a body falls in this set route through the
-    "all-parts collected" proxy rule instead of the dv-based access
-    check.
+    Every target achievement is feasible — a goal on a mission the dv model
+    can't verify is rejected at resolution (``_assert_goal_feasible``) — so
+    each body/event gets its real dv-based access check, never a proxy.
     """
     sub_rules: list[Callable[[CollectionState], bool]] = []
 
@@ -1372,27 +1366,15 @@ def _make_goal_spec_rule(
         sub_rules.append(_make_goal_event_rule(
             player, spec.flag_bodies, EventName.FLAG_PLANT))
 
-    # Return bodies
-    proxy_return = [b for b in spec.return_bodies
-                    if _all_locations_infeasible(b, EventName.RETURN,
-                                                   model_infeasible_locations)]
-    normal_return = [b for b in spec.return_bodies if b not in proxy_return]
-    if normal_return:
+    # Return + sample-return bodies.  All feasible: a goal that targets a
+    # mission the dv model can't verify is rejected at resolution
+    # (_assert_goal_feasible), so there is no infeasible fallback here.
+    if spec.return_bodies:
         sub_rules.append(_make_goal_event_rule(
-            player, normal_return, EventName.RETURN))
-    if proxy_return:
-        sub_rules.append(_make_all_parts_rule(player))
-
-    # Sample return bodies
-    proxy_sample = [b for b in spec.sample_return_bodies
-                    if _all_locations_infeasible(b, EventName.SAMPLE_RETURN,
-                                                   model_infeasible_locations)]
-    normal_sample = [b for b in spec.sample_return_bodies if b not in proxy_sample]
-    if normal_sample:
+            player, spec.return_bodies, EventName.RETURN))
+    if spec.sample_return_bodies:
         sub_rules.append(_make_goal_event_rule(
-            player, normal_sample, EventName.SAMPLE_RETURN))
-    if proxy_sample:
-        sub_rules.append(_make_all_parts_rule(player))
+            player, spec.sample_return_bodies, EventName.SAMPLE_RETURN))
 
     # Orbit bodies
     if spec.orbit_bodies:

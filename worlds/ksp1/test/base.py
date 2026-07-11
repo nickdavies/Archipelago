@@ -92,15 +92,15 @@ class KSP1TestBase(WorldTestBase):
             return
         world = self.multiworld.worlds[self.player]
         exempt: set[str] = set()
-        # Contracts whose access rule falls back to the all-parts proxy
-        # (unbracketed, or the curated proxy set) are filler-only and can't be
-        # reached on a location-short pool — exempt their reward slots.
+        # UNBRACKETED contracts fall back to has_all(every part) (the sphere
+        # ladder couldn't bracket them) — filler-only, unreachable on a
+        # location-short pool, so exempt their reward slots.  (The goal-infeasible
+        # all-parts proxy is gone — those goals are now rejected at resolution.)
         creps = getattr(world, "_cheap_contract_reps", {}) or {}
-        proxy_ids = getattr(world, "_proxy_contract_ids", set())
         slot_count = getattr(world, "locations_per_contract", 2)
         for spec in (*getattr(world, "contract_specs", ()),
                      *getattr(world, "goal_contract_specs", ())):
-            if creps.get(spec.contract_id) is None or spec.contract_id in proxy_ids:
+            if creps.get(spec.contract_id) is None:
                 exempt.update(spec.location_names(slot_count))
         with self.subTest("Game", game=self.game, seed=self.multiworld.seed):
             state = self.multiworld.get_all_state(False)
