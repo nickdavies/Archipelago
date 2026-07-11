@@ -1551,13 +1551,17 @@ def minimal_ranks_for(
             if b.reason == BlockingReason.NO_REBOARD_AID:
                 # Low-g surface sample: a ladder OR an EVA jetpack re-boards
                 # the lander — either satisfies the capability gate.  Pick one
-                # per resolution with the seeded rng so, across seeds, ~half
-                # gate on the ladder and half on the jetpack.  The cumulative
-                # kit means the earliest low-g return in rank order fixes the
-                # seed's choice; later low-g returns inherit it (no new blocker
-                # once one aid is present).
+                # ~50/50 from the seeded rng's CURRENT state, then RESTORE that
+                # state so the pick does not advance the shared stream.  A live
+                # draw here shifts every downstream sphere-ladder/fill decision,
+                # which reshuffled tight far-home seeds onto cheap-vs-capability
+                # bracket-gap layouts (moho/expert regressed 100/100 -> 98/100).
+                # Restoring keeps the fill layout identical while still varying
+                # the choice per seed (state) and per resolution (rng position).
+                _rng_state = rng.getstate()
                 needed_flag = rng.choice(
                     [CapabilityFlag.LADDER, CapabilityFlag.EVA_JETPACK])
+                rng.setstate(_rng_state)
             else:
                 needed_flag = discrete_unlocks_for.get(b.reason)
             if needed_flag is None:
