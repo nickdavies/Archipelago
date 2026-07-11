@@ -30,6 +30,7 @@ class CapabilityFlag(StrEnum):
     DOCKING_PORT = "docking_port"
     FUEL_LINE = "fuel_line"
     LADDER = "ladder"
+    EVA_JETPACK = "eva_jetpack"
     LAUNCH_CLAMP = "launch_clamp"
     ISRU = "isru"
     MULTI_MOUNT = "multi_mount"

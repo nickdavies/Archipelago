@@ -768,6 +768,8 @@ _RANK_BUMP_TABLE: dict[BlockingReason, tuple[RankAxisKey, ...]] = {
     BlockingReason.LANDING_LEGS_MISSING: (RankAxisKey.LANDING_LEG,),
     # Ladder doesn't have a rank axis yet — handled discretely in Phase 2.
     BlockingReason.NO_LADDER: (),
+    # Discrete-unlock (ladder OR jetpack); resolved by name, no rank axis.
+    BlockingReason.NO_REBOARD_AID: (),
     # Launch Pad is a counted progressive in Phase 1; rank gating in Phase 2.
     BlockingReason.LAUNCH_MASS_EXCEEDED: (),
     BlockingReason.SOUNDING_ALTITUDE_TOO_LOW: (
@@ -960,6 +962,7 @@ def _enrich_kit_alternates(kit, ctx: RankContext) -> None:
         'reaction_wheel': CapabilityFlag.REACTION_WHEEL,
         'aero_control': CapabilityFlag.AERO_CONTROL,
         'ladder': CapabilityFlag.LADDER,
+        'eva_jetpack': CapabilityFlag.EVA_JETPACK,
     }
 
     for field_name, axis in rank_axis_for_field.items():
@@ -1020,6 +1023,7 @@ def _random_kit_variant(kit, rng: Random) -> frozenset[str]:
         'capsule', 'probe_core', 'parachute',
         'rtg', 'solar', 'solar_retractable', 'monoprop_tank',
         'rcs_thruster', 'reaction_wheel', 'aero_control', 'ladder',
+        'eva_jetpack',
         'stack_decoupler', 'radial_decoupler', 'fuel_line', 'srb',
         'ion_power',
     ):
@@ -1544,7 +1548,18 @@ def minimal_ranks_for(
         }
         added_discrete = False
         for b in result.blocking:
-            needed_flag = discrete_unlocks_for.get(b.reason)
+            if b.reason == BlockingReason.NO_REBOARD_AID:
+                # Low-g surface sample: a ladder OR an EVA jetpack re-boards
+                # the lander — either satisfies the capability gate.  Pick one
+                # per resolution with the seeded rng so, across seeds, ~half
+                # gate on the ladder and half on the jetpack.  The cumulative
+                # kit means the earliest low-g return in rank order fixes the
+                # seed's choice; later low-g returns inherit it (no new blocker
+                # once one aid is present).
+                needed_flag = rng.choice(
+                    [CapabilityFlag.LADDER, CapabilityFlag.EVA_JETPACK])
+            else:
+                needed_flag = discrete_unlocks_for.get(b.reason)
             if needed_flag is None:
                 continue
             for item_name, parts in PART_DB.items():

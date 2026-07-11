@@ -42,6 +42,7 @@ class BlockingReason(str, Enum):
     # --- Landing / safe descent -----------------------------------------
     LANDING_LEGS_MISSING = "landing_legs_missing"
     NO_LADDER = "no_ladder"
+    NO_REBOARD_AID = "no_reboard_aid"
     NO_HEAT_SHIELD = "no_heat_shield"
     # A shield exists but none covers any owned command module: a passive
     # reentry behind an undersized shield exposes the pod, so the profile is
@@ -264,6 +265,8 @@ class BlockingInfo:
                     f"have {self.leg_tier_available}")
         if r == BlockingReason.NO_LADDER:
             return "need ladder for sample return"
+        if r == BlockingReason.NO_REBOARD_AID:
+            return "need ladder or EVA jetpack for sample return"
         if r == BlockingReason.NO_HEAT_SHIELD:
             return "no heat shield for aero edge"
         if r == BlockingReason.HEAT_SHIELD_TOO_SMALL:

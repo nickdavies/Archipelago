@@ -2214,7 +2214,7 @@ class MergedEdgeGroup:
     requires_attitude_control: bool
     needs_heat_shield: bool
     needs_landing_legs: bool
-    needs_ladder: bool
+    reboard: "ReboardMode"          # strongest re-board requirement (LADDER_ONLY dominates)
     plane_change_dv: float          # sum of plane-change components
 
 
@@ -2225,13 +2225,21 @@ def merge_edge_groups(
     Merge a list of MissionEdge objects into a single MergedEdgeGroup.
     Constraints are the union (strictest) of all constituent edges.
     """
-    from ..bodies import EdgeType
+    from ..bodies import EdgeType, ReboardMode
 
     atmo_types = {
         EdgeType.ATMOSPHERIC_ASCENT,
         EdgeType.ATMO_LANDING,
         EdgeType.AEROBRAKE_CAPTURE,
     }
+
+    reboard = ReboardMode.NONE
+    for e in edges:
+        if e.reboard is ReboardMode.LADDER_ONLY:
+            reboard = ReboardMode.LADDER_ONLY
+            break
+        if e.reboard is ReboardMode.LADDER_OR_JETPACK:
+            reboard = ReboardMode.LADDER_OR_JETPACK
 
     return [MergedEdgeGroup(
         total_dv=sum(e.base_dv for e in edges),
@@ -2242,6 +2250,6 @@ def merge_edge_groups(
         requires_attitude_control=any(e.requires_attitude_control for e in edges),
         needs_heat_shield=any(e.needs_heat_shield for e in edges),
         needs_landing_legs=any(e.needs_landing_legs for e in edges),
-        needs_ladder=any(e.needs_ladder for e in edges),
+        reboard=reboard,
         plane_change_dv=sum(e.plane_change_dv for e in edges),
     )]

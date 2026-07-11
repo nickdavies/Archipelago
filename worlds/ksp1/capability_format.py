@@ -13,6 +13,7 @@ from typing import Optional
 
 from worlds.ksp1.bodies import (
     ALL_BODIES, BODY_BY_NAME, BodyName, MissionType, DIFFICULTY_PROFILES, EdgeType,
+    ReboardMode,
     MissionBuilder, MissionEdge, min_relay_tier, physics_profile_name_from_slot_data,
 )
 from worlds.ksp1.capability import (
@@ -131,8 +132,10 @@ def _profile_prereqs(profile: list[MissionEdge],
         tier = max(b.landing_leg_tier for b in leg_bodies)
         reqs.append(f"landing_legs(tier>={tier})")
 
-    if any(e.needs_ladder for e in profile):
+    if any(e.reboard is ReboardMode.LADDER_ONLY for e in profile):
         reqs.append("ladder")
+    elif any(e.reboard is ReboardMode.LADDER_OR_JETPACK for e in profile):
+        reqs.append("ladder|jetpack")
 
     if any(e.needs_heat_shield for e in profile):
         reqs.append("heat_shield")

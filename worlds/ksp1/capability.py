@@ -27,7 +27,7 @@ from .bodies import (
     BODY_BY_NAME, ALL_BODIES,
     BodyName, MissionType, DifficultyProfile, DIFFICULTY_PROFILES,
     GameplayDifficulty, CONSERVATIVE_GAMEPLAY,
-    Body, MissionEdge, MissionBuilder, EdgeType,
+    Body, MissionEdge, MissionBuilder, EdgeType, ReboardMode,
     effective_dv, effective_physics_profile_name, home_system_bodies, parent_chain,
 )
 from .comms import DSN_POWER_MAX, dsn_required_relay_table
@@ -305,6 +305,7 @@ class EquipmentFlags:
     has_docking_port: bool = False
     has_fuel_lines: bool = False
     has_ladder: bool = False
+    has_eva_jetpack: bool = False
     has_launch_clamp: bool = False
     has_isru: bool = False
     has_thermometer: bool = False
@@ -343,6 +344,7 @@ class EquipmentFlags:
     lightest_rtg: Optional[MiscEquipment] = None
     lightest_aero_control: Optional[MiscEquipment] = None
     lightest_ladder: Optional[MiscEquipment] = None
+    lightest_eva_jetpack: Optional[MiscEquipment] = None
     # Per-stage attitude control parts. Used when a stage needs attitude
     # control (`requires_attitude_control` edge) AND the terminal payload
     # has no built-in reaction wheels AND the chosen propulsion lacks gimbal.
@@ -950,6 +952,10 @@ def _apply_misc(flags: EquipmentFlags, part: MiscEquipment, count: int) -> None:
             flags.has_ladder = True
             if flags.lightest_ladder is None or part.mass < flags.lightest_ladder.mass:
                 flags.lightest_ladder = part
+        elif flag == CF.EVA_JETPACK:
+            flags.has_eva_jetpack = True
+            if flags.lightest_eva_jetpack is None or part.mass < flags.lightest_eva_jetpack.mass:
+                flags.lightest_eva_jetpack = part
         elif flag == CF.LAUNCH_CLAMP:
             flags.has_launch_clamp = True
         elif flag == CF.ISRU:
@@ -1025,6 +1031,7 @@ class KitUsed:
     reaction_wheel: Optional[str] = None
     aero_control: Optional[str] = None
     ladder: Optional[str] = None
+    eva_jetpack: Optional[str] = None
     # 3. Presence-only representatives
     stack_decoupler: Optional[str] = None
     radial_decoupler: Optional[str] = None
@@ -1065,7 +1072,7 @@ class KitUsed:
                   self.rtg, self.solar,
                   self.solar_retractable, self.monoprop_tank,
                   self.rcs_thruster, self.reaction_wheel,
-                  self.aero_control, self.ladder,
+                  self.aero_control, self.ladder, self.eva_jetpack,
                   self.stack_decoupler, self.radial_decoupler,
                   self.fuel_line, self.srb, self.ion_power):
             if v:
@@ -1236,6 +1243,8 @@ def _build_kit_used(flags: EquipmentFlags,
         kit.aero_control = flags.lightest_aero_control.name
     if flags.lightest_ladder:
         kit.ladder = flags.lightest_ladder.name
+    if flags.lightest_eva_jetpack:
+        kit.eva_jetpack = flags.lightest_eva_jetpack.name
     # Relays: keep every tier the mission needed (terminal_parts captured
     # only the lightest, but we want each tier represented so the chain
     # can attribute them correctly on the relay rank axis).
@@ -1858,7 +1867,7 @@ def _evaluate_profile(
     has_atmo_land = any(e.edge_type == EdgeType.ATMO_LANDING for e in profile)
     has_land = has_vacuum_land or has_atmo_land
     needs_legs = any(e.needs_landing_legs for e in profile)
-    needs_ladder = any(e.needs_ladder for e in profile)
+    reboard = _profile_reboard_mode(profile)
 
     # Collect all pre-check failures before attempting stage optimization.
     blocking: list[BlockingInfo] = []
@@ -1902,9 +1911,13 @@ def _evaluate_profile(
                 leg_tier_available=flags.landing_leg_tier,
             ))
 
-    # Ladder
-    if needs_ladder and not flags.has_ladder:
+    # Re-board aid for a crewed surface sample (jumping isn't controllable).
+    # High-g needs a ladder; low-g accepts a ladder OR an EVA jetpack.
+    if reboard is ReboardMode.LADDER_ONLY and not flags.has_ladder:
         blocking.append(BlockingInfo(reason=BlockingReason.NO_LADDER))
+    elif (reboard is ReboardMode.LADDER_OR_JETPACK
+            and not (flags.has_ladder or flags.has_eva_jetpack)):
+        blocking.append(BlockingInfo(reason=BlockingReason.NO_REBOARD_AID))
 
     # EVA (Astronaut Complex, buildings_in_logic).  ``flags.can_eva`` defaults
     # True, so when buildings aren't in logic this never fires.  Stock AC level 0
@@ -2932,9 +2945,10 @@ def _evaluate_profile(
         # branch above; a burn-landing group falls through to here with them
         # already on the manifest and the burn folded into req_dv.)
 
-        # Ladder
-        if any(e.needs_ladder for e in group) and flags.lightest_ladder:
-            stage_equipment.append((1, flags.lightest_ladder.name))
+        # Re-board aid (ladder / EVA jetpack) for a crewed surface sample
+        _reboard_aid = _reboard_aid_part(flags, _profile_reboard_mode(group))
+        if _reboard_aid is not None:
+            stage_equipment.append((1, _reboard_aid.name))
 
         # Prepend group equipment; KEEP what the optimizer already attached
         # (a parallel build's radial decouplers + fuel lines), else they're
@@ -3569,9 +3583,11 @@ def _terminal_equipment_mass(profile: list[MissionEdge],
             if body:
                 leg_mass, _ = _leg_mass_for_tier(flags, body.landing_leg_tier)
                 mass += leg_mass
-    # Ladder — only if last edge needs one (same logic: left at surface otherwise)
-    if profile and profile[-1].needs_ladder and flags.lightest_ladder:
-        mass += flags.lightest_ladder.mass
+    # Re-board aid — only if the last edge needs one (left at surface otherwise)
+    if profile:
+        _reboard_aid = _reboard_aid_part(flags, profile[-1].reboard)
+        if _reboard_aid is not None:
+            mass += _reboard_aid.mass
     # Support equipment (antenna + power source)
     support_mass, _ = _support_equipment_mass(
         flags, profile, home=home, is_crewed=is_crewed)
@@ -4071,9 +4087,12 @@ def _assess_one_body(
             prof.access[event.name] = True
             continue
 
-        # High-gravity sample return requires ladder for EVA re-boarding
-        if event.mission_type == MissionType.SAMPLE_RETURN and body.eva_jetpack_twr < _MIN_EVA_JETPACK_TWR:
-            profiles = _inject_ladder(profiles)
+        # Crewed surface sample: the kerbal must re-board the lander under
+        # control (jumping drifts them off).  Ladder always; jetpack too on
+        # low-g bodies.  Home sample return is an empty profile (no landing
+        # edge) so it is never injected.
+        if event.mission_type == MissionType.SAMPLE_RETURN:
+            profiles = _inject_reboard(profiles, _reboard_mode_for_body(body))
 
         ok, sub_blocking = _try_profiles_reason(
             profiles, flags, diff, event.mission_type,
@@ -4099,10 +4118,50 @@ def _assess_one_body(
     return prof
 
 
-def _inject_ladder(profiles: list[list[MissionEdge]]) -> list[list[MissionEdge]]:
+def _reboard_mode_for_body(body: Body) -> ReboardMode:
+    """The re-board aid a crewed surface sample needs on ``body``.
+
+    A ladder always works.  The EVA jetpack only qualifies where it can lift
+    the kerbal off the surface (``eva_jetpack_twr >= _MIN_EVA_JETPACK_TWR``);
+    on high-gravity bodies it can't, so a ladder is mandatory.
     """
-    Return copies of the profiles with needs_ladder=True on any landing edge.
-    Used when the body's EVA jetpack TWR is too low for unassisted reentry.
+    if body.eva_jetpack_twr < _MIN_EVA_JETPACK_TWR:
+        return ReboardMode.LADDER_ONLY
+    return ReboardMode.LADDER_OR_JETPACK
+
+
+def _profile_reboard_mode(edges: list[MissionEdge]) -> ReboardMode:
+    """Strongest re-board requirement across ``edges`` (LADDER_ONLY dominates)."""
+    mode = ReboardMode.NONE
+    for e in edges:
+        if e.reboard is ReboardMode.LADDER_ONLY:
+            return ReboardMode.LADDER_ONLY
+        if e.reboard is ReboardMode.LADDER_OR_JETPACK:
+            mode = ReboardMode.LADDER_OR_JETPACK
+    return mode
+
+
+def _reboard_aid_part(flags: "EquipmentFlags",
+                      mode: ReboardMode) -> Optional[MiscEquipment]:
+    """Lightest owned part that satisfies ``mode``, or None if the player has
+    no qualifying aid.  LADDER_OR_JETPACK picks the lighter of ladder / jetpack
+    (what the player would actually fly)."""
+    if mode is ReboardMode.LADDER_ONLY:
+        return flags.lightest_ladder
+    if mode is ReboardMode.LADDER_OR_JETPACK:
+        cands = [p for p in (flags.lightest_ladder, flags.lightest_eva_jetpack)
+                 if p is not None]
+        return min(cands, key=lambda p: p.mass) if cands else None
+    return None
+
+
+def _inject_reboard(profiles: list[list[MissionEdge]],
+                    mode: ReboardMode) -> list[list[MissionEdge]]:
+    """
+    Return copies of the profiles with ``reboard=mode`` on any landing edge.
+    A crewed surface sample must re-board the lander under control; ``mode``
+    is LADDER_ONLY where the jetpack can't lift off and LADDER_OR_JETPACK
+    where it can (see ReboardMode).
     """
     import dataclasses
     result = []
@@ -4110,7 +4169,7 @@ def _inject_ladder(profiles: list[list[MissionEdge]]) -> list[list[MissionEdge]]
         new_profile = []
         for edge in profile:
             if edge.needs_landing_legs:
-                edge = dataclasses.replace(edge, needs_ladder=True)
+                edge = dataclasses.replace(edge, reboard=mode)
             new_profile.append(edge)
         result.append(new_profile)
     return result
@@ -4467,8 +4526,7 @@ def evaluate_mission_detailed(
 
     if mission_type == MissionType.SAMPLE_RETURN:
         body = BODY_BY_NAME[body_name]
-        if body.eva_jetpack_twr < _MIN_EVA_JETPACK_TWR:
-            profiles = _inject_ladder(profiles)
+        profiles = _inject_reboard(profiles, _reboard_mode_for_body(body))
 
     # Contract-supplied mission modifier: rewrite each profile's edge list
     # (insert/append/modify maneuvers) before sizing. Used by orbit-variant

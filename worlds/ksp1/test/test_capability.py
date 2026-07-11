@@ -8,7 +8,7 @@ import unittest
 
 from worlds.ksp1.bodies import (
     ALL_BODIES, BODY_BY_NAME, DIFFICULTY_PROFILES,
-    BodyName, MissionBuilder, MissionType, effective_dv,
+    BodyName, MissionBuilder, MissionType, ReboardMode, effective_dv,
     effective_physics_profile_name,
 )
 from worlds.ksp1.options import Difficulty, PhysicsDifficulty
@@ -27,7 +27,7 @@ from worlds.ksp1.capability import (
     BodyAccessProfile, EquipmentFlags,
     _evaluate_profile, _assess_bodies, _assess_one_body,
     _try_profiles, _try_profiles_reason, _solve_atmo_landing, _required_power_source,
-    _inject_ladder, _compute_sounding_altitude,
+    _inject_reboard, _compute_sounding_altitude,
     _group_edges, _MAX_SAFE_LANDING_SPEED,
 )
 from worlds.ksp1.parts import (
@@ -101,6 +101,7 @@ _RA2 = _part("RelayAntenna5")
 _LAUNCH_CLAMP = _part("launchClamp1")
 _FUEL_LINE = _part("fuelLine")
 _LADDER = _part("ladder1")
+_EVA_JETPACK = _part("evaJetpack")
 _BASIC_FIN = _part("basicFin")
 
 
@@ -117,7 +118,7 @@ def _make_flags(
     fuel_lines=False, docking_port=False,
     solar=False, solar_retractable=False, solar_large=False, rtg=False,
     battery_large=False,
-    relay_tier=0, ladder=False, launch_clamp=False,
+    relay_tier=0, ladder=False, eva_jetpack=False, launch_clamp=False,
     staging_tier=None,
 ) -> EquipmentFlags:
     flags = EquipmentFlags()
@@ -201,6 +202,9 @@ def _make_flags(
     flags.has_ladder = ladder
     if ladder:
         flags.lightest_ladder = _LADDER
+    flags.has_eva_jetpack = eva_jetpack
+    if eva_jetpack:
+        flags.lightest_eva_jetpack = _EVA_JETPACK
     flags.has_launch_clamp = launch_clamp
 
     return flags
@@ -666,26 +670,36 @@ class TestPhysicsDifficultyResolution(unittest.TestCase):
         self.assertEqual(z.plane_change_fraction, 0.0)
 
 
-class TestInjectLadder(unittest.TestCase):
-    """_inject_ladder should add needs_ladder to landing edges."""
+class TestInjectReboard(unittest.TestCase):
+    """_inject_reboard should stamp the ReboardMode onto landing edges."""
 
-    def test_ladder_injected_on_landing_edge(self) -> None:
+    def test_reboard_injected_on_landing_edge(self) -> None:
         profiles = MISSION_PROFILES.get((BodyName.MUN, MissionType.SAMPLE_RETURN), [])
         self.assertTrue(len(profiles) > 0)
-        modified = _inject_ladder(profiles)
+        modified = _inject_reboard(profiles, ReboardMode.LADDER_OR_JETPACK)
         for profile in modified:
             for edge in profile:
                 if edge.needs_landing_legs:
-                    self.assertTrue(edge.needs_ladder,
-                                    f"Edge {edge.source}->{edge.destination} should have needs_ladder after inject")
+                    self.assertIs(edge.reboard, ReboardMode.LADDER_OR_JETPACK,
+                                  f"Edge {edge.source}->{edge.destination} should carry the reboard mode after inject")
+
+    def test_high_g_mode_is_ladder_only(self) -> None:
+        profiles = MISSION_PROFILES.get((BodyName.TYLO, MissionType.SAMPLE_RETURN), [])
+        self.assertTrue(len(profiles) > 0)
+        modified = _inject_reboard(profiles, ReboardMode.LADDER_ONLY)
+        for profile in modified:
+            for edge in profile:
+                if edge.needs_landing_legs:
+                    self.assertIs(edge.reboard, ReboardMode.LADDER_ONLY)
 
     def test_original_profiles_unchanged(self) -> None:
         profiles = MISSION_PROFILES.get((BodyName.MUN, MissionType.SAMPLE_RETURN), [])
-        _ = _inject_ladder(profiles)
+        _ = _inject_reboard(profiles, ReboardMode.LADDER_OR_JETPACK)
         # Original should not have been mutated
         for edge in profiles[0]:
             if edge.needs_landing_legs:
-                self.assertFalse(edge.needs_ladder, "Original profiles should not be mutated")
+                self.assertIs(edge.reboard, ReboardMode.NONE,
+                              "Original profiles should not be mutated")
 
 
 class TestBodiesDatabase(unittest.TestCase):
@@ -1890,6 +1904,10 @@ class TestPassiveEntryShieldCovering(unittest.TestCase):
             if (flags.lightest_capsule is None
                     or pod.mass < flags.lightest_capsule.mass):
                 flags.lightest_capsule = pod
+        # Mun sample return needs a re-board aid (ladder / jetpack); give it a
+        # ladder so these tests isolate shield covering, not the re-board gate.
+        flags.has_ladder = True
+        flags.lightest_ladder = _LADDER
         return flags
 
     def _mun_sample_return(self, flags, crewed=True):
@@ -1942,6 +1960,70 @@ class TestPassiveEntryShieldCovering(unittest.TestCase):
                         "covering shield, not fixed to the lightest")
         self.assertLessEqual(plus.launch_mass, base.launch_mass * 1.0001)
         self.assertEqual(plus.terminal_pod_name, mark2.name)
+
+
+class TestReboardAidGate(unittest.TestCase):
+    """A crewed surface sample must re-board the lander under control.
+
+    Jumping isn't a valid re-board (a low-g jump drifts the kerbal far from
+    the craft), so every off-home SAMPLE_RETURN needs an aid: a ladder
+    always, or an EVA jetpack where it can lift off (low-g).  High-g bodies
+    (jetpack TWR < 1.05) need a ladder specifically.
+    """
+
+    def _mun_kit(self, ladder=False, eva_jetpack=False):
+        # A full crewed Mun-return kit with a covering shield; the only lever
+        # is the re-board aid.
+        return _make_flags(
+            engines=[_SWIVEL, _MAINSAIL, _TERRIER],
+            tanks=[_FL_T400, _FL_T800, _X200_32, _JUMBO_64],
+            capsule=True, probe_core=True, solar=True, rtg=True,
+            heat_shields=[_SHIELD_125], parachutes=[_MK16, _MK2R],
+            legs=[_LT1], relay_tier=4, launch_clamp=True, staging_tier=2,
+            decoupler_stack=True, fuel_lines=True, decoupler_radial=True,
+            ladder=ladder, eva_jetpack=eva_jetpack,
+        )
+
+    def _mun_return(self, flags):
+        from worlds.ksp1.capability import evaluate_mission_detailed
+        return evaluate_mission_detailed(
+            flags, _normal_diff(), BodyName.MUN, MissionType.SAMPLE_RETURN,
+            True, MISSION_BUILDER)
+
+    def test_low_g_return_without_aid_is_blocked(self) -> None:
+        from worlds.ksp1.capability_reasons import BlockingReason
+        r = self._mun_return(self._mun_kit())
+        self.assertFalse(r.feasible)
+        self.assertIn(BlockingReason.NO_REBOARD_AID,
+                      {b.reason for b in r.blocking})
+
+    def test_low_g_return_ladder_satisfies(self) -> None:
+        self.assertTrue(self._mun_return(self._mun_kit(ladder=True)).feasible)
+
+    def test_low_g_return_jetpack_satisfies(self) -> None:
+        self.assertTrue(self._mun_return(self._mun_kit(eva_jetpack=True)).feasible)
+
+    def test_reboard_mode_by_gravity(self) -> None:
+        from worlds.ksp1.capability import _reboard_mode_for_body
+        for b in (BodyName.MUN, BodyName.MINMUS, BodyName.DUNA, BodyName.IKE):
+            self.assertIs(_reboard_mode_for_body(BODY_BY_NAME[b]),
+                          ReboardMode.LADDER_OR_JETPACK, b.name)
+        for b in (BodyName.TYLO, BodyName.EVE, BodyName.LAYTHE, BodyName.KERBIN):
+            self.assertIs(_reboard_mode_for_body(BODY_BY_NAME[b]),
+                          ReboardMode.LADDER_ONLY, b.name)
+
+    def test_high_g_jetpack_does_not_satisfy_ladder_only(self) -> None:
+        from worlds.ksp1.capability import _reboard_aid_part
+        flags = _make_flags(eva_jetpack=True)  # jetpack only, no ladder
+        self.assertIsNone(_reboard_aid_part(flags, ReboardMode.LADDER_ONLY))
+        self.assertIsNotNone(
+            _reboard_aid_part(flags, ReboardMode.LADDER_OR_JETPACK))
+
+    def test_reboard_aid_prefers_lighter_when_both_present(self) -> None:
+        from worlds.ksp1.capability import _reboard_aid_part
+        flags = _make_flags(ladder=True, eva_jetpack=True)
+        aid = _reboard_aid_part(flags, ReboardMode.LADDER_OR_JETPACK)
+        self.assertEqual(aid, _LADDER)  # 0.005t ladder beats 0.02t jetpack
 
 
 if __name__ == "__main__":

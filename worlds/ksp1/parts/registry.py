@@ -345,7 +345,7 @@ PART_REGISTRY: list[PartMapping] = [
     PartMapping("evaCylinder", MiscEquipment, "EVA Fuel Cylinders", 1055,
                 {"provides": frozenset()}),
     PartMapping("evaJetpack", MiscEquipment, "EVA Jetpack", 1056,
-                {"provides": frozenset()}),
+                {"provides": frozenset({"eva_jetpack"})}),
     PartMapping("evaRepairKit", MiscEquipment, "EVA Repair Kit", 1057,
                 {"provides": frozenset()}),
     PartMapping("evaScienceKit", MiscEquipment, "EVA Experiments Kit", 1054,

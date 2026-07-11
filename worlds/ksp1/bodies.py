@@ -565,6 +565,20 @@ class EdgeType(Enum):
     AEROBRAKE_CAPTURE       = auto()  # SOI capture using atmosphere (not landing)
 
 
+class ReboardMode(Enum):
+    """How a crewed surface sample must re-board the lander after EVA.
+
+    A surface sample requires the kerbal to leave the craft and climb back
+    in with the sample; jumping is uncontrollable (a low-g jump drifts the
+    kerbal hundreds of metres from the craft), so some controlled aid is
+    always required.  Which aids qualify depends on gravity, set at profile
+    build time from the body's ``eva_jetpack_twr``.
+    """
+    NONE              = auto()  # no re-board required (not a crewed landing edge)
+    LADDER_ONLY       = auto()  # high-g: the jetpack can't lift off; must climb a ladder
+    LADDER_OR_JETPACK = auto()  # low-g: the jetpack lifts off, so it or a ladder works
+
+
 # ---------------------------------------------------------------------------
 # Mission edge
 # ---------------------------------------------------------------------------
@@ -589,7 +603,9 @@ class MissionEdge:
     requires_attitude_control: bool = False  # gimbal OR rcs OR reaction_wheel
     needs_heat_shield: bool = False
     needs_landing_legs: bool = False
-    needs_ladder: bool = False          # set at profile build time if eva_twr < 1.05
+    # Crewed-sample re-board requirement, set at profile build time from the
+    # body's eva_jetpack_twr (see ReboardMode).  NONE on every non-sample edge.
+    reboard: ReboardMode = ReboardMode.NONE
     # ATMO_LANDING context: the speed the craft carries into the atmosphere
     # (low-orbit circular for a landing from orbit; padded escape speed for a
     # reentry from an interplanetary return).  Feeds the entry-bleed model.
