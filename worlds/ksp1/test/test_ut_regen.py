@@ -228,6 +228,31 @@ class TestUTRegen(unittest.TestCase):
         self.assertEqual(world1.goal_spec.flag_bodies, world2.goal_spec.flag_bodies)
         self.assertEqual(world1.contract_threshold_defs, world2.contract_threshold_defs)
 
+    def test_hidden_bodies_round_trip(self):
+        """Feature-on regen (a DIFFERENT RNG seed) must reproduce the exact
+        hidden set, tech-gate planet order and per-tier reqs from slot_data — not
+        re-roll them — or UT would show the wrong gates."""
+        opts = {"body_visibility_mode": "home_system", "goal": "complete_tech_tree"}
+        world1, world2, sd = self._regen_from_slot_data(seed=42, options=opts)
+        self.assertEqual(sorted(map(str, world1.hidden_bodies)),
+                         sorted(map(str, world2.hidden_bodies)))
+        self.assertEqual([str(b) for b in world1.tech_gate_planet_order],
+                         [str(b) for b in world2.tech_gate_planet_order])
+        self.assertEqual(world1.tech_gate_reqs_by_tier,
+                         world2.tech_gate_reqs_by_tier)
+        # slot_data carries the resolved mode + a body_item_map per gated body.
+        self.assertEqual(sd["body_visibility_mode"], world1.body_visibility_mode)
+        self.assertEqual(len(sd["body_item_map"]), len(world1.gated_hidden_bodies))
+
+    def test_all_visible_round_trip(self):
+        """Feature-off must stay off after regen (resolved all_visible is carried,
+        so regen doesn't re-resolve auto and start hiding bodies)."""
+        opts = {"body_visibility_mode": "all_visible", "goal": "duna_return"}
+        world1, world2, sd = self._regen_from_slot_data(seed=7, options=opts)
+        self.assertEqual(len(world2.hidden_bodies), 0)
+        self.assertEqual(len(world2.gated_hidden_bodies), 0)
+        self.assertNotIn("body_item_map", sd)
+
 
 class TestBuildingsInLogicUTRegen(unittest.TestCase):
     """UT round-trip for buildings_in_logic (default ON) and related slot_data."""

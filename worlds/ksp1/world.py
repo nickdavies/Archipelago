@@ -988,6 +988,24 @@ class KSP1World(World):
         # covers this home/pack/difficulty).  Carried only so UT regen picks
         # the same chain and reproduces the fill; the client ignores it.
         d["lifter_profile_id"] = self.lifter_profile_id
+        # Hidden-body visibility.  The resolved mode (never "auto") is always
+        # carried so UT regen recomputes the identical hidden set + tech gates
+        # instead of re-resolving auto.  The client-facing keys are emitted only
+        # when the feature actually hides something: ``body_item_map`` ({Discover
+        # item -> body string}) drives the client's hide/reveal without string
+        # parsing, ``allow_undiscovered_bodies`` is the deep-hide toggle, and
+        # ``tech_gate_planet_order`` (the per-seed planet permutation) lets UT
+        # rebuild the same tech-tier gate.
+        d["body_visibility_mode"] = self.body_visibility_mode
+        if self.gated_hidden_bodies:
+            d["body_item_map"] = {
+                items.discover_item_name(b): str(b)
+                for b in self.gated_hidden_bodies
+            }
+            d["allow_undiscovered_bodies"] = bool(
+                self.options.allow_undiscovered_bodies)
+            d["tech_gate_planet_order"] = [
+                str(b) for b in self.tech_gate_planet_order]
         return d
 
     # ------------------------------------------------------------------
@@ -1080,6 +1098,19 @@ class KSP1World(World):
         # seeds -> generate_early re-picks from the seed RNG.
         if "lifter_profile_id" in slot_data:
             self._ut_lifter_profile_id = slot_data["lifter_profile_id"]
+
+        # Restore hidden-body visibility: the resolved mode (so generate_early
+        # recomputes the identical hidden set + gates rather than re-resolving
+        # auto) and the exact tech-gate planet order (re-shuffling would diverge
+        # which planets the tech tree needs). Absent on pre-feature seeds ->
+        # all_visible, so an old seed never spuriously hides bodies.
+        from .options import BodyVisibilityMode as _BVM
+        self.options.body_visibility_mode.value = slot_data.get(
+            "body_visibility_mode", _BVM.option_all_visible)
+        if "allow_undiscovered_bodies" in slot_data:
+            self.options.allow_undiscovered_bodies.value = int(
+                slot_data["allow_undiscovered_bodies"])
+        self._ut_tech_gate_planet_order = slot_data.get("tech_gate_planet_order")
 
         # A custom goal isn't a single enum value — its body lists ARE the goal,
         # and resolve_goal_spec rebuilds the spec from those option values during
