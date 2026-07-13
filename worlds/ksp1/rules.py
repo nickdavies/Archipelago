@@ -937,7 +937,8 @@ def _ban_early_science_windfalls(world: KSP1World, player: int, difficulty: int)
     for name in world.location_builder.names:
         add_item_rule(world.get_location(name), early_ban_rule)
     home = world.mission_builder.home
-    for event in (EventName.ORBIT, EventName.EVA_IN_ORBIT, EventName.LANDING,
+    for event in (EventName.ORBIT, EventName.EVA_IN_ORBIT,
+                  EventName.ORBITAL_PROBE, EventName.LANDING,
                   EventName.CREWED_LANDING, EventName.FLAG_PLANT,
                   EventName.RETURN, EventName.SAMPLE_RETURN):
         for loc in event_locations(home, event):

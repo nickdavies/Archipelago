@@ -3688,14 +3688,17 @@ def _compute_tech_tier_signatures_rank(
 # the prior event's cumulative kit (flyby -> orbit -> landing -> return ->
 # sample-return — the validated PASS-2 hierarchy in
 # scratchpad/analyze_prior_path.py).  Events that share a mission_type with a
-# canonical step (EVA in Orbit / Crewed Landing / Flag Plant / SOI Leave) are
-# slotted alongside their nearest canonical event so every location's mission
-# key still receives a tree-walk signature.  Lower value = walked earlier.
+# canonical step (EVA in Orbit / Crewed Landing / Flag Plant / SOI Leave /
+# Unmanned Flyby / Orbital Probe) are slotted alongside their nearest canonical
+# event so every location's mission key still receives a tree-walk signature.
+# Lower value = walked earlier.
 _GRAPH_WALK_EVENT_ORDER: dict[str, int] = {
     EventName.FLYBY.value:          0,
     EventName.SOI_LEAVE.value:      0,
+    EventName.UNMANNED_FLYBY.value: 0,
     EventName.ORBIT.value:          1,
     EventName.EVA_IN_ORBIT.value:   1,
+    EventName.ORBITAL_PROBE.value:  1,
     EventName.LANDING.value:        2,
     EventName.CREWED_LANDING.value: 2,
     EventName.FLAG_PLANT.value:     2,

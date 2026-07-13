@@ -10,17 +10,18 @@ Four location sources (total ~524 max, filtered by difficulty):
      Earned by performing science experiments at KSC buildings/grounds.
      Requires EVA (capsule) or rover (probe + wheels + power + instrument).
 
-  3. Mission Event Locations  (256 total)
-     11 home-body-specific + 1 body-agnostic (Splashdown) + 244 per-body
-     event-scaled checks.
+  3. Mission Event Locations  (288 total)
+     11 home-body-specific + 1 body-agnostic (Splashdown) + 276 per-body
+     event-scaled checks.  (Universe is home-agnostic; a seed emits fewer —
+     Unmanned Flyby is dropped for its own home body.)
      Kerbol excluded (root body — can't escape/flyby, orbit infeasible).
      Eve Return/Sample Return exist but require all progression parts.
      Scale is by event difficulty, not body distance:
-       Flyby/SOI Leave/Orbit/EVA in Orbit = 1 slot each,
+       Flyby/SOI Leave/Unmanned Flyby/Orbit/EVA in Orbit/Orbital Probe = 1 slot each,
        Landing/Crewed Landing/Flag Plant = 2 slots each,
        Return/Sample Return = 3 slots each.
-     Per landable body: 4×1 + 3×2 + 2×3 = 16 locations.
-     Per non-landable body (Jool): 4×1 = 4 locations.
+     Per landable body: 6×1 + 3×2 + 2×3 = 18 locations.
+     Per non-landable body (Jool): 6×1 = 6 locations.
      Kerbol excluded entirely (root body).
 
   4. Tech Tree Locations  (124–248 by difficulty)
@@ -135,8 +136,10 @@ class EventName(StrEnum):
     """Canonical event names — use these instead of string literals."""
     FLYBY = "Flyby"
     SOI_LEAVE = "SOI Leave"
+    UNMANNED_FLYBY = "Unmanned Flyby"
     ORBIT = "Orbit"
     EVA_IN_ORBIT = "EVA in Orbit"
+    ORBITAL_PROBE = "Orbital Probe"
     LANDING = "Landing"
     CREWED_LANDING = "Crewed Landing"
     FLAG_PLANT = "Flag Plant"
@@ -162,12 +165,21 @@ class EventDef:
     # their mission_type, but EVA-in-orbit shares the plain ORBIT type and so
     # needs this explicit flag.  Default False.
     requires_eva: bool = False
+    # Whether this event is NOT emitted for the seed's HOME body.  A *home*
+    # flyby is the weird "returning from interplanetary and passing home"
+    # special case; the probe-only UNMANNED_FLYBY variant skips it (home orbit
+    # is fine — that's a first-satellite check).  Applied event-side in the
+    # LocationBuilder emission filter because the ``unachievable`` set is keyed
+    # by (body, mission_type) and can't single out one event of a shared type.
+    home_excluded: bool = False
 
 ALL_EVENTS: tuple[EventDef, ...] = (
     EventDef(EventName.ORBIT,          1, MissionType.ORBIT,         None,  False),
     EventDef(EventName.EVA_IN_ORBIT,   1, MissionType.ORBIT,         True,  False, requires_eva=True),
+    EventDef(EventName.ORBITAL_PROBE,  1, MissionType.ORBIT,         False, False),
     EventDef(EventName.FLYBY,          1, MissionType.ESCAPE,        None,  False),
     EventDef(EventName.SOI_LEAVE,      1, MissionType.ESCAPE,        None,  False),
+    EventDef(EventName.UNMANNED_FLYBY, 1, MissionType.ESCAPE,        False, False, home_excluded=True),
     EventDef(EventName.LANDING,        2, MissionType.LAND,          None,  True),
     EventDef(EventName.CREWED_LANDING, 2, MissionType.LAND,          True,  True),
     EventDef(EventName.FLAG_PLANT,     2, MissionType.FLAG_PLANT,    True,  True,  requires_eva=True),
@@ -446,9 +458,20 @@ class LocationBuilder:
         # invariant — a location exists iff its access rule is satisfiable;
         # contracts apply the same rule at generation (evaluate_contract).
         all_missions = self.all_mission_locations()
+
+        def _emitted(ml: "MissionLocation") -> bool:
+            """Whether this world emits ``ml``.  Dropped when its
+            (body, mission_type) is unachievable OR when it is a home-excluded
+            event on this seed's home body (e.g. Unmanned Flyby at home)."""
+            ed = EVENT_BY_NAME[ml.event]
+            if (ml.body, ed.mission_type) in unachievable:
+                return False
+            if ed.home_excluded and ml.body == self.home:
+                return False
+            return True
+
         self.mission_locations: tuple[MissionLocation, ...] = tuple(
-            ml for ml in all_missions
-            if (ml.body, EVENT_BY_NAME[ml.event].mission_type) not in unachievable
+            ml for ml in all_missions if _emitted(ml)
         )
         self.mission_location_names: tuple[str, ...] = tuple(
             str(ml) for ml in self.mission_locations
@@ -462,8 +485,7 @@ class LocationBuilder:
         # The dropped set (the world's ``model_infeasible_locations``): the
         # unreachable names this world deliberately does not emit.
         self.excluded_mission_names: frozenset[str] = frozenset(
-            str(ml) for ml in all_missions
-            if (ml.body, EVENT_BY_NAME[ml.event].mission_type) in unachievable
+            str(ml) for ml in all_missions if not _emitted(ml)
         )
 
     @staticmethod
@@ -524,9 +546,9 @@ class LocationBuilder:
                 for event in get_body_events(body)
                 for slot in range(1, EVENT_BY_NAME[event].scale + 1)
             ]
-            # 15 landable × 16 + 1 non-landable (Jool) × 4 = 244 (Kerbol excluded)
-            assert len(locs) == 244, (
-                f"Expected 244 per-body mission locations, got {len(locs)}"
+            # 15 landable × 18 + 1 non-landable (Jool) × 6 = 276 (Kerbol excluded)
+            assert len(locs) == 276, (
+                f"Expected 276 per-body mission locations, got {len(locs)}"
             )
             cls._all_missions = tuple(locs)
         return cls._all_missions
@@ -568,7 +590,7 @@ class LocationBuilder:
 _KERBIN_HOME_LOCATIONS: tuple[HomeLocationDef, ...] = LocationBuilder._build_for(BodyName.KERBIN)
 
 # ---------------------------------------------------------------------------
-# Per-body mission location names (217 total, generated from body data)
+# Per-body mission location names (276-location universe, generated from body data)
 # ---------------------------------------------------------------------------
 
 def get_body_events(body) -> tuple[EventName, ...]:
