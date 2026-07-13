@@ -7,7 +7,7 @@ from BaseClasses import CollectionState, Item, MultiWorld, Tutorial
 from Options import OptionError
 from worlds.AutoWorld import LogicMixin, WebWorld, World
 
-from . import contracts, items, locations, regions, rules
+from . import body_visibility, contracts, items, locations, regions, rules
 from .data import lifter_chains
 from .parts import part_manager_for
 from .ksc_sites import ksc_site_slot_data
@@ -296,6 +296,17 @@ class KSP1World(World):
     # vs goal-achievement contracts; both are ContractSpec. Set in generate_early.
     contract_specs: list
     goal_contract_specs: list
+    # Hidden-body visibility (set in generate_early). ``body_visibility_mode`` is
+    # the RESOLVED concrete option value (auto already collapsed to
+    # home_only/home_system). ``hidden_bodies`` is every body hidden at start;
+    # ``gated_hidden_bodies`` is the subset that gets a Discover gate + item
+    # (hidden bodies that own — or parent a hidden owner of — a location). All
+    # empty when the feature is off (all_visible).
+    body_visibility_mode: int
+    hidden_bodies: frozenset
+    gated_hidden_bodies: list
+    tech_gate_planet_order: list
+    tech_gate_reqs_by_tier: dict
     # Goal-mode (count / progressive_unlock) state. Resolved in generate_early.
     # ``contracts_required`` is X (completed non-goal contracts needed for the
     # goal). ``contract_threshold_defs`` is the list of
@@ -538,6 +549,42 @@ class KSP1World(World):
 
         # Goal contract mode: validate + resolve X and the threshold locations.
         self._resolve_goal_contract_mode()
+
+        # Hidden-body visibility: resolve the mode (auto -> home_only/home_system
+        # by goal reach) and derive which bodies start hidden and which of those
+        # need a Discover gate + item. Consumed by create_regions (entrance
+        # gates + tech-tier discovery gate), create_items (pool) and
+        # fill_slot_data. all_visible / feature-off yields empty sets, so
+        # everything downstream is a no-op.
+        self.body_visibility_mode = body_visibility.resolve_visibility_mode(
+            self.options.body_visibility_mode.value, self.goal_spec,
+            self.mission_builder.home)
+        self.hidden_bodies = body_visibility.hidden_bodies(
+            self.body_visibility_mode, self.mission_builder.home)
+        self.gated_hidden_bodies = body_visibility.gated_hidden_bodies(
+            self.hidden_bodies, regions.location_owning_bodies(self))
+        # Tech tiers that visible-body science alone can't fund → each gated on
+        # discovering a specific random subset of hidden planets (regions.py), so
+        # the tree's top requires exploring enough of the system. The chosen
+        # planets differ per seed (variance); the rest float free as bonuses.
+        # ``tech_gate_planet_order`` is the per-seed permutation, ``discover_tier_
+        # reqs`` the required prefix length per tier. A derived RNG keeps the
+        # shuffle off the main fill stream; guarded so a feature-off world draws
+        # nothing (byte-identical). UT regen reuses the order from slot_data.
+        ut_order = getattr(self, "_ut_tech_gate_planet_order", None)
+        if ut_order is not None:
+            self.tech_gate_planet_order = [BodyName(b) for b in ut_order]
+        elif self.gated_hidden_bodies:
+            self.tech_gate_planet_order = body_visibility.hidden_planets(
+                frozenset(self.gated_hidden_bodies))
+            random.Random(self.random.getrandbits(64)).shuffle(
+                self.tech_gate_planet_order)
+        else:
+            self.tech_gate_planet_order = []
+        self.tech_gate_reqs_by_tier = body_visibility.tech_gate_reqs_by_tier(
+            self.mission_builder.home,
+            rules.effective_science_safety(self.options, self.options.difficulty.value),
+            self.hidden_bodies, self.tech_gate_planet_order)
 
         if self.options.exclude_late_tech_tree:
             late_tier_locs: set[str] = {

@@ -622,6 +622,51 @@ class HomeContractFloor(Range):
     default = 5
 
 
+class BodyVisibilityMode(Choice):
+    """
+    Which celestial bodies start HIDDEN, revealed only as you receive
+    "Discover <Body>" items (ResearchBodies-style).
+
+    auto         -- (default) pick a sane mode from the goal: a goal confined to
+                    your home system hides EVEN the home system (home_only, so
+                    you discover your own neighbourhood progressively); any wider
+                    goal hides everything OUTSIDE the home system (home_system).
+    all_visible  -- feature off: every body visible from the start, exactly as
+                    before. No Discover items are added.
+    home_system  -- your home body and the rest of its local system are visible;
+                    every other body is hidden until discovered.
+    home_only    -- only your home body is visible; everything else — including
+                    the rest of your home system — is hidden until discovered.
+
+    A hidden body's missions/contracts require its Discover item (logic-gated in
+    both AllowUndiscoveredBodies settings). Parent planets are discovered before
+    their moons. Your home body and the Sun are never hidden.
+    """
+    display_name = "Body Visibility Mode"
+    option_auto = 0
+    option_all_visible = 1
+    option_home_system = 2
+    option_home_only = 3
+    default = option_auto
+
+
+class AllowUndiscoveredBodies(Toggle):
+    """
+    Whether an undiscovered body's sphere still physically exists in-game.
+
+    On (default): a hidden body renders but is uninteractable — no map label,
+    not clickable, not Tab-selectable. You can still fly a probe there out of
+    logic; arriving reveals it locally. Off: a hidden body is fully invisible
+    (its sphere is removed); flying into its SOI destroys the craft, so you can
+    only reach what you have discovered.
+
+    Only meaningful when Body Visibility Mode is not all_visible; the generation
+    logic requires the Discover item either way.
+    """
+    display_name = "Allow Undiscovered Bodies"
+    default = 1
+
+
 @dataclass
 class KSP1Options(PerGameCommonOptions):
     goal: Goal
@@ -646,6 +691,8 @@ class KSP1Options(PerGameCommonOptions):
     allow_missions_harder_than_goal: AllowMissionsHarderThanGoal
     allow_eve_on_expert: AllowEveOnExpert
     home_contract_floor: HomeContractFloor
+    body_visibility_mode: BodyVisibilityMode
+    allow_undiscovered_bodies: AllowUndiscoveredBodies
     flag_bodies: FlagBodies
     return_bodies: ReturnBodies
     sample_return_bodies: SampleReturnBodies

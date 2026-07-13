@@ -11,8 +11,9 @@ Region layout:
     locations.  Planets connect from Menu; each moon connects from its planet
     region, so a moon is reachable only if its planet is.  Every per-body
     location (mission events, home specials, contract completions) lives in its
-    body's region.  Entrance rules are open today; the hidden-body ``Discover``
-    gate is layered onto these same entrances in a later phase.
+    body's region.  A **hidden** body's entrance additionally requires its
+    ``Discover`` item; the home body always connects straight from Menu (it is
+    the start, never gated behind a possibly-hidden parent).
 """
 from __future__ import annotations
 
@@ -21,7 +22,7 @@ from typing import TYPE_CHECKING, Callable
 from BaseClasses import CollectionState, Region
 
 from .bodies import ALL_BODIES, BODY_BY_NAME, BodyName
-from .items import PROGRESSIVE_RD_NAME
+from .items import PROGRESSIVE_RD_NAME, discover_item_name
 from .tech_tree import NODE_BY_ID, TECH_NODES, TechNode, TIER_TO_BAND
 
 if TYPE_CHECKING:
@@ -49,24 +50,47 @@ def create_all_regions(world: KSP1World) -> None:
     menu = Region("Menu", player, world.multiworld)
     world.multiworld.regions.append(menu)
 
+    # Tiers whose science the visible bodies can't fund require the player to
+    # have discovered a specific random subset of hidden PLANETS: their entrances
+    # AND-in ``has_all(order[:K])``, where ``order`` is the per-seed planet
+    # permutation and ``K`` the tier's required prefix length.  This is how AP
+    # learns a valid fill needs those bodies (the top of the tree is unreachable
+    # until they are found); the un-required planets and all moons float free.
+    # Empty when the feature is off, so the tech entrances are byte-identical.
+    tier_reqs: dict[int, int] = getattr(world, "tech_gate_reqs_by_tier", {})
+    order_items = [
+        discover_item_name(b) for b in getattr(world, "tech_gate_planet_order", ())
+    ]
+
+    # Every gated Discover item gates a region entrance (its body's missions /
+    # contracts, and — for the planet subset — the top tech tiers).  Record them
+    # as logic-required so the sphere-ladder demote keeps them PROGRESSION; a
+    # gate item demoted to USEFUL is skipped by AP's advancement sweep, making
+    # the gated locations unreachable.  (``_assert_gate_items_progression`` is
+    # the backstop.)
+    world.logic_required_items.update(
+        discover_item_name(b) for b in getattr(world, "gated_hidden_bodies", ())
+    )
+
     for node in TECH_NODES:
         region = Region(node.display_name, player, world.multiworld)
         world.multiworld.regions.append(region)
 
-        rule = _make_node_entrance_rule(node, player, safety, home, _can_afford_tier)
+        k = tier_reqs.get(node.tier, 0)
+        rule = _make_node_entrance_rule(
+            node, player, safety, home, _can_afford_tier, tuple(order_items[:k]))
         menu.connect(region, rule=rule)
 
     _create_body_regions(world, menu)
 
 
-def bodies_needing_regions(world: KSP1World) -> list[BodyName]:
-    """Bodies that own — or transitively parent — at least one location.
+def location_owning_bodies(world: KSP1World) -> frozenset[BodyName]:
+    """Bodies that own at least one emitted location in this world.
 
-    A body owns locations if it has emitted mission events, home-body specials,
-    or per-body contract completions.  A moon's planet is included even when the
-    planet owns nothing itself, so the moon region has a parent to hang off.
-    Returned in ``ALL_BODIES`` order (parents precede their moons) for stable,
-    hash-seed-independent region ordering.
+    A body owns a location if it has emitted mission events, home-body specials,
+    or per-body contract completions.  Shared by ``bodies_needing_regions``
+    (region creation) and the hidden-body pruning in ``generate_early`` so both
+    agree on which bodies actually carry locations.
     """
     lb = world.location_builder
     owning: set[BodyName] = set()
@@ -77,9 +101,18 @@ def bodies_needing_regions(world: KSP1World) -> list[BodyName]:
             owning.add(hloc.body)
     for spec in (*world.contract_specs, *world.goal_contract_specs):
         owning.add(spec.body)
+    return frozenset(owning)
 
+
+def bodies_needing_regions(world: KSP1World) -> list[BodyName]:
+    """Bodies that own — or transitively parent — at least one location.
+
+    A moon's planet is included even when the planet owns nothing itself, so the
+    moon region has a parent to hang off.  Returned in ``ALL_BODIES`` order
+    (parents precede their moons) for stable, hash-seed-independent ordering.
+    """
     needed: set[BodyName] = set()
-    for body in owning:
+    for body in location_owning_bodies(world):
         cur: BodyName | None = body
         while cur is not None and cur not in needed:
             needed.add(cur)
@@ -92,12 +125,20 @@ def _create_body_regions(world: KSP1World, menu: Region) -> None:
     """Create and connect the per-body region hierarchy.
 
     Every region is created before any connection is made, so a moon's planet
-    region always exists when we connect the moon to it.  Planets connect from
-    Menu; moons connect from their planet via a ``can_reach_region`` rule (the
-    idiom the tech-node parents already use).
+    region always exists when we connect the moon to it.  Connection rules:
+
+      * The **home** body connects straight from Menu, ungated — it is the start
+        and must stay reachable even when its parent planet is hidden.
+      * A **moon** connects from its planet region (so reaching it requires
+        reaching the planet — the structural parent→child gate); a **planet**
+        connects from Menu.
+      * A **hidden** body additionally requires its ``Discover`` item on the
+        entrance.  Visible bodies stay ungated (reachable exactly as before).
     """
     player = world.player
     mw = world.multiworld
+    home = world.mission_builder.home
+    gated = frozenset(getattr(world, "gated_hidden_bodies", ()))
 
     bodies = bodies_needing_regions(world)
     regions_by_body: dict[BodyName, Region] = {}
@@ -108,19 +149,26 @@ def _create_body_regions(world: KSP1World, menu: Region) -> None:
 
     for body in bodies:
         region = regions_by_body[body]
+        rule = _discover_gate(body, player) if body in gated else None
         parent = BODY_BY_NAME[body].parent
-        if parent is not None and parent in regions_by_body:
-            planet = regions_by_body[parent]
-            planet.connect(region, rule=_make_body_entrance_rule(planet.name, player))
-        else:
+        if body == home:
             menu.connect(region)
+        elif parent is not None and parent in regions_by_body:
+            regions_by_body[parent].connect(region, rule=rule)
+        else:
+            menu.connect(region, rule=rule)
 
 
-def _make_body_entrance_rule(
-    parent_region_name: str, player: int
+def _discover_gate(
+    body: BodyName, player: int
 ) -> Callable[[CollectionState], bool]:
-    """Entrance rule for a moon region: reachable once its planet region is."""
-    return lambda state: state.can_reach_region(parent_region_name, player)
+    """Entrance rule for a hidden body: reachable once its Discover item is held.
+
+    Parent→child gating is structural (a moon connects from its planet region),
+    so a hidden moon transitively requires its parent's Discover too.
+    """
+    item_name = discover_item_name(body)
+    return lambda state: state.has(item_name, player)
 
 
 def _make_node_entrance_rule(
@@ -129,10 +177,15 @@ def _make_node_entrance_rule(
     safety: float,
     home: BodyName,
     can_afford_tier: Callable[[CollectionState, int, int, float, BodyName], bool],
+    gate_items: tuple[str, ...] = (),
 ) -> Callable[[CollectionState], bool]:
     """Build an entrance rule for a tech node region.
 
     Checks R&D band, science budget, and parent node reachability (AND/OR).
+    On a science-insufficient hidden-bodies tier, ``gate_items`` are the specific
+    hidden-planet Discover items required at that tier (the per-seed random
+    prefix) — the tree's top is unreachable until they are discovered.  Empty by
+    default, so ordinary tiers are unaffected.
     """
     band = TIER_TO_BAND[node.tier]
     real_parents = [p for p in node.parents if p != "start"]
@@ -142,6 +195,8 @@ def _make_node_entrance_rule(
     any_to_unlock = node.any_to_unlock
 
     def rule(state: CollectionState) -> bool:
+        if gate_items and not state.has_all(gate_items, player):
+            return False
         if band > 0 and not state.has(PROGRESSIVE_RD_NAME, player, band):
             return False
         if not can_afford_tier(state, player, tier, safety, home):

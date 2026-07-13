@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING
 
 from BaseClasses import Item, ItemClassification
 
+from .bodies import ALL_BODIES, BodyName
 from .parts import (
     DEFAULT_PART_MANAGER, PART_REGISTRY, CapabilityFlag,
     Engine, FuelTank, SolidBooster, HeatShield, Parachute,
@@ -262,6 +263,39 @@ _CONTRACT_ITEMS: dict[str, tuple[int, ItemClassification]] = {
         sorted(all_possible_contract_specs(), key=lambda s: s.contract_id))
 }
 
+_DISCOVER_ITEM_PREFIX = "Discover "
+
+
+def discover_item_name(body: BodyName) -> str:
+    """Canonical AP item name that reveals a hidden body.
+
+    Single source of truth for the "Discover X" string — items.py, rules.py,
+    regions.py and world.py all import this rather than forming it inline.
+    """
+    return f"{_DISCOVER_ITEM_PREFIX}{body}"
+
+
+# Discover items: offsets 200-299 (a free block — parts 1000-1999, filler
+# 100-199, progressive 50-99, victory 0, contracts 10_000+). One stable id per
+# hideable body (every body except the Sun, which is never hidden) so the data
+# package stays fixed regardless of which bodies a given seed hides. Always
+# progression: a Discover item is a logic gate in every visibility mode. Body
+# order (ALL_BODIES) is load-bearing for id stability — do not reorder.
+_DISCOVER_ITEM_BASE_OFFSET = 200
+HIDEABLE_BODIES: tuple[BodyName, ...] = tuple(
+    b.name for b in ALL_BODIES if b.name != BodyName.KERBOL
+)
+_DISCOVER_ITEMS: dict[str, tuple[int, ItemClassification]] = {
+    discover_item_name(body): (_DISCOVER_ITEM_BASE_OFFSET + i,
+                               ItemClassification.progression)
+    for i, body in enumerate(HIDEABLE_BODIES)
+}
+#: Reverse map used by slot_data (item name -> body string) and consumers that
+#: resolve an item back to its body.
+DISCOVER_ITEM_BY_BODY: dict[BodyName, str] = {
+    body: discover_item_name(body) for body in HIDEABLE_BODIES
+}
+
 ITEM_NAME_TO_ID: dict[str, int] = {
     name: KSP1_BASE_ID + offset
     for name, (offset, _) in {
@@ -270,6 +304,7 @@ ITEM_NAME_TO_ID: dict[str, int] = {
         **_VICTORY_ITEM,
         **_PROGRESSIVE_ITEMS,
         **_CONTRACT_ITEMS,
+        **_DISCOVER_ITEMS,
     }.items()
 }
 
@@ -309,6 +344,8 @@ def create_item(world: KSP1World, name: str) -> KSP1Item:
         offset, classification = _PROGRESSIVE_ITEMS[name]
     elif name in _CONTRACT_ITEMS:
         offset, classification = _CONTRACT_ITEMS[name]
+    elif name in _DISCOVER_ITEMS:
+        offset, classification = _DISCOVER_ITEMS[name]
     else:
         raise KeyError(f"Unknown KSP1 item: {name!r}")
     item = KSP1Item(name, classification, KSP1_BASE_ID + offset, world.player)
@@ -436,6 +473,14 @@ def create_all_items(world: KSP1World) -> None:
         elif mode == GoalContractMode.option_findable:
             pool.append(create_item(world, spec.item_name))
         # count / progressive_unlock: locked on a threshold location instead.
+
+    # Discover items — one per hidden body that gates a location (computed in
+    # generate_early as ``world.gated_hidden_bodies``; empty/absent when the
+    # visibility feature is off, so this is a no-op then). Each is placed freely
+    # like a contract-award item; the body's region gate keeps fill from
+    # stranding it behind the body it unlocks.
+    for body in getattr(world, "gated_hidden_bodies", ()):
+        pool.append(create_item(world, discover_item_name(body)))
 
     # Pad the pool with filler items so item count == count of locations that
     # still need filling. create_regions() runs before create_items(), so all
