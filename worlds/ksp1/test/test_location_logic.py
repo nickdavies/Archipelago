@@ -38,7 +38,12 @@ from worlds.ksp1.test.base import KSP1TestBase as _SharedKSP1TestBase
 
 
 class KSP1TestBase(_SharedKSP1TestBase):
-    options = {"difficulty": 1}  # normal difficulty for determinism
+    # normal difficulty for determinism; all_visible so these per-body
+    # capability/rule-wiring tests aren't gated by the hidden-bodies Discover
+    # requirement (a separate concern, exercised by its own tests). Without this
+    # the default (auto) hides interplanetary bodies and a mocked full flyby
+    # profile alone can't reach e.g. Duna Flyby 1.
+    options = {"difficulty": 1, "body_visibility_mode": "all_visible"}
 
 
 # ---------------------------------------------------------------------------

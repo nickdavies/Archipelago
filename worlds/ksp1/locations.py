@@ -706,13 +706,21 @@ def event_locations(body_name: BodyName, event: EventName) -> list[MissionLocati
 
 def create_all_locations(world: KSP1World) -> None:
     """
-    Create and attach all locations to the Menu region.
+    Create and attach all locations to their regions.
+
+    Non-body locations (starting inventory, KSC biomes, body-agnostic
+    Splashdown) go into Menu; per-body locations (home specials, mission
+    events, contract completions) into their body region; tech slots into
+    their node region.
 
     Starting inventory locations: only the first N (by difficulty) are created.
     KSC biome locations: always all 12.
     Tech tree slots per node: 2–4 by difficulty.
     All mission locations are always created.
     """
+    from collections import defaultdict
+    from .regions import body_region_name
+
     difficulty = world.options.difficulty.value
     num_starting = effective_starting_inv_count(world.options, difficulty)
     num_tech_slots = effective_tech_slots_per_node(world.options, difficulty)
@@ -741,19 +749,34 @@ def create_all_locations(world: KSP1World) -> None:
     }
     menu.add_locations(biome_locs, KSP1Location)
 
+    # Per-body locations (home-body specials, mission events, contract
+    # completions) go into their body's region rather than Menu, so the
+    # hidden-body Discover gate can sit on one entrance per body.  Grouped by
+    # target region and added in one pass.  Body-agnostic entries (Splashdown,
+    # body=None) stay in Menu.
+    by_region: dict[str, dict[str, int]] = defaultdict(dict)
+
     # Home-body specials (first launch / first staging / altitude milestones /
     # splashdown / first crash / first landing) — only for the home body the
     # world is actually pinned to; the other 14 sets exist only in the data
     # package so AP can render them on the universal tracker.
-    home_locs = {name: LOCATION_NAME_TO_ID[name] for name in world.location_builder.names}
-    menu.add_locations(home_locs, KSP1Location)
+    for hloc in world.location_builder.locations:
+        target = body_region_name(hloc.body) if hloc.body is not None else "Menu"
+        by_region[target][hloc.name] = LOCATION_NAME_TO_ID[hloc.name]
 
     # Per-body mission events (the world's emitted subset, owned by the builder)
-    mission_locs = {
-        name: LOCATION_NAME_TO_ID[name]
-        for name in world.location_builder.mission_location_names
-    }
-    menu.add_locations(mission_locs, KSP1Location)
+    for ml in world.location_builder.mission_locations:
+        by_region[body_region_name(ml.body)][str(ml)] = LOCATION_NAME_TO_ID[str(ml)]
+
+    # Contract completion locations (only the contracts this seed generated).
+    # Non-goal contracts register ``world.locations_per_contract`` slot locations
+    # (base 2 + Contract Repeats); goal contracts one.
+    for spec in (*world.contract_specs, *world.goal_contract_specs):
+        for name in spec.location_names(world.locations_per_contract):
+            by_region[body_region_name(spec.body)][name] = LOCATION_NAME_TO_ID[name]
+
+    for region_name, region_locs in by_region.items():
+        world.get_region(region_name).add_locations(region_locs, KSP1Location)
 
     # Tech tree node slots — each node's slots go into its own region.
     for node in TECH_NODES:
@@ -764,23 +787,13 @@ def create_all_locations(world: KSP1World) -> None:
             node_locs[name] = LOCATION_NAME_TO_ID[name]
         region.add_locations(node_locs, KSP1Location)
 
-    # Contract completion locations (only the contracts this seed generated).
-    # Non-goal contracts register ``world.locations_per_contract`` slot locations
-    # (base 2 + Contract Repeats); goal contracts one.
-    contract_locs = {
-        name: LOCATION_NAME_TO_ID[name]
-        for spec in (*world.contract_specs, *world.goal_contract_specs)
-        for name in spec.location_names(world.locations_per_contract)
-    }
-    menu.add_locations(contract_locs, KSP1Location)
-
     # Attach each capability-gated location's physics descriptor to the created
     # object so the sphere ladder reads structured meaning off ``loc.descriptor``
     # instead of decoding the display name (bug 086).  Built from the structured
     # producers in hand; the wiring dict is transient (discarded here).  Tech /
     # KSC / starting / body-agnostic Splashdown locations stay ``descriptor=None``
-    # (not physics-gated).  Tech-tree locations live in per-node regions, never
-    # in ``menu``, so they are untouched here.
+    # (not physics-gated).  Physics-gated locations now live in per-body regions,
+    # so assignment sweeps every location this world owns, not just ``menu``.
     descriptors: dict[str, LocationDescriptor] = {
         str(ml): LocationDescriptor.from_mission(ml, EVENT_BY_NAME[ml.event])
         for ml in world.location_builder.mission_locations
@@ -793,5 +806,5 @@ def create_all_locations(world: KSP1World) -> None:
         spec_desc = LocationDescriptor.from_spec(spec)
         for name in spec.location_names(world.locations_per_contract):
             descriptors[name] = spec_desc
-    for loc in menu.locations:
+    for loc in world.multiworld.get_locations(world.player):
         loc.descriptor = descriptors.get(loc.name)

@@ -7,7 +7,7 @@ from BaseClasses import CollectionState, Item, MultiWorld, Tutorial
 from Options import OptionError
 from worlds.AutoWorld import LogicMixin, WebWorld, World
 
-from . import contracts, items, locations, regions, rules
+from . import body_visibility, contracts, items, locations, regions, rules
 from .data import lifter_chains
 from .parts import part_manager_for
 from .ksc_sites import ksc_site_slot_data
@@ -61,13 +61,24 @@ _NO_STRICT_LADDER_FALLBACK = os.environ.get("KSP_NO_STRICT_LADDER_FALLBACK") == 
 
 
 class KSP1State(LogicMixin):
-    """Inject per-player stale flag and cached result onto CollectionState."""
+    """Inject per-player stale flag + cached result onto CollectionState.
+
+    Two independent state-local caches, both invalidated by ``collect``/``remove``:
+    the RocketCapability, and the cheap accessible-science sum (which every one of
+    the 62 tech-node region entrances would otherwise recompute from scratch for
+    the same state — the science sum is identical across all tiers).
+    """
     ksp1_cap_stale: dict[int, bool]
     ksp1_cap_result: dict[int, RocketCapability]
+    ksp1_sci_stale: dict[int, bool]
+    ksp1_sci_result: dict[int, float]
 
     def init_mixin(self, multiworld: MultiWorld) -> None:
-        self.ksp1_cap_stale = {p: True for p in multiworld.get_game_players("Kerbal Space Program 1")}
+        players = multiworld.get_game_players("Kerbal Space Program 1")
+        self.ksp1_cap_stale = {p: True for p in players}
         self.ksp1_cap_result = {}
+        self.ksp1_sci_stale = {p: True for p in players}
+        self.ksp1_sci_result = {}
 
 
 class KSP1WebWorld(WebWorld):
@@ -296,6 +307,15 @@ class KSP1World(World):
     # vs goal-achievement contracts; both are ContractSpec. Set in generate_early.
     contract_specs: list
     goal_contract_specs: list
+    # Hidden-body visibility (set in generate_early). ``body_visibility_mode`` is
+    # the RESOLVED concrete option value (auto already collapsed to
+    # home_only/home_system). ``hidden_bodies`` is every body hidden at start;
+    # ``gated_hidden_bodies`` is the subset that gets a Discover gate + item
+    # (hidden bodies that own — or parent a hidden owner of — a location). All
+    # empty when the feature is off (all_visible).
+    body_visibility_mode: int
+    hidden_bodies: frozenset
+    gated_hidden_bodies: list
     # Goal-mode (count / progressive_unlock) state. Resolved in generate_early.
     # ``contracts_required`` is X (completed non-goal contracts needed for the
     # goal). ``contract_threshold_defs`` is the list of
@@ -538,6 +558,22 @@ class KSP1World(World):
 
         # Goal contract mode: validate + resolve X and the threshold locations.
         self._resolve_goal_contract_mode()
+
+        # Hidden-body visibility: resolve the mode (auto -> home_only/home_system
+        # by goal reach) and derive which bodies start hidden and which of those
+        # need a Discover gate + item. Consumed by create_regions (entrance
+        # gates), create_items (pool) and fill_slot_data. The tech tree needs no
+        # explicit gate — a hidden body's science is gated on its Discover item in
+        # the science rule (rules._cheap_bankable_science), so the tiers that need
+        # it require discovery through the ordinary affordability check.
+        # all_visible / feature-off yields empty sets, so downstream is a no-op.
+        self.body_visibility_mode = body_visibility.resolve_visibility_mode(
+            self.options.body_visibility_mode.value, self.goal_spec,
+            self.mission_builder.home)
+        self.hidden_bodies = body_visibility.hidden_bodies(
+            self.body_visibility_mode, self.mission_builder.home)
+        self.gated_hidden_bodies = body_visibility.gated_hidden_bodies(
+            self.hidden_bodies, regions.location_owning_bodies(self))
 
         if self.options.exclude_late_tech_tree:
             late_tier_locs: set[str] = {
@@ -941,6 +977,24 @@ class KSP1World(World):
         # covers this home/pack/difficulty).  Carried only so UT regen picks
         # the same chain and reproduces the fill; the client ignores it.
         d["lifter_profile_id"] = self.lifter_profile_id
+        # Hidden-body visibility.  The resolved mode (never "auto") is always
+        # carried so UT regen recomputes the identical hidden set instead of
+        # re-resolving auto.  The client-facing keys are emitted only when the
+        # feature actually hides something: ``body_item_map`` ({Discover item ->
+        # body string}) drives the client's hide/reveal without string parsing;
+        # ``allow_undiscovered_bodies`` and ``deep_hide`` are client-only
+        # depth/behaviour flags (no server logic effect).
+        d["body_visibility_mode"] = self.body_visibility_mode
+        if self.gated_hidden_bodies:
+            d["body_item_map"] = {
+                items.discover_item_name(b): str(b)
+                for b in self.gated_hidden_bodies
+            }
+            d["allow_undiscovered_bodies"] = bool(
+                self.options.allow_undiscovered_bodies)
+            # Client depth flag: True => deep hide (sphere physically vanishes).
+            # Hard-coded on for now; purely client-side (no bearing on logic).
+            d["deep_hide"] = True
         return d
 
     # ------------------------------------------------------------------
@@ -1033,6 +1087,17 @@ class KSP1World(World):
         # seeds -> generate_early re-picks from the seed RNG.
         if "lifter_profile_id" in slot_data:
             self._ut_lifter_profile_id = slot_data["lifter_profile_id"]
+
+        # Restore hidden-body visibility: the resolved mode, so generate_early
+        # recomputes the identical hidden set rather than re-resolving auto.
+        # Absent on pre-feature seeds -> all_visible, so an old seed never
+        # spuriously hides bodies.
+        from .options import BodyVisibilityMode as _BVM
+        self.options.body_visibility_mode.value = slot_data.get(
+            "body_visibility_mode", _BVM.option_all_visible)
+        if "allow_undiscovered_bodies" in slot_data:
+            self.options.allow_undiscovered_bodies.value = int(
+                slot_data["allow_undiscovered_bodies"])
 
         # A custom goal isn't a single enum value — its body lists ARE the goal,
         # and resolve_goal_spec rebuilds the spec from those option values during
@@ -1153,10 +1218,12 @@ class KSP1World(World):
         change = super().collect(state, item)
         if change:
             state.ksp1_cap_stale[self.player] = True
+            state.ksp1_sci_stale[self.player] = True
         return change
 
     def remove(self, state: CollectionState, item: Item) -> bool:
         change = super().remove(state, item)
         if change:
             state.ksp1_cap_stale[self.player] = True
+            state.ksp1_sci_stale[self.player] = True
         return change

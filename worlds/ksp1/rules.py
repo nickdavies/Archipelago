@@ -28,7 +28,7 @@ from .bodies import (
 )
 from .comms import DSN_POWER_MAX, dsn_required_relay_table
 from .capability import get_capability, cheap_flags, _compute_sounding_altitude
-from .items import PROGRESSIVE_RD_NAME, SCIENCE_PACK_NAMES
+from .items import PROGRESSIVE_RD_NAME, SCIENCE_PACK_NAMES, discover_item_name
 from .locations import (
     EVENT_BY_NAME,
     EventName,
@@ -168,7 +168,7 @@ def _make_goal_event_rule(
 # ---------------------------------------------------------------------------
 
 def bankable_science(cap, psi_tier: int, home: BodyName,
-                     access=None) -> float:
+                     access=None, skip_bodies: frozenset = frozenset()) -> float:
     """Per-body science contributions, gated on the player's ability to
     actually extract science from each body.
 
@@ -177,11 +177,18 @@ def bankable_science(cap, psi_tier: int, home: BodyName,
     meets the body's heliocentric requirement).  Transmit-only paths
     apply ``_TRANSMIT_ONLY_DISCOUNT``.
 
-    This is the canonical "what science can the player bank in this state"
-    function.  Both the tech-tree victory rule and the sphere-ladder
-    per-sphere tier-funding pass MUST use it — duplicating the loop with
-    a different gate produces a silent mismatch where the ladder thinks
-    the seed is solvable but the rule disagrees at fill time.
+    This is the CAPABILITY-based science sum.  It is DELIBERATELY blind to the
+    hidden-bodies Discover gate: its two callers are (1) the sphere-ladder
+    funding pass, which MUST stay Discover-blind — the fill rule
+    (_cheap_bankable_science) is the strict Discover-gated one, and it alone
+    gating is what keeps provisioning working (see A1 there); and (2) the
+    Universal-Tracker fallback, which passes ``skip_bodies`` to recover the gate.
+
+    DO NOT route the fill-time or post_fill-cross-check science through this
+    function — those use ``_cheap_bankable_science`` (via ``_accessible_science``),
+    which carries the nav (B1) and Discover (A1) gates.  Using the Discover-blind
+    version on the victory/tech path would silently over-credit an undiscovered
+    body's science and defeat the strict backstop.
 
     ``access`` optionally supplies per-body ORBIT/RETURN/CREWED_LANDING
     reachability as ``{body_name: {EventName: bool}}``.  When given, the
@@ -190,6 +197,12 @@ def bankable_science(cap, psi_tier: int, home: BodyName,
     access so it need not re-run the (expensive) per-body optimizer for
     bodies already proven reachable at an earlier sphere.  Instrument and
     relay flags still come from ``cap`` (cheap, flag-level).
+
+    ``skip_bodies`` credits 0 for those bodies — the Universal Tracker path
+    passes its undiscovered hidden bodies so the tracker's science matches the
+    generator's Discover gate (which capability-based access cannot see).  The
+    funding pass must NOT pass it (its Discover-blindness is what keeps
+    provisioning working — see _cheap_bankable_science / A1).
     """
     # Transmitting science needs a comms link, which the Tracking Station (DSN)
     # gates when buildings_in_logic is on.  Below max DSN the antenna needs a
@@ -199,6 +212,8 @@ def bankable_science(cap, psi_tier: int, home: BodyName,
                    if cap.dsn_power < DSN_POWER_MAX else relay_tier_table_for(home))
     total = 0.0
     for body in ALL_BODIES:
+        if body.name in skip_bodies:
+            continue
         if access is not None:
             acc = access[body.name]
             a_orbit = acc[EventName.ORBIT]
@@ -229,6 +244,21 @@ def bankable_science(cap, psi_tier: int, home: BodyName,
     return total
 
 
+def _discovered(
+    state: CollectionState, player: int, body: BodyName,
+    gated_hidden: frozenset,
+) -> bool:
+    """True iff a hidden body's full Discover chain is held — its own Discover
+    plus every hidden ancestor's (a moon's region hangs off its planet's, so the
+    parent must be discovered too)."""
+    cur: BodyName | None = body
+    while cur is not None:
+        if cur in gated_hidden and not state.has(discover_item_name(cur), player):
+            return False
+        cur = BODY_BY_NAME[cur].parent
+    return True
+
+
 def _cheap_bankable_science(
     state: CollectionState, player: int, world, home: BodyName,
 ) -> float:
@@ -238,8 +268,27 @@ def _cheap_bankable_science(
     (⟹ the kit really flies it) and consistent with the funding placement that
     derived the brackets, so the science gate stays on the cheap ladder oracle.
     Instrument/relay inputs come from the cheap pre-pass + ``state.count``.
+
+    State-cached (``ksp1_sci_*``, invalidated by collect/remove): the 62 tech-node
+    entrances all query the same state, and the sum is identical across tiers, so
+    the full 17-body sweep runs once per state instead of once per tier.
     """
+    if not state.ksp1_sci_stale[player]:
+        return state.ksp1_sci_result[player]
     reps_map = world._science_body_event_reps
+    # Per-(body, event) capability counted gate (nav maneuver nodes / conics,
+    # pad, DSN) — the bracket reps are PARTS ONLY and never carry it.  Without
+    # this an interplanetary body banks science from parts alone with zero
+    # Mission Control (no way to actually reach its orbit); requiring it matches
+    # the funding pass's cap.bodies[*].access[ORBIT] and the mission/contract
+    # cheap rules, so the two sides can't drift (bug 104).  Empty when
+    # buildings_in_logic is off (then this is a no-op).
+    counted_map = getattr(world, "_cheap_mission_counted", {})
+    # A hidden body's science needs its Discover item — and every hidden
+    # ancestor's, since a moon hangs off its planet's gated region (you can't
+    # bank science from a body you can't fly to).  Parts + nav aren't enough.
+    # Empty when the feature is off, so this is a no-op then.
+    gated_hidden = frozenset(getattr(world, "gated_hidden_bodies", ()))
     flags = cheap_flags(state, player)
     psi_tier = state.count("Progressive Science Instrument", player)
     # DSN-aware transmit gate (see bankable_science); max DSN -> plain table.
@@ -250,8 +299,17 @@ def _cheap_bankable_science(
         orbit = reps_map.get((body.name, EventName.ORBIT))
         if orbit is None or not state.has_all(orbit, player):
             continue
+        orbit_nav = counted_map.get((body.name, EventName.ORBIT.value), ())
+        if not all(state.has(kind, player, lvl) for kind, lvl in orbit_nav):
+            continue
+        if body.name in gated_hidden and not _discovered(state, player, body.name,
+                                                          gated_hidden):
+            continue
         ret = reps_map.get((body.name, EventName.RETURN))
-        can_recover = ret is not None and state.has_all(ret, player)
+        ret_nav = counted_map.get((body.name, EventName.RETURN.value), ())
+        can_recover = (ret is not None and state.has_all(ret, player)
+                       and all(state.has(kind, player, lvl)
+                               for kind, lvl in ret_nav))
         can_transmit = flags.relay_tier >= relay_table[body.name]
         if not (can_recover or can_transmit):
             continue
@@ -266,6 +324,8 @@ def _cheap_bankable_science(
         if not can_recover:
             contribution *= _TRANSMIT_ONLY_DISCOUNT
         total += contribution
+    state.ksp1_sci_result[player] = total
+    state.ksp1_sci_stale[player] = False
     return total
 
 
@@ -290,7 +350,14 @@ def _accessible_science(
         if getattr(world, "_ut_active", False):
             cap = get_capability(state, player)
             psi_tier = state.count("Progressive Science Instrument", player)
-            return bankable_science(cap, psi_tier, home) * safety
+            # Match the generator's Discover gate: capability-based access can't
+            # see it, so exclude any hidden body whose Discover chain isn't held.
+            gated_hidden = frozenset(getattr(world, "gated_hidden_bodies", ()))
+            undiscovered = frozenset(
+                b for b in getattr(world, "hidden_bodies", ())
+                if not _discovered(state, player, b, gated_hidden))
+            return bankable_science(
+                cap, psi_tier, home, skip_bodies=undiscovered) * safety
         return 0.0
     return _cheap_bankable_science(state, player, world, home) * safety
 
