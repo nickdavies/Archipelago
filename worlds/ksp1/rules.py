@@ -240,6 +240,14 @@ def _cheap_bankable_science(
     Instrument/relay inputs come from the cheap pre-pass + ``state.count``.
     """
     reps_map = world._science_body_event_reps
+    # Per-(body, event) capability counted gate (nav maneuver nodes / conics,
+    # pad, DSN) — the bracket reps are PARTS ONLY and never carry it.  Without
+    # this an interplanetary body banks science from parts alone with zero
+    # Mission Control (no way to actually reach its orbit); requiring it matches
+    # the funding pass's cap.bodies[*].access[ORBIT] and the mission/contract
+    # cheap rules, so the two sides can't drift (bug 104).  Empty when
+    # buildings_in_logic is off (then this is a no-op).
+    counted_map = getattr(world, "_cheap_mission_counted", {})
     flags = cheap_flags(state, player)
     psi_tier = state.count("Progressive Science Instrument", player)
     # DSN-aware transmit gate (see bankable_science); max DSN -> plain table.
@@ -250,8 +258,14 @@ def _cheap_bankable_science(
         orbit = reps_map.get((body.name, EventName.ORBIT))
         if orbit is None or not state.has_all(orbit, player):
             continue
+        orbit_nav = counted_map.get((body.name, EventName.ORBIT.value), ())
+        if not all(state.has(kind, player, lvl) for kind, lvl in orbit_nav):
+            continue
         ret = reps_map.get((body.name, EventName.RETURN))
-        can_recover = ret is not None and state.has_all(ret, player)
+        ret_nav = counted_map.get((body.name, EventName.RETURN.value), ())
+        can_recover = (ret is not None and state.has_all(ret, player)
+                       and all(state.has(kind, player, lvl)
+                               for kind, lvl in ret_nav))
         can_transmit = flags.relay_tier >= relay_table[body.name]
         if not (can_recover or can_transmit):
             continue
