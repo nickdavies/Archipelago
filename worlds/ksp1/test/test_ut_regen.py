@@ -251,6 +251,36 @@ class TestUTRegen(unittest.TestCase):
         self.assertEqual(len(world2.gated_hidden_bodies), 0)
         self.assertNotIn("body_item_map", sd)
 
+    def test_ut_science_gated_on_discovery(self):
+        """Under UT (no pre_fill -> bankable_science fallback), a hidden body's
+        science must stay gated on its Discover chain, matching the generator's
+        _cheap_bankable_science — else the tracker over-credits and shows tech
+        nodes reachable earlier than the generator actually placed them."""
+        from BaseClasses import CollectionState
+        from worlds.ksp1.rules import _accessible_science, effective_science_safety
+        opts = {"body_visibility_mode": "home_only", "goal": "complete_tech_tree"}
+        _, world2, _ = self._regen_from_slot_data(seed=99, options=opts)
+        self.assertTrue(getattr(world2, "_ut_active", False))
+        mw, p = world2.multiworld, world2.player
+        safety = effective_science_safety(
+            world2.options, world2.options.difficulty.value)
+
+        def sci(drop_discover: bool) -> float:
+            st = CollectionState(mw)
+            for it in mw.precollected_items[p]:
+                st.collect(it, prevent_sweep=True)
+            for it in mw.itempool:
+                if drop_discover and it.name.startswith("Discover "):
+                    continue
+                st.collect(it, prevent_sweep=True)
+            st.update_reachable_regions(p)
+            return _accessible_science(
+                st, p, safety, world2.mission_builder.home)
+
+        self.assertGreater(
+            sci(False), sci(True) * 5,
+            "UT science must be gated on discovery, matching the generator")
+
 
 class TestBuildingsInLogicUTRegen(unittest.TestCase):
     """UT round-trip for buildings_in_logic (default ON) and related slot_data."""

@@ -168,7 +168,7 @@ def _make_goal_event_rule(
 # ---------------------------------------------------------------------------
 
 def bankable_science(cap, psi_tier: int, home: BodyName,
-                     access=None) -> float:
+                     access=None, skip_bodies: frozenset = frozenset()) -> float:
     """Per-body science contributions, gated on the player's ability to
     actually extract science from each body.
 
@@ -177,11 +177,18 @@ def bankable_science(cap, psi_tier: int, home: BodyName,
     meets the body's heliocentric requirement).  Transmit-only paths
     apply ``_TRANSMIT_ONLY_DISCOUNT``.
 
-    This is the canonical "what science can the player bank in this state"
-    function.  Both the tech-tree victory rule and the sphere-ladder
-    per-sphere tier-funding pass MUST use it — duplicating the loop with
-    a different gate produces a silent mismatch where the ladder thinks
-    the seed is solvable but the rule disagrees at fill time.
+    This is the CAPABILITY-based science sum.  It is DELIBERATELY blind to the
+    hidden-bodies Discover gate: its two callers are (1) the sphere-ladder
+    funding pass, which MUST stay Discover-blind — the fill rule
+    (_cheap_bankable_science) is the strict Discover-gated one, and it alone
+    gating is what keeps provisioning working (see A1 there); and (2) the
+    Universal-Tracker fallback, which passes ``skip_bodies`` to recover the gate.
+
+    DO NOT route the fill-time or post_fill-cross-check science through this
+    function — those use ``_cheap_bankable_science`` (via ``_accessible_science``),
+    which carries the nav (B1) and Discover (A1) gates.  Using the Discover-blind
+    version on the victory/tech path would silently over-credit an undiscovered
+    body's science and defeat the strict backstop.
 
     ``access`` optionally supplies per-body ORBIT/RETURN/CREWED_LANDING
     reachability as ``{body_name: {EventName: bool}}``.  When given, the
@@ -190,6 +197,12 @@ def bankable_science(cap, psi_tier: int, home: BodyName,
     access so it need not re-run the (expensive) per-body optimizer for
     bodies already proven reachable at an earlier sphere.  Instrument and
     relay flags still come from ``cap`` (cheap, flag-level).
+
+    ``skip_bodies`` credits 0 for those bodies — the Universal Tracker path
+    passes its undiscovered hidden bodies so the tracker's science matches the
+    generator's Discover gate (which capability-based access cannot see).  The
+    funding pass must NOT pass it (its Discover-blindness is what keeps
+    provisioning working — see _cheap_bankable_science / A1).
     """
     # Transmitting science needs a comms link, which the Tracking Station (DSN)
     # gates when buildings_in_logic is on.  Below max DSN the antenna needs a
@@ -199,6 +212,8 @@ def bankable_science(cap, psi_tier: int, home: BodyName,
                    if cap.dsn_power < DSN_POWER_MAX else relay_tier_table_for(home))
     total = 0.0
     for body in ALL_BODIES:
+        if body.name in skip_bodies:
+            continue
         if access is not None:
             acc = access[body.name]
             a_orbit = acc[EventName.ORBIT]
@@ -335,7 +350,14 @@ def _accessible_science(
         if getattr(world, "_ut_active", False):
             cap = get_capability(state, player)
             psi_tier = state.count("Progressive Science Instrument", player)
-            return bankable_science(cap, psi_tier, home) * safety
+            # Match the generator's Discover gate: capability-based access can't
+            # see it, so exclude any hidden body whose Discover chain isn't held.
+            gated_hidden = frozenset(getattr(world, "gated_hidden_bodies", ()))
+            undiscovered = frozenset(
+                b for b in getattr(world, "hidden_bodies", ())
+                if not _discovered(state, player, b, gated_hidden))
+            return bankable_science(
+                cap, psi_tier, home, skip_bodies=undiscovered) * safety
         return 0.0
     return _cheap_bankable_science(state, player, world, home) * safety
 
