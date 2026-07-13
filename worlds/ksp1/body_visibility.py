@@ -14,11 +14,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .bodies import (
-    ALL_BODIES, BODY_BY_NAME, BodyName, home_system_bodies, science_budget,
-)
+from .bodies import ALL_BODIES, BODY_BY_NAME, BodyName, home_system_bodies
 from .options import BodyVisibilityMode
-from .tech_tree import TECH_NODES, cumulative_tier_cost
 
 if TYPE_CHECKING:
     from .rules import GoalSpec
@@ -87,63 +84,3 @@ def gated_hidden_bodies(
         return False
 
     return [b.name for b in ALL_BODIES if b.name in hidden and qualifies(b.name)]
-
-
-def _full_kit_science(body_name: BodyName, home: BodyName) -> float:
-    """Full-kit science a single body can bank (pure ``science_budget``, no
-    capability needed)."""
-    b = BODY_BY_NAME[body_name]
-    return science_budget(
-        b, has_thermometer=True, has_barometer=True, has_capsule=True,
-        can_land_crewed=b.can_land, home=home, psi_tier=3,
-        can_land_uncrewed=b.can_land)
-
-
-def hidden_planets(gated_hidden: frozenset[BodyName]) -> list[BodyName]:
-    """The gated hidden bodies that are planets (no parent) — the bodies whose
-    ``Discover`` item is obtainable independently (a moon's needs its planet's,
-    via region topology, so a moon Discover alone yields no bankable science)."""
-    return [b for b in gated_hidden if BODY_BY_NAME[b].parent is None]
-
-
-def tech_gate_reqs_by_tier(
-    home: BodyName, safety: float, hidden: frozenset[BodyName],
-    planet_order: list[BodyName],
-) -> dict[int, int]:
-    """How deep into ``planet_order`` each science-insufficient tier reaches.
-
-    Returns ``{tier: K}``: for each tier whose cumulative science cost exceeds
-    what the *visible* bodies (reachable without any Discover) can bank, ``K`` is
-    the length of the shortest prefix of ``planet_order`` whose full-kit science
-    covers the tier's gap.  regions.py gates that tier on ``has_all(order[:K])``
-    — the tree's top is reachable only once those specific planets are found.
-
-    ``planet_order`` is a per-seed random permutation of the hidden planets (the
-    caller shuffles it), so requiring ``order[:K]`` picks a specific random
-    subset — each seed forces a different tour (variance), while the un-required
-    planets and every moon float free as bonus discoveries.  The gap is covered
-    by the actual chosen planets (exact, since we know which are required).
-    Empty when nothing is hidden or the visible set self-funds the whole tree.
-    """
-    if not planet_order:
-        return {}
-    visible_science = safety * sum(
-        _full_kit_science(b.name, home)
-        for b in ALL_BODIES
-        if b.name not in hidden and b.name != BodyName.KERBOL
-    )
-    order_sci = [safety * _full_kit_science(p, home) for p in planet_order]
-    reqs: dict[int, int] = {}
-    for tier in {n.tier for n in TECH_NODES}:
-        gap = cumulative_tier_cost(tier) - visible_science
-        if gap <= 0:
-            continue
-        acc = 0.0
-        k = 0
-        for s in order_sci:
-            if acc >= gap:
-                break
-            acc += s
-            k += 1
-        reqs[tier] = k
-    return reqs

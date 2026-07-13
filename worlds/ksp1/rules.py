@@ -28,7 +28,7 @@ from .bodies import (
 )
 from .comms import DSN_POWER_MAX, dsn_required_relay_table
 from .capability import get_capability, cheap_flags, _compute_sounding_altitude
-from .items import PROGRESSIVE_RD_NAME, SCIENCE_PACK_NAMES
+from .items import PROGRESSIVE_RD_NAME, SCIENCE_PACK_NAMES, discover_item_name
 from .locations import (
     EVENT_BY_NAME,
     EventName,
@@ -229,6 +229,21 @@ def bankable_science(cap, psi_tier: int, home: BodyName,
     return total
 
 
+def _discovered(
+    state: CollectionState, player: int, body: BodyName,
+    gated_hidden: frozenset,
+) -> bool:
+    """True iff a hidden body's full Discover chain is held — its own Discover
+    plus every hidden ancestor's (a moon's region hangs off its planet's, so the
+    parent must be discovered too)."""
+    cur: BodyName | None = body
+    while cur is not None:
+        if cur in gated_hidden and not state.has(discover_item_name(cur), player):
+            return False
+        cur = BODY_BY_NAME[cur].parent
+    return True
+
+
 def _cheap_bankable_science(
     state: CollectionState, player: int, world, home: BodyName,
 ) -> float:
@@ -238,7 +253,13 @@ def _cheap_bankable_science(
     (⟹ the kit really flies it) and consistent with the funding placement that
     derived the brackets, so the science gate stays on the cheap ladder oracle.
     Instrument/relay inputs come from the cheap pre-pass + ``state.count``.
+
+    State-cached (``ksp1_sci_*``, invalidated by collect/remove): the 62 tech-node
+    entrances all query the same state, and the sum is identical across tiers, so
+    the full 17-body sweep runs once per state instead of once per tier.
     """
+    if not state.ksp1_sci_stale[player]:
+        return state.ksp1_sci_result[player]
     reps_map = world._science_body_event_reps
     # Per-(body, event) capability counted gate (nav maneuver nodes / conics,
     # pad, DSN) — the bracket reps are PARTS ONLY and never carry it.  Without
@@ -248,6 +269,11 @@ def _cheap_bankable_science(
     # cheap rules, so the two sides can't drift (bug 104).  Empty when
     # buildings_in_logic is off (then this is a no-op).
     counted_map = getattr(world, "_cheap_mission_counted", {})
+    # A hidden body's science needs its Discover item — and every hidden
+    # ancestor's, since a moon hangs off its planet's gated region (you can't
+    # bank science from a body you can't fly to).  Parts + nav aren't enough.
+    # Empty when the feature is off, so this is a no-op then.
+    gated_hidden = frozenset(getattr(world, "gated_hidden_bodies", ()))
     flags = cheap_flags(state, player)
     psi_tier = state.count("Progressive Science Instrument", player)
     # DSN-aware transmit gate (see bankable_science); max DSN -> plain table.
@@ -260,6 +286,9 @@ def _cheap_bankable_science(
             continue
         orbit_nav = counted_map.get((body.name, EventName.ORBIT.value), ())
         if not all(state.has(kind, player, lvl) for kind, lvl in orbit_nav):
+            continue
+        if body.name in gated_hidden and not _discovered(state, player, body.name,
+                                                          gated_hidden):
             continue
         ret = reps_map.get((body.name, EventName.RETURN))
         ret_nav = counted_map.get((body.name, EventName.RETURN.value), ())
@@ -280,6 +309,8 @@ def _cheap_bankable_science(
         if not can_recover:
             contribution *= _TRANSMIT_ONLY_DISCOUNT
         total += contribution
+    state.ksp1_sci_result[player] = total
+    state.ksp1_sci_stale[player] = False
     return total
 
 

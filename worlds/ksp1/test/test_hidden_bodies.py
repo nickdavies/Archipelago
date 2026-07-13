@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from BaseClasses import CollectionState, ItemClassification
 
-from ..bodies import ALL_BODIES, BODY_BY_NAME, BodyName
 from ..items import discover_item_name
 from .base import KSP1TestBase
 
@@ -30,8 +29,6 @@ class TestFeatureOff(KSP1TestBase):
         w = self.world
         self.assertEqual(len(w.hidden_bodies), 0)
         self.assertEqual(len(w.gated_hidden_bodies), 0)
-        self.assertEqual(w.tech_gate_reqs_by_tier, {})
-        self.assertEqual(w.tech_gate_planet_order, [])
 
     def test_no_discover_items_in_pool(self):
         disc = [i for i in self.multiworld.itempool if i.name.startswith("Discover ")]
@@ -186,27 +183,37 @@ class TestDiscoverGateItemsStayProgression(KSP1TestBase):
                             f"{name} not collected by get_all_state")
 
 
-class TestTechTierDiscoverGate(KSP1TestBase):
-    """complete_tech_tree: the science-insufficient tiers require a specific
-    random subset of hidden planets; the tree's top nests the lower gates."""
-    options = {"body_visibility_mode": "home_system", "goal": "complete_tech_tree"}
+class TestHiddenScienceRequiresDiscovery(KSP1TestBase):
+    """The tech tree is gated on science, and a hidden body's science is gated on
+    its Discover item (the accurate model that replaced the explicit tech-tier
+    gate).  In home_only Kerbin the whole system is hidden, so science banked
+    without any Discover item is far lower than with them — the tree can't be
+    funded until the player discovers bodies."""
+    options = {"body_visibility_mode": "home_only", "goal": "complete_tech_tree"}
+    needs_real_pre_fill = True
 
-    def test_top_tiers_have_planet_requirement(self):
-        reqs = self.world.tech_gate_reqs_by_tier
-        self.assertTrue(reqs, "tech tree should need discovery under home_system")
-        # Required planets are a prefix of the per-seed order, nested by tier.
-        order = self.world.tech_gate_planet_order
-        for tier, k in reqs.items():
-            self.assertLessEqual(k, len(order))
-        tiers = sorted(reqs)
-        for a, b in zip(tiers, tiers[1:]):
-            self.assertLessEqual(reqs[a], reqs[b], "deeper tiers must nest")
+    def _science(self, drop_discover: bool) -> float:
+        from ..rules import _accessible_science, effective_science_safety
+        state = CollectionState(self.multiworld)
+        for it in self.multiworld.precollected_items[self.player]:
+            state.collect(it, prevent_sweep=True)
+        for it in self.multiworld.itempool:
+            if drop_discover and it.name.startswith("Discover "):
+                continue
+            state.collect(it, prevent_sweep=True)
+        state.update_reachable_regions(self.player)
+        safety = effective_science_safety(
+            self.world.options, self.world.options.difficulty.value)
+        return _accessible_science(
+            state, self.player, safety, self.world.mission_builder.home)
 
-    def test_required_planets_are_planets(self):
-        order = self.world.tech_gate_planet_order
-        for body in order:
-            self.assertIsNone(BODY_BY_NAME[body].parent,
-                              f"{body} is not a planet")
+    def test_discovery_multiplies_bankable_science(self):
+        with_disc = self._science(drop_discover=False)
+        without_disc = self._science(drop_discover=True)
+        self.assertGreater(
+            with_disc, without_disc * 5,
+            f"discovery should unlock the hidden system's science "
+            f"({round(without_disc)} without -> {round(with_disc)} with)")
 
 
 class TestFeatureOnFullReachability(KSP1TestBase):
@@ -219,8 +226,8 @@ class TestFeatureOnFullReachability(KSP1TestBase):
 
 
 class TestFeatureOnTechTreeReachability(KSP1TestBase):
-    """Same, for complete_tech_tree — exercises the science-insufficient tier
-    planet-subset gate through a real fill."""
+    """Same, for complete_tech_tree — exercises the science-gated-on-discovery
+    tech tree through a real fill."""
     run_default_tests = True
     needs_real_pre_fill = True
     options = {"body_visibility_mode": "home_system", "goal": "complete_tech_tree"}

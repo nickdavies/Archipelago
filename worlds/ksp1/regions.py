@@ -50,24 +50,14 @@ def create_all_regions(world: KSP1World) -> None:
     menu = Region("Menu", player, world.multiworld)
     world.multiworld.regions.append(menu)
 
-    # Tiers whose science the visible bodies can't fund require the player to
-    # have discovered a specific random subset of hidden PLANETS: their entrances
-    # AND-in ``has_all(order[:K])``, where ``order`` is the per-seed planet
-    # permutation and ``K`` the tier's required prefix length.  This is how AP
-    # learns a valid fill needs those bodies (the top of the tree is unreachable
-    # until they are found); the un-required planets and all moons float free.
-    # Empty when the feature is off, so the tech entrances are byte-identical.
-    tier_reqs: dict[int, int] = getattr(world, "tech_gate_reqs_by_tier", {})
-    order_items = [
-        discover_item_name(b) for b in getattr(world, "tech_gate_planet_order", ())
-    ]
-
-    # Every gated Discover item gates a region entrance (its body's missions /
-    # contracts, and — for the planet subset — the top tech tiers).  Record them
-    # as logic-required so the sphere-ladder demote keeps them PROGRESSION; a
-    # gate item demoted to USEFUL is skipped by AP's advancement sweep, making
-    # the gated locations unreachable.  (``_assert_gate_items_progression`` is
-    # the backstop.)
+    # Every gated Discover item gates a body region's entrance (its missions /
+    # contracts).  Record them as logic-required so the sphere-ladder demote
+    # keeps them PROGRESSION; a gate item demoted to USEFUL is skipped by AP's
+    # advancement sweep, making the gated locations unreachable.
+    # (``_assert_gate_items_progression`` is the backstop.)  The tech tree needs
+    # no explicit Discover gate: a hidden body's science is gated on its Discover
+    # item in the science rule, so the tiers that need it become affordable only
+    # after discovery — the accurate model, which fill provisions on its own.
     world.logic_required_items.update(
         discover_item_name(b) for b in getattr(world, "gated_hidden_bodies", ())
     )
@@ -76,9 +66,7 @@ def create_all_regions(world: KSP1World) -> None:
         region = Region(node.display_name, player, world.multiworld)
         world.multiworld.regions.append(region)
 
-        k = tier_reqs.get(node.tier, 0)
-        rule = _make_node_entrance_rule(
-            node, player, safety, home, _can_afford_tier, tuple(order_items[:k]))
+        rule = _make_node_entrance_rule(node, player, safety, home, _can_afford_tier)
         menu.connect(region, rule=rule)
 
     _create_body_regions(world, menu)
@@ -177,15 +165,14 @@ def _make_node_entrance_rule(
     safety: float,
     home: BodyName,
     can_afford_tier: Callable[[CollectionState, int, int, float, BodyName], bool],
-    gate_items: tuple[str, ...] = (),
 ) -> Callable[[CollectionState], bool]:
     """Build an entrance rule for a tech node region.
 
     Checks R&D band, science budget, and parent node reachability (AND/OR).
-    On a science-insufficient hidden-bodies tier, ``gate_items`` are the specific
-    hidden-planet Discover items required at that tier (the per-seed random
-    prefix) — the tree's top is unreachable until they are discovered.  Empty by
-    default, so ordinary tiers are unaffected.
+    A hidden body's science is gated on its Discover item inside the science
+    budget itself (rules._cheap_bankable_science), so no extra gate is needed
+    here — a science-hungry tier simply isn't affordable until enough of the
+    system is discovered.
     """
     band = TIER_TO_BAND[node.tier]
     real_parents = [p for p in node.parents if p != "start"]
@@ -195,8 +182,6 @@ def _make_node_entrance_rule(
     any_to_unlock = node.any_to_unlock
 
     def rule(state: CollectionState) -> bool:
-        if gate_items and not state.has_all(gate_items, player):
-            return False
         if band > 0 and not state.has(PROGRESSIVE_RD_NAME, player, band):
             return False
         if not can_afford_tier(state, player, tier, safety, home):

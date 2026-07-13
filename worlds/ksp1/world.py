@@ -61,13 +61,24 @@ _NO_STRICT_LADDER_FALLBACK = os.environ.get("KSP_NO_STRICT_LADDER_FALLBACK") == 
 
 
 class KSP1State(LogicMixin):
-    """Inject per-player stale flag and cached result onto CollectionState."""
+    """Inject per-player stale flag + cached result onto CollectionState.
+
+    Two independent state-local caches, both invalidated by ``collect``/``remove``:
+    the RocketCapability, and the cheap accessible-science sum (which every one of
+    the 62 tech-node region entrances would otherwise recompute from scratch for
+    the same state — the science sum is identical across all tiers).
+    """
     ksp1_cap_stale: dict[int, bool]
     ksp1_cap_result: dict[int, RocketCapability]
+    ksp1_sci_stale: dict[int, bool]
+    ksp1_sci_result: dict[int, float]
 
     def init_mixin(self, multiworld: MultiWorld) -> None:
-        self.ksp1_cap_stale = {p: True for p in multiworld.get_game_players("Kerbal Space Program 1")}
+        players = multiworld.get_game_players("Kerbal Space Program 1")
+        self.ksp1_cap_stale = {p: True for p in players}
         self.ksp1_cap_result = {}
+        self.ksp1_sci_stale = {p: True for p in players}
+        self.ksp1_sci_result = {}
 
 
 class KSP1WebWorld(WebWorld):
@@ -305,8 +316,6 @@ class KSP1World(World):
     body_visibility_mode: int
     hidden_bodies: frozenset
     gated_hidden_bodies: list
-    tech_gate_planet_order: list
-    tech_gate_reqs_by_tier: dict
     # Goal-mode (count / progressive_unlock) state. Resolved in generate_early.
     # ``contracts_required`` is X (completed non-goal contracts needed for the
     # goal). ``contract_threshold_defs`` is the list of
@@ -553,9 +562,11 @@ class KSP1World(World):
         # Hidden-body visibility: resolve the mode (auto -> home_only/home_system
         # by goal reach) and derive which bodies start hidden and which of those
         # need a Discover gate + item. Consumed by create_regions (entrance
-        # gates + tech-tier discovery gate), create_items (pool) and
-        # fill_slot_data. all_visible / feature-off yields empty sets, so
-        # everything downstream is a no-op.
+        # gates), create_items (pool) and fill_slot_data. The tech tree needs no
+        # explicit gate — a hidden body's science is gated on its Discover item in
+        # the science rule (rules._cheap_bankable_science), so the tiers that need
+        # it require discovery through the ordinary affordability check.
+        # all_visible / feature-off yields empty sets, so downstream is a no-op.
         self.body_visibility_mode = body_visibility.resolve_visibility_mode(
             self.options.body_visibility_mode.value, self.goal_spec,
             self.mission_builder.home)
@@ -563,28 +574,6 @@ class KSP1World(World):
             self.body_visibility_mode, self.mission_builder.home)
         self.gated_hidden_bodies = body_visibility.gated_hidden_bodies(
             self.hidden_bodies, regions.location_owning_bodies(self))
-        # Tech tiers that visible-body science alone can't fund → each gated on
-        # discovering a specific random subset of hidden planets (regions.py), so
-        # the tree's top requires exploring enough of the system. The chosen
-        # planets differ per seed (variance); the rest float free as bonuses.
-        # ``tech_gate_planet_order`` is the per-seed permutation, ``discover_tier_
-        # reqs`` the required prefix length per tier. A derived RNG keeps the
-        # shuffle off the main fill stream; guarded so a feature-off world draws
-        # nothing (byte-identical). UT regen reuses the order from slot_data.
-        ut_order = getattr(self, "_ut_tech_gate_planet_order", None)
-        if ut_order is not None:
-            self.tech_gate_planet_order = [BodyName(b) for b in ut_order]
-        elif self.gated_hidden_bodies:
-            self.tech_gate_planet_order = body_visibility.hidden_planets(
-                frozenset(self.gated_hidden_bodies))
-            random.Random(self.random.getrandbits(64)).shuffle(
-                self.tech_gate_planet_order)
-        else:
-            self.tech_gate_planet_order = []
-        self.tech_gate_reqs_by_tier = body_visibility.tech_gate_reqs_by_tier(
-            self.mission_builder.home,
-            rules.effective_science_safety(self.options, self.options.difficulty.value),
-            self.hidden_bodies, self.tech_gate_planet_order)
 
         if self.options.exclude_late_tech_tree:
             late_tier_locs: set[str] = {
@@ -989,14 +978,12 @@ class KSP1World(World):
         # the same chain and reproduces the fill; the client ignores it.
         d["lifter_profile_id"] = self.lifter_profile_id
         # Hidden-body visibility.  The resolved mode (never "auto") is always
-        # carried so UT regen recomputes the identical hidden set + tech gates
-        # instead of re-resolving auto.  The client-facing keys are emitted only
-        # when the feature actually hides something: ``body_item_map`` ({Discover
-        # item -> body string}) drives the client's hide/reveal without string
-        # parsing, ``allow_undiscovered_bodies`` and ``deep_hide`` are client-only
-        # depth/behaviour flags (no server logic effect), and
-        # ``tech_gate_planet_order`` (the per-seed planet permutation) lets UT
-        # rebuild the same tech-tier gate.
+        # carried so UT regen recomputes the identical hidden set instead of
+        # re-resolving auto.  The client-facing keys are emitted only when the
+        # feature actually hides something: ``body_item_map`` ({Discover item ->
+        # body string}) drives the client's hide/reveal without string parsing;
+        # ``allow_undiscovered_bodies`` and ``deep_hide`` are client-only
+        # depth/behaviour flags (no server logic effect).
         d["body_visibility_mode"] = self.body_visibility_mode
         if self.gated_hidden_bodies:
             d["body_item_map"] = {
@@ -1008,8 +995,6 @@ class KSP1World(World):
             # Client depth flag: True => deep hide (sphere physically vanishes).
             # Hard-coded on for now; purely client-side (no bearing on logic).
             d["deep_hide"] = True
-            d["tech_gate_planet_order"] = [
-                str(b) for b in self.tech_gate_planet_order]
         return d
 
     # ------------------------------------------------------------------
@@ -1103,18 +1088,16 @@ class KSP1World(World):
         if "lifter_profile_id" in slot_data:
             self._ut_lifter_profile_id = slot_data["lifter_profile_id"]
 
-        # Restore hidden-body visibility: the resolved mode (so generate_early
-        # recomputes the identical hidden set + gates rather than re-resolving
-        # auto) and the exact tech-gate planet order (re-shuffling would diverge
-        # which planets the tech tree needs). Absent on pre-feature seeds ->
-        # all_visible, so an old seed never spuriously hides bodies.
+        # Restore hidden-body visibility: the resolved mode, so generate_early
+        # recomputes the identical hidden set rather than re-resolving auto.
+        # Absent on pre-feature seeds -> all_visible, so an old seed never
+        # spuriously hides bodies.
         from .options import BodyVisibilityMode as _BVM
         self.options.body_visibility_mode.value = slot_data.get(
             "body_visibility_mode", _BVM.option_all_visible)
         if "allow_undiscovered_bodies" in slot_data:
             self.options.allow_undiscovered_bodies.value = int(
                 slot_data["allow_undiscovered_bodies"])
-        self._ut_tech_gate_planet_order = slot_data.get("tech_gate_planet_order")
 
         # A custom goal isn't a single enum value — its body lists ARE the goal,
         # and resolve_goal_spec rebuilds the spec from those option values during
@@ -1235,10 +1218,12 @@ class KSP1World(World):
         change = super().collect(state, item)
         if change:
             state.ksp1_cap_stale[self.player] = True
+            state.ksp1_sci_stale[self.player] = True
         return change
 
     def remove(self, state: CollectionState, item: Item) -> bool:
         change = super().remove(state, item)
         if change:
             state.ksp1_cap_stale[self.player] = True
+            state.ksp1_sci_stale[self.player] = True
         return change
