@@ -993,7 +993,8 @@ class KSP1World(World):
         # instead of re-resolving auto.  The client-facing keys are emitted only
         # when the feature actually hides something: ``body_item_map`` ({Discover
         # item -> body string}) drives the client's hide/reveal without string
-        # parsing, ``allow_undiscovered_bodies`` is the deep-hide toggle, and
+        # parsing, ``allow_undiscovered_bodies`` and ``deep_hide`` are client-only
+        # depth/behaviour flags (no server logic effect), and
         # ``tech_gate_planet_order`` (the per-seed planet permutation) lets UT
         # rebuild the same tech-tier gate.
         d["body_visibility_mode"] = self.body_visibility_mode
@@ -1004,6 +1005,9 @@ class KSP1World(World):
             }
             d["allow_undiscovered_bodies"] = bool(
                 self.options.allow_undiscovered_bodies)
+            # Client depth flag: True => deep hide (sphere physically vanishes).
+            # Hard-coded on for now; purely client-side (no bearing on logic).
+            d["deep_hide"] = True
             d["tech_gate_planet_order"] = [
                 str(b) for b in self.tech_gate_planet_order]
         return d
