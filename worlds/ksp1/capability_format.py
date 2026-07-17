@@ -274,6 +274,7 @@ def format_rocket_output(
     body_label = body_name if body_name is not None else "any ocean body"
     lines.append(f"  Body: {body_label} | Difficulty: {difficulty_name}")
     lines.append(f"  In logic: {logic_str}")
+    lines.extend(_mission_summary_lines(result, info.mission_type))
     lines.extend(_format_profile_summary(info, mission_builder))
     if info.mission_type == MissionType.SOUNDING and info.threshold_km is not None:
         lines.append(f"  Sounding altitude: {sounding_altitude_km:.1f} km "
@@ -337,6 +338,58 @@ def architecture_lines(result: ProfileResult) -> list[str]:
                      "pod, then rejoins the")
         lines.append("                parked return stage (rendezvous + "
                      "docking) for the trip home.")
+    return lines
+
+
+def _mission_summary_lines(
+    result: ProfileResult,
+    mission_type: MissionType,
+) -> list[str]:
+    """At-a-glance top-line totals: the craft's total delta-v budget and total
+    launch mass.  Rendered as its own section near the top of a report so the
+    overall figures are visible before the detailed profile / per-stage build.
+
+    Only emitted for feasible, staged missions.  The non-profile Kerbin types
+    (sounding / first-*) model no staged craft, and a trivial (no-propulsion)
+    mission has nothing to total, so both return ``[]`` — the section is simply
+    absent rather than showing a misleading zero.
+    """
+    if mission_type in _NON_PROFILE_TYPES:
+        return []
+    if not result.feasible or not result.stage_results:
+        return []
+
+    lines: list[str] = ["\n  --- Mission summary ---"]
+
+    if getattr(result, "via_assembly", False) and result.assembly_launches:
+        launches = result.assembly_launches
+        n = len(launches)
+        # Total tonnage the player must build across every separate launch (each
+        # launch's pad mass is its heaviest/bottom stage).
+        total_mass = sum(
+            max((s.stage_mass_wet for s in L.stages), default=0.0)
+            for L in launches
+        )
+        # Delta-v of the coherent vehicle that actually flies the mission after
+        # docking (the group>0 assembled stack); the ascent delta-v is split
+        # across the N launches detailed further down.
+        stack_dv = sum(
+            s.delta_v
+            for s, gi in zip(result.stage_results, result.stage_group_indices)
+            if gi != 0
+        )
+        lines.append(f"    Architecture:  {n}-launch orbital assembly")
+        lines.append(f"    Total mass:    {total_mass:.2f} t "
+                     f"({n} launches; heaviest {result.launch_mass:.2f} t)")
+        lines.append(f"    Total delta-v: {stack_dv:.0f} m/s "
+                     f"(assembled orbital stack, post-docking)")
+    else:
+        total_dv = sum(s.delta_v for s in result.stage_results)
+        n = len(result.stage_results)
+        lines.append(f"    Total delta-v: {total_dv:.0f} m/s "
+                     f"({n} stage{'' if n == 1 else 's'})")
+        lines.append(f"    Total mass:    {result.launch_mass:.2f} t")
+
     return lines
 
 
@@ -590,6 +643,16 @@ def format_contract_output(
     lines.append(f"  In logic: {'YES' if in_logic else 'NO'}")
     lines.append(f"{'=' * 60}")
 
+    # Physics feasibility of the delivery rocket, via the SAME evaluate_contract
+    # the access rule's contract_access uses (so the verdict matches the rule
+    # exactly).  Computed up front so the mission summary can lead the report,
+    # matching the mission-report layout; Gate 3 and the delivery rocket below
+    # reuse it.  None = a required category has no part (see Gate 2).
+    result = evaluate_contract(spec, flags, diff, mission_builder)
+    feasible = result is not None and result.feasible
+    if feasible:
+        lines.extend(_mission_summary_lines(result, td.base_mission_type))
+
     # Gate 1 — the AP item itself (a hard state.has gate).
     lines.append(f"  Gate 1 - contract item held: {'YES' if item_held else 'NO'}")
 
@@ -605,11 +668,7 @@ def format_contract_output(
             else:
                 lines.append(f"      {cat}: HAVE  {', '.join(titled(p.name) for p in got)}")
 
-    # Gate 3 — physics can deliver the contract kit. Recomputed via the SAME
-    # evaluate_contract the access rule's contract_access uses, so this verdict
-    # matches the rule exactly. None = a required category has no part (Gate 2).
-    result = evaluate_contract(spec, flags, diff, mission_builder)
-    feasible = result is not None and result.feasible
+    # Gate 3 — physics can deliver the contract kit (computed up front, above).
     lines.append(f"  Gate 3 - physics delivery: {'YES' if feasible else 'NO'}")
     if result is None:
         lines.append("      (a required part category is unavailable -- see Gate 2)")
