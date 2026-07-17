@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from Options import Choice, DefaultOnToggle, ExcludeLocations, ItemsAccessibility, NamedRange, OptionDict, OptionSet, PerGameCommonOptions, Range, Toggle, Visibility
+from Options import Choice, DeathLink, DefaultOnToggle, ExcludeLocations, ItemsAccessibility, NamedRange, OptionDict, OptionSet, PerGameCommonOptions, Range, Toggle, Visibility
 
 from .bodies import ALL_BODIES, BodyName
 from .contracts import ContractType, NON_GOAL_TYPES
@@ -722,3 +722,4 @@ class KSP1Options(PerGameCommonOptions):
     orbit_bodies: OrbitBodies
     flyby_bodies: FlybyBodies
     enabled_part_packs: EnabledPartPacks
+    death_link: DeathLink

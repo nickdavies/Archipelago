@@ -861,6 +861,10 @@ class KSP1World(World):
     def fill_slot_data(self) -> dict[str, Any]:
         d = self.options.as_dict(
             "goal", "difficulty", "start_with_launch_clamps", "buildings_in_logic")
+        # DeathLink: purely client-side. When on, a KSP crash/crew-death is
+        # broadcast to the multiworld and an incoming death destroys the craft.
+        # Generation/logic never reads it.
+        d["death_link"] = self.options.death_link.value   # 0/1
         # Home body — used by the client mod to drive every per-body
         # comparison (KSC biome prefixes, altitude polling guard, splashdown
         # detection, first-launch / first-landing / first-crash events).
