@@ -511,31 +511,16 @@ class Body:
     # ------------------------------------------------------------------
     # Suborbital ascent physics
     # ------------------------------------------------------------------
-    def max_suborbital_altitude_km(self, dv: float, twr: float) -> float:
-        """Apoapsis altitude (km) achievable from this body's surface
-        given a single-stage rocket with ``dv`` budget and constant
-        ascent ``twr``.
-
-        Model: straight-up flight, no atmospheric drag, simple gravity-
-        drag approximation ``h = dv²·(twr−1) / (2·g·twr·1000)``.  Ignoring
-        atmospheric drag overestimates altitude on atmo bodies — current
-        capability uses vacuum Isp anyway, so this matches that
-        convention.  Returns 0 if TWR ≤ 1 (cannot lift off).
-        """
-        if twr <= 1.0 or dv <= 0.0:
-            return 0.0
-        return (dv * dv) * (twr - 1.0) / (2.0 * self.surface_gravity * twr * 1000.0)
-
     def suborbital_dv_required(self, altitude_km: float, twr: float = 1.2) -> float:
-        """Inverse of ``max_suborbital_altitude_km`` — dv needed to
-        apoapsis-touch ``altitude_km`` from this body's surface at
-        constant ascent ``twr``.
+        """Delta-v needed to apoapsis-touch ``altitude_km`` from this body's
+        surface at constant ascent ``twr`` — the inverse of the straight-up,
+        no-drag gravity-loss model ``h = dv²·(twr−1)/(2·g·twr·1000)``.  The
+        sounding evaluator turns each altitude milestone into this dv target
+        (swept over a few TWRs) and hands it to the shared ascent optimizer.
 
-        Returns ``math.inf`` if TWR ≤ 1.  ``twr=1.2`` is the
-        sounding-rocket floor we model: just enough thrust to lift off
-        and climb without wasted gravity drag.  Going higher overstates
-        the dv required because real sounding rockets typically run
-        TWR close to the minimum to maximise altitude per unit fuel.
+        Returns ``math.inf`` if TWR ≤ 1.  Delta-v required FALLS as TWR rises
+        (less gravity drag), so evaluating at a floor TWR gives the widest bar;
+        the sweep finds the lightest pad-fitting rocket across TWRs.
         """
         if twr <= 1.0:
             return math.inf

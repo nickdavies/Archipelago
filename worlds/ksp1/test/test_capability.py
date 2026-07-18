@@ -27,9 +27,11 @@ from worlds.ksp1.capability import (
     BodyAccessProfile, EquipmentFlags,
     _evaluate_profile, _assess_bodies, _assess_one_body,
     _try_profiles, _try_profiles_reason, _solve_atmo_landing, _required_power_source,
-    _inject_reboard, _compute_sounding_altitude,
+    _inject_reboard, _evaluate_sounding, _sounding_reaches,
+    _sounding_min_launch_mass,
     _group_edges, _MAX_SAFE_LANDING_SPEED,
 )
+from worlds.ksp1.capability_reasons import BlockingReason
 from worlds.ksp1.parts import (
     DEFAULT_PART_MANAGER, Engine, FuelTank, SolidBooster, MultiMount,
 )
@@ -890,19 +892,15 @@ class TestAtmosphericAscentControl(unittest.TestCase):
             "Dart should be a valid vacuum-ascent engine (no gimbal required)",
         )
 
-    def test_sounding_altitude_unaffected(self) -> None:
-        # Dart + fuel (no gimbal, no fins) — sounding altitude is not gated
-        # by control authority; the altitude path doesn't go through the
-        # ascent stage optimizer.
-        flags = _make_flags(
-            engines=[_DART],
-            tanks=[_FL_T800],
-            probe_core=True,
-        )
-        alt = _compute_sounding_altitude(flags, HOME_BODY)
-        self.assertGreater(
-            alt, 70.0,
-            f"Dart sounding altitude should exceed 70 km, got {alt:.1f} km",
+    def test_sounding_gimballess_engine_ok(self) -> None:
+        # Dart aerospike has no gimbal; a straight-up sounding needs no steering
+        # (needs_gimbal_engine=False), so it must still be a valid sounding
+        # engine even though the reframe routes soundings through the ascent
+        # optimizer.
+        flags = _make_flags(engines=[_DART], tanks=[_FL_T800], probe_core=True)
+        self.assertTrue(
+            _sounding_reaches(flags, HOME_BODY, 70.0),
+            "Dart (no gimbal) should be a valid straight-up sounding engine",
         )
 
 
@@ -1064,129 +1062,81 @@ class TestKerbinOrbitIsEarlyGame(unittest.TestCase):
         )
 
 
-class TestSoundingRocketAltitude(unittest.TestCase):
+class TestSounding(unittest.TestCase):
+    """Feasibility tests for the reframed sounding evaluator (``_evaluate_sounding``
+    / ``_sounding_reaches``).  Soundings now go through the shared K=1 ascent
+    optimizer and enforce the launch-pad mass cap.  These ``_make_flags`` kits
+    carry no pad cap (inf), so they exercise the pure dv model except where a
+    cap is set explicitly.
     """
-    Unit tests for _compute_sounding_altitude.
 
-    Formula: h_km = dv^2 * (twr - 1) / (2*g*twr*1000)
-    No drag, TWR floor = 1.1.
-    Crewed flights require staging_tier >= 1 (decoupler) AND parachutes.
-    """
+    def _reaches(self, flags, km):
+        return _sounding_reaches(flags, HOME_BODY, km)
 
-    def test_empty_flags_zero(self) -> None:
-        flags = _make_flags()
-        self.assertEqual(_compute_sounding_altitude(flags, HOME_BODY), 0.0)
+    def test_empty_flags_infeasible(self) -> None:
+        self.assertFalse(self._reaches(_make_flags(), 0.1))
 
-    def test_probe_core_no_engine_zero(self) -> None:
-        # Probe core alone, no engine -> no thrust, no altitude
-        flags = _make_flags(probe_core=True)
-        self.assertEqual(_compute_sounding_altitude(flags, HOME_BODY), 0.0)
+    def test_probe_no_engine_infeasible(self) -> None:
+        self.assertFalse(self._reaches(_make_flags(probe_core=True), 0.1))
 
-    def test_capsule_only_zero(self) -> None:
-        # Capsule, no engine -> zero
-        flags = _make_flags(capsule=True)
-        self.assertEqual(_compute_sounding_altitude(flags, HOME_BODY), 0.0)
+    def test_capsule_no_engine_infeasible(self) -> None:
+        self.assertFalse(self._reaches(_make_flags(capsule=True), 0.1))
 
-    def test_probe_reliant_ft800_above_70km(self) -> None:
-        # Probe + LFO engine + LFO tank — should clear all 7 altitude milestones
-        flags = _make_flags(
-            engines=[_RELIANT],
-            tanks=[_FL_T800],
-            probe_core=True,
-        )
-        alt = _compute_sounding_altitude(flags, HOME_BODY)
-        self.assertGreater(alt, 70.0, f"Expected > 70 km, got {alt:.1f} km")
+    def test_probe_reliant_tank_reaches_70km(self) -> None:
+        flags = _make_flags(engines=[_RELIANT], tanks=[_FL_T800], probe_core=True)
+        self.assertTrue(self._reaches(flags, 70.0))
 
-    def test_probe_hammer_srb_above_70km(self) -> None:
-        # SRB path: Hammer SRB + probe core
-        flags = _make_flags(srbs=[_HAMMER], probe_core=True)
-        alt = _compute_sounding_altitude(flags, HOME_BODY)
-        self.assertGreater(alt, 70.0, f"Expected > 70 km, got {alt:.1f} km")
+    def test_hammer_srb_probe_reaches_70km(self) -> None:
+        self.assertTrue(self._reaches(_make_flags(srbs=[_HAMMER], probe_core=True), 70.0))
 
-    def test_crewed_no_parachute_zero(self) -> None:
-        # Capsule + engine + tank but no parachute -> can't survive, altitude = 0
-        flags = _make_flags(
-            engines=[_RELIANT],
-            tanks=[_FL_T800],
-            capsule=True,
-            staging_tier=1,  # has decoupler
-        )
-        self.assertEqual(_compute_sounding_altitude(flags, HOME_BODY), 0.0)
+    def test_flea_srb_probe_reaches_70km(self) -> None:
+        self.assertTrue(self._reaches(_make_flags(srbs=[_FLEA], probe_core=True), 70.0))
 
-    def test_crewed_no_decoupler_zero(self) -> None:
-        # Capsule + engine + tank + parachute but no decoupler -> can't separate
-        flags = _make_flags(
-            engines=[_RELIANT],
-            tanks=[_FL_T800],
-            capsule=True,
-            parachutes=[_MK16],
-            staging_tier=0,  # no decoupler
-        )
-        self.assertEqual(_compute_sounding_altitude(flags, HOME_BODY), 0.0)
+    def test_crewed_no_parachute_infeasible(self) -> None:
+        # Capsule + engine + tank + decoupler but NO parachute -> the capsule
+        # can't descend safely and there's no probe, so no valid payload.
+        flags = _make_flags(engines=[_RELIANT], tanks=[_FL_T800],
+                            capsule=True, staging_tier=1)
+        self.assertFalse(self._reaches(flags, 0.1))
+        self.assertEqual(
+            _evaluate_sounding(flags, 5.0, HOME_BODY).blocking[0].reason,
+            BlockingReason.CAPSULE_SOUNDING_INCOMPLETE)
 
-    def test_crewed_full_kit_above_70km(self) -> None:
-        # Capsule + engine + tank + parachute + decoupler -> survivable crewed flight
-        flags = _make_flags(
-            engines=[_RELIANT],
-            tanks=[_FL_T800],
-            capsule=True,
-            parachutes=[_MK16],
-            staging_tier=1,  # has decoupler
-        )
-        alt = _compute_sounding_altitude(flags, HOME_BODY)
-        self.assertGreater(alt, 70.0, f"Expected > 70 km, got {alt:.1f} km")
+    def test_crewed_no_decoupler_infeasible(self) -> None:
+        flags = _make_flags(engines=[_RELIANT], tanks=[_FL_T800],
+                            capsule=True, parachutes=[_MK16], staging_tier=0)
+        self.assertFalse(self._reaches(flags, 0.1))
 
-    # --- Analytic precision tests -------------------------------------------
-    # These check specific numeric outputs to catch formula regressions.
-    # Expected values hand-calculated from h = dv^2 * (twr-1) / (2*g*twr*1000).
+    def test_crewed_full_kit_reaches_70km(self) -> None:
+        flags = _make_flags(engines=[_RELIANT], tanks=[_FL_T800],
+                            capsule=True, parachutes=[_MK16], staging_tier=1)
+        self.assertTrue(self._reaches(flags, 70.0))
 
-    def test_flea_probe_expected_altitude(self) -> None:
-        """
-        RT-5 Flea SRB + probe:
-          m0 = dry_mass + fuel_mass + probe = 0.45 + 1.05 + 0.1 = 1.60t
-          m_dry = 0.45 + 0.1 = 0.55t
-          twr = 192 / (1.60 * 9.80665) = 12.24 (atm_thrust=162.9/... but
-                sounding uses atm values for thrust, vac for ISP)
-        """
-        flags = _make_flags(srbs=[_FLEA], probe_core=True)
-        alt = _compute_sounding_altitude(flags, HOME_BODY)
-        # Flea + probe should reach > 100 km regardless of exact formula details
-        self.assertGreater(alt, 100.0, f"got {alt:.2f} km")
+    def test_no_command_part_names_reason(self) -> None:
+        # Engine + tank but no probe/capsule at all.
+        flags = _make_flags(engines=[_RELIANT], tanks=[_FL_T800])
+        r = _evaluate_sounding(flags, 5.0, HOME_BODY)
+        self.assertFalse(r.feasible)
+        self.assertEqual(r.blocking[0].reason, BlockingReason.NO_COMMAND_MODULE)
 
-    def test_hammer_probe_expected_altitude(self) -> None:
-        """
-        RT-10 Hammer SRB + probe:
-          m0 = 0.75 + 2.8125 + 0.1 = 3.6625t
-          Real Hammer has lower ISP (195) and less fuel than old Thumper data.
-        """
-        flags = _make_flags(srbs=[_HAMMER], probe_core=True)
-        alt = _compute_sounding_altitude(flags, HOME_BODY)
-        # Hammer + probe should comfortably clear 70 km
-        self.assertGreater(alt, 70.0, f"got {alt:.2f} km")
+    def test_pad_cap_gates_heavy_engine_and_is_monotonic(self) -> None:
+        # The launch-pad mass cap gates a sounding whose lightest rocket exceeds
+        # it: LAUNCH_MASS_EXCEEDED just below the min mass, feasible just above.
+        # Mammoth is Size-3, so it needs a Size-3 tank (the ascent model checks
+        # bulkhead compatibility, unlike the old bespoke sounding model).
+        _size3_tank = _part("Size3LargeTank")
 
-    def test_reliant_fl400_probe_expected_altitude(self) -> None:
-        """
-        Reliant + FL-T400 + probe:
-          Optimizer stacks tanks to maximize altitude within TWR constraints.
-        """
-        flags = _make_flags(engines=[_RELIANT], tanks=[_FL_T400], probe_core=True)
-        alt = _compute_sounding_altitude(flags, HOME_BODY)
-        # Should comfortably reach above 70 km (orbital altitude)
-        self.assertGreater(alt, 70.0, f"got {alt:.2f} km")
-
-    def test_flea_beats_reliant_low_twr_kills_altitude(self) -> None:
-        """
-        Flea (high TWR) should reach substantial altitude despite lower dv.
-        Reliant+FL-T400 (low TWR) also reaches good altitude but TWR penalty
-        limits sounding rocket performance.
-        """
-        flea_flags = _make_flags(srbs=[_FLEA], probe_core=True)
-        reliant_flags = _make_flags(engines=[_RELIANT], tanks=[_FL_T400], probe_core=True)
-        flea_alt = _compute_sounding_altitude(flea_flags, HOME_BODY)
-        reliant_alt = _compute_sounding_altitude(reliant_flags, HOME_BODY)
-        # Both should be well above 70 km
-        self.assertGreater(flea_alt, 70.0)
-        self.assertGreater(reliant_alt, 70.0)
+        def kit(cap):
+            f = _make_flags(engines=[_MAMMOTH], tanks=[_size3_tank], probe_core=True)
+            f.launch_pad_mass_cap = cap
+            return f
+        min_mass = _sounding_min_launch_mass(kit(float("inf")), HOME_BODY, 16.0)
+        self.assertLess(min_mass, float("inf"))  # reachable at some pad
+        below = _evaluate_sounding(kit(min_mass - 0.1), 16.0, HOME_BODY)
+        above = _evaluate_sounding(kit(min_mass + 0.1), 16.0, HOME_BODY)
+        self.assertFalse(below.feasible)
+        self.assertEqual(below.blocking[0].reason, BlockingReason.LAUNCH_MASS_EXCEEDED)
+        self.assertTrue(above.feasible)
 
 
 class TestStagingGroupPreservation(unittest.TestCase):

@@ -283,7 +283,6 @@ def format_rocket_output(
     flags: Optional[EquipmentFlags],
     difficulty_name: str,
     mission_builder: MissionBuilder,
-    sounding_altitude_km: float = 0.0,
 ) -> list[str]:
     """Return lines of the rocket breakdown for a given check.
 
@@ -313,8 +312,7 @@ def format_rocket_output(
     lines.extend(_mission_summary_lines(result, info.mission_type))
     lines.extend(_format_profile_summary(info, mission_builder))
     if info.mission_type == MissionType.SOUNDING and info.threshold_km is not None:
-        lines.append(f"  Sounding altitude: {sounding_altitude_km:.1f} km "
-                     f"(need {info.threshold_km:.0f} km)")
+        lines.append(f"  Target altitude: {info.threshold_km:.0f} km")
     lines.append(f"  Feasible: {'YES' if result.feasible else 'NO'}")
     if result.feasible:
         lines.extend(architecture_lines(result))

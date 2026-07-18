@@ -27,7 +27,10 @@ from .bodies import (
     home_system_bodies, relay_tier_table_for, science_budget,
 )
 from .comms import DSN_POWER_MAX, dsn_required_relay_table
-from .capability import get_capability, cheap_flags, _compute_sounding_altitude
+from .capability import (
+    get_capability, cheap_flags, _sounding_reaches,
+    _SOUNDING_LIFTOFF_KM as _LIFTOFF_KM,
+)
 from .items import PROGRESSIVE_RD_NAME, SCIENCE_PACK_NAMES, discover_item_name
 from .locations import (
     EVENT_BY_NAME,
@@ -495,24 +498,26 @@ def _set_ksc_biome_rules(world: KSP1World, player: int) -> None:
 # access rule.
 # ---------------------------------------------------------------------------
 
-# These home-body rules read only equipment flags + the sounding-rocket sizing,
-# so they use the cheap pre-pass instead of the full ``get_capability`` (no
-# per-body mission optimizer).  ``_compute_sounding_altitude(flags, home_body)``
-# is exactly what ``cap.sounding_altitude_km`` is computed from.
+# These home-body rules read only equipment flags, so they use the cheap
+# pre-pass instead of the full ``get_capability`` (no per-body mission
+# optimizer).  Sounding capability comes from ``_sounding_reaches`` — the shared
+# K=1 ascent evaluator, so these milestones can't drift from the rest of the
+# capability system.  ``_LIFTOFF_KM`` (imported) is a token positive altitude
+# meaning "builds a rocket that actually leaves the pad" (the old ``> 0``).
 def _make_altitude_rule(player: int, threshold_km: float) -> Callable[[CollectionState], bool]:
     def rule(state: CollectionState) -> bool:
         flags = cheap_flags(state, player)
         home_body = state.multiworld.worlds[player].mission_builder.home_body
-        return _compute_sounding_altitude(flags, home_body) >= threshold_km
+        return _sounding_reaches(flags, home_body, threshold_km)
     return rule
 
 
 def _make_first_launch_rule(player: int) -> Callable[[CollectionState], bool]:
-    """Any propulsion OR capsule (kerbal EVA counts as launch)."""
+    """Any pad-fitting rocket that lifts off OR a capsule (kerbal EVA counts)."""
     def rule(state: CollectionState) -> bool:
         flags = cheap_flags(state, player)
         home_body = state.multiworld.worlds[player].mission_builder.home_body
-        return _compute_sounding_altitude(flags, home_body) > 0 or flags.has_capsule
+        return _sounding_reaches(flags, home_body, _LIFTOFF_KM) or flags.has_capsule
     return rule
 
 
@@ -521,7 +526,7 @@ def _make_first_landing_rule(player: int) -> Callable[[CollectionState], bool]:
     def rule(state: CollectionState) -> bool:
         flags = cheap_flags(state, player)
         home_body = state.multiworld.worlds[player].mission_builder.home_body
-        if (_compute_sounding_altitude(flags, home_body) > 0
+        if (_sounding_reaches(flags, home_body, _LIFTOFF_KM)
                 and (flags.has_parachutes or flags.has_throttleable_engine)):
             return True
         return flags.has_capsule
@@ -560,10 +565,10 @@ def _make_splashdown_rule(
     )
 
     def rule(state: CollectionState) -> bool:
-        # Home-ocean path uses only cheap flags + the sounding-rocket sizing.
+        # Home-ocean path uses only cheap flags + the shared sounding evaluator.
         flags = cheap_flags(state, player)
         if home_has_ocean:
-            if (_compute_sounding_altitude(flags, home_body) >= threshold_km
+            if (_sounding_reaches(flags, home_body, threshold_km)
                     and (flags.has_parachutes or flags.has_throttleable_engine)):
                 return True
         # Other-ocean-body LANDING uses the cheap ladder brackets (the same

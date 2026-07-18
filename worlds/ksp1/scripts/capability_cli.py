@@ -267,7 +267,6 @@ def cmd_rocket(ap: APState, check_name: str, verbose: bool = False) -> None:
     lines = format_rocket_output(
         check_name, in_logic, already_checked, info, result, flags, difficulty_name,
         world.mission_builder,
-        sounding_altitude_km=cap.sounding_altitude_km,
     )
     for line in lines:
         print(line)

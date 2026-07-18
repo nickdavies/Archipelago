@@ -1190,7 +1190,6 @@ class KSP1World(World):
         lines = format_rocket_output(
             target_name, in_logic, False, info, result, flags,
             difficulty_name, self.mission_builder,
-            sounding_altitude_km=cap.sounding_altitude_km,
         )
         return [{"type": "text", "text": "\n".join(discovery + lines)}]
 

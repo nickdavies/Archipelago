@@ -495,9 +495,6 @@ class RocketCapability:
     has_throttleable_engine: bool = False
     has_aero_control_surface: bool = False
 
-    # Sounding rocket: best achievable altitude (km) with a single stage
-    sounding_altitude_km: float = 0.0
-
     # Per-body assessments
     bodies: dict[BodyName, BodyAccessProfile] = field(default_factory=dict)
 
@@ -4437,29 +4434,21 @@ def evaluate_mission_detailed(
         # accepting "kerbal walks off pad" caused minimal_rocket_for to
         # always pick Progressive Capsule for sphere 0 (Capsule alone makes
         # the location feasible), which forced every starting inventory to
-        # contain a capsule and suppressed probe-only starts.
-        sounding = _compute_sounding_altitude(flags, home)
-        if sounding > 0:
-            return ProfileResult(True)
-        # Delegate to the sounding-rocket evaluator (with threshold=0.1 to
-        # force a "needs altitude" failure) so the structured reasons name
-        # the specific missing parts (payload, propulsion).
-        sub = _evaluate_sounding(flags, 0.1, home)
-        return ProfileResult(False, blocking=list(sub.blocking))
+        # contain a capsule and suppressed probe-only starts.  (The fill-time
+        # access rule DOES add the ``or has_capsule`` EVA escape.)
+        return _evaluate_sounding(flags, _SOUNDING_LIFTOFF_KM, home)
 
     if mission_type == MissionType.FIRST_LANDING:
-        sounding = _compute_sounding_altitude(flags, home)
         # Capsule-only path (kerbal EVA)
         if flags.has_capsule:
             return ProfileResult(True)
-        # Engine path: sounding + safe descent
-        if sounding > 0 and (flags.has_parachutes or flags.has_throttleable_engine):
+        # Engine path: a pad-fitting rocket that lifts off + safe descent.
+        can_liftoff = _sounding_reaches(flags, home, _SOUNDING_LIFTOFF_KM)
+        if can_liftoff and (flags.has_parachutes or flags.has_throttleable_engine):
             return ProfileResult(True)
-        blocking_list = []
-        if not flags.has_capsule:
-            blocking_list.append(BlockingInfo(
-                reason=BlockingReason.NO_CAPSULE, detail="EVA path"))
-        if sounding <= 0:
+        blocking_list = [BlockingInfo(
+            reason=BlockingReason.NO_CAPSULE, detail="EVA path")]
+        if not can_liftoff:
             blocking_list.append(BlockingInfo(
                 reason=BlockingReason.NO_SOUNDING_ALTITUDE))
         elif not flags.has_parachutes and not flags.has_throttleable_engine:
@@ -4488,16 +4477,12 @@ def evaluate_mission_detailed(
 
         # Path 1: home has an ocean → sounding rocket + safe descent.
         if home_body_obj.has_ocean:
-            sounding = _compute_sounding_altitude(flags, home)
+            sub = _evaluate_sounding(flags, threshold, home)
             descent_ok = flags.has_parachutes or flags.has_throttleable_engine
-            if sounding >= threshold and descent_ok:
+            if sub.feasible and descent_ok:
                 return ProfileResult(True)
-            if sounding < threshold:
-                blocking_list.append(BlockingInfo(
-                    reason=BlockingReason.SOUNDING_ALTITUDE_TOO_LOW,
-                    altitude_km=sounding,
-                    threshold_km=threshold,
-                ))
+            if not sub.feasible:
+                blocking_list.extend(sub.blocking)
             if not descent_ok:
                 blocking_list.append(BlockingInfo(
                     reason=BlockingReason.NO_SAFE_DESCENT))
@@ -4619,128 +4604,123 @@ def evaluate_mission_detailed(
     return ProfileResult(False, blocking=all_blocking)
 
 
-def _evaluate_sounding(flags: EquipmentFlags, threshold_km: float, home: Body) -> ProfileResult:
-    """Evaluate sounding rocket capability against a target altitude."""
-    sounding_km = _compute_sounding_altitude(flags, home)
-    if sounding_km >= threshold_km:
-        return ProfileResult(True, launch_mass=0.0)
+# Sounding altitude is turned into a dv target via
+# ``home.suborbital_dv_required(H, twr)``; the dv needed FALLS as TWR rises
+# (less gravity drag), so the min-mass rocket sits at an interior TWR.  We sweep
+# a few targets and keep the lightest build.  The grid must reach high TWR: a
+# high-thrust engine (Mammoth) flies its sounding near-impulsively (TWR well
+# above 10), where the dv bar is lowest — a grid that stopped at ~5 would call
+# such a rocket infeasible when it plainly reaches the altitude.
+_SOUNDING_TWR_GRID: tuple[float, ...] = (
+    _SOUNDING_MIN_TWR, 1.5, 2.0, 3.0, 5.0, 8.0, 13.0, 20.0)
 
+# A token positive altitude meaning "builds a rocket that actually leaves the
+# pad" — the reframe's replacement for the old ``sounding_altitude > 0`` test
+# used by First Launch / First Landing.
+_SOUNDING_LIFTOFF_KM: float = 0.001
+
+
+def _sounding_payload_masses(flags: EquipmentFlags) -> list[float]:
+    """Candidate sounding payloads (tonnes): a probe core (unmanned) and/or a
+    capsule that can separate and descend safely (needs decoupler + parachute)."""
+    payloads: list[float] = []
+    if flags.lightest_probe:
+        payloads.append(flags.lightest_probe.mass)
+    if (flags.lightest_capsule and flags.lightest_capsule.mass > 0
+            and flags.has_parachutes and flags.staging_tier >= 1):
+        payloads.append(flags.lightest_capsule.mass)
+    return payloads
+
+
+def _sounding_min_launch_mass(
+    flags: EquipmentFlags, home: Body, threshold_km: float) -> float:
+    """Lightest launch mass (t) of a single-stage rocket that reaches apoapsis
+    ``threshold_km`` straight up, IGNORING the pad cap (``inf`` if none exists).
+
+    Reuses the shared multistage ascent optimizer at K=1 (``stack_decoupler=None``)
+    — the SAME model as orbital ascent, so sounding capability can't drift from
+    it.  K=1 gives a single atmospheric liftoff stage: the TWR floor is checked
+    against sea-level (atmospheric) thrust while Isp is blended over the climbed
+    column (``atm_top_m = H*1000``), which the single-stage optimizer's lone
+    ``in_atmosphere`` flag cannot separate.
+    """
+    payloads = _sounding_payload_masses(flags)
+    if not payloads:
+        return math.inf
+    in_atmo = home.has_atmosphere
+    best = math.inf
+    for payload_mass in payloads:
+        for twr in _SOUNDING_TWR_GRID:
+            required_dv = home.suborbital_dv_required(threshold_km, twr)
+            kwargs = _ascent_stage_kwargs(
+                flags, home, in_atmo=in_atmo, min_twr=twr,
+                eligible_engines=flags.available_engines,
+                stack_decoupler=None,          # force K=1 (single straight-up stage)
+                needs_hs=False, heat_shields_arg=(),
+                req_throttle=False, needs_gimbal_engine=False,
+                srb_needs_rcs=False, stage_attitude_mass=0.0, stage_aero_mass=0.0,
+                parallel_mode="none", rdec_mass=0.0, rdec_name="",
+                fl_mass=0.0, fl_name="", run_parallel=False)
+            kwargs["atm_top_m"] = threshold_km * 1000.0  # blend Isp over climbed column
+            stages = find_optimal_multistage_ascent(
+                required_dv=required_dv, payload_mass=payload_mass, **kwargs)
+            if stages:
+                best = min(best, stages[0].stage_mass_wet)
+    return best
+
+
+def _evaluate_sounding(flags: EquipmentFlags, threshold_km: float, home: Body) -> ProfileResult:
+    """Sounding feasibility: can a PAD-FITTING single-stage rocket reach apoapsis
+    ``threshold_km`` straight up?  Evaluated through the shared K=1 ascent
+    optimizer (``_sounding_min_launch_mass``) so it stays in lock-step with the
+    capability system's rocket physics — and enforces the launch-pad mass cap,
+    which the old bespoke model ignored entirely."""
+    min_mass = _sounding_min_launch_mass(flags, home, threshold_km)
+    if min_mass < math.inf and min_mass <= flags.launch_pad_mass_cap:
+        return ProfileResult(True, launch_mass=min_mass)
+
+    if min_mass < math.inf:
+        # A rocket reaches the altitude but is too heavy for the current pad.
+        return ProfileResult(False, launch_mass=min_mass, blocking=[BlockingInfo(
+            reason=BlockingReason.LAUNCH_MASS_EXCEEDED,
+            mass_actual=min_mass,
+            mass_cap=flags.launch_pad_mass_cap,
+        )])
+
+    # No rocket reaches the altitude at any pad size — name the missing piece.
     blocking_list: list[BlockingInfo] = []
-    if sounding_km > 0:
-        blocking_list.append(BlockingInfo(
-            reason=BlockingReason.SOUNDING_ALTITUDE_TOO_LOW,
-            altitude_km=sounding_km,
-            threshold_km=threshold_km,
-            detail="need bigger SRB/engine",
-        ))
-    else:
+    if not _sounding_payload_masses(flags):
         if not flags.has_probe_core and not flags.has_capsule:
-            blocking_list.append(BlockingInfo(
-                reason=BlockingReason.NO_COMMAND_MODULE))
-        elif not flags.has_probe_core and flags.has_capsule:
+            blocking_list.append(BlockingInfo(reason=BlockingReason.NO_COMMAND_MODULE))
+        else:  # a capsule exists but can't separate + descend
             missing = []
             if not flags.has_parachutes:
                 missing.append("parachute")
             if flags.staging_tier < 1:
                 missing.append("decoupler")
-            if missing:
-                blocking_list.append(BlockingInfo(
-                    reason=BlockingReason.CAPSULE_SOUNDING_INCOMPLETE,
-                    detail=", ".join(missing),
-                ))
-        if not flags.available_srbs and not flags.available_engines:
             blocking_list.append(BlockingInfo(
-                reason=BlockingReason.NO_PROPULSION))
-        elif flags.available_engines and not flags.available_tanks:
-            blocking_list.append(BlockingInfo(reason=BlockingReason.NO_FUEL))
+                reason=BlockingReason.CAPSULE_SOUNDING_INCOMPLETE,
+                detail=", ".join(missing) or "survival gear"))
+    elif not flags.available_srbs and not flags.available_engines:
+        blocking_list.append(BlockingInfo(reason=BlockingReason.NO_PROPULSION))
+    elif flags.available_engines and not flags.available_tanks and not flags.available_srbs:
+        blocking_list.append(BlockingInfo(reason=BlockingReason.NO_FUEL))
+    else:
+        blocking_list.append(BlockingInfo(
+            reason=BlockingReason.SOUNDING_ALTITUDE_TOO_LOW,
+            threshold_km=threshold_km,
+            detail="need more thrust / delta-v"))
     return ProfileResult(False, blocking=blocking_list)
+
+
+def _sounding_reaches(flags: EquipmentFlags, home: Body, threshold_km: float) -> bool:
+    """Bool sounding predicate for the home-milestone access rules."""
+    return _evaluate_sounding(flags, threshold_km, home).feasible
 
 
 # ---------------------------------------------------------------------------
 # Step 4: Assemble RocketCapability
 # ---------------------------------------------------------------------------
-
-def _compute_sounding_altitude(flags: EquipmentFlags, home: Body) -> float:
-    """
-    Estimate the maximum altitude (km) achievable with a single-stage sounding
-    rocket built from the player's current parts, launched from ``home``.
-
-    Back-computation goes through ``home.max_suborbital_altitude_km(dv, twr)``
-    (no atm drag; simple gravity-drag).  ``home.surface_gravity`` is used for
-    TWR; ``9.81`` (the Isp reference constant ``g0``) is used for the
-    rocket equation.  Engine thrust uses sea-level ``atm_thrust`` on atmo
-    bodies and ``vac_thrust`` on vacuum bodies — the engine actually
-    performs at vac in vacuum, so atm_thrust would understate it.
-
-    Vacuum Isp is used throughout: drag is ignored, so the dv that does
-    real work is the high-altitude regime where atm Isp loss is small.
-
-    Payload options:
-      • Probe core (unmanned) — no survival constraint.
-      • Capsule (crewed) — requires decoupler + parachute so the pod can
-        separate from the rocket body and land safely.
-    """
-    G0 = 9.81  # standard Isp reference (physical constant, not body-dependent)
-    g = home.surface_gravity
-    use_atm_thrust = home.has_atmosphere
-    best_km = 0.0
-
-    payloads: list[float] = []
-    if flags.lightest_probe:
-        payloads.append(flags.lightest_probe.mass)
-    if flags.lightest_capsule and flags.lightest_capsule.mass > 0:
-        # Crewed: survivable iff (decoupler + at least one parachute)
-        if flags.has_parachutes and flags.staging_tier >= 1:
-            payloads.append(flags.lightest_capsule.mass)
-
-    if not payloads:
-        return 0.0
-
-    for payload_mass in payloads:
-        # Liquid / LF engines
-        for engine in flags.available_engines:
-            if engine.fuel_type not in ("lfo", "lf"):
-                continue  # ion/xenon have negligible atm thrust
-            thrust = engine.atm_thrust if use_atm_thrust else engine.vac_thrust
-            m_base = engine.mass + payload_mass
-            max_total = thrust / (_SOUNDING_MIN_TWR * g)
-            if m_base >= max_total:
-                continue
-            max_prop = max_total - m_base
-            for tank in flags.available_tanks:
-                if tank.fuel_type != engine.fuel_type:
-                    continue
-                tank_full = tank.dry_mass + tank.fuel_mass
-                n = int(max_prop / tank_full)
-                if n < 1:
-                    continue
-                m0 = m_base + n * tank_full
-                m_dry = m_base + n * tank.dry_mass
-                if m_dry <= 0 or m0 <= m_dry:
-                    continue
-                dv = engine.vac_isp * G0 * math.log(m0 / m_dry)
-                twr = thrust / (g * m0)
-                if twr < _SOUNDING_MIN_TWR:
-                    continue
-                h_km = home.max_suborbital_altitude_km(dv, twr)
-                best_km = max(best_km, h_km)
-
-        # Solid rocket boosters
-        for srb in flags.available_srbs:
-            m0 = srb.dry_mass + srb.fuel_mass + payload_mass
-            m_dry = srb.dry_mass + payload_mass
-            if m_dry <= 0 or m0 <= m_dry:
-                continue
-            thrust = srb.atm_thrust if use_atm_thrust else srb.vac_thrust
-            twr = thrust / (g * m0)
-            if twr < _SOUNDING_MIN_TWR:
-                continue
-            dv = srb.vac_isp * G0 * math.log(m0 / m_dry)
-            h_km = home.max_suborbital_altitude_km(dv, twr)
-            best_km = max(best_km, h_km)
-
-    return best_km
-
 
 def compute_capability_from_items(
     item_count_fn: Callable[[str], int],
@@ -4772,7 +4752,6 @@ def compute_capability_from_items(
     # Lazy: bodies are assessed on first query (AP fill rules touch only
     # a few bodies per state; eager _assess_bodies evaluated all 17).
     body_profiles = _LazyBodyProfiles(flags, diff, mission_builder)
-    sounding_km = _compute_sounding_altitude(flags, mission_builder.home_body)
 
     if flags.has_rtg:
         power_str = "rtg"
@@ -4794,7 +4773,6 @@ def compute_capability_from_items(
         has_rtg=flags.has_rtg,
         has_isru=flags.has_isru,
         has_docking_port=flags.has_docking_port,
-        sounding_altitude_km=sounding_km,
         relay_tier=flags.relay_tier,
         dsn_power=flags.dsn_power,
         power_profile=power_str,

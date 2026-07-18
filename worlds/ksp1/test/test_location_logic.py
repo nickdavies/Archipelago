@@ -437,13 +437,13 @@ class TestKerbinEarlyLocations(KSP1TestBase):
             )
 
     def test_altitude_checks_gate_with_sounding(self):
-        """Altitude check locations require strictly increasing sounding thresholds.
+        """Altitude check locations gate on their own threshold via the sounding
+        predicate.
 
-        Mocks the sounding-altitude computation (``_compute_sounding_altitude``,
-        the cheap-flags function the altitude rule actually calls) to avoid
-        depending on the SRB physics model.  Altitudes are read from the Kerbin
-        home location set so this stays correct if the milestone schedule shifts
-        (Phase 3a moved from 5/15/25/…/70 to 5/10/16/20/30/45/70).
+        Mocks ``_sounding_reaches`` (the per-threshold bool the altitude rule
+        actually calls) to avoid depending on the ascent physics model.
+        Altitudes are read from the Kerbin home location set so this stays
+        correct if the milestone schedule shifts (5/10/16/20/30/45/70).
         """
         altitudes = sorted(
             int(loc.threshold_km)
@@ -453,27 +453,31 @@ class TestKerbinEarlyLocations(KSP1TestBase):
             and loc.threshold_km >= 1.0  # exclude First Crash (0.1 km)
         )
 
-        # sounding = 10 km: only the lowest milestones pass
-        with patch("worlds.ksp1.rules._compute_sounding_altitude", return_value=10.0):
+        def reaches_up_to(limit_km):
+            # the rule calls _sounding_reaches(flags, home, threshold_km)
+            return lambda _flags, _home, threshold_km: threshold_km <= limit_km
+
+        # reachable up to 10 km: only the lowest milestones pass
+        with patch("worlds.ksp1.rules._sounding_reaches", side_effect=reaches_up_to(10.0)):
             for km in altitudes:
                 name = f"Kerbin {km}km Altitude"
                 if km <= 10:
                     self.assertTrue(self.can_reach_location(name),
-                                    f"{km} km check must pass with 10 km sounding")
+                                    f"{km} km check must pass when reachable to 10 km")
                 else:
                     self.assertFalse(self.can_reach_location(name),
-                                     f"{km} km check must fail with 10 km sounding")
+                                     f"{km} km check must fail when reachable to 10 km")
 
-        # sounding = 50 km: everything below 50 km passes, top tier fails
-        with patch("worlds.ksp1.rules._compute_sounding_altitude", return_value=50.0):
+        # reachable up to 50 km: everything below 50 km passes, top tier fails
+        with patch("worlds.ksp1.rules._sounding_reaches", side_effect=reaches_up_to(50.0)):
             for km in altitudes:
                 name = f"Kerbin {km}km Altitude"
                 if km <= 50:
                     self.assertTrue(self.can_reach_location(name),
-                                    f"{km} km check must pass with 50 km sounding")
+                                    f"{km} km check must pass when reachable to 50 km")
                 else:
                     self.assertFalse(self.can_reach_location(name),
-                                     f"{km} km check must fail with 50 km sounding")
+                                     f"{km} km check must fail when reachable to 50 km")
 
 
 # ---------------------------------------------------------------------------

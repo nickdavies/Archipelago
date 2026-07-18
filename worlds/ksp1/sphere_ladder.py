@@ -4549,8 +4549,7 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
                     )
                     _out.write(f'  step {_i:2d} +{_it.name!r}: reach={_step_reach}/'
                                f'{len(_locs)} engines={len(_f.available_engines)} '
-                               f'tanks={len(_f.available_tanks)} '
-                               f'sounding_km={_c.sounding_altitude_km:.0f}\n')
+                               f'tanks={len(_f.available_tanks)}\n')
     except Exception as _e:
         with open('/home/nick/workspaces/ksp_ap/scratchpad/diag.txt', 'a') as _out:
             import traceback
