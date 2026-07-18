@@ -194,7 +194,8 @@ def _format_profile_summary(info: CheckInfo, mission_builder: MissionBuilder) ->
 
     if mt == MissionType.FIRST_STAGING:
         lines.append(f"  Profile: [first staging]")
-        lines.append(f"  Requires: stack decoupler (staging_tier >= 1)")
+        lines.append(f"  Requires: decoupler (staging_tier >= 1) + command part "
+                     f"(capsule or probe core)")
         return lines
 
     if mt == MissionType.SPLASHDOWN:

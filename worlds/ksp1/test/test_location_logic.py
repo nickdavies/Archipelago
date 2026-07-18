@@ -301,6 +301,32 @@ class TestKerbinEarlyLocations(KSP1TestBase):
             "First Landing: sounding > 0 + throttleable engine must pass",
         )
 
+    def test_staging_needs_command_part(self):
+        """First Staging needs a command part, not just a decoupler.
+
+        A lone stack decoupler sets staging_tier ≥ 1 but the vessel can't be
+        controlled or staged — the milestone must stay out of logic until a
+        capsule or probe core is collected (matching every sibling milestone).
+        """
+        self.collect_by_name("Decoupler.1")   # TR-18A stack decoupler → staging_tier = 1
+        self.assertFalse(
+            self.can_reach_location("Kerbin First Staging"),
+            "First Staging: a decoupler with no command part must NOT be in logic",
+        )
+
+    def test_staging_enabled_by_decoupler_plus_command(self):
+        """Stack decoupler + probe core (or capsule) → First Staging in logic."""
+        self.collect_by_name("Decoupler.1")
+        self.assertFalse(
+            self.can_reach_location("Kerbin First Staging"),
+            "sanity: decoupler alone is not enough",
+        )
+        self.collect_by_name("probeCoreSphere.v2")
+        self.assertTrue(
+            self.can_reach_location("Kerbin First Staging"),
+            "First Staging: decoupler + probe core must pass",
+        )
+
     def test_splashdown_needs_altitude_and_descent_control(self):
         """Capsule alone (sounding = 0): Splashdown rule requires sounding ≥ 1.0 km."""
         self.collect_by_name("mk1pod.v2")

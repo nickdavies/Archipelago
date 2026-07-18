@@ -507,8 +507,13 @@ def _make_first_landing_rule(player: int) -> Callable[[CollectionState], bool]:
 
 
 def _make_staging_rule(player: int) -> Callable[[CollectionState], bool]:
+    """A staging event needs something to stage (a decoupler) AND a command
+    part to control the vessel — matching every sibling milestone (First
+    Launch / Landing / Sounding all require a probe core or capsule)."""
     def rule(state: CollectionState) -> bool:
-        return cheap_flags(state, player).staging_tier >= 1
+        flags = cheap_flags(state, player)
+        return (flags.staging_tier >= 1
+                and (flags.has_capsule or flags.has_probe_core))
     return rule
 
 

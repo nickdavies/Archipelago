@@ -4468,13 +4468,18 @@ def evaluate_mission_detailed(
         return ProfileResult(False, blocking=blocking_list)
 
     if mission_type == MissionType.FIRST_STAGING:
-        if flags.staging_tier >= 1:
-            return ProfileResult(True)
-        return ProfileResult(False, blocking=[BlockingInfo(
-            reason=BlockingReason.STAGING_TIER_INSUFFICIENT,
-            stages_needed=0,
-            stages_available=0,
-        )])
+        if flags.staging_tier < 1:
+            return ProfileResult(False, blocking=[BlockingInfo(
+                reason=BlockingReason.STAGING_TIER_INSUFFICIENT,
+                stages_needed=0,
+                stages_available=0,
+            )])
+        # Staging a vessel needs a command part to fly it — a lone decoupler
+        # can't be controlled or staged.
+        if not flags.has_capsule and not flags.has_probe_core:
+            return ProfileResult(False, blocking=[BlockingInfo(
+                reason=BlockingReason.NO_COMMAND_MODULE)])
+        return ProfileResult(True)
 
     if mission_type == MissionType.SPLASHDOWN:
         threshold = threshold_km or 1.0
