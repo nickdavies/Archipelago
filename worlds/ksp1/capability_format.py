@@ -34,6 +34,41 @@ class CheckInfo:
     threshold_km: float | None = None  # sounding rocket target altitude
 
 
+@dataclass(frozen=True)
+class DiscoveryStatus:
+    """Whether a location's body is reachable through the hidden-body Discover
+    gates, for the ``/explain`` report.
+
+    When ``discovered`` is False the body region can't be reached at all, so it
+    is the real blocker regardless of rocket physics; ``blocking_body`` /
+    ``discover_item`` name the first region you can't reach (the topmost
+    undiscovered ancestor).  ``None`` is passed to the formatters when the
+    hidden-bodies feature isn't gating anything, keeping their output unchanged.
+    """
+    discovered: bool
+    blocking_body: Optional[str] = None
+    discover_item: Optional[str] = None
+
+
+def _discovery_lines(discovery: Optional[DiscoveryStatus]) -> list[str]:
+    """Render the hidden-body discovery gate as a leading /explain section.
+
+    Empty when nothing is gated (``discovery is None``).  When the body is
+    undiscovered its region can't be reached at all, so this is the headline
+    Failure reason — surfaced ahead of, and independent of, the rocket-physics
+    verdict (which is discovery-blind)."""
+    if discovery is None:
+        return []
+    if discovery.discovered:
+        return ["  Body discovered: YES"]
+    return [
+        "  Body discovered: NO",
+        f"  Failure reason: cannot reach {discovery.blocking_body} region "
+        f"-- need '{discovery.discover_item}'",
+        "",
+    ]
+
+
 def _build_check_map() -> dict[str, CheckInfo]:
     """Build mapping from location name -> mission parameters.
 

@@ -1115,7 +1115,7 @@ class KSP1World(World):
         from .capability import compute_capability_from_items, evaluate_mission_detailed
         from .capability_format import (
             CHECK_MAP, format_rocket_output, format_parts_list,
-            format_contract_output,
+            format_contract_output, _discovery_lines,
         )
 
         # Sub-command: /explain parts [filter]
@@ -1145,6 +1145,12 @@ class KSP1World(World):
         info = CHECK_MAP.get(target_name)
         difficulty_name = effective_physics_profile_name(self.options)
 
+        # Hidden-body discovery gate — general over location type: any body
+        # location is unreachable until its (and its ancestors') Discover items
+        # are held, regardless of rocket physics.  Rendered as a leading section
+        # on every report; empty when nothing is gated.
+        discovery = _discovery_lines(self._discovery_status(loc_obj, state))
+
         # Pass the SAME pad-cap gate the live access rules use
         # (_compute_capability), or /explain would render at unlimited pad —
         # disagreeing with the real "In logic" verdict and never showing the
@@ -1170,7 +1176,7 @@ class KSP1World(World):
                 self.mission_builder, proxy=False,
                 part_manager=self.part_manager,
             )
-            return [{"type": "text", "text": "\n".join(lines)}]
+            return [{"type": "text", "text": "\n".join(discovery + lines)}]
 
         result = None
         if info is not None:
@@ -1186,7 +1192,31 @@ class KSP1World(World):
             difficulty_name, self.mission_builder,
             sounding_altitude_km=cap.sounding_altitude_km,
         )
-        return [{"type": "text", "text": "\n".join(lines)}]
+        return [{"type": "text", "text": "\n".join(discovery + lines)}]
+
+    def _discovery_status(self, loc_obj, state: CollectionState):
+        """Hidden-body Discover gate for a location's body, for ``/explain``.
+
+        General over location type: the body is read from the location's own
+        region (body regions are named by the body), so missions, contracts and
+        any future body location are covered uniformly.  Returns ``None`` when
+        the hidden-bodies feature gates nothing, or the location has no body
+        (KSC / tech / Menu regions)."""
+        from .capability_format import DiscoveryStatus
+        from .rules import first_undiscovered_body
+        from .items import discover_item_name
+        gated = frozenset(getattr(self, "gated_hidden_bodies", ()))
+        region = loc_obj.parent_region
+        if not gated or region is None:
+            return None
+        try:
+            body = BodyName(region.name)
+        except ValueError:
+            return None  # not a body region (KSC / tech / Menu)
+        blocker = first_undiscovered_body(state, self.player, body, gated)
+        if blocker is None:
+            return DiscoveryStatus(discovered=True)
+        return DiscoveryStatus(False, str(blocker), discover_item_name(blocker))
 
     def _contract_spec_for_name(self, name: str):
         """The ContractSpec whose location matches ``name``, or None. Looks up the

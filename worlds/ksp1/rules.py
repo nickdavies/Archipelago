@@ -259,6 +259,28 @@ def _discovered(
     return True
 
 
+def first_undiscovered_body(
+    state: CollectionState, player: int, body: BodyName,
+    gated_hidden: frozenset,
+) -> BodyName | None:
+    """The shallowest (closest-to-Menu) body on ``body``'s ancestor chain that
+    is gated-hidden with its Discover item not held — i.e. the first body region
+    unreachable from Menu.  ``None`` if the whole chain is discovered.
+
+    A hidden ancestor makes every descendant unreachable (moon regions hang off
+    their planet's), so the topmost undiscovered gate is the one to report as
+    "the first region you can't reach".  Used by ``/explain``."""
+    chain: list[BodyName] = []
+    cur: BodyName | None = body
+    while cur is not None:
+        chain.append(cur)
+        cur = BODY_BY_NAME[cur].parent
+    for b in reversed(chain):   # planet (top) -> ... -> body
+        if b in gated_hidden and not state.has(discover_item_name(b), player):
+            return b
+    return None
+
+
 def _cheap_bankable_science(
     state: CollectionState, player: int, world, home: BodyName,
 ) -> float:

@@ -216,6 +216,56 @@ class TestHiddenScienceRequiresDiscovery(KSP1TestBase):
             f"({round(without_disc)} without -> {round(with_disc)} with)")
 
 
+class TestExplainDiscoveryGate(KSP1TestBase):
+    """`/explain` surfaces the hidden-body Discover gate as the headline reason
+    when a location's body isn't reachable yet (bug 4)."""
+    options = {"body_visibility_mode": "home_system", "goal": "duna_return"}
+
+    def _state(self, discovered=()):
+        s = CollectionState(self.multiworld)
+        for it in self.multiworld.precollected_items[self.player]:
+            s.collect(it, prevent_sweep=True)
+        for it in self.multiworld.itempool:
+            if it.name.startswith("Discover ") and it.name not in discovered:
+                continue
+            s.collect(it, prevent_sweep=True)
+        s.update_reachable_regions(self.player)
+        return s
+
+    def _explain(self, loc_name, state) -> str:
+        out = self.world.explain_rule(loc_name, state)
+        return "\n".join(seg["text"] for seg in out)
+
+    def test_undiscovered_body_is_headline_reason(self):
+        txt = self._explain("Duna Orbit 1", self._state())
+        self.assertIn("Body discovered: NO", txt)
+        self.assertIn("cannot reach Duna region", txt)
+        self.assertIn("Discover Duna", txt)
+
+    def test_discovered_body_reported_yes(self):
+        txt = self._explain("Duna Orbit 1", self._state(discovered={"Discover Duna"}))
+        self.assertIn("Body discovered: YES", txt)
+
+    def test_moon_reports_topmost_undiscovered_ancestor(self):
+        # Ike discovered but its parent Duna not: the first region you can't
+        # reach is Duna (the shallowest gate), not Ike itself.
+        txt = self._explain("Ike Orbit 1", self._state(discovered={"Discover Ike"}))
+        self.assertIn("cannot reach Duna region", txt)
+        self.assertNotIn("cannot reach Ike region", txt)
+
+
+class TestExplainDiscoveryGateFeatureOff(KSP1TestBase):
+    """Feature off: /explain output carries no discovery section (unchanged)."""
+    options = {"body_visibility_mode": "all_visible", "goal": "duna_return"}
+
+    def test_no_discovery_line_when_nothing_gated(self):
+        s = CollectionState(self.multiworld)
+        s.update_reachable_regions(self.player)
+        out = self.world.explain_rule("Duna Orbit 1", s)
+        txt = "\n".join(seg["text"] for seg in out)
+        self.assertNotIn("Body discovered", txt)
+
+
 class TestFeatureOnFullReachability(KSP1TestBase):
     """End-to-end: with the feature ON, WorldTestBase's default suite (fill,
     accessibility=full reachability, beatability) must pass — the strongest
