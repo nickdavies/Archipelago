@@ -4,8 +4,8 @@ The strict-ladder fill gates each capability mission with a cheap
 ``has_all(reps)`` bracket rule for speed.  ``post_fill`` then re-verifies the
 SAME seed under the REAL capability rules, sweeping from scratch — and if that
 disagrees (a location the cheap fill treated as reachable is not reachable under
-real physics, e.g. because capability is non-monotone in the part set), it pays
-an expensive whole-seed fallback re-fill.
+real physics, e.g. because capability is non-monotone in the part set), it
+raises OptionError (a hard assert — there is no rescue).
 
 This test is the structural guard for that agreement: build a seed, run the real
 strict-ladder fill, then install the saved capability rules and assert the seed
@@ -71,6 +71,15 @@ _CONFIGS = [
     # (bigger kit, heavier rocket → over Moho's pad cap).  Guards the
     # scan-all-owned-tiers charge.
     ("mun_flag", "moho", "count", 11551505357908101103, {}),
+    # Evaluator split-brain seeds: the ladder proved brackets with the lifter
+    # table while the runtime rules / cross-check judged with the raw online
+    # search — table/raw masses straddled Tylo's scaled pad caps (13.67 vs
+    # 13.88 over cap 13.72; 149.5 vs 376.2 over cap 274.5) and the sig
+    # under-required the pad relative to the raw judge.  Guards the unified
+    # evaluator (runtime consults the table; raw fallback on chain-prefix
+    # miss stays runtime-only, guidance hard-fail stays ladder-only).
+    ("standard_sample_returns", "tylo", "count", 13137605720836865799, {}),
+    ("complete_tech_tree", "tylo", "count", 3892266478646511270, {}),
 ]
 
 
@@ -94,8 +103,8 @@ def _build_and_fill(goal: str, home: str, mode: str, seed: int,
     for step in gen_steps:  # includes pre_fill -> apply_sphere_ladder
         AutoWorld.call_all(mw, step)
     distribute_items_restrictive(mw)
-    # Run the real post_fill cross-check so ``_strict_ladder_fell_back``
-    # reflects a genuine divergence (gen_steps stops at pre_fill).
+    # Run the real post_fill cross-check — a genuine divergence raises here
+    # (gen_steps stops at pre_fill).
     AutoWorld.call_all(mw, "post_fill")
     return mw
 
@@ -104,15 +113,11 @@ class TestCapabilityCrossCheck:
     """Build + fill, then assert the seed is beatable under REAL capability."""
 
     def _check(self, goal, home, mode, seed, extra_opts=None):
+        # A divergence on these fixed seeds raises OptionError straight out of
+        # post_fill (the cross-check is a hard assert; there is no rescue), so
+        # merely completing the build is the first half of the check.
         mw = _build_and_fill(goal, home, mode, seed, extra_opts)
         world = mw.worlds[1]
-        # The post_fill cross-check must not have needed the whole-seed
-        # re-fill rescue: a fallback on these fixed seeds is a cheap-bracket
-        # vs capability divergence (bug 092 class) even though the rescue
-        # makes the seed solvable.
-        assert not getattr(world, "_strict_ladder_fell_back", False), (
-            f"{goal}/{home}/{mode} seed={seed}: strict-ladder fallback fired "
-            "(cheap-bracket vs capability divergence)")
         saved = getattr(world, "_strict_ladder_saved_rules", None) or {}
         assert saved, "expected strict-ladder saved capability rules"
         # Swap the cheap bracket rules for the real capability rules and verify
@@ -145,3 +150,9 @@ class TestCapabilityCrossCheck:
 
     def test_bug_103_mun_flag_moho(self):
         self._check(*_CONFIGS[6])
+
+    def test_evaluator_split_ssr_tylo(self):
+        self._check(*_CONFIGS[7])
+
+    def test_evaluator_split_tech_tree_tylo(self):
+        self._check(*_CONFIGS[8])

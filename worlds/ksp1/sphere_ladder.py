@@ -468,11 +468,15 @@ def _evaluate(
             info.spec is not None
             and info.spec.contract_type in PRECISE_POINTING_TYPES),
         run_parallel=run_parallel,
-        # The sphere-ladder evaluator is the ONE opt-in to the pre-cached
-        # home-ascent lifter table (mission_builder.lifter_table).  post_fill
-        # cross-check / spoiler / get_capability keep use_lifter_table=False
-        # and stay on raw physics — the table never gates a shipped seed alone.
+        # Explicit for emphasis: the ladder proves brackets with the lifter
+        # table, and the runtime rules / post_fill cross-check consult the SAME
+        # table (capability's default) — one trusted evaluator everywhere, so a
+        # bracket proof can never be convicted by a weaker-searching judge.
+        # lifter_guidance: a chain-prefix miss is the bumper's steering signal
+        # (and skips the raw ascent search per trial); runtime consumers leave
+        # it off and fall back to the raw search on a miss.
         use_lifter_table=True,
+        lifter_guidance=True,
     )
 
 
@@ -2897,10 +2901,10 @@ def _install_ladder_rules(
     # the generic bracket rule buys no speed (both are cheap) but DIVERGES the
     # fill-time rule from the post_fill rule — the bracket rule keys on the sphere's
     # cumulative reps_collected (not the contract's own cheap_contract_reps) and
-    # omits the award gate on goal-contract events, so fill stranded the award /
-    # required parts and the strict_ladder cross-check then forced an expensive
-    # whole-seed capability re-fill.  Leave these rules in place so fill and
-    # post_fill use the SAME rule (single source of truth).
+    # omits the award gate on goal-contract events, so fill can strand the
+    # award / required parts and the strict_ladder cross-check then hard-fails
+    # the seed.  Leave these rules in place so fill and post_fill use the SAME
+    # rule (single source of truth).
     contract_ruled: set = getattr(world, "_contract_ruled_locations", set())
     bracket_by_mission: dict[tuple, Optional[int]] = {}
     # Per-location feasibility bracket (first sphere whose cumulative kit can
@@ -4007,11 +4011,23 @@ def _build_ladder_graph_walk(
             predictable_labels,
             key=lambda ln: _goal_dv(ln[2], world.mission_builder)):
         dv = _goal_dv(desc, world.mission_builder)
-        # Fold the deep-space enablers into the accumulated prior when the anchor
-        # is interplanetary-deep (the from-empty path does the same before
-        # bumping a deep goal anchor).
-        _prior_sig, _prior_reps = _apply_deep_inject(
-            _anchor_sig, _anchor_reps, dv)
+        if label == "S_launch":
+            # S_launch walks from EMPTY, not the home-orbit warm start: its kit
+            # becomes sphere 0 and (via the marginal signature) the First Launch
+            # location's cheap gate, so it must be a genuine tier-0-pad liftoff
+            # kit.  Inheriting the orbit kit here handed First Launch a
+            # heavy-parts gate with the pad requirement dropped from the
+            # marginal — fill then buried bootstrap items behind a "liftoff"
+            # whose real rule (pad-cap-enforcing sounding) is False at scaled
+            # far-home pads.  The bumper bumps the Pad axis itself if no kit
+            # lifts off at tier 0, so the gate stays honest either way.
+            _prior_sig, _prior_reps = Signature.empty(), frozenset()
+        else:
+            # Fold the deep-space enablers into the accumulated prior when the
+            # anchor is interplanetary-deep (the from-empty path does the same
+            # before bumping a deep goal anchor).
+            _prior_sig, _prior_reps = _apply_deep_inject(
+                _anchor_sig, _anchor_reps, dv)
         rocket = minimal_ranks_for(
             desc, _prior_sig, ctx, prior_reps=_prior_reps, **_bump_kw,
         )
@@ -4348,6 +4364,10 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
     # locked, never touched by the orbit-kit ban).  The rover-kit pre-fill makes
     # those rules satisfiable on connect, but the solve is correct without it (AP
     # fill lands a control source / rover reachably regardless).
+    #
+    # First Launch's real gate comes from the S_launch anchor's from-empty
+    # marginal (set in the predictable-anchor walk; the setdefault below no-ops
+    # for it) — an honest tier-0-pad liftoff kit, not the orbit-kit warm start.
     _gate_early: dict[str, Signature] = {first_launch: Signature.empty()}
     for loc in world.multiworld.get_locations(world.player):
         if loc.address is None:
@@ -4388,7 +4408,7 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
     # swapped in:
     #   * ladder / strict_ladder — install the cheap bracket rule (strict_ladder
     #     additionally saves the raw capability rule so post_fill can re-prove
-    #     the placement under physics and re-fill if the bracket ever diverged).
+    #     the placement under physics — a divergence hard-fails the seed).
     #   * capability / strict_validation — leave the raw capability access rule
     #     in place, gating the whole seed on real physics for verification.
     ladder_mode = _ACCESS_RULE_MODE in ("ladder", "strict_ladder")

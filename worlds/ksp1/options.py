@@ -380,7 +380,13 @@ class KSP1Accessibility(ItemsAccessibility):
     See bug 074 for the full rationale.
     """
     default = ItemsAccessibility.option_minimal
-    __doc__ = ItemsAccessibility.__doc__
+    __doc__ = (ItemsAccessibility.__doc__ or "") + (
+        "\n"
+        "    KSP1 note: **minimal** is the supported default.  Stricter modes\n"
+        "    (items/full) force every progression item onto the conservative\n"
+        "    physics ladder; a rare seed can fail the post-fill physics check\n"
+        "    and need a reroll.\n"
+    )
 
 
 class ExcludeLateTechTree(Toggle):

@@ -51,15 +51,6 @@ from .tech_tree import MAX_TIER, NODES_BY_TIER, TECH_NODES, TIER_TO_BAND
 from .effects import RD_FACILITY_THRESHOLDS
 
 
-# Diagnostic flag: keep the strict_ladder post_fill physics cross-check but
-# DISABLE the re-fill fallback — raise instead of rescuing.  For perf testing
-# (the fallback is a whole-seed capability re-fill that otherwise dominates
-# slow-goal wall time) and correctness testing (a cheap-rule-vs-capability
-# divergence fails loudly here instead of being silently repaired).  Default
-# off = normal rescue behaviour.
-_NO_STRICT_LADDER_FALLBACK = os.environ.get("KSP_NO_STRICT_LADDER_FALLBACK") == "1"
-
-
 class KSP1State(LogicMixin):
     """Inject per-player stale flag + cached result onto CollectionState.
 
@@ -410,6 +401,7 @@ class KSP1World(World):
         # pool, capability, the rank table, and the feasibility lookup.
         self.part_manager = part_manager_for(
             frozenset(self.options.enabled_part_packs.value))
+
         # Per-world RankContext for sphere-ladder + item.rank_sig.
         # ``home_has_atmosphere`` drives the SRB axis scorer; ``enabled_packs``
         # scopes the rank table to the parts this seed can actually grant.
@@ -771,9 +763,9 @@ class KSP1World(World):
         # them on the real capability path.  can_beat_game therefore verifies
         # contract capability alongside missions — no separate mode-toggle needed
         # (contract_access is already computed inside the get_capability the
-        # mission rules trigger, so it costs nothing extra).  The real rules stay
-        # installed through the fallback re-fill below and are restored (with the
-        # cheap rules) only on the success path.
+        # mission rules trigger, so it costs nothing extra).  The cheap rules
+        # are restored only on the success path — on the failure path below
+        # generation aborts, so the installed rules no longer matter.
         if self.multiworld.can_beat_game():
             for loc in self.multiworld.get_locations(self.player):
                 if loc.name in cheap_rules:
@@ -781,58 +773,41 @@ class KSP1World(World):
             return  # cheap-rule fill is winnable under capability — done
 
         # The cheap-rule fill produced a placement capability can't solve — a
-        # cheap-rule-vs-capability divergence (now rare, ~0.5%, mostly Laythe
-        # deep-interplanetary after the contract-rule unification).
-        self._strict_ladder_fell_back = True
-        summary = self._strict_ladder_divergence_summary()
-
-        if _NO_STRICT_LADDER_FALLBACK:
-            # Diagnostic mode: keep the strict physics cross-check but skip the
-            # rescue — surface the divergence as a hard failure (perf +
-            # correctness testing).  solve-check classifies this as UNSOLVABLE.
-            raise OptionError(
-                "strict_ladder cross-check failed and the fallback is disabled "
-                f"(KSP_NO_STRICT_LADDER_FALLBACK): home={self.mission_builder.home} "
-                f"goal={self.options.goal.current_key} — {summary}"
-            )
-
-        # FALLBACK.  Log the divergence (the punch-list for the round-trip fix)
-        # and RE-FILL with the capability rules now active — equivalent to
-        # strict_validation for this one seed.  Rare, so the slow fill is only
-        # paid where the cheap path is unsound.
-        import logging
-        from Fill import distribute_items_restrictive
-        logging.warning(
-            "KSP1 strict_ladder fallback (re-fill with capability rules): "
-            "home=%s goal=%s — %s",
-            self.mission_builder.home, self.options.goal.current_key, summary,
+        # cheap-rule-vs-capability divergence.  There is no rescue: the old
+        # whole-seed re-fill was single-player-shaped (it cleared only THIS
+        # world's locations, so it could never relocate KSP progression items
+        # scattered into other games' worlds) and was deleted.  Divergences are
+        # a measured-rare bracketing bug; fail with an actionable message and
+        # the punch-list summary.
+        hint = (
+            "reroll the seed"
+            if self.options.accessibility.current_key == "minimal"
+            else "reroll the seed, or set accessibility: minimal (the "
+                 "supported default for KSP1)"
         )
-        cleared = []
-        for loc in self.multiworld.get_locations(self.player):
-            if loc.address is not None and loc.item is not None and not loc.locked:
-                it = loc.item
-                loc.item = None
-                it.location = None
-                cleared.append(it)
-        self.multiworld.itempool = cleared
-        distribute_items_restrictive(self.multiworld)
-        if not self.multiworld.can_beat_game():
-            raise OptionError(
-                "strict_ladder fallback FAILED: a capability-rule re-fill is "
-                "still not winnable — genuine unsolvable seed, not a "
-                "bracketing bug."
-            )
+        raise OptionError(
+            f"KSP1 '{self.player_name}': the post-fill physics cross-check "
+            "could not verify this seed is completable — a cheap-rule vs "
+            f"capability divergence, not an options problem.  Fix: {hint}.  "
+            f"home={self.mission_builder.home} "
+            f"goal={self.options.goal.current_key} — "
+            f"{self._strict_ladder_divergence_summary()}"
+        )
 
     def _strict_ladder_divergence_summary(self) -> str:
         """Short description of what capability can't reach under the cheap
-        fill — logged on fallback to build the round-trip (3) punch-list."""
+        fill — the punch-list for closing the divergence.  Scans this world's
+        locations AND this world's own progression items placed in other
+        players' worlds (in a multiworld the latter are exactly the items a
+        local-only scan is blind to)."""
         from BaseClasses import CollectionState, ItemClassification
         st = CollectionState(self.multiworld)
         st.sweep_for_advancements()
         unreached = [
             (l.name, l.item.name)
-            for l in self.multiworld.get_locations(self.player)
+            for l in self.multiworld.get_locations()
             if l.item and (l.item.classification & ItemClassification.progression)
+            and (l.player == self.player or l.item.player == self.player)
             and not l.can_reach(st)
         ]
         sample = ", ".join(f"{n}<-{it}" for n, it in unreached[:5])

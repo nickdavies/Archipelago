@@ -771,7 +771,14 @@ def _pre_pass(item_count_fn: Callable[[str], int],
             eff_mass = usable_fuel_mass(tank, engine_props)
             if eff_mass <= 0:
                 continue
-            key = (engine_ft, tank.dry_mass, eff_mass, tank.size_class)
+            # Roles are part of the dedup identity: stat-identical tanks with
+            # different structural roles are NOT interchangeable — the stage
+            # builder mounts SPINE tanks only, so letting a RADIAL_MOUNT tank
+            # (radialRCSTank) evict a stat-twin SPINE tank (rcsTankMini) makes
+            # acquiring the radial tank LOSE every mission with a monoprop
+            # stage (bug-092-class non-monotonicity).
+            key = (engine_ft, tank.dry_mass, eff_mass, tank.size_class,
+                   tank.roles)
             if key in seen_tank_stats:
                 continue
             seen_tank_stats.add(key)
@@ -779,6 +786,8 @@ def _pre_pass(item_count_fn: Callable[[str], int],
                 bucket.append(tank)
             else:
                 # Synthetic view: same physical tank, reduced fuel mass.
+                # Roles carry over — dropping them to the empty default would
+                # strip SPINE and make every drained view unmountable.
                 bucket.append(FuelTank(
                     name=tank.name,
                     dry_mass=tank.dry_mass,
@@ -786,6 +795,7 @@ def _pre_pass(item_count_fn: Callable[[str], int],
                     fuel_type=engine_ft,
                     size_class=tank.size_class,
                     max_count=tank.max_count,
+                    roles=tank.roles,
                     fuel_masses=tank.fuel_masses,
                 ))
         if bucket:
@@ -1807,9 +1817,17 @@ def _evaluate_profile(
     apollo_split: bool = False,
     assembly_chunks: Optional[tuple[int, ...]] = None,
     lifter_table=None,
+    lifter_guidance: bool = False,
 ) -> ProfileResult:
     """
     Run the two-pass evaluation on a single mission profile alternative.
+
+    ``lifter_guidance`` (ladder/bumper mode): a lifter-chain PREFIX_MISSING is
+    a hard fail carrying the chain delta — the bumper's steering signal, and
+    the deliberate skip of the expensive raw ascent search inside the bumper
+    loop.  Runtime consumers (access rules, cross-check, contract_access)
+    leave it False: a prefix miss just falls back to the raw search, because
+    a kit without the chain parts may still fly a live build.
 
     Forward pass:  check broad category gates; compute effective dv per edge.
     Backward pass: walk in reverse, run optimizer per stage group, propagate mass.
@@ -2798,10 +2816,9 @@ def _evaluate_profile(
                 from .lifter_binding import ServeResult
                 from .capability_reasons import LifterChainDelta
                 if _c.result is ServeResult.SERVED:
-                    # 100% chain for the authoritative staged home lifter — no
-                    # live fallback.  The guide is an authoritative build under
-                    # this home's own bounds, so it always reproduces; a None
-                    # here means the checked-in table drifted from the code.
+                    # The guide is an authoritative build under this home's own
+                    # bounds, so it always reproduces; a None here means the
+                    # checked-in table drifted from the code.
                     multistage = _rebuild_served_lifter(
                         _c, body,
                         in_atmo=in_atmo, min_twr=min_twr,
@@ -2816,8 +2833,19 @@ def _evaluate_profile(
                             f"to rebuild (home={home} dv={req_dv:.0f} "
                             f"payload={stage_payload:.1f}t) — stale/corrupt "
                             f"lifter table; regenerate")
-                    _lifter_prefix_used |= _c.prefix_used
-                    _lifter_fallback = False
+                    if multistage[0].stage_mass_wet > flags.launch_pad_mass_cap:
+                        # A rung is bound per coarse payload-threshold bucket,
+                        # so its mass overestimates THIS payload's optimum (a
+                        # 0.2t payload can be served by a multi-tonne-bucket
+                        # rung).  When that overshoot busts the pad cap the
+                        # rung is a failed accelerator, not a verdict: the
+                        # cap-aware live search below may still close a lighter
+                        # build, and the final pad check keeps the honest
+                        # failure if it can't.
+                        multistage = None
+                    else:
+                        _lifter_prefix_used |= _c.prefix_used
+                        _lifter_fallback = False
                 elif _c.result is ServeResult.OVER_CEILING:
                     return ProfileResult(
                         False, launch_mass=stage_payload,
@@ -2833,24 +2861,32 @@ def _evaluate_profile(
                             or {}),
                         edge_groups=groups)
                 elif _c.result is ServeResult.PREFIX_MISSING:
-                    return ProfileResult(
-                        False, launch_mass=stage_payload,
-                        blocking=[BlockingInfo(
-                            reason=BlockingReason.LIFTER_PREFIX_MISSING,
-                            body=body.name, dv_needed=req_dv,
-                            mass_actual=stage_payload,
-                            chain_delta=LifterChainDelta(
-                                profile_id=lifter_table.profile_id,
-                                missing_parts=_c.missing_parts,
-                                threshold_t=stage_payload,
-                                dv_bound=_c.dv_bound))],
-                        partial_stages=list(stage_results_list),
-                        partial_group_mass=(_assembly_standalone_masses(
-                            _group_own, len(groups),
-                            terminal_mass + terminal_equip + extra_payload_mass,
-                            apollo.ascent_gidx if apollo is not None else None)
-                            or {}),
-                        edge_groups=groups)
+                    if lifter_guidance:
+                        # Ladder/bumper mode: the chain delta IS the product —
+                        # steer the bumper toward the chain instead of paying
+                        # the raw ascent search per trial.
+                        return ProfileResult(
+                            False, launch_mass=stage_payload,
+                            blocking=[BlockingInfo(
+                                reason=BlockingReason.LIFTER_PREFIX_MISSING,
+                                body=body.name, dv_needed=req_dv,
+                                mass_actual=stage_payload,
+                                chain_delta=LifterChainDelta(
+                                    profile_id=lifter_table.profile_id,
+                                    missing_parts=_c.missing_parts,
+                                    threshold_t=stage_payload,
+                                    dv_bound=_c.dv_bound))],
+                            partial_stages=list(stage_results_list),
+                            partial_group_mass=(_assembly_standalone_masses(
+                                _group_own, len(groups),
+                                terminal_mass + terminal_equip
+                                + extra_payload_mass,
+                                apollo.ascent_gidx if apollo is not None
+                                else None)
+                                or {}),
+                            edge_groups=groups)
+                    # Runtime: the kit lacks this chain's parts but may still
+                    # fly a live build — fall through to the raw search.
                 else:  # NOT_COVERED — impossible for an authoritative staged
                     # home ascent (every such dv variant is bound).
                     raise RuntimeError(
@@ -3975,13 +4011,14 @@ class _LazyBodyProfiles:
     still materialize everything (used by display + multi-body goal
     rules like flag_every_body), so those paths are unchanged.
     """
-    __slots__ = ("_flags", "_diff", "_mb", "_cache")
+    __slots__ = ("_flags", "_diff", "_mb", "_lifter_table", "_cache")
 
     def __init__(self, flags: EquipmentFlags, diff: DifficultyProfile,
-                 mission_builder: MissionBuilder):
+                 mission_builder: MissionBuilder, lifter_table=None):
         self._flags = flags
         self._diff = diff
         self._mb = mission_builder
+        self._lifter_table = lifter_table
         self._cache: dict[str, BodyAccessProfile] = {}
 
     def _get(self, body_name: str) -> BodyAccessProfile:
@@ -3996,7 +4033,8 @@ class _LazyBodyProfiles:
         if body.parent is not None and body.parent not in self._cache:
             self._get(body.parent)
         prof = _assess_one_body(body, self._flags, self._diff,
-                                self._cache, self._mb)
+                                self._cache, self._mb,
+                                lifter_table=self._lifter_table)
         self._cache[body_name] = prof
         return prof
 
@@ -4036,6 +4074,7 @@ def _assess_one_body(
     diff: DifficultyProfile,
     computed: dict[str, BodyAccessProfile],
     mission_builder: MissionBuilder,
+    lifter_table=None,
 ) -> BodyAccessProfile:
     gameplay = mission_builder.gameplay  # world-carried skill/equipment gates
     prof = BodyAccessProfile()
@@ -4096,6 +4135,7 @@ def _assess_one_body(
             crewed=event.crewed, home=mission_builder.home,
             requires_eva=event.requires_eva, gameplay=gameplay,
             body_name=body.name,
+            lifter_table=lifter_table,
         )
         prof.access[event.name] = ok
         if not ok and not prof.blocking:
@@ -4200,6 +4240,7 @@ def _try_assembly_profiles(
     gameplay: GameplayDifficulty = CONSERVATIVE_GAMEPLAY,
     run_parallel: bool = True,
     lifter_table=None,
+    lifter_guidance: bool = False,
 ) -> Optional[ProfileResult]:
     """Multi-launch assembly retry (failure path only; caller pre-gates with
     ``_assembly_candidate``).  Per profile: one probe evaluation captures the
@@ -4218,7 +4259,7 @@ def _try_assembly_profiles(
                 requires_rendezvous=True, requires_samples=requires_samples,
                 requires_precise_pointing=requires_precise_pointing,
                 gameplay=gameplay, apollo_split=asm_apollo,
-                lifter_table=lifter_table)
+                lifter_table=lifter_table, lifter_guidance=lifter_guidance)
             if probe.feasible:
                 return probe  # closed without assembly after all
             candidates = _assembly_partitions(probe)
@@ -4231,7 +4272,8 @@ def _try_assembly_profiles(
                     requires_samples=requires_samples,
                     requires_precise_pointing=requires_precise_pointing,
                     gameplay=gameplay, apollo_split=asm_apollo,
-                    assembly_chunks=chunks, lifter_table=lifter_table)
+                    assembly_chunks=chunks, lifter_table=lifter_table,
+                    lifter_guidance=lifter_guidance)
                 if result.feasible:
                     result.via_assembly = True
                     # The assembly eval keeps the Apollo split when the
@@ -4316,6 +4358,8 @@ def _try_profiles_reason(
     requires_eva: bool = False,
     gameplay: GameplayDifficulty = CONSERVATIVE_GAMEPLAY,
     body_name: Optional[BodyName] = None,
+    lifter_table=None,
+    lifter_guidance: bool = False,
 ) -> tuple[bool, list[BlockingInfo]]:
     """
     Like _try_profiles but also returns deduplicated blocking entries
@@ -4341,7 +4385,9 @@ def _try_profiles_reason(
                                            extra_payload_parts=extra_payload_parts,
                                            run_parallel=run_par,
                                            requires_eva=requires_eva,
-                                           gameplay=gameplay)
+                                           gameplay=gameplay,
+                                           lifter_table=lifter_table,
+                                               lifter_guidance=lifter_guidance)
                 if result.feasible:
                     return True, []
                 for b in result.blocking:
@@ -4363,7 +4409,9 @@ def _try_profiles_reason(
                                                requires_eva=requires_eva,
                                                requires_rendezvous=True,
                                                gameplay=gameplay,
-                                               apollo_split=True)
+                                               apollo_split=True,
+                                               lifter_table=lifter_table,
+                                               lifter_guidance=lifter_guidance)
                     if result.feasible:
                         return True, []
     # Assembly retry (see _try_profiles).  Blocking stays the standard
@@ -4372,7 +4420,9 @@ def _try_profiles_reason(
         result = _try_assembly_profiles(
             profiles, flags, diff, mission_type, crewed, home,
             extra_payload_parts=extra_payload_parts,
-            requires_eva=requires_eva, gameplay=gameplay)
+            requires_eva=requires_eva, gameplay=gameplay,
+            lifter_table=lifter_table,
+                                               lifter_guidance=lifter_guidance)
         if result is not None:
             return True, []
     return False, all_blocking
@@ -4393,7 +4443,8 @@ def evaluate_mission_detailed(
     requires_samples: bool | None = None,
     requires_precise_pointing: bool = False,
     run_parallel: bool = True,
-    use_lifter_table: bool = False,
+    use_lifter_table: bool = True,
+    lifter_guidance: bool = False,
 ) -> ProfileResult:
     """
     Evaluate a specific mission and return the winning ProfileResult
@@ -4416,10 +4467,12 @@ def evaluate_mission_detailed(
     """
     home = mission_builder.home_body
     gameplay = mission_builder.gameplay  # world-carried skill/equipment gates
-    # Pre-cached home-ascent lifter: consulted only when the caller opts in
-    # (the sphere-ladder evaluator).  post_fill cross-check / spoiler /
-    # get_capability leave it None and stay on raw physics, so the table never
-    # gates a shipped seed on its own.
+    # Pre-cached home-ascent lifter table: part of the trusted physics path
+    # (rungs are real builds bound offline by the same optimizer), consulted
+    # by DEFAULT so the ladder's proofs, the runtime access rules, and the
+    # post_fill cross-check all judge with the same evaluator.  The one
+    # deliberate raw consumer is the feasibility-table generator (curation:
+    # its output only bans missions, so staying raw is purely conservative).
     _lifter_table = mission_builder.lifter_table if use_lifter_table else None
 
     # --- Sounding rocket (altitude milestones, first crash) ---
@@ -4497,6 +4550,7 @@ def evaluate_mission_detailed(
             ok, sub_blocking = _try_profiles_reason(
                 profiles, flags, diff, MissionType.LAND,
                 crewed=None, home=home, gameplay=gameplay,
+                lifter_table=_lifter_table, lifter_guidance=lifter_guidance,
             )
             if ok:
                 return ProfileResult(True)
@@ -4551,7 +4605,8 @@ def evaluate_mission_detailed(
                                        requires_samples=requires_samples,
                                        requires_precise_pointing=requires_precise_pointing,
                                        gameplay=gameplay,
-                                       lifter_table=_lifter_table)
+                                       lifter_table=_lifter_table,
+                                       lifter_guidance=lifter_guidance)
             if result.feasible:
                 return result
             for b in result.blocking:
@@ -4578,7 +4633,8 @@ def evaluate_mission_detailed(
                                                requires_precise_pointing),
                                            gameplay=gameplay,
                                            apollo_split=True,
-                                           lifter_table=_lifter_table)
+                                           lifter_table=_lifter_table,
+                                           lifter_guidance=lifter_guidance)
                 if result.feasible:
                     result.via_apollo = True
                     return result
@@ -4595,7 +4651,7 @@ def evaluate_mission_detailed(
             requires_eva=requires_eva, requires_samples=requires_samples,
             requires_precise_pointing=requires_precise_pointing,
             gameplay=gameplay, run_parallel=run_parallel,
-            lifter_table=_lifter_table)
+            lifter_table=_lifter_table, lifter_guidance=lifter_guidance)
         if result is not None:
             if result.feasible and not result.via_assembly:
                 result.via_apollo = _apollo_candidate(flags, mission_type)
@@ -4732,6 +4788,7 @@ def compute_capability_from_items(
     buildings_in_logic: bool = False,
     local_needs_conics: bool = True,
     local_needs_nodes: bool = True,
+    use_lifter_table: bool = True,
 ) -> tuple[RocketCapability, EquipmentFlags]:
     """Compute capability without a CollectionState. For CLI/external tools.
 
@@ -4740,6 +4797,12 @@ def compute_capability_from_items(
 
     ``buildings_in_logic`` (default off) gates curated facility effects; OFF is
     a strict no-op (see ``_pre_pass``).
+
+    ``use_lifter_table`` (default on) consults the offline lifter-chain table —
+    the same trusted physics path the sphere-ladder proves brackets with — so
+    every runtime consumer judges with one evaluator.  The feasibility-table
+    generator passes False: its output only bans missions, so raw is purely
+    conservative there.
     """
     diff = DIFFICULTY_PROFILES[difficulty_name]
     flags = _pre_pass(item_count_fn, start_with_clamps,
@@ -4751,7 +4814,9 @@ def compute_capability_from_items(
                       local_needs_nodes=local_needs_nodes)
     # Lazy: bodies are assessed on first query (AP fill rules touch only
     # a few bodies per state; eager _assess_bodies evaluated all 17).
-    body_profiles = _LazyBodyProfiles(flags, diff, mission_builder)
+    _lifter_table = mission_builder.lifter_table if use_lifter_table else None
+    body_profiles = _LazyBodyProfiles(flags, diff, mission_builder,
+                                      lifter_table=_lifter_table)
 
     if flags.has_rtg:
         power_str = "rtg"
