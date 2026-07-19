@@ -212,7 +212,13 @@ class TestKerbinEarlyLocations(KSP1TestBase):
 
     Each KSP part is its own AP item (keyed by ksp_name); collecting one grants
     that part to the capability model directly.
+
+    ``guarantee_science_rover`` is off so the base state is genuinely empty —
+    these tests verify the physics access *rules*, which must hold independent
+    of the starting-convenience pre-fill.
     """
+
+    options = {"guarantee_science_rover": 0}
 
     def test_nothing_accessible_without_items(self):
         """Fresh state: Kerbin mission locations and KSC biomes are not reachable."""

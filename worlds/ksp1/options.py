@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from Options import Choice, ExcludeLocations, ItemsAccessibility, NamedRange, OptionDict, OptionSet, PerGameCommonOptions, Range, Toggle
+from Options import Choice, DefaultOnToggle, ExcludeLocations, ItemsAccessibility, NamedRange, OptionDict, OptionSet, PerGameCommonOptions, Range, Toggle, Visibility
 
 from .bodies import ALL_BODIES, BodyName
 from .contracts import ContractType, NON_GOAL_TYPES
@@ -327,6 +327,22 @@ class StartWithLaunchClamps(Toggle):
     """
     display_name = "Start With Launch Clamps"
     default = 1
+
+
+class GuaranteeScienceRover(DefaultOnToggle):
+    """
+    Internal starting-convenience floor (not a player-facing option).
+
+    Precollects a complete science-capable kit — a control source (a probe or
+    a capsule, rolled per seed), a wheel, a power source, and a science
+    instrument — so the KSC-biome science and splashdown checks are doable from
+    the moment you connect, regardless of what your ascent parts rolled or where
+    the multiworld scattered them.  The location rules stay real physics and
+    generation is solvable without it; it exists so tests can build a genuinely
+    empty starting state to verify those rules in isolation.
+    """
+    display_name = "Guarantee Science Rover"
+    visibility = Visibility.none
 
 
 class KSP1ExcludeLocations(ExcludeLocations):
@@ -677,6 +693,7 @@ class KSP1Options(PerGameCommonOptions):
     science_safety_factor: ScienceSafetyFactor
     physics_difficulty: PhysicsDifficulty
     start_with_launch_clamps: StartWithLaunchClamps
+    guarantee_science_rover: GuaranteeScienceRover
     accessibility: KSP1Accessibility
     exclude_locations: KSP1ExcludeLocations
     exclude_late_tech_tree: ExcludeLateTechTree

@@ -380,6 +380,33 @@ def get_filler_item_name(world: KSP1World) -> str:
     return world.random.choice(_FILLER_NAMES_WEIGHTED)
 
 
+#: The four capability roles a science-capable rover needs. Control is a probe
+#: OR a capsule (rolled per seed to preserve the manned/unmanned flavor); either
+#: satisfies the early-Kerbin science + splashdown rules.
+_ROVER_KIT_ROLES: tuple[tuple[CapabilityFlag, ...], ...] = (
+    (CapabilityFlag.PROBE_CORE, CapabilityFlag.CAPSULE),
+    (CapabilityFlag.WHEEL,),
+    (CapabilityFlag.SOLAR_FIXED, CapabilityFlag.SOLAR_RETRACTABLE),
+    (CapabilityFlag.THERMOMETER, CapabilityFlag.BAROMETER),
+)
+
+
+def _science_rover_kit(world: KSP1World) -> set[str]:
+    """One random part per rover role from the seed's enabled parts. Skips any
+    role the active packs don't provide (graceful under part filtering)."""
+    enabled = world.part_manager.parts
+    picks: set[str] = set()
+    for roles in _ROVER_KIT_ROLES:
+        cands = sorted({
+            nm for nm, ps in enabled.items()
+            for p in ps
+            if any(f in getattr(p, "provides", ()) for f in roles)
+        })
+        if cands:
+            picks.add(world.random.choice(cands))
+    return picks
+
+
 def create_all_items(world: KSP1World) -> None:
     """
     Add part items and progressive items to the multiworld item pool.
@@ -393,6 +420,17 @@ def create_all_items(world: KSP1World) -> None:
         precollected.update(CLAMP_PRECOLLECTED)
     if world.goal_spec.complete_tech_tree:
         precollected.update(TECH_TREE_PRECOLLECTED)
+
+    # Science-rover bootstrap floor: precollect a complete science-capable kit
+    # every seed — a random control source (probe OR capsule, rolled to keep the
+    # manned/unmanned flavor) + wheel + power + instrument — so the early-Kerbin
+    # science + splashdown checks are always doable from connect regardless of
+    # what the ascent kit rolled or where the multiworld scattered it.  This is a
+    # GAMEPLAY guarantee (it defuses the "0 checks on connect" case); the solve's
+    # correctness never depends on it — the location rules stay real physics and
+    # AP fill places a control source / rover reachably on its own.
+    if world.options.guarantee_science_rover:
+        precollected.update(_science_rover_kit(world))
 
     for name in precollected:
         world.multiworld.push_precollected(create_item(world, name))

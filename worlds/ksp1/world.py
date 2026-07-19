@@ -693,10 +693,21 @@ class KSP1World(World):
     def set_rules(self) -> None:
         rules.set_all_rules(self)
         rules.set_completion_condition(self, self.goal_spec)
-
-    def pre_fill(self) -> None:
-        from .sphere_ladder import apply_sphere_ladder
-        apply_sphere_ladder(self)
+        # Build the sphere ladder here rather than in pre_fill: it needs only
+        # locations, items, and the intrinsic rules just installed (it uses no
+        # entrances/reachability and touches only its own player), and running
+        # it before AP's locality_rules (Main.py, ahead of pre_fill) lets it
+        # pin the exact home-orbit kit to the player's own world via
+        # options.local_items — the sanctioned locality path.
+        #
+        # Skipped under Universal Tracker: UT regen runs without pre_fill on
+        # purpose and falls back to live capability (see _ut_active), so the
+        # ladder must stay unbuilt there. Historically that fell out of UT not
+        # calling pre_fill; now that the build lives in set_rules (which UT does
+        # call), the skip is explicit.
+        if not getattr(self, "_ut_active", False):
+            from .sphere_ladder import apply_sphere_ladder
+            apply_sphere_ladder(self)
 
     def fill_hook(self, progitempool, usefulitempool, filleritempool,
                   fill_locations) -> None:

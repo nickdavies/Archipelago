@@ -1,21 +1,22 @@
 """Shared base for KSP1 world tests.
 
-The KSP1 world's ``pre_fill`` runs ``apply_sphere_ladder`` — a multi-second
-operation that builds the sphere ladder, demotes spare progressive copies,
-and installs per-location placement rules. The bulk of the test suite's
-runtime is dominated by this step being re-run for every test method.
+The KSP1 world runs ``apply_sphere_ladder`` at the end of ``set_rules`` — a
+multi-second operation that builds the sphere ladder, demotes spare progressive
+copies, installs per-location placement rules, and pins the exact home-orbit
+kit to the player's own world via ``options.local_items``. The bulk of the test
+suite's runtime is dominated by this step being re-run for every test method.
 
-Most tests don't read any of the sphere-ladder side effects:
-``pre_fill`` populates ``world._sphere_ladder``, mutates item
-classifications via ``_demote_non_rep_parts``, installs Rule A
-(bootstrap-local) on KSC biomes, installs Rule B (per-copy tier ban) on
-non-bootstrap locations, and registers ``S_launch.delta`` as
-``multiworld.local_early_items``. Tests that only inspect ``itempool``
-or do their own reachability sweeps don't need any of that.
+Most tests don't read any of the sphere-ladder side effects (``world.
+_sphere_ladder``, the demoted item classifications, the bootstrap-local KSC
+rules, the per-copy tier ban, or ``options.local_items``); they only inspect
+``itempool`` or do their own reachability sweeps.
 
-This base stubs ``pre_fill`` to a no-op so world setup completes through
-the other (fast) gen steps. Tests that depend on sphere-ladder side
-effects opt back into the real implementation via ``with self.real_pre_fill():``.
+This base stubs ``apply_sphere_ladder`` to a no-op so world setup completes
+through the fast gen steps. Tests that depend on sphere-ladder side effects opt
+back into the real implementation via ``needs_real_pre_fill = True`` at the
+class level, or ``with self.real_pre_fill():`` per test. (The ``pre_fill``
+naming is retained for the opt-in API even though the build now happens in
+``set_rules``.)
 """
 from __future__ import annotations
 
@@ -40,12 +41,13 @@ class KSP1TestBase(WorldTestBase):
     _real_pre_fill_done: bool = False  # internal: per-test idempotency
 
     def setUp(self) -> None:
-        # Skip the expensive sphere-ladder build during world_setup. Tests
-        # that need it opt back in via ``needs_real_pre_fill = True`` or
-        # the ``real_pre_fill`` context manager.
+        # Skip the expensive sphere-ladder build during world_setup (it runs in
+        # set_rules). Patch the source function — set_rules imports it at call
+        # time. Tests that need it opt back in via ``needs_real_pre_fill = True``
+        # or the ``real_pre_fill`` context manager.
         with patch(
-            "worlds.ksp1.world.KSP1World.pre_fill",
-            new=lambda self: None,
+            "worlds.ksp1.sphere_ladder.apply_sphere_ladder",
+            new=lambda world: None,
         ):
             super().setUp()
         self._real_pre_fill_done = False

@@ -10,9 +10,11 @@ Shield at "Tylo EVA in Orbit" — a location that itself requires the heat
 shield to reach.  See ``/home/nick/.claude/plans/modular-hatching-hickey.md``.
 
 Phase 1 (this commit): predictable spheres only (S_launch / S_orbit /
-S_goal), Rule A extension (bootstrap-local), sphere-1 boost via
-``local_early_items``.  No Rule B, no intermediates, no tech-tier
-post-pass yet — those come in Phases 2/3.
+S_goal), Rule A extension (bootstrap-local).  No Rule B, no intermediates,
+no tech-tier post-pass yet — those come in Phases 2/3.  The tail of
+``apply_sphere_ladder`` also pins this seed's exact home-orbit kit to the
+player's own world via ``options.local_items``; the ladder is invoked from
+``set_rules`` (not ``pre_fill``) so this runs before AP's ``locality_rules``.
 """
 from __future__ import annotations
 
@@ -3378,10 +3380,18 @@ def _install_unified_sphere_rules(
     floor_by_tier = [_floor_for_tier(m) for m in range(len(spheres) + 1)]
 
     # Bootstrap kit: reps needed from sphere 0 are in EVERY location's cumulative
-    # min_kit, so the kit-exact ban would forbid them everywhere.  They belong in
-    # starting inventory (zero-requirement locations) — exempt them so AP fill
-    # routes them there.
+    # min_kit, so the plain kit-exact ban would forbid them everywhere.  Rather
+    # than exempt them to land ANYWHERE (which lets a local orbit rep sit on a
+    # KSC-biome check whose own min_kit needs a capsule that isn't local, gating
+    # the local rep behind a non-local rep), confine orbit-kit reps to the
+    # bootstrap band: locations whose min_kit stays within the orbit kit.  The
+    # orbit kit is the same set ``local_items`` pins — sphere-0 reps ∪ S_orbit's
+    # cumulative reps.
     _bootstrap_kit = spheres[0].reps_collected if spheres else frozenset()
+    _orbit_sphere = next((s for s in spheres if s.name == "S_orbit"), None)
+    _orbit_kit = frozenset(
+        set(_bootstrap_kit)
+        | (set(_orbit_sphere.reps_collected) if _orbit_sphere else set()))
 
     # Contract AWARD items float FREELY (sequence-break: contracts land at varied
     # points each seed instead of riding the physics ladder, giving off-physics
@@ -3445,7 +3455,7 @@ def _install_unified_sphere_rules(
 
         def _rule(item, _p=player, _L=L, _spheres=spheres, _orig=existing,
                   _sig=my_sig, _floor=floor_by_tier, _mk=_min_kit,
-                  _boot=_bootstrap_kit, _loc=loc.name, _an=award_names,
+                  _ok=_orbit_kit, _loc=loc.name, _an=award_names,
                   _ac=award_ceiling, _ao=award_own_locs) -> bool:
             if _orig is not None and not _orig(item):
                 return False
@@ -3483,10 +3493,20 @@ def _install_unified_sphere_rules(
                 # place broadly-gating reps reachably — a cascade lower bound here
                 # collides with the min_kit upper bound and strands reps).
                 # Reps absent from every kit (spare high-rank parts) are in no
-                # min_kit → admitted everywhere.  Bootstrap reps (needed from
-                # sphere 0) are in every kit → exempt to starting inventory.
-                if item.name in _boot:
-                    return True
+                # min_kit → admitted everywhere.  Orbit-kit reps are in every
+                # kit, so instead of the plain ``not in _mk`` (which would ban
+                # them everywhere) they get a GENERALIZED kit-exact ban: admit
+                # only where the location's own min_kit stays within the orbit
+                # kit — the bootstrap band (starting inv / First Launch /
+                # altitudes / orbit).  This keeps them off checks that require
+                # more than the orbit kit (deep missions, contracts, rank-gated
+                # tech nodes), which would gate a local orbit rep behind a
+                # non-local rep and break KSP-only bootstrap.  AP's restrictive
+                # fill still self-avoids the circular case (a rep in L's own
+                # min_kit) — starting inventory (empty min_kit) is always a
+                # valid reachable target, so no rep strands.
+                if item.name in _ok:
+                    return _mk <= _ok
                 return item.name not in _mk
             # Non-progression PART (filler): lower bound on sphere — a high-rank
             # part may not appear far before its tier (that would hand the player a
@@ -4169,8 +4189,6 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
       - Install bootstrap-local on KSC / First Launch / starting-inv.
       - Install per-location rank-ceiling ``item_rule``.
       - Demote parts that exceed the chain's cumulative ceiling.
-      - Register S_launch-admitted parts as ``local_early_items`` so AP
-        prefers them on sphere-0 locations.
     """
     from .rocket_math import clear_find_optimal_stage_cache
     clear_find_optimal_stage_cache()
@@ -4321,23 +4339,20 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
         if loc.name in STARTING_INV_NAME_SET:
             bootstrap_locations.add(loc.name)
 
-    # Step A: pull the early "ungated" locations into the sphere system, so
-    # every location is sphere-locked by the kit needed to reach it (the one
-    # exception is Starting Inventory, pinned to sphere 0).  KSC science and
-    # the first splashdown need a capsule; First Launch and Starting Inventory
-    # sit at sphere 0.  Discarding them from ``bootstrap_locations`` lets the
-    # unified sphere rule gate them (it skips the bootstrap set).
-    _capsule_kit = Signature.empty().with_rank(RankAxisKey.CAPSULE, 1)
-    _gate_early: dict[str, Signature] = {
-        name: _capsule_kit for name in world.location_builder.ksc_biome_names
-    }
-    _gate_early[first_launch] = Signature.empty()
+    # Step A: pin First Launch and Starting Inventory to sphere 0 so the unified
+    # sphere rule gates them.  KSC science and the first splashdown are LEFT OUT
+    # on purpose: they keep their real physics access rules (KSC = crewed EVA OR
+    # a probe+wheel+power+instrument rover; splashdown = flight + safe descent,
+    # probe OR capsule) instead of a capsule-only ladder proxy, so the ladder's
+    # gate matches the simulation.  They stay in the bootstrap band (never sphere-
+    # locked, never touched by the orbit-kit ban).  The rover-kit pre-fill makes
+    # those rules satisfiable on connect, but the solve is correct without it (AP
+    # fill lands a control source / rover reachably regardless).
+    _gate_early: dict[str, Signature] = {first_launch: Signature.empty()}
     for loc in world.multiworld.get_locations(world.player):
         if loc.address is None:
             continue
-        if loc.name == "Splashdown":
-            _gate_early[loc.name] = _capsule_kit
-        elif loc.name in STARTING_INV_NAME_SET:
+        if loc.name in STARTING_INV_NAME_SET:
             _gate_early[loc.name] = Signature.empty()
     for _name, _need in _gate_early.items():
         location_signatures.setdefault(_name, _need)
@@ -4436,136 +4451,25 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
     _demote_non_rep_parts(world, rep_part_names, cumulative_sig,
                           chain_extras=chain_full_extras)
     _assert_gate_items_progression(world)
-    # === DIAGNOSTIC (temporary, gated) ===
-    import os as _os
-    if not _os.environ.get('KSP_PHASE2_DIAG'):
-        return
-    try:
-        with open('/home/nick/workspaces/ksp_ap/scratchpad/diag_compare.txt', 'w') as _dout:
-            _dout.write(f'=== CHAIN ({len(ladder.spheres)} spheres) ===\n')
-            for _i, _s in enumerate(ladder.spheres):
-                _dout.write(f'  [{_i}] {_s.name} @ {_s.location_name}\n')
-                _dout.write(f'      provides={list(_s.provides.reqs)}\n')
-                _dout.write(f'      reps_collected ({len(_s.reps_collected)}):'
-                            f' {sorted(_s.reps_collected)}\n')
-                _dout.write(f'      bumper flags: has_launch={_s.flags.has_launch_engine}, '
-                            f'has_vac={_s.flags.has_vacuum_engine}, '
-                            f'engines={len(_s.flags.available_engines)}, '
-                            f'tanks={len(_s.flags.available_tanks)}, '
-                            f'srbs={len(_s.flags.available_srbs)}, '
-                            f'capsule={_s.flags.has_capsule}, '
-                            f'probe={_s.flags.has_probe_core}\n')
-            # Show what FINAL sphere claims vs what player actually has.
-            if ladder.spheres:
-                _final = ladder.spheres[-1]
-                _dout.write(f'\n=== FINAL SPHERE bumper claim ===\n')
-                _dout.write(f'reps_collected: {sorted(_final.reps_collected)}\n')
-                _dout.write(f'flags: has_launch={_final.flags.has_launch_engine}, '
-                            f'has_vac={_final.flags.has_vacuum_engine}, '
-                            f'engines={len(_final.flags.available_engines)}, '
-                            f'tanks={len(_final.flags.available_tanks)}\n')
-                _dout.write(f'engines: {[e.name for e in _final.flags.available_engines]}\n')
-                _dout.write(f'tanks: {[(t.name, t.fuel_type) for t in _final.flags.available_tanks]}\n')
-            # Pool composition.
-            from BaseClasses import ItemClassification
-            _prog = [_it for _it in world.multiworld.itempool
-                     if _it.player == world.player
-                     and _it.classification == ItemClassification.progression]
-            _dout.write(f'\n=== POOL (after demote) ===\n')
-            _dout.write(f'PROGRESSION items ({len(_prog)}):\n')
-            for _it in _prog:
-                _dout.write(f'  {_it.name}\n')
-        return
-    except Exception as _e:
-        with open('/home/nick/workspaces/ksp_ap/scratchpad/diag_compare.txt', 'a') as _eout:
-            import traceback
-            _eout.write(f'DIAG_FAIL: {_e}\n{traceback.format_exc()}\n')
-        return
-    try:
-        from BaseClasses import CollectionState, ItemClassification
-        os.makedirs('/home/nick/workspaces/ksp_ap/scratchpad', exist_ok=True)
-        with open('/home/nick/workspaces/ksp_ap/scratchpad/diag.txt', 'w') as _out:
-            _out.write(f'=== CHAIN ({len(ladder.spheres)} spheres) ===\n')
-            for _i, _s in enumerate(ladder.spheres):
-                _out.write(f'  [{_i}] {_s.name} @ {_s.location_name}\n')
-                _out.write(f'      provides={list(_s.provides.reqs)}\n')
-            _pool = world.multiworld.itempool
-            _by_class = {}
-            for _it in _pool:
-                if _it.player != world.player:
-                    continue
-                _by_class.setdefault(_it.classification, []).append(_it.name)
-            for _c, _names in _by_class.items():
-                _out.write(f'POOL[{_c.name}] {len(_names)} items\n')
-            _state = CollectionState(world.multiworld)
-            _locs = [_l for _l in world.multiworld.get_locations(world.player)
-                     if _l.address is not None]
-            _reach = sum(1 for _l in _locs if _l.can_reach(_state))
-            _out.write(f'LOCS[reachable from precollected]={_reach}/{len(_locs)}\n')
-            _prog = [_it for _it in _pool if _it.player == world.player
-                     and _it.classification == ItemClassification.progression]
-            _out.write(f'PROG_COUNT={len(_prog)}\n')
-            for _it in _prog:
-                _acc = sum(1 for _l in _locs if _l.item_rule(_it))
-                _acc_r = sum(1 for _l in _locs
-                             if _l.item_rule(_it) and _l.can_reach(_state))
-                _out.write(f'  {_it.name!r:40} rule_ok={_acc:4d} '
-                           f'reach_ok={_acc_r:4d}\n')
-            # Sample: which locations does the BUMPER's first rep accept?
-            _out.write('=== SAMPLE LOCATIONS (capability-gated, reachable) ===\n')
-            _reach_locs = [_l for _l in _locs[:50] if _l.can_reach(_state)]
-            for _l in _reach_locs[:20]:
-                _out.write(f'  {_l.name}\n')
-            _out.write(f'=== SPHERE REP PICKS (count={len(sphere_rank_reps)}) ===\n')
-            for _k in sorted(sphere_rank_reps.keys(), key=lambda x: (x[0].value, x[1])):
-                _out.write(f'  {_k[0].value}={_k[1]} -> {sphere_rank_reps[_k]!r}\n')
-            _out.write(f'rep_part_names ({len(rep_part_names)}): {sorted(rep_part_names)}\n')
-            # Simulate fill progressively to see what makes progress.
-            _out.write('=== SIM: progressively add bumper reps to state ===\n')
-            # Build a list of all PROGRESSION items in pool.
-            _prog_list = list(_prog)
-            # Sort: rank-bearing parts by rank-sum (low first), then R&D/Pad/PSI.
-            def _key(it):
-                _sig = getattr(it, "rank_sig", None)
-                if _sig is None or not _sig.axes:
-                    return (1, 999)
-                return (0, sum(r for _, r in _sig.axes))
-            _prog_list.sort(key=_key)
-            _sim_state = CollectionState(world.multiworld)
-            _step_reach = sum(1 for _l in _locs if _l.can_reach(_sim_state))
-            _out.write(f'  step 0: reachable={_step_reach}\n')
-            from .capability import compute_capability_from_items as _ccfi
-            _diff_name = effective_physics_profile_name(world.options)
-            for _i, _it in enumerate(_prog_list[:25], start=1):
-                _sim_state.collect(_it, prevent_sweep=True)
-                _step_reach = sum(1 for _l in _locs if _l.can_reach(_sim_state))
-                if _i <= 5 or _i % 5 == 0:
-                    _c, _f = _ccfi(
-                        lambda n, _s=_sim_state, _p=world.player: _s.count(n, _p),
-                        _diff_name,
-                        bool(world.options.start_with_launch_clamps.value),
-                        world.mission_builder,
-                        progressive_launch_pad=bool(world.options.progressive_launch_pad.value),
-                    )
-                    _out.write(f'  step {_i:2d} +{_it.name!r}: reach={_step_reach}/'
-                               f'{len(_locs)} engines={len(_f.available_engines)} '
-                               f'tanks={len(_f.available_tanks)}\n')
-    except Exception as _e:
-        with open('/home/nick/workspaces/ksp_ap/scratchpad/diag.txt', 'a') as _out:
-            import traceback
-            _out.write(f'DIAG_FAILED: {_e}\n{traceback.format_exc()}\n')
-    # === END DIAGNOSTIC ===
 
-    # Sphere-1 boost: items whose rank is admitted by S_launch's ceiling
-    # AND that the bumper picked as designated reps at S_launch level
-    # go on local-early so AP places them at sphere-0 locations.
-    launch_sphere = next(
-        (s for s in ladder.spheres if s.name == "S_launch"),
-        None,
-    )
-    local_early = world.multiworld.local_early_items[world.player]
-    if launch_sphere is not None:
-        for (_axis, _rank), rep_name in sphere_rank_reps.items():
-            if launch_sphere.provides.rank(_axis) >= _rank:
-                local_early[rep_name] = max(local_early.get(rep_name, 0), 1)
-
+    # Keep THIS SEED's exact home-orbit kit in the player's own world. The
+    # ladder just selected the specific parts that reach home orbit — the
+    # sphere-0 kit plus S_orbit's cumulative reps — so mark only those (a
+    # handful of items that vary per seed), NOT a whole category. Under Minimal
+    # accessibility a multiworld fill only guarantees the goal is reachable, so
+    # it can otherwise scatter the player's bootstrap (esp. the scarce control
+    # source) into another player's world behind a deep check, stranding them
+    # with ~0 in-logic checks (shipped seed AP_32744882047302664921: the only
+    # pod landed ~8h deep elsewhere).
+    #
+    # options.local_items is the sanctioned own-world constraint (AP's
+    # locality_rules compiles it into item rules, ANDing with the existing
+    # rule). It only bites in multiworld and is a no-op in solo (Main clears it
+    # for single-player). This runs in set_rules — before locality_rules —
+    # precisely so the kit is known in time; marking whole categories would
+    # defeat the point of a multiworld, so we mark only the per-seed kit.
+    orbit_kit = set(ladder.spheres[0].reps_collected) if ladder.spheres else set()
+    _orbit_sphere = next((s for s in ladder.spheres if s.name == "S_orbit"), None)
+    if _orbit_sphere is not None:
+        orbit_kit |= set(_orbit_sphere.reps_collected)
+    world.options.local_items.value |= (orbit_kit - precollected_names)
