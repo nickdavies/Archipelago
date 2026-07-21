@@ -31,7 +31,9 @@ from .capability import (
     get_capability, cheap_flags, _sounding_reaches,
     _SOUNDING_LIFTOFF_KM as _LIFTOFF_KM,
 )
-from .items import PROGRESSIVE_RD_NAME, SCIENCE_PACK_NAMES, discover_item_name
+from .items import (
+    PROGRESSIVE_RD_NAME, SCIENCE_PACK_NAMES, TRAP_ITEM_NAMES, discover_item_name,
+)
 from .locations import (
     EVENT_BY_NAME,
     EventName,
@@ -892,6 +894,19 @@ _EARLY_BANNED_ITEMS: frozenset[str] = frozenset({
 })
 
 
+def _make_starting_inv_ban_rule(player: int):
+    """Item rule for Starting Inventory slots: the early ban plus every trap.
+
+    Starting-inventory items are granted at connect, before the first
+    flight — a trap there is a guaranteed first-launch ambush rather than
+    the consequence of a check, so no trap may occupy these slots.
+    """
+    banned = _EARLY_BANNED_ITEMS | TRAP_ITEM_NAMES
+    def rule(item) -> bool:
+        return item.player != player or item.name not in banned
+    return rule
+
+
 def _make_early_ban_rule(player: int):
     """Item rule: reject pacing-sensitive items for our player.
 
@@ -926,9 +941,10 @@ def _ban_early_science_windfalls(world: KSP1World, player: int, difficulty: int)
     num_starting = effective_starting_inv_count(world.options, difficulty)
     early_ban_rule = _make_early_ban_rule(player)
 
-    # Starting Inventory
+    # Starting Inventory (early ban + all traps)
+    starting_inv_rule = _make_starting_inv_ban_rule(player)
     for name in STARTING_INV_NAMES[:num_starting]:
-        add_item_rule(world.get_location(name), early_ban_rule)
+        add_item_rule(world.get_location(name), starting_inv_rule)
 
     # KSC biomes + home-body specials + early home mission events (everything
     # except Flyby/SOI Leave, which need escape).

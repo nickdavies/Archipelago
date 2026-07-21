@@ -33,7 +33,8 @@ AP generation fails if `items > locations`. The item pool must be sized to fit w
 
 - **Advancement:** Items that open new reachable locations. Engines, tanks, decouplers, heat shields, parachutes, relay antennas, RTGs, probe cores, capsules. Almost all physical rocket parts qualify.
 - **Useful:** Items that help but rarely gate locations on their own. RCS systems, additional reaction wheels, fairings, docking ports (except where rendezvous is a location requirement).
-- **Filler:** Cosmetic items, trap items (eg "mystery part" that turns out to be a structural panel), and genuinely redundant parts that provide no new capability.
+- **Filler:** Cosmetic items, science packs, and genuinely redundant parts that provide no new capability.
+- **Trap:** Client-actuated hazards (see `traps.py`) substituted into the filler padding per the *Trap Density* / *Trap Type Weights* options. The item name is the entire wire signal; the client mod owns every effect.
 
 Classifying too many items as `advancement` makes fill slow and generation brittle. Pre-classify conservatively. Note that because KSP is location-short, the filler category should be kept small — excess items over locations are handled by reducing the item pool via part group bundling rather than by padding with duplicates.
 

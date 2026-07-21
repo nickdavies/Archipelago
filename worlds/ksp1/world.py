@@ -46,7 +46,7 @@ from .locations import (
 _BANNED_EDGES: frozenset[tuple[BodyName, EdgeType]] = frozenset(
     {(BodyName.EVE, EdgeType.ATMOSPHERIC_ASCENT)}
 )
-from .options import Difficulty, Goal, GoalContractMode, KSP1Options, PhysicsDifficulty, STARTING_BODY_POOLS, StartingBody
+from .options import Difficulty, Goal, GoalContractMode, KSP1Options, PhysicsDifficulty, STARTING_BODY_POOLS, StartingBody, TrapDensity
 from .tech_tree import MAX_TIER, NODES_BY_TIER, TECH_NODES, TIER_TO_BAND
 from .effects import RD_FACILITY_THRESHOLDS
 
@@ -865,6 +865,12 @@ class KSP1World(World):
         # broadcast to the multiworld and an incoming death destroys the craft.
         # Generation/logic never reads it.
         d["death_link"] = self.options.death_link.value   # 0/1
+        # Traps: the item NAME is the entire client signal — no payload here.
+        # These two keys exist only for Universal Tracker regen fidelity:
+        # unlike death_link, trap options reshape the item pool (filler
+        # substitution), so regen must restore them.
+        d["trap_density"] = self.options.trap_density.value
+        d["trap_type_weights"] = dict(self.options.trap_type_weights.value)
         # Home body — used by the client mod to drive every per-body
         # comparison (KSC biome prefixes, altitude polling guard, splashdown
         # detection, first-launch / first-landing / first-crash events).
@@ -1087,6 +1093,15 @@ class KSP1World(World):
         if "contracts_available" in slot_data:
             self.options.contracts_available.value = slot_data["contracts_available"]
         self._ut_contracts_required = slot_data.get("contracts_required")
+
+        # Traps reshape filler padding, so regen restores both options.  Absent
+        # keys mean a pre-trap seed: restore to ``none`` (NOT the option
+        # default) so old seeds regenerate trap-free.
+        self.options.trap_density.value = int(
+            slot_data.get("trap_density", TrapDensity.option_none))
+        trap_weights = slot_data.get("trap_type_weights")
+        if trap_weights is not None:
+            self.options.trap_type_weights.value = dict(trap_weights)
 
         # Restore the exact RANDOM_ORBIT target orbits (re-rolling would diverge).
         rop = slot_data.get("random_orbit_params")

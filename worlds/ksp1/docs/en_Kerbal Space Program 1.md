@@ -79,7 +79,25 @@ world. See *Hidden bodies* below.
 **Other equipment** includes RTGs, batteries, docking ports, landing legs, ladders, reaction wheels, RCS,
 science instruments, and more.
 
-**Traps** are **NOT** implemented today but are planned for later.
+**Traps** replace part of the filler pool when *Trap Density* is above *none* (default: *light*, ~10% of
+filler). A trap fires some time after you receive it, one at a time, and never twice — reverting a save
+cannot bring a suffered trap back. Most traps need you in flight (*Time Slip* can also strike at the Space
+Center or Tracking Station), and timed trap effects run in **real time**: time warp does not shorten them.
+Traps never appear in the starting inventory. Which traps appear is controlled by *Trap Type Weights* (all
+equally likely by default; weight 0 disables one):
+
+- *Stage Fright* — a 15-second fuse (warning at ten, hard count from five), then your next stage fires.
+  No cancel — but a stage lock (Alt+L) engaged at zero wins.
+- *Gravity Storm* — local gravity runs 20–50% off for a while.
+- *Spin Cycle* — the craft is thrown into a random tumble.
+- *Radio Silence* — every antenna goes dead for a while.
+- *Short Circuit* — electric charge drains rapidly for a few seconds.
+- *Thermal Runaway* — one part heats toward (but not past) its failure point.
+- *Loose Bolts* — one peripheral part falls off. Permanently.
+- *Mandatory Spacewalk* — a kerbal decides to step outside. Right now.
+- *Time Slip* — time warp changes on its own.
+- *Sticky Throttle* — the throttle jumps to a random setting.
+- *Minor Kraken Attack* — solar panels, gear, and antennas all toggle. Yes, in atmosphere too.
 
 ### Locations
 

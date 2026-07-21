@@ -94,6 +94,64 @@ class TestUTRegen(unittest.TestCase):
         self.assertEqual(effective_physics_profile_name(world2.options), "zero")
         self.assertEqual(world2.fill_slot_data()["physics_difficulty"], "zero")
 
+    def test_trap_options_round_trip(self):
+        """Trap options reshape filler padding, so regen must restore them.
+
+        The regen world is built with DEFAULT options (density light, all
+        weights 1) so the only path to hell/skewed-weights is the restored
+        slot_data, isolating the hook.
+        """
+        from test.general import call_all
+        from worlds.ksp1.options import TrapDensity
+
+        mw1 = setup_multiworld(
+            KSP1World,
+            steps=("generate_early", "create_regions", "create_items", "set_rules"),
+            seed=42,
+            options={
+                "trap_density": "hell",
+                "trap_type_weights": {"staging": 3, "spin": 1},
+            },
+        )
+        slot_data = mw1.worlds[1].fill_slot_data()
+        self.assertEqual(slot_data["trap_density"], TrapDensity.option_hell)
+
+        mw2 = setup_multiworld(KSP1World, steps=(), seed=43, options={})
+        mw2.re_gen_passthrough = {KSP1World.game: slot_data}
+        for step in ("generate_early", "create_regions", "create_items", "set_rules"):
+            call_all(mw2, step)
+        world2: KSP1World = mw2.worlds[1]
+
+        self.assertEqual(world2.options.trap_density.value, TrapDensity.option_hell)
+        self.assertEqual(
+            dict(world2.options.trap_type_weights.value),
+            dict(slot_data["trap_type_weights"]),
+        )
+
+    def test_trap_options_absent_regen_trap_free(self):
+        """A pre-trap slot_data (no trap keys) must regen at density none —
+        not at the option default — so old seeds rebuild trap-free."""
+        from test.general import call_all
+        from worlds.ksp1.options import TrapDensity
+
+        mw1 = setup_multiworld(
+            KSP1World,
+            steps=("generate_early", "create_regions", "create_items", "set_rules"),
+            seed=42,
+            options={},
+        )
+        slot_data = mw1.worlds[1].fill_slot_data()
+        del slot_data["trap_density"]
+        del slot_data["trap_type_weights"]
+
+        mw2 = setup_multiworld(KSP1World, steps=(), seed=43, options={})
+        mw2.re_gen_passthrough = {KSP1World.game: slot_data}
+        for step in ("generate_early", "create_regions", "create_items", "set_rules"):
+            call_all(mw2, step)
+        world2: KSP1World = mw2.worlds[1]
+
+        self.assertEqual(world2.options.trap_density.value, TrapDensity.option_none)
+
     def test_custom_goal_round_trip(self):
         """Custom goal bodies survive the slot_data → regen cycle."""
         opts = {

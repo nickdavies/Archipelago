@@ -37,6 +37,7 @@ from .parts import (
 from .contracts import all_possible_contract_specs
 from .ranks import RankContext, rank_sig_for
 from .options import GoalContractMode
+from .traps import TRAP_DEFS
 
 if TYPE_CHECKING:
     from .world import KSP1World
@@ -296,6 +297,18 @@ DISCOVER_ITEM_BY_BODY: dict[BodyName, str] = {
     body: discover_item_name(body) for body in HIDEABLE_BODIES
 }
 
+# Trap items: offsets 300-310 inside the 300-999 block reserved for traps.
+# The offsets are hand-written in traps.py (id stability is load-bearing —
+# same contract as the Discover/contract blocks above).  Classification
+# ``trap`` serializes to the AP trap flag via as_flag(); the client mod
+# recognizes each item by its exact name and actuates the effect in flight,
+# so the name is the entire wire signal.
+_TRAP_ITEMS: dict[str, tuple[int, ItemClassification]] = {
+    name: (offset, ItemClassification.trap)
+    for name, offset in TRAP_DEFS.values()
+}
+TRAP_ITEM_NAMES: frozenset[str] = frozenset(_TRAP_ITEMS)
+
 ITEM_NAME_TO_ID: dict[str, int] = {
     name: KSP1_BASE_ID + offset
     for name, (offset, _) in {
@@ -305,6 +318,7 @@ ITEM_NAME_TO_ID: dict[str, int] = {
         **_PROGRESSIVE_ITEMS,
         **_CONTRACT_ITEMS,
         **_DISCOVER_ITEMS,
+        **_TRAP_ITEMS,
     }.items()
 }
 
@@ -346,6 +360,8 @@ def create_item(world: KSP1World, name: str) -> KSP1Item:
         offset, classification = _CONTRACT_ITEMS[name]
     elif name in _DISCOVER_ITEMS:
         offset, classification = _DISCOVER_ITEMS[name]
+    elif name in _TRAP_ITEMS:
+        offset, classification = _TRAP_ITEMS[name]
     else:
         raise KeyError(f"Unknown KSP1 item: {name!r}")
     item = KSP1Item(name, classification, KSP1_BASE_ID + offset, world.player)
@@ -377,6 +393,24 @@ _FILLER_NAMES_WEIGHTED: list[str] = (
 
 
 def get_filler_item_name(world: KSP1World) -> str:
+    # Trap substitution lives here (not in the create_all_items padding loop)
+    # so every filler request — pool padding, item links, plando swaps — rolls
+    # the same trap chance.  Density ``none`` draws no rng at all, keeping
+    # trap-free worlds byte-identical to pre-trap generation.
+    pct = world.options.trap_density.percent
+    if pct > 0:
+        weights = world.options.trap_type_weights.value
+        # Absent key == 0 == disabled, same consumption semantics as
+        # contract_type_weights.  All-zero weights degrade silently to
+        # science packs.
+        candidates = [
+            (name, weights[str(trap_type)])
+            for trap_type, (name, _offset) in TRAP_DEFS.items()
+            if weights.get(str(trap_type), 0) > 0
+        ]
+        if candidates and world.random.random() * 100 < pct:
+            names, ws = zip(*candidates)
+            return world.random.choices(names, weights=ws, k=1)[0]
     return world.random.choice(_FILLER_NAMES_WEIGHTED)
 
 

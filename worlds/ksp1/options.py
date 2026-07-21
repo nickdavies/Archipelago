@@ -4,6 +4,7 @@ from Options import Choice, DeathLink, DefaultOnToggle, ExcludeLocations, ItemsA
 
 from .bodies import ALL_BODIES, BodyName
 from .contracts import ContractType, NON_GOAL_TYPES
+from .traps import TrapType
 from .parts.packs import OPTIONAL_PACKS, DEFAULT_ENABLED_OPTIONAL_PACKS
 
 # All landable body names, derived from bodies.py (single source of truth).
@@ -689,6 +690,68 @@ class AllowUndiscoveredBodies(Toggle):
     default = 1
 
 
+class TrapDensity(Choice):
+    """
+    How much of the filler item pool is replaced by trap items.
+
+    Traps are quirky client-actuated hazards (random staging, gravity
+    anomalies, a kerbal deciding to step outside, ...) that fire in flight
+    some time after being received.  Which traps appear is controlled by
+    Trap Type Weights.
+
+    none     -- No traps.
+    light    -- ~10% of filler items become traps.  The default.
+    moderate -- ~25% of filler.
+    heavy    -- ~50% of filler.
+    hell     -- Every filler item is a trap.
+    """
+    display_name = "Trap Density"
+
+    option_none = 0
+    option_light = 1
+    option_moderate = 2
+    option_heavy = 3
+    option_hell = 4
+
+    default = option_light
+
+    _PERCENT = {
+        option_none: 0,
+        option_light: 10,
+        option_moderate: 25,
+        option_heavy: 50,
+        option_hell: 100,
+    }
+
+    @property
+    def percent(self) -> int:
+        """Chance (0-100) that a single filler pick becomes a trap."""
+        return self._PERCENT[self.value]
+
+
+class TrapTypeWeights(OptionDict):
+    """
+    Relative weight of each trap type in the trap pool.  A weight of 0
+    disables that trap entirely; weights are relative, mirroring Contract
+    Type Weights.  All traps enabled and equally likely by default.
+
+    staging       -- Stage Fright: a 5-second klaxon, then your next stage fires.
+    gravity       -- Gravity Storm: local gravity runs 20-50% off for a while.
+    spin          -- Spin Cycle: the craft is thrown into a random tumble.
+    comms_outage  -- Radio Silence: every antenna goes dead for a while.
+    power_drain   -- Short Circuit: charge drains rapidly for a few seconds.
+    overheat      -- Thermal Runaway: one part heats toward (not past) failure.
+    part_failure  -- Loose Bolts: one peripheral part falls off.  Permanently.
+    surprise_eva  -- Mandatory Spacewalk: a kerbal steps outside.  Right now.
+    timewarp      -- Time Slip: time warp changes on its own.
+    throttle      -- Sticky Throttle: the throttle jumps to a random setting.
+    deployables   -- Minor Kraken Attack: panels, gear and antennas toggle.
+    """
+    display_name = "Trap Type Weights"
+    valid_keys = frozenset(str(t) for t in TrapType)
+    default = {str(t): 1 for t in TrapType}
+
+
 @dataclass
 class KSP1Options(PerGameCommonOptions):
     goal: Goal
@@ -722,4 +785,6 @@ class KSP1Options(PerGameCommonOptions):
     orbit_bodies: OrbitBodies
     flyby_bodies: FlybyBodies
     enabled_part_packs: EnabledPartPacks
+    trap_density: TrapDensity
+    trap_type_weights: TrapTypeWeights
     death_link: DeathLink
