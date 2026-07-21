@@ -736,10 +736,25 @@ class KSP1World(World):
                 if item.player == self.player:
                     pool[i] = next(it)
 
-    def post_fill(self) -> None:
+    def pre_output(self) -> None:
         # strict_ladder cross-check: the cheap sphere-bracket access rules
         # were used during fill.  Swap the saved capability access rules
         # back in and confirm the placement is winnable under real physics.
+        #
+        # This runs in pre_output, NOT post_fill, and the distinction is
+        # load-bearing.  ``can_beat_game`` is an ALL-WORLDS check (every slot's
+        # completion condition), and other worlds finalise their beatability at
+        # different pipeline points than their per-player post_fill.  Super
+        # Metroid is the concrete case: its slot only becomes winnable in
+        # ``stage_post_fill`` (it sets ``onlyBossLeft``), which AP's call_all
+        # runs AFTER every per-player post_fill (worlds/AutoWorld.py:214).  So a
+        # can_beat_game from KSP's post_fill sees SM as unbeatable no matter the
+        # player order and aborts a perfectly good seed, mislabelled as a KSP
+        # physics divergence.  pre_output runs after the whole post_fill/
+        # stage_post_fill call_all AND progression balancing AND every world's
+        # finalize_multiworld, so all slots are in their final beatable state —
+        # yet still before get_sendable_spheres / the spoiler playthrough, so the
+        # restore below keeps those cheap.
         saved = getattr(self, "_strict_ladder_saved_rules", None)
         if not saved:
             return
@@ -760,13 +775,13 @@ class KSP1World(World):
         # Contract-ruled locations are first-class in ``saved`` now: their real
         # rule (award gate AND the live ``contract_access`` oracle) was merged in
         # by sphere_ladder._install_ladder_rules, so the swap above already put
-        # them on the real capability path.  can_beat_game therefore verifies
-        # contract capability alongside missions — no separate mode-toggle needed
-        # (contract_access is already computed inside the get_capability the
-        # mission rules trigger, so it costs nothing extra).  The cheap rules
-        # are restored only on the success path — on the failure path below
-        # generation aborts, so the installed rules no longer matter.
-        if self.multiworld.can_beat_game():
+        # them on the real capability path.  The beatability sweep therefore
+        # verifies contract capability alongside missions — no separate
+        # mode-toggle needed (contract_access is already computed inside the
+        # get_capability the mission rules trigger, so it costs nothing extra).
+        # The cheap rules are restored only on the success path — on the failure
+        # path below generation aborts, so the installed rules no longer matter.
+        if self._ksp_slot_beatable():
             for loc in self.multiworld.get_locations(self.player):
                 if loc.name in cheap_rules:
                     loc.access_rule = cheap_rules[loc.name]
@@ -793,6 +808,30 @@ class KSP1World(World):
             f"goal={self.options.goal.current_key} — "
             f"{self._strict_ladder_divergence_summary()}"
         )
+
+    def _ksp_slot_beatable(self) -> bool:
+        """Player-scoped ``can_beat_game``: is THIS KSP slot's goal reachable
+        under the currently-installed (real-capability) rules?
+
+        The advancement sweep is global — KSP progression items can be placed in
+        other players' worlds, and reaching them may require other games' items —
+        but only KSP's own completion condition is checked.  Other worlds'
+        beatability is their own concern (and AP's core ``can_beat_game`` at
+        output time); KSP's physics cross-check must not abort generation, under
+        a "physics divergence" message, because some unrelated slot is unbeatable.
+        Mirrors ``MultiWorld.can_beat_game`` (BaseClasses.py) but passes
+        ``self.player`` to ``has_beaten_game`` so the verdict is KSP-only — which
+        also makes it agree with the KSP-scoped divergence summary below."""
+        from BaseClasses import CollectionState
+        mw = self.multiworld
+        state = CollectionState(mw)
+        if mw.has_beaten_game(state, self.player):
+            return True
+        for _ in state.sweep_for_advancements(
+                yield_each_sweep=True, checked_locations=state.locations_checked):
+            if mw.has_beaten_game(state, self.player):
+                return True
+        return False
 
     def _strict_ladder_divergence_summary(self) -> str:
         """Short description of what capability can't reach under the cheap
