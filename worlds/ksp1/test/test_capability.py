@@ -1954,12 +1954,25 @@ class TestReboardAidGate(unittest.TestCase):
         self.assertTrue(self._mun_return(self._mun_kit(eva_jetpack=True)).feasible)
 
     def test_reboard_mode_by_gravity(self) -> None:
-        from worlds.ksp1.capability import _reboard_mode_for_body
-        for b in (BodyName.MUN, BodyName.MINMUS, BodyName.DUNA, BodyName.IKE):
-            self.assertIs(_reboard_mode_for_body(BODY_BY_NAME[b]),
+        from worlds.ksp1.capability import _reboard_mode_for
+        # SAMPLE_RETURN (the player's own kerbal): low-g accepts a ladder OR the
+        # player's EVA jetpack; high-g (jetpack can't lift off) needs a ladder.
+        _HIGH_G = (BodyName.TYLO, BodyName.EVE, BodyName.LAYTHE, BodyName.KERBIN)
+        _LOW_G = (BodyName.MUN, BodyName.MINMUS, BodyName.DUNA, BodyName.IKE)
+        for b in _LOW_G:
+            self.assertIs(_reboard_mode_for(MissionType.SAMPLE_RETURN, BODY_BY_NAME[b]),
                           ReboardMode.LADDER_OR_JETPACK, b.name)
-        for b in (BodyName.TYLO, BodyName.EVE, BodyName.LAYTHE, BodyName.KERBIN):
-            self.assertIs(_reboard_mode_for_body(BODY_BY_NAME[b]),
+        for b in _HIGH_G:
+            self.assertIs(_reboard_mode_for(MissionType.SAMPLE_RETURN, BODY_BY_NAME[b]),
+                          ReboardMode.LADDER_ONLY, b.name)
+        # SURFACE_RESCUE: the rescued kerbal is always client-equipped with a
+        # jetpack, so low-g needs NOTHING (they lift themselves in); high-g still
+        # needs a ladder on the rescue craft.
+        for b in _LOW_G:
+            self.assertIs(_reboard_mode_for(MissionType.SURFACE_RESCUE, BODY_BY_NAME[b]),
+                          ReboardMode.NONE, b.name)
+        for b in _HIGH_G:
+            self.assertIs(_reboard_mode_for(MissionType.SURFACE_RESCUE, BODY_BY_NAME[b]),
                           ReboardMode.LADDER_ONLY, b.name)
 
     def test_high_g_jetpack_does_not_satisfy_ladder_only(self) -> None:

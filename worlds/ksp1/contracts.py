@@ -32,8 +32,8 @@ from typing import Optional, TYPE_CHECKING
 
 from .bodies import (
     ALL_BODIES, BODY_BY_NAME, BodyName, MissionType, DifficultyProfile,
-    DIFFICULTY_PROFILES, MissionBuilder, effective_physics_profile_name,
-    orbit_reach_dv,
+    DIFFICULTY_PROFILES, MissionBuilder, TOURISM_CREW,
+    effective_physics_profile_name, orbit_reach_dv,
 )
 from .parts import DEFAULT_PART_MANAGER, MiscEquipment, PartManager
 
@@ -46,8 +46,12 @@ if TYPE_CHECKING:
 # client rejects contracts whose schema it doesn't understand. v5 added the
 # variable reward-slot count (Contract Repeats): a non-goal contract's
 # ``locations`` array may now hold more than 2 entries, so a v4 client that
-# assumed exactly 2 must reject rather than silently drop the extras.
-CONTRACT_SCHEMA_VERSION = 5
+# assumed exactly 2 must reject rather than silently drop the extras. v6 added
+# the ``surface_rescue`` primitive (Kerbal stranded ON a body's surface). v7
+# added the ``docking``, ``survey_waypoint`` and ``tourist``
+# primitives (new contract-type wave; a ``part_test`` primitive is reserved but
+# deferred pending an in-game-validated custom parameter).
+CONTRACT_SCHEMA_VERSION = 7
 
 # Number of reward locations each non-goal contract emits, all sharing ONE gate
 # item: completing the contract checks every location, so each non-goal contract
@@ -75,6 +79,12 @@ MINE_ORE_UNITS = 50
 # Space Station contract: required crew CAPACITY (seats). Fixed (not random) so
 # the requirement is predictable; delivered as empty cabins to orbit.
 STATION_CREW = 5
+
+# Surface Survey contract: the science experiment run at the waypoint. Paired
+# with the ``thermometer`` category (the 2HOT Thermometer runs temperatureScan).
+# A single fixed experiment for v1; extend to more instrument/experiment pairs
+# later (each pairs an experiment id with the category that provides it).
+SURVEY_EXPERIMENT = "temperatureScan"
 
 # Orbit-variant contracts: orbit-match tolerance passed to stock
 # SpecificOrbitParameter (degrees / the param's deviation window). 10 is the stock
@@ -195,6 +205,79 @@ class RescueParam:
 
 
 @dataclass(frozen=True)
+class SurfaceRescueParam:
+    """Rescue a Kerbal stranded ON THE SURFACE of ``body`` and return them home.
+    The client SPAWNS the stranded Kerbal (a lone EVA kerbal, stock
+    RecoverAsset-style) landed at a seeded site when the contract is accepted,
+    and completes when that Kerbal is recovered.  ``lat`` is the site-latitude
+    BOUND in degrees: the client places the Kerbal anywhere with
+    ``|latitude| <= lat`` (longitude free, water excluded), and the generator
+    charges the ascent plane change for exactly this bound — so every placeable
+    site costs no more than what logic charged.  ``seed`` drives the client's
+    deterministic site pick.  Like RescueParam, this primitive creates world
+    state — see the client SurfaceRescuePrimitive."""
+    body: str
+    lat: float      # site-latitude bound (deg, symmetric ±)
+    seed: int       # client-side site-pick rng seed
+
+    def to_json(self) -> dict:
+        return {"kind": "surface_rescue", "body": str(self.body),
+                "lat": self.lat, "seed": self.seed}
+
+
+@dataclass(frozen=True)
+class TouristParam:
+    """Take a named tourist to ``entry`` (Suborbit / Orbit) at ``body`` and
+    recover them.  Wraps the mod's ApTouristParameter, which spawns a Tourist
+    roster member and hosts stock KerbalTourParameter / KerbalDestinationParameter
+    children (completes on the tourist's flight-log entry + recovery).  ``name``
+    is a display hint — the client persists whatever unique roster name it
+    actually assigns."""
+    name: str
+    female: bool
+    body: str
+    entry: str            # "Suborbit" | "Orbit"
+
+    def to_json(self) -> dict:
+        return {"kind": "tourist", "name": self.name, "female": self.female,
+                "body": str(self.body), "entry": self.entry}
+
+
+@dataclass(frozen=True)
+class SurveyWaypointParam:
+    """Run ``experiment`` at a seeded surface waypoint on ``body``.  Wraps the
+    mod's ApSurveyWaypointParameter (stock SurveyWaypointParameter), which renders
+    a map waypoint and completes when the experiment is deployed there — running
+    it is enough (no transmit/recover).  ``lat`` is the site-latitude BOUND in
+    degrees (same convention as SurfaceRescueParam): the client picks a water-free
+    waypoint with ``|latitude| <= lat``, and the generator charges reaching that
+    latitude band.  ``seed`` drives the deterministic client site pick."""
+    body: str
+    experiment: str
+    lat: float      # site-latitude bound (deg, symmetric ±)
+    seed: int       # client-side site-pick rng seed
+
+    def to_json(self) -> dict:
+        return {"kind": "survey_waypoint", "body": str(self.body),
+                "experiment": self.experiment, "lat": self.lat, "seed": self.seed}
+
+
+@dataclass(frozen=True)
+class DockingParam:
+    """Dock two SEPARATELY-launched craft in orbit of ``body``.  Wraps the mod's
+    ApDockingParameter, which hooks ``GameEvents.onPartCouple`` while the contract
+    is active and completes on a dock at ``body`` between two vessels of different
+    missionIDs (rejecting EVA grabs and same-launch couples, matching stock
+    ``KSPAchievements.Docking``).  Event-based, so it requires the dock AFTER the
+    contract activates and is safely repeatable — unlike the one-shot progress
+    milestone."""
+    body: str
+
+    def to_json(self) -> dict:
+        return {"kind": "docking", "body": str(self.body)}
+
+
+@dataclass(frozen=True)
 class SpecificOrbitParam:
     """Match a specific target orbit around ``body``. Wraps stock
     SpecificOrbitParameter (the satellite-contract orbit param) on the client; the
@@ -279,6 +362,10 @@ class ContractType(StrEnum):
     RANDOM_ORBIT = "random_orbit"           # seeded inclined/eccentric satellite orbit
     TRANSMIT_SCIENCE = "transmit_science"   # phone home from a body's space (CollectScience)
     KERBAL_RESCUE = "kerbal_rescue"         # rescue a stranded Kerbal from orbit + return
+    SURFACE_RESCUE = "surface_rescue"       # rescue a Kerbal stranded on a surface + return
+    DOCKING = "docking"                     # dock two craft in orbit of a body
+    SURFACE_SURVEY = "surface_survey"       # run an experiment at a seeded surface waypoint
+    TOURISM = "tourism"                     # take tourists to a body's orbit/suborbit and return
     # Goal-only types — used when a goal achievement is one of these missions.
     RETURN = "return"
     FLYBY = "flyby"
@@ -292,6 +379,9 @@ NON_GOAL_TYPES: tuple[ContractType, ...] = (
     ContractType.EQUATORIAL_ORBIT, ContractType.POLAR_ORBIT,
     ContractType.STATIONARY_ORBIT, ContractType.RANDOM_ORBIT,
     ContractType.TRANSMIT_SCIENCE, ContractType.KERBAL_RESCUE,
+    ContractType.SURFACE_RESCUE,
+    ContractType.DOCKING, ContractType.SURFACE_SURVEY,
+    ContractType.TOURISM,
 )
 
 # Contract types that ask the player to match a SPECIFIC target orbit (via the
@@ -305,11 +395,17 @@ PRECISE_ORBIT_TYPES: frozenset[ContractType] = frozenset({
 # they need a reaction wheel or RCS (not just engine gimbal) on casual/normal
 # difficulty — see GameplayDifficulty.precise_pointing_needs_reaction_control and
 # the capability NO_PRECISE_ATTITUDE gate. Beyond the specific-orbit set: a space
-# station (a large crewed vessel holding a service orbit) and a kerbal rescue
-# (fine approach to the stranded craft). RESCUE additionally carries the
-# navigation (rendezvous) gate via its mission type.
+# station (a large crewed vessel holding a service orbit) and the kerbal rescues
+# (fine approach to the stranded craft / precision descent onto the stranded
+# Kerbal's site). Both RESCUE types additionally carry the navigation
+# (rendezvous) gate via their mission type.
 PRECISE_POINTING_TYPES: frozenset[ContractType] = PRECISE_ORBIT_TYPES | frozenset({
     ContractType.SPACE_STATION, ContractType.KERBAL_RESCUE,
+    ContractType.SURFACE_RESCUE,
+    # Docking is the archetypal fine-attitude / RCS-translation manoeuvre.
+    ContractType.DOCKING,
+    # A survey must set down at a designated waypoint — a precise touchdown.
+    ContractType.SURFACE_SURVEY,
 })
 
 
@@ -401,6 +497,12 @@ class ContractTypeDef:
     # required_categories entry; new types may author this explicitly — then it
     # is taken as given.
     requirements: tuple[Requirement, ...] = ()
+    # True if the mission needs a rendezvous (matching orbits with another craft)
+    # beyond what ``base_mission_type`` implies — e.g. DOCKING on the plain ORBIT
+    # profile. Threaded into evaluate_mission_detailed (the CANNOT_RENDEZVOUS
+    # physics gate) and mission_logic_needs (the CAN_RENDEZVOUS counted gate), so
+    # both the feasibility check and the sphere-ladder signature see it.
+    requires_rendezvous: bool = False
 
     def __post_init__(self):
         if not self.requirements:
@@ -418,7 +520,7 @@ class ContractTypeDef:
     def requires_landing(self) -> bool:
         return self.base_mission_type in (
             MissionType.LAND, MissionType.FLAG_PLANT, MissionType.SAMPLE_RETURN,
-            MissionType.RETURN)
+            MissionType.RETURN, MissionType.SURFACE_RESCUE)
 
     def body_compatible(self, body) -> bool:
         """True if this type can target ``body`` at all (before feasibility)."""
@@ -472,7 +574,51 @@ class ContractTypeDef:
         ``orbit_reach_dv`` (home vs capture-from-outside vs moon→parent); the
         inclination cost is a launch-from-home penalty only (off home the plane is
         set for free at capture/transfer).  RESCUE is the round-trip case (out and
-        back to the stranded Kerbal's orbit).  Non-orbital types are identity."""
+        back to the stranded Kerbal's orbit).  SURFACE_RESCUE marks the target
+        landing edge precision (difficulty-resolved hover surcharge) and puts the
+        seeded site latitude's worst-case plane reconcile (2·v_LO·sin(lat/2)) on
+        the target ascent edge's ``plane_change_dv`` — free with window timing,
+        so it is priced by ``plane_change_fraction`` like every other plane
+        change.  Non-orbital types are identity."""
+        if self.contract_type == ContractType.DOCKING:
+            # ORBIT profile plus the phasing/matching burn to rendezvous with the
+            # second craft — the same margin the rescue profiles carry.
+            return list(edges) + [mission_builder.make_phasing_edge(
+                target_body, mission_builder._RESCUE_RENDEZVOUS_DV)]
+        if self.contract_type == ContractType.SURFACE_SURVEY:
+            # Precise touchdown at the waypoint (hover surcharge on the landing
+            # edge). At HOME the ascent must reach the site's latitude band, so
+            # charge the rotation-assist loss of an inclined launch (same formula
+            # as the polar/inclined orbital contracts). Off home the arrival plane
+            # is set for free at capture and there is no return leg to reconcile.
+            edges = mission_builder.mark_precision_landing(edges, target_body)
+            lat = mission_builder.survey_site_lats.get(target_body)
+            if lat is None:
+                # Fail closed, matching build_parameters — never under-charge a
+                # mission whose defining site latitude is missing.
+                raise ValueError(
+                    f"SURFACE_SURVEY on {target_body} has no assigned site latitude")
+            if target_body == home_body and lat > 0.0:
+                home = BODY_BY_NAME[home_body]
+                penalty = home.surface_rotation_velocity * (
+                    1.0 - math.cos(math.radians(lat)))
+                edges = mission_builder.add_ascent_penalty(
+                    edges, home_body, penalty)
+            return edges
+        if self.contract_type == ContractType.SURFACE_RESCUE:
+            edges = mission_builder.mark_precision_landing(edges, target_body)
+            lat = mission_builder.surface_rescue_site_lats.get(target_body)
+            if lat is None:
+                # Fail closed, matching build_parameters — never under-charge a
+                # mission whose defining site latitude is missing.
+                raise ValueError(
+                    f"SURFACE_RESCUE on {target_body} has no assigned site latitude")
+            b = BODY_BY_NAME[target_body]
+            pc = 2.0 * b.lo_circular_velocity * math.sin(
+                math.radians(lat) / 2.0)
+            edges = mission_builder.add_ascent_plane_change(
+                edges, target_body, pc)
+            return edges
         orbit = self._target_orbit(target_body, mission_builder)
         if orbit is None:
             return edges
@@ -591,6 +737,63 @@ class ContractTypeDef:
                        for cat in self.required_categories
                        if cat not in self.logic_only_categories]
             return params
+        if self.contract_type == ContractType.SURFACE_RESCUE:
+            # The client spawns the stranded Kerbal landed at a site with
+            # |latitude| <= the seeded bound (longitude free, water excluded)
+            # and completes when they are recovered.  Free seat / logic-only
+            # jetpack mirror KERBAL_RESCUE.  The site-pick rng seed is derived
+            # from the seeded latitude (already per-seed random and restored
+            # from slot_data on UT regen), so no extra state is needed.
+            lat = 0.0
+            if mission_builder is not None:
+                lat_v = mission_builder.surface_rescue_site_lats.get(body)
+                if lat_v is None:
+                    raise ValueError(
+                        f"SURFACE_RESCUE on {body} has no assigned site latitude")
+                lat = lat_v
+            params = [SurfaceRescueParam(
+                body, lat=lat, seed=int(round(lat * 1_000_000)))]
+            params += [_category_param(cat, part_manager)
+                       for cat in self.required_categories
+                       if cat not in self.logic_only_categories]
+            return params
+        if self.contract_type == ContractType.DOCKING:
+            # Dock two craft in orbit of the body (client ApDockingParameter).
+            # The docking-port objective is a real has_any_part gate; the RCS
+            # requirement is logic-only (paces the contract behind RCS tech but
+            # is not a separate in-game objective — the dock proves control).
+            params = [DockingParam(body)]
+            params += [_category_param(cat, part_manager)
+                       for cat in self.required_categories
+                       if cat not in self.logic_only_categories]
+            return params
+        if self.contract_type == ContractType.SURFACE_SURVEY:
+            # Run the experiment at the seeded waypoint (client renders the map
+            # marker). The thermometer is logic-only: running temperatureScan
+            # implies carrying one, so a separate "has thermometer" objective
+            # would be redundant in-game — but the contract is still paced behind
+            # (and promotes) the instrument. Site latitude / seed live on the
+            # mission_builder, same as SURFACE_RESCUE.
+            lat = 0.0
+            if mission_builder is not None:
+                lat_v = mission_builder.survey_site_lats.get(body)
+                if lat_v is None:
+                    raise ValueError(
+                        f"SURFACE_SURVEY on {body} has no assigned site latitude")
+                lat = lat_v
+            return [SurveyWaypointParam(
+                body, experiment=SURVEY_EXPERIMENT, lat=lat,
+                seed=int(round(lat * 1_000_000)))]
+        if self.contract_type == ContractType.TOURISM:
+            # One tourist objective per seeded passenger (client spawns each as a
+            # Tourist and tracks their flight log + recovery). The manifest lives
+            # on the mission_builder, same as the other seeded per-body data.
+            if mission_builder is None:
+                raise ValueError("TOURISM build_parameters needs mission_builder")
+            manifest = mission_builder.tourist_manifests.get(body)
+            if not manifest:
+                raise ValueError(f"TOURISM on {body} has no assigned tourists")
+            return [TouristParam(t.name, t.female, body, t.entry) for t in manifest]
         if self.contract_type == ContractType.FLYBY:
             return [SituationParam("flyby", body)]      # stock EnterSOI(body)
         if self.contract_type == ContractType.RETURN:
@@ -707,7 +910,7 @@ CONTRACT_TYPE_DEFS: dict[ContractType, ContractTypeDef] = {
     ),
     ContractType.KERBAL_RESCUE: ContractTypeDef(
         contract_type=ContractType.KERBAL_RESCUE,
-        location_noun="Crew Rescue",
+        location_noun="Orbital Rescue",
         location_prep="around",
         base_mission_type=MissionType.RESCUE,
         crewed=None,
@@ -726,6 +929,60 @@ CONTRACT_TYPE_DEFS: dict[ContractType, ContractTypeDef] = {
         synopsis_fmt="Rendezvous with a stranded Kerbal in orbit of {body} and "
                      "bring them home safely.",
     ),
+    ContractType.SURFACE_RESCUE: ContractTypeDef(
+        contract_type=ContractType.SURFACE_RESCUE,
+        location_noun="Surface Rescue",
+        location_prep="from",   # "Surface Rescue from Mun" vs orbital "Orbital Rescue around Mun"
+        base_mission_type=MissionType.SURFACE_RESCUE,
+        crewed=None,
+        # Same kit shape as the orbital rescue: a free seat to bring the
+        # stranded Kerbal home, and a logic-only EVA jetpack (the CLIENT equips
+        # the rescuee; the jetpack paces the contract behind jetpack tech and
+        # lets the Kerbal cross from their site to the lander).
+        required_categories=("crew_cabin", "eva_jetpack"),
+        logic_only_categories=("eva_jetpack",),
+        crew_requirement=1,
+        # Home excluded, matching stock RecoverAsset — bodies.py registers no
+        # home SURFACE_RESCUE profile either, so both gates agree.
+        home_safe=False,
+        title_fmt="Rescue a stranded Kerbal from the surface of {body}",
+        synopsis_fmt="Land near a Kerbal stranded on the surface of {body} "
+                     "and bring them home safely.",
+    ),
+    ContractType.DOCKING: ContractTypeDef(
+        contract_type=ContractType.DOCKING,
+        location_noun="Docking",
+        location_prep="around",   # "Docking around Kerbin"
+        base_mission_type=MissionType.ORBIT,
+        crewed=None,              # two probe cores can dock
+        # The docking port is a real vessel objective; RCS gates logic only (the
+        # dock event itself proves controlled translation, so a separate "carry
+        # RCS" objective would be redundant in-game — but the contract is still
+        # paced behind RCS tech).
+        required_categories=("docking_port", "rcs"),
+        logic_only_categories=("rcs",),
+        requires_rendezvous=True,
+        # Docking around the home body is classic early-mid content.
+        home_safe=True,
+        title_fmt="Dock two craft in orbit of {body}",
+        synopsis_fmt="Rendezvous and dock two separately-launched craft in "
+                     "orbit of {body}.",
+    ),
+    ContractType.SURFACE_SURVEY: ContractTypeDef(
+        contract_type=ContractType.SURFACE_SURVEY,
+        location_noun="Surface Survey",
+        location_prep="on",
+        base_mission_type=MissionType.LAND,
+        crewed=None,              # a probe lander with an instrument suffices
+        # The thermometer gates feasibility + promotion but emits no in-game
+        # objective (running the experiment implies carrying it).
+        required_categories=("thermometer",),
+        logic_only_categories=("thermometer",),
+        # A surface survey of the home body is good early content (no return).
+        home_safe=True,
+        title_fmt="Survey a site on {body}",
+        synopsis_fmt="Land at the marked waypoint on {body} and run a survey.",
+    ),
     ContractType.FLAG_PLANT: ContractTypeDef(
         contract_type=ContractType.FLAG_PLANT,
         location_noun="Flag Plant",
@@ -734,6 +991,24 @@ CONTRACT_TYPE_DEFS: dict[ContractType, ContractTypeDef] = {
         required_categories=(),
         title_fmt="Plant a flag on {body}",
         synopsis_fmt="Land a kerbal on {body} and plant a flag.",
+    ),
+    ContractType.TOURISM: ContractTypeDef(
+        contract_type=ContractType.TOURISM,
+        location_noun="Tourism",
+        location_prep="to",       # "Tourism to Mun"
+        base_mission_type=MissionType.ORBIT_RETURN,
+        crewed=None,              # a probe bus carrying tourist cabins is fine
+        # Seats for the tourists (payload) — crew_cabin is logic-only: the tourist
+        # objectives are the in-game requirement, and the seats are chain-
+        # guaranteed, so no separate cabin objective is emitted.
+        required_categories=("crew_cabin",),
+        logic_only_categories=("crew_cabin",),
+        crew_requirement=TOURISM_CREW,
+        # Home orbital / suborbital tourism is good early-mid content.
+        home_safe=True,
+        title_fmt="Fly tourists to {body}",
+        synopsis_fmt="Take a group of space tourists to {body} and bring them "
+                     "home safely.",
     ),
     ContractType.SAMPLE_RETURN: ContractTypeDef(
         contract_type=ContractType.SAMPLE_RETURN,
@@ -992,6 +1267,7 @@ def evaluate_contract(
         mission_builder, extra_payload_parts=manifest,
         mission_transform=spec.mission_transform(mission_builder),
         requires_precise_pointing=spec.contract_type in PRECISE_POINTING_TYPES,
+        requires_rendezvous=td.requires_rendezvous or None,
         run_parallel=run_parallel,
     )
 
@@ -1007,7 +1283,8 @@ def contract_logic_needs(spec: ContractSpec, mission_builder: MissionBuilder):
     from .capability import mission_logic_needs
     td = spec.type_def
     return mission_logic_needs(
-        spec.body, td.base_mission_type, td.crewed, None, mission_builder)
+        spec.body, td.base_mission_type, td.crewed, None, mission_builder,
+        requires_rendezvous=td.requires_rendezvous or None)
 
 
 def can_complete_contract(
@@ -1420,7 +1697,15 @@ def generate_contracts(world: "KSP1World") -> tuple[list[ContractSpec], list[Con
             # per-difficulty feasibility table + Eve curated ban).  Only the
             # return-type events have table entries, so this naturally filters
             # Eve/Tylo/Laythe surface returns and leaves other types alone.
+            # SURFACE_RESCUE has no milestone of its own but is strictly harder
+            # than RETURN from the same body (same trajectory + precision and
+            # site-latitude surcharges), so RETURN's table entry is its
+            # conservative proxy — deliberately NOT via _migrated_event_map,
+            # which would also opt it into the milestone equal-or-after gating.
             event = contract_event_of.get(ct)
+            if event is None and ct == ContractType.SURFACE_RESCUE:
+                from .locations import EventName
+                event = EventName.RETURN
             if event is not None and _all_locations_infeasible(
                     body.name, event, model_infeasible):
                 continue

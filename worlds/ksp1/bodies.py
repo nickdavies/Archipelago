@@ -51,6 +51,16 @@ class MissionType(StrEnum):
     # Rescue: reach the target's ORBIT, rendezvous, and bring a stranded Kerbal
     # home — like RETURN but the return starts from low orbit (no landing leg).
     RESCUE = "rescue"
+    # Surface rescue: land NEAR a Kerbal stranded on the target's surface
+    # (precision landing), take them aboard, and bring them home — RETURN's
+    # trajectory plus a precision-landing surcharge on the descent and a
+    # site-latitude plane change on the ascent back out.
+    SURFACE_RESCUE = "surface_rescue"
+    # Orbit-and-return: reach the target's ORBIT and bring the vessel home —
+    # RESCUE's trajectory without the rendezvous phasing burn (no second craft to
+    # meet). Contract-only (TOURISM); never emitted as a mission location, so it
+    # has no feasibility-table row (full physics filters it).
+    ORBIT_RETURN = "orbit_return"
     # Home-body-only mission types (no MissionBuilder profile entry)
     SOUNDING = "sounding"
     FIRST_LAUNCH = "first_launch"
@@ -94,6 +104,11 @@ class DifficultyProfile:
     min_twr_atmo: float         # minimum TWR for atmospheric ascent/landing
     min_twr_vac: float          # minimum TWR for vacuum ascent/landing
     ship_cd: float              # ship body drag coefficient (parachute discount)
+    # Hover-translate seconds budgeted to correct residual horizontal error onto
+    # a precision landing target (surface rescue).  Consumed by
+    # precision_landing_dv: surcharge = g * precision_hover_s +
+    # 2 * PRECISION_TRANSLATE_V, defined as exactly 0 when the budget is 0.
+    precision_hover_s: float
 
 
 # Physics-difficulty profiles, keyed by the PhysicsDifficulty option's level
@@ -112,21 +127,30 @@ DIFFICULTY_PROFILES: dict[str, DifficultyProfile] = {
     "generous": DifficultyProfile(
         fixed_margin=200, percent_margin=0.30, plane_change_fraction=1.00,
         min_twr_atmo=1.5, min_twr_vac=1.2, ship_cd=0.0,
+        precision_hover_s=45.0,
     ),
     "comfortable": DifficultyProfile(
         fixed_margin=100, percent_margin=0.15, plane_change_fraction=0.25,
         min_twr_atmo=1.5, min_twr_vac=1.2, ship_cd=0.1,
+        precision_hover_s=30.0,
     ),
     "small": DifficultyProfile(
         fixed_margin=50, percent_margin=0.05, plane_change_fraction=0.05,
         min_twr_atmo=1.3, min_twr_vac=1.1, ship_cd=0.2,
+        precision_hover_s=15.0,
     ),
     # No dv margin at all: every budget must close exactly.
     "zero": DifficultyProfile(
         fixed_margin=0, percent_margin=0.00, plane_change_fraction=0.00,
         min_twr_atmo=1.2, min_twr_vac=1.0, ship_cd=0.2,
+        precision_hover_s=0.0,
     ),
 }
+
+# Horizontal translate speed (m/s) assumed while correcting residual landing
+# error onto a precision target; precision_landing_dv's 2x term pays the
+# accelerate + decelerate cost of that translation.
+PRECISION_TRANSLATE_V = 30.0
 
 
 @dataclass(frozen=True)
@@ -208,6 +232,21 @@ def effective_dv(base_dv: float, profile: DifficultyProfile,
     """Return the margin-adjusted dv budget for an edge."""
     pc = plane_change_dv * profile.plane_change_fraction
     return (base_dv + pc + profile.fixed_margin) * (1.0 + profile.percent_margin)
+
+
+def precision_landing_dv(surface_gravity: float,
+                         profile: DifficultyProfile) -> float:
+    """Hover-translate surcharge for a precision landing (land NEAR a target).
+
+    Gravity-scaled: correcting residual horizontal error costs gravity losses
+    for the profile's budgeted hover time plus accel/decel of the translate
+    speed — nearly free on Gilly, expensive on Tylo.  Exactly 0 when the
+    profile budgets no hover time (the zero profile closes every budget
+    exactly)."""
+    if profile.precision_hover_s <= 0.0:
+        return 0.0
+    return (surface_gravity * profile.precision_hover_s
+            + 2.0 * PRECISION_TRANSLATE_V)
 
 
 # ---------------------------------------------------------------------------
@@ -600,6 +639,12 @@ class MissionEdge:
     # further power is needed.  Typed replacement for string-matching the
     # destination node name against "<home>_surface".
     is_recovery: bool = False
+    # Landing must hit a designated site (surface rescue).  The dv cost is
+    # difficulty-resolved at evaluation time (precision_landing_dv), so the
+    # edge only carries the flag: added to the descent burn on vacuum
+    # landings, forced as a terminal-divert burn on atmo landings (a
+    # pure-chute mix cannot steer to a target).
+    precision_landing: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -1335,6 +1380,90 @@ def generate_rescue_orbit_params(rng, bodies) -> dict[BodyName, float]:
     return out
 
 
+# Seeded surface-rescue site latitude bound (degrees).  The floor keeps a
+# nonzero plane-change term on every instance (no degenerate equator-only
+# contracts); the ceiling keeps worst-case ascent plane reconciliation
+# (2*v_LO*sin(lat/2)) within reach of the feasibility filter on heavy bodies.
+_SURFACE_RESCUE_LAT_MIN_DEG = 5.0
+_SURFACE_RESCUE_LAT_MAX_DEG = 45.0
+
+
+def generate_surface_rescue_site_lats(rng, bodies) -> dict[BodyName, float]:
+    """Seeded surface-rescue site latitude BOUND (degrees, symmetric ±band) per
+    landable body.  The capability model charges the ascent plane change for
+    this latitude and the client places the stranded Kerbal anywhere with
+    ``|lat| <= bound`` (longitude is physics-free), so every placeable site
+    costs no more than what logic charged.  Deterministic for a given ``rng``
+    so UT regen restores the same values from slot_data."""
+    out: dict[BodyName, float] = {}
+    for b in bodies:
+        if not b.can_land:
+            continue
+        out[b.name] = rng.uniform(_SURFACE_RESCUE_LAT_MIN_DEG,
+                                  _SURFACE_RESCUE_LAT_MAX_DEG)
+    return out
+
+
+# Tourists per TOURISM contract (seat count the vessel must carry + return).
+# One tourist per contract: one seeded flight objective, not a pair.
+TOURISM_CREW = 1
+
+# First-name pool for seeded tourist names. The client resolves these against
+# the roster and falls back to a unique name on collision (it persists the real
+# name), so these are display hints — but kept deterministic for UT regen.
+_TOURIST_NAMES: tuple[str, ...] = (
+    "Lodan", "Gwenzon", "Desnie", "Sherzor", "Adelie", "Mortimer",
+    "Ludred", "Nedzer", "Obrin", "Sigsby", "Thomsen", "Elindy",
+)
+
+
+@dataclass(frozen=True)
+class TouristSpec:
+    """One tourist on a TOURISM contract: a named passenger to deliver to a
+    destination situation and recover.  ``entry`` is a client FlightLog.EntryType;
+    every tourism objective is an orbit-and-return, so it is always "Orbit" (the
+    client also accepts "Suborbit", reserved for a future pre-orbit tourism
+    option).  The capability model prices tourism as reaching the body's ORBIT and
+    returning, so ``entry`` is client flavour only."""
+    name: str
+    female: bool
+    entry: str
+
+
+def generate_tourist_manifests(
+    rng, bodies
+) -> dict[BodyName, tuple[TouristSpec, ...]]:
+    """Seeded TOURISM tourist manifest per orbitable body — ``TOURISM_CREW``
+    tourist(s) with distinct seeded names/genders, each an orbit-and-return
+    objective.  Deterministic for a given ``rng`` so UT regen restores the same
+    manifests."""
+    out: dict[BodyName, tuple[TouristSpec, ...]] = {}
+    for b in bodies:
+        if not b.is_orbitable:
+            continue
+        names = rng.sample(_TOURIST_NAMES, TOURISM_CREW)
+        out[b.name] = tuple(
+            TouristSpec(f"{nm} Kerman", rng.random() < 0.5, "Orbit")
+            for nm in names)
+    return out
+
+
+def generate_survey_site_lats(rng, bodies) -> dict[BodyName, float]:
+    """Seeded SURFACE_SURVEY waypoint latitude BOUND (degrees, symmetric ±band)
+    per landable body — INCLUDING home (a home surface survey is valid early
+    content, unlike surface rescue which excludes home).  Same lat band and
+    determinism as ``generate_surface_rescue_site_lats``; the capability model
+    charges reaching this latitude (home ascent inclination) and the client picks
+    the water-free waypoint within ``|lat| <= bound``."""
+    out: dict[BodyName, float] = {}
+    for b in bodies:
+        if not b.can_land:
+            continue
+        out[b.name] = rng.uniform(_SURFACE_RESCUE_LAT_MIN_DEG,
+                                  _SURFACE_RESCUE_LAT_MAX_DEG)
+    return out
+
+
 # Aerobrake-capture circularisation residual (m/s) — the dv left after an
 # atmospheric SOI capture drops you into low orbit.  Shared with the
 # AEROBRAKE_CAPTURE edge in ``_build_graph`` so the capture cost the base profile
@@ -1499,6 +1628,19 @@ class MissionBuilder:
         # to charge the dv to reach the orbit and by build_parameters to tell the
         # client where to spawn the stranded Kerbal.
         self.rescue_orbit_params: dict[BodyName, float] = {}
+        # Per-body seeded surface-rescue site latitude bound (degrees) for
+        # SURFACE_RESCUE contracts. Same lifecycle as rescue_orbit_params:
+        # read by transform_mission to charge the ascent plane change for the
+        # site latitude and by build_parameters to bound the client's spawn.
+        self.surface_rescue_site_lats: dict[BodyName, float] = {}
+        # Per-body seeded SURFACE_SURVEY waypoint latitude bound (degrees),
+        # including home. Same lifecycle: read by transform_mission to charge the
+        # home ascent inclination for the site latitude, and by build_parameters
+        # to bound the client's waypoint pick.
+        self.survey_site_lats: dict[BodyName, float] = {}
+        # Per-body seeded tourist manifest for TOURISM. Same lifecycle; read by
+        # build_parameters to emit one tourist objective per passenger.
+        self.tourist_manifests: dict[BodyName, tuple["TouristSpec", ...]] = {}
         # Per-seed bound lifter table (pad -> home low orbit), or None to use
         # raw physics for the home-ascent build.  Populated by the world in
         # generate_early (same lifecycle as random_orbit_params); read only by
@@ -1618,6 +1760,43 @@ class MissionBuilder:
         src, dst = f"{bnl}_surface", f"{bnl}_low_orbit"
         return [
             replace(e, base_dv=e.base_dv + extra_dv)
+            if (e.source == src and e.destination == dst) else e
+            for e in edges
+        ]
+
+    def mark_precision_landing(
+        self, edges: list[MissionEdge], body: BodyName
+    ) -> list[MissionEdge]:
+        """Return ``edges`` with ``body``'s orbit→surface landing edge flagged
+        ``precision_landing`` (surface rescue: the descent must hit a
+        designated site).  The dv cost is difficulty-resolved at evaluation
+        time — see ``precision_landing_dv``.  No-op if the landing edge isn't
+        in the profile."""
+        bnl = body.value.lower()
+        src, dst = f"{bnl}_low_orbit", f"{bnl}_surface"
+        return [
+            replace(e, precision_landing=True)
+            if (e.source == src and e.destination == dst) else e
+            for e in edges
+        ]
+
+    def add_ascent_plane_change(
+        self, edges: list[MissionEdge], body: BodyName, pc_dv: float
+    ) -> list[MissionEdge]:
+        """Return ``edges`` with ``pc_dv`` added to the worst-case
+        ``plane_change_dv`` of ``body``'s surface→low-orbit ascent edge.  A
+        surface-rescue site at latitude φ forces an ascent plane of i ≥ φ,
+        reconciled to the return/ejection plane for up to 2·v_LO·sin(φ/2) —
+        free with window timing (launch into the plane containing site and
+        departure asymptote), so it is priced by ``plane_change_fraction``
+        like every other plane change.  No-op if ``pc_dv`` is non-positive or
+        the ascent edge isn't in the profile."""
+        if pc_dv <= 0.0:
+            return edges
+        bnl = body.value.lower()
+        src, dst = f"{bnl}_surface", f"{bnl}_low_orbit"
+        return [
+            replace(e, plane_change_dv=e.plane_change_dv + pc_dv)
             if (e.source == src and e.destination == dst) else e
             for e in edges
         ]
@@ -2133,6 +2312,9 @@ class MissionBuilder:
                 land_profile = ascent + [deorbit]
                 self._add(hn, MissionType.LAND, land_profile)
                 self._add(hn, MissionType.RETURN, land_profile)
+                # ORBIT_RETURN — reach home orbit and come back down. Same
+                # ascent+deorbit trajectory as LAND (no rendezvous phasing).
+                self._add(hn, MissionType.ORBIT_RETURN, land_profile)
                 # RESCUE — reach home orbit, rendezvous, and deorbit the rescued
                 # Kerbal. Ascent + phasing burn (at low orbit) + deorbit.
                 phasing = self.make_phasing_edge(hn, self._RESCUE_RENDEZVOUS_DV)
@@ -2201,6 +2383,13 @@ class MissionBuilder:
             # missions are flyby-and-back, not sample retrieval.
             if body.can_land:
                 self._add(bn, MissionType.SAMPLE_RETURN, *combos)
+                # SURFACE_RESCUE shares the land+return trajectory; the
+                # precision-landing flag and the site-latitude plane change
+                # are per-contract (seeded site), applied in
+                # ``transform_mission``, not baked into the profile.
+                # Destination bodies only — the home body is excluded from
+                # surface rescue (matches stock RecoverAsset).
+                self._add(bn, MissionType.SURFACE_RESCUE, *combos)
 
         # RESCUE — reach the target's orbit, rendezvous, bring the stranded
         # Kerbal home. The seeded rescue-orbit radius cost is added in
@@ -2234,6 +2423,10 @@ class MissionBuilder:
                                      self._PV, dvli, home.name, attitude=True)
                 self._add(bn, MissionType.RESCUE,
                           ascent_paths[0] + [eject, phasing, capture, deorbit])
+                # ORBIT_RETURN — reach the parent's orbit and come home, no
+                # rendezvous (tourists, not a second craft to meet).
+                self._add(bn, MissionType.ORBIT_RETURN,
+                          ascent_paths[0] + [eject, capture, deorbit])
         else:
             # General case: reach the target's LOW ORBIT (not surface),
             # rendezvous, and bring the stranded Kerbal home. Like RETURN but the
@@ -2248,6 +2441,15 @@ class MissionBuilder:
                 rescue_combos.sort(key=lambda p: sum(e.base_dv for e in p))
                 self._add(bn, MissionType.RESCUE,
                           *rescue_combos[:self._MAX_PROFILE_ALTS])
+                # ORBIT_RETURN — reach the body's low orbit and return home, no
+                # rendezvous phasing (tourists ride along; there is no second
+                # craft to meet).
+                orbit_return_combos = [out + ret
+                                       for out in rescue_outbound
+                                       for ret in rescue_return]
+                orbit_return_combos.sort(key=lambda p: sum(e.base_dv for e in p))
+                self._add(bn, MissionType.ORBIT_RETURN,
+                          *orbit_return_combos[:self._MAX_PROFILE_ALTS])
 
     # ------------------------------------------------------------------
     # Cross-validation

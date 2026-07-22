@@ -109,6 +109,21 @@ CONTRACT_PART_CATEGORIES: dict[str, PartCategory] = {
     "eva_jetpack": PartCategory(
         "eva_jetpack", members=frozenset({"evaJetpack"}),
         description="EVA jetpack (kerbal orbital maneuvering for rescue)"),
+    # Provides-flag derived — every Clamp-O-Tron carries the docking_port flag.
+    # The docking contract needs one to mate two craft.
+    "docking_port": PartCategory(
+        "docking_port", provides_any=frozenset({"docking_port"}),
+        description="docking port (mate two craft)"),
+    # Provides-flag derived — RCS thruster blocks. A precise docking approach
+    # needs translation authority the docking contract gates on in logic.
+    "rcs": PartCategory(
+        "rcs", provides_any=frozenset({"rcs"}),
+        description="RCS thruster block (translation for docking)"),
+    # Provides-flag derived — the 2HOT Thermometer carries the thermometer flag.
+    # The surface-survey contract runs a temperatureScan, which needs it.
+    "thermometer": PartCategory(
+        "thermometer", provides_any=frozenset({"thermometer"}),
+        description="thermometer (temperature-scan instrument)"),
 }
 
 # Resolved ksp_name membership per category, computed once over the full part

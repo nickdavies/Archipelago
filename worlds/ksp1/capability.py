@@ -29,6 +29,7 @@ from .bodies import (
     GameplayDifficulty, CONSERVATIVE_GAMEPLAY,
     Body, MissionEdge, MissionBuilder, EdgeType, ReboardMode,
     effective_dv, effective_physics_profile_name, home_system_bodies, parent_chain,
+    precision_landing_dv,
 )
 from .comms import DSN_POWER_MAX, dsn_required_relay_table
 from .parts import (
@@ -155,16 +156,20 @@ MISSION_TYPES_REQUIRING_EVA: frozenset[MissionType] = frozenset({
     MissionType.FLAG_PLANT,
     MissionType.SAMPLE_RETURN,
     MissionType.RESCUE,
+    MissionType.SURFACE_RESCUE,
 })
 
 # Mission types that require a rendezvous — matching orbits with another vessel.
-# Rescuing a stranded Kerbal is the sole type today; other callers (e.g. the
-# Apollo-split return retry) pass ``requires_rendezvous=True`` explicitly.
-# Rendezvous needs patched conics + maneuver nodes (Tracking Station + Mission
-# Control), the ``can_rendezvous`` gate — this is the NAVIGATION axis, orthogonal
-# to the precise-pointing (attitude-hardware) gate above.
+# Other callers (e.g. the Apollo-split return retry) pass
+# ``requires_rendezvous=True`` explicitly.  Rendezvous needs patched conics +
+# maneuver nodes (Tracking Station + Mission Control), the ``can_rendezvous``
+# gate — this is the NAVIGATION axis, orthogonal to the precise-pointing
+# (attitude-hardware) gate above.  SURFACE_RESCUE is included because steering
+# a descent onto a designated surface site takes the same conics/node
+# targeting a rendezvous does.
 MISSION_TYPES_REQUIRING_RENDEZVOUS: frozenset[MissionType] = frozenset({
     MissionType.RESCUE,
+    MissionType.SURFACE_RESCUE,
 })
 
 # Mission types that take a surface sample (a Kerbal collecting surface material)
@@ -174,6 +179,27 @@ MISSION_TYPES_REQUIRING_RENDEZVOUS: frozenset[MissionType] = frozenset({
 # samples: plain home EVA is free, so a home sample needs only R&D).
 MISSION_TYPES_REQUIRING_SAMPLES: frozenset[MissionType] = frozenset({
     MissionType.SAMPLE_RETURN,
+})
+
+# Mission types whose crewed surface leg leaves a Kerbal on the ground who must
+# then re-board the lander under control (a jump drifts them off).  A ladder
+# always works; an EVA jetpack works only where it can lift the Kerbal off the
+# surface (low-g).  SAMPLE_RETURN (the player's own kerbal takes a sample) and
+# SURFACE_RESCUE (the stranded kerbal boards the rescue craft) both need this.
+# Any future land-and-re-board type joins this set to inherit the gate.
+MISSION_TYPES_REQUIRING_REBOARD: frozenset[MissionType] = frozenset({
+    MissionType.SAMPLE_RETURN,
+    MissionType.SURFACE_RESCUE,
+})
+
+# Re-board types where the re-boarding Kerbal is GUARANTEED an EVA jetpack (the
+# client always equips a rescued Kerbal with one), so on low-g bodies they lift
+# themselves in and the player need bring no re-board aid at all — only a ladder
+# on high-g bodies (where no jetpack can lift off) is required.  SAMPLE_RETURN is
+# NOT here: its actor is the player's own kerbal, so its low-g case still needs a
+# ladder OR the player's jetpack.  This is the second axis of the re-board mode.
+MISSION_TYPES_REBOARDER_HAS_OWN_JETPACK: frozenset[MissionType] = frozenset({
+    MissionType.SURFACE_RESCUE,
 })
 
 
@@ -214,6 +240,7 @@ class MissionLogicNeeds:
 def mission_logic_needs(
     body: BodyName, mission_type: MissionType, crewed: Optional[bool],
     requires_eva: Optional[bool], mission_builder: MissionBuilder,
+    requires_rendezvous: Optional[bool] = None,
 ) -> MissionLogicNeeds:
     """Capability + comms requirements a mission imposes beyond dv/rank physics.
 
@@ -260,7 +287,9 @@ def mission_logic_needs(
             caps.add(Capability.CAN_NAVIGATE_INTERPLANETARY)
         elif body != home:
             caps.add(Capability.CAN_NAVIGATE_LOCAL)
-    if mission_type in MISSION_TYPES_REQUIRING_RENDEZVOUS:
+    rendezvous_required = (requires_rendezvous if requires_rendezvous is not None
+                           else mission_type in MISSION_TYPES_REQUIRING_RENDEZVOUS)
+    if rendezvous_required:
         caps.add(Capability.CAN_RENDEZVOUS)
 
     min_ts_dsn_level = 0
@@ -2344,6 +2373,11 @@ def _evaluate_profile(
                 coverage_shield=passive_pod_shield,
                 pod_size=terminal_pod.size_class if terminal_pod else 0.0,
                 ground_altitude_m=_land_ground,
+                # Precision landing (surface rescue): mandatory terminal-divert
+                # budget onto the designated site, difficulty-resolved.
+                extra_burn_dv=(precision_landing_dv(
+                    _land_body.surface_gravity, diff)
+                    if _land_edge.precision_landing else 0.0),
             )
             if not landing_mix.feasible:
                 return ProfileResult(False, launch_mass=payload, blocking=[BlockingInfo(
@@ -2365,6 +2399,14 @@ def _evaluate_profile(
         # Compute effective dv with difficulty margins
         base_dv = sum(e.base_dv for e in group)
         pc_dv = sum(e.plane_change_dv for e in group)
+        # Precision-landing surcharge (surface rescue): hover-translate onto
+        # the designated site.  Vacuum landings pay it as extra descent-burn
+        # dv here (percent margins stack via effective_dv); atmo landings pay
+        # it inside the landing mix as a forced divert burn (above).
+        for _e in group:
+            if _e.precision_landing and _e.edge_type == ET.VACUUM_LANDING:
+                base_dv += precision_landing_dv(
+                    BODY_BY_NAME[_e.body].surface_gravity, diff)
         # Apollo rejoin: the lander's ascent ends in a rendezvous + docking
         # with the parked stack — charge the phasing/matching burn here so
         # the margins below apply to it like any other burn.
@@ -3749,6 +3791,7 @@ def _solve_atmo_landing(
     twr_floor: float, v_entry: float, dvGL_cap: float,
     coverage_shield: Optional[HeatShield], pod_size: float,
     ground_altitude_m: float = 0.0,
+    extra_burn_dv: float = 0.0,
 ) -> LandingMix:
     """Pick the min-mass staged-descent mix for a single atmospheric landing.
 
@@ -3766,6 +3809,10 @@ def _solve_atmo_landing(
     already blocked ``HEAT_SHIELD_TOO_SMALL``, no undersized-fallback), so this
     never re-derives coverage.  ``ground_altitude_m`` is the landing-site
     elevation (highlands sites land in thinner air with less braking column).
+    ``extra_burn_dv`` is a mandatory terminal-divert budget (precision landing
+    onto a designated site) — when positive, every mix becomes a burn mix (a
+    chute-only descent cannot steer onto a target), with the divert added on
+    top of whatever touchdown burn the drag mix still needs.
     Returns ``feasible=False`` when no drag reaches safe touchdown AND no
     propulsive finish is available.
     """
@@ -3863,16 +3910,21 @@ def _solve_atmo_landing(
         min_residual = min(min_residual, plan.touchdown_speed)
         shield_tuple = (shield.size_class, shield.mass, shield.name)
         hardware = shield_mass + chute_mass
-        if not plan.requires_burn:
+        if not plan.requires_burn and extra_burn_dv <= 0.0:
             mix = LandingMix(True, False, 0.0, equip, shield_tuple, hardware,
                              shield_count=n_sh)
             if best_passive is None or hardware < best_passive.hardware_mass:
                 best_passive = mix
             return 0.0
         # Burn mix: needs a throttleable engine + fuel; infeasible otherwise.
+        # A precision divert (extra_burn_dv) turns EVERY mix into a burn mix —
+        # a chute-only descent cannot steer onto the site — so a passively-safe
+        # drag mix competes here carrying just the divert dv.
         if not has_burn_capacity or math.isinf(plan.total_burn_dv):
             return math.inf
-        burn = min(plan.total_burn_dv, dvGL_cap)
+        touchdown_burn = (min(plan.total_burn_dv, dvGL_cap)
+                          if plan.requires_burn else 0.0)
+        burn = touchdown_burn + extra_burn_dv
         fuel_proxy = entry_mass * (math.exp(burn / ve) - 1.0) if ve > 0 else math.inf
         key = hardware + fuel_proxy
         if key < best_burn_key:
@@ -4123,12 +4175,14 @@ def _assess_one_body(
             prof.access[event.name] = True
             continue
 
-        # Crewed surface sample: the kerbal must re-board the lander under
-        # control (jumping drifts them off).  Ladder always; jetpack too on
-        # low-g bodies.  Home sample return is an empty profile (no landing
-        # edge) so it is never injected.
-        if event.mission_type == MissionType.SAMPLE_RETURN:
-            profiles = _inject_reboard(profiles, _reboard_mode_for_body(body))
+        # Crewed surface re-board: a Kerbal left on the ground must re-board the
+        # lander under control (jumping drifts them off).  Ladder always; jetpack
+        # too on low-g — see _reboard_mode_for for the per-type / per-body mode.
+        # An empty profile (no landing edge, e.g. home sample return) is never
+        # injected.
+        if event.mission_type in MISSION_TYPES_REQUIRING_REBOARD:
+            profiles = _inject_reboard(
+                profiles, _reboard_mode_for(event.mission_type, body))
 
         ok, sub_blocking = _try_profiles_reason(
             profiles, flags, diff, event.mission_type,
@@ -4155,15 +4209,24 @@ def _assess_one_body(
     return prof
 
 
-def _reboard_mode_for_body(body: Body) -> ReboardMode:
-    """The re-board aid a crewed surface sample needs on ``body``.
+def _reboard_mode_for(mission_type: MissionType, body: Body) -> ReboardMode:
+    """The re-board aid a crewed surface leg of ``mission_type`` needs on ``body``.
 
-    A ladder always works.  The EVA jetpack only qualifies where it can lift
-    the kerbal off the surface (``eva_jetpack_twr >= _MIN_EVA_JETPACK_TWR``);
-    on high-gravity bodies it can't, so a ladder is mandatory.
+    A ladder always works.  The EVA jetpack only qualifies where it can lift the
+    Kerbal off the surface (``eva_jetpack_twr >= _MIN_EVA_JETPACK_TWR``); on
+    high-gravity bodies it can't, so a ladder is mandatory (``LADDER_ONLY``).
+
+    On low-g bodies the mode depends on WHO re-boards: when the Kerbal is
+    guaranteed their own jetpack (``MISSION_TYPES_REBOARDER_HAS_OWN_JETPACK`` — a
+    rescued Kerbal, always client-equipped) they lift themselves in and no player
+    aid is needed (``NONE``); otherwise (the player's own kerbal, e.g. a sample
+    return) the player must bring a ladder OR have unlocked the jetpack
+    (``LADDER_OR_JETPACK``).
     """
     if body.eva_jetpack_twr < _MIN_EVA_JETPACK_TWR:
         return ReboardMode.LADDER_ONLY
+    if mission_type in MISSION_TYPES_REBOARDER_HAS_OWN_JETPACK:
+        return ReboardMode.NONE
     return ReboardMode.LADDER_OR_JETPACK
 
 
@@ -4568,9 +4631,10 @@ def evaluate_mission_detailed(
             mission_type=str(mission_type),
         )])
 
-    if mission_type == MissionType.SAMPLE_RETURN:
+    if mission_type in MISSION_TYPES_REQUIRING_REBOARD:
         body = BODY_BY_NAME[body_name]
-        profiles = _inject_reboard(profiles, _reboard_mode_for_body(body))
+        profiles = _inject_reboard(
+            profiles, _reboard_mode_for(mission_type, body))
 
     # Contract-supplied mission modifier: rewrite each profile's edge list
     # (insert/append/modify maneuvers) before sizing. Used by orbit-variant

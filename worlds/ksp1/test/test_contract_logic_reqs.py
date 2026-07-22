@@ -23,6 +23,7 @@ from worlds.ksp1.sphere_ladder import _needs_to_counted
 from worlds.ksp1.bodies import (
     ALL_BODIES, BodyName, MissionBuilder, DIFFICULTY_PROFILES, MissionType, EdgeType,
     home_system_bodies, generate_random_orbit_params, generate_rescue_orbit_params,
+    generate_surface_rescue_site_lats, generate_survey_site_lats,
 )
 from worlds.ksp1.items import (
     PROGRESSIVE_ASTRONAUT_COMPLEX_NAME as AC,
@@ -49,6 +50,12 @@ def _mb(home):
     mb = MissionBuilder(home=home)
     mb.random_orbit_params = generate_random_orbit_params(_random.Random(0), ALL_BODIES)
     mb.rescue_orbit_params = generate_rescue_orbit_params(_random.Random(0), ALL_BODIES)
+    # SURFACE_RESCUE / SURFACE_SURVEY read a per-body site latitude in
+    # transform_mission (fail-closed if absent), so a mission builder used to
+    # evaluate contracts must carry the same seeded site-lat maps world.py
+    # populates in generate_early.
+    mb.surface_rescue_site_lats = generate_surface_rescue_site_lats(_random.Random(0), ALL_BODIES)
+    mb.survey_site_lats = generate_survey_site_lats(_random.Random(0), ALL_BODIES)
     return mb
 
 

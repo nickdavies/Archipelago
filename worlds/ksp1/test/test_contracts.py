@@ -5,6 +5,7 @@ Covers the shared feasibility check (the single most safety-critical point — a
 generation false positive yields an unsolvable seed), the required-part manifest,
 slot_data round-trip, and the three-gate access rule under a full world setup.
 """
+import math
 import unittest
 
 import random as _random
@@ -13,16 +14,25 @@ from worlds.ksp1 import contracts as C
 from worlds.ksp1.bodies import (
     ALL_BODIES, BodyName, BODY_BY_NAME, MissionBuilder, DIFFICULTY_PROFILES,
     GameplayDifficulty, MissionType,
-    generate_random_orbit_params, generate_rescue_orbit_params,
+    generate_random_orbit_params,
+    generate_rescue_orbit_params, generate_surface_rescue_site_lats,
+    generate_survey_site_lats,
+    generate_tourist_manifests, precision_landing_dv,
 )
 from worlds.ksp1.capability import _pre_pass
 from worlds.ksp1.test.base import KSP1TestBase
 
 MB = MissionBuilder(home=BodyName.KERBIN)
-# RANDOM_ORBIT / KERBAL_RESCUE contracts read their seeded target orbit off the
-# mission_builder; populate both so every type can build parameters in tests.
+# RANDOM_ORBIT / KERBAL_RESCUE / SURFACE_RESCUE contracts read their seeded
+# target orbit / site latitude off the mission_builder; populate them so every
+# type can build parameters in tests.
 MB.random_orbit_params = generate_random_orbit_params(_random.Random(0), ALL_BODIES)
 MB.rescue_orbit_params = generate_rescue_orbit_params(_random.Random(0), ALL_BODIES)
+MB.surface_rescue_site_lats = generate_surface_rescue_site_lats(
+    _random.Random(0), ALL_BODIES)
+MB.survey_site_lats = generate_survey_site_lats(_random.Random(0), ALL_BODIES)
+MB.tourist_manifests = generate_tourist_manifests(
+    _random.Random(0), ALL_BODIES)
 DIFF = DIFFICULTY_PROFILES["comfortable"]
 
 
@@ -207,14 +217,23 @@ class TestSlotDataRoundTrip(unittest.TestCase):
         # without raising NotImplementedError.
         from worlds.ksp1.bodies import (
             ALL_BODIES, MissionBuilder, BodyName, generate_random_orbit_params,
-            generate_rescue_orbit_params,
+            generate_rescue_orbit_params, generate_surface_rescue_site_lats,
+            generate_survey_site_lats,
+            generate_tourist_manifests,
         )
         import random as _random
         mb = MissionBuilder(home=BodyName.KERBIN)
-        # RANDOM_ORBIT / KERBAL_RESCUE read their seeded target orbit off the mb.
+        # Every seeded type reads its target orbit / site latitude / survey site
+        # off the mb.
         mb.random_orbit_params = generate_random_orbit_params(
             _random.Random(1), ALL_BODIES)
         mb.rescue_orbit_params = generate_rescue_orbit_params(
+            _random.Random(1), ALL_BODIES)
+        mb.surface_rescue_site_lats = generate_surface_rescue_site_lats(
+            _random.Random(1), ALL_BODIES)
+        mb.survey_site_lats = generate_survey_site_lats(
+            _random.Random(1), ALL_BODIES)
+        mb.tourist_manifests = generate_tourist_manifests(
             _random.Random(1), ALL_BODIES)
         for ct, td in C.CONTRACT_TYPE_DEFS.items():
             with self.subTest(contract_type=ct.name):
@@ -667,6 +686,209 @@ class TestStationaryFeasibility(unittest.TestCase):
         self.assertTrue(td.body_compatible(BODY_BY_NAME[BN.KERBIN]))
 
 
+class TestDocking(unittest.TestCase):
+    """DOCKING: dock two craft in orbit — event-based (repeatable), gated on a
+    docking port + rendezvous capability, with an RCS logic-only requirement."""
+
+    TD = C.CONTRACT_TYPE_DEFS[C.ContractType.DOCKING]
+
+    def test_build_parameters(self):
+        # A docking objective + the docking-port has_any_part; RCS is logic-only
+        # (no in-game objective).
+        params = self.TD.build_parameters(BodyName.KERBIN)
+        kinds = [p.to_json()["kind"] for p in params]
+        self.assertEqual(kinds, ["docking", "has_any_part"])
+        self.assertEqual(params[0].to_json(), {"kind": "docking", "body": "Kerbin"})
+        self.assertEqual(params[1].to_json()["label"], "docking_port")
+
+    def test_rcs_is_logic_only(self):
+        self.assertIn("rcs", self.TD.required_categories)
+        self.assertIn("rcs", self.TD.logic_only_categories)
+        self.assertNotIn("docking_port", self.TD.logic_only_categories)
+
+    def test_requires_rendezvous_capability(self):
+        from worlds.ksp1.effects import Capability
+        self.assertTrue(self.TD.requires_rendezvous)
+        mb = MissionBuilder(home=BodyName.KERBIN)
+        spec = C.ContractSpec(C.ContractType.DOCKING, BodyName.KERBIN)
+        needs = C.contract_logic_needs(spec, mb)
+        self.assertIn(Capability.CAN_RENDEZVOUS, needs.capabilities)
+
+    def test_phasing_edge_costs_more_than_plain_orbit(self):
+        mb = MissionBuilder(home=BodyName.KERBIN)
+        dock = C.evaluate_contract(
+            C.ContractSpec(C.ContractType.DOCKING, BodyName.KERBIN), FULL, DIFF, mb)
+        orbit = C.evaluate_contract(
+            C.ContractSpec(C.ContractType.ORBIT, BodyName.KERBIN), FULL, DIFF, mb)
+        self.assertTrue(dock.feasible)
+        self.assertGreater(dock.launch_mass, orbit.launch_mass,
+                           "docking (payload + phasing) must cost more than a bare orbit")
+
+    def test_precise_pointing(self):
+        self.assertIn(C.ContractType.DOCKING, C.PRECISE_POINTING_TYPES)
+
+
+class TestDockingGeneration(KSP1TestBase):
+    """DOCKING must generate (weighted to dominate) and stay reachable."""
+    options = {
+        "contract_type_weights": {"docking": 1},
+        "contracts_available": 40,
+        "allow_missions_harder_than_goal": True,
+    }
+    needs_real_pre_fill = True
+
+    def test_docking_generates_and_is_reachable(self):
+        locs = [loc for loc in self.multiworld.get_locations(self.player)
+                if loc.name.startswith("Contract: Docking")]
+        self.assertTrue(locs, "no docking contract generated")
+        state = self.multiworld.get_all_state(False)
+        for loc in locs:
+            self.assertTrue(loc.can_reach(state), f"{loc.name} unreachable")
+
+
+class TestSurfaceSurvey(unittest.TestCase):
+    """SURFACE_SURVEY: run an experiment at a seeded surface waypoint. One-way
+    landing (no return), precise touchdown, home-safe, thermometer logic-only."""
+
+    TD = C.CONTRACT_TYPE_DEFS[C.ContractType.SURFACE_SURVEY]
+
+    def _mb(self, lats):
+        mb = MissionBuilder(home=BodyName.KERBIN)
+        mb.survey_site_lats = lats
+        return mb
+
+    def test_build_parameters(self):
+        params = self.TD.build_parameters(BodyName.MUN, MB)
+        self.assertEqual(len(params), 1)
+        j = params[0].to_json()
+        self.assertEqual(j["kind"], "survey_waypoint")
+        self.assertEqual(j["body"], "Mun")
+        self.assertEqual(j["experiment"], C.SURVEY_EXPERIMENT)
+        self.assertEqual(j["lat"], MB.survey_site_lats[BodyName.MUN])
+        self.assertEqual(j["seed"], int(round(j["lat"] * 1_000_000)))
+
+    def test_thermometer_logic_only(self):
+        # Gates feasibility/promotion but emits no in-game objective.
+        self.assertIn("thermometer", self.TD.required_categories)
+        self.assertIn("thermometer", self.TD.logic_only_categories)
+        self.assertNotIn("has_any_part",
+                         [p.to_json()["kind"]
+                          for p in self.TD.build_parameters(BodyName.MUN, MB)])
+
+    def test_missing_site_raises(self):
+        with self.assertRaises(ValueError):
+            self.TD.build_parameters(BodyName.MUN, self._mb({}))
+
+    def test_home_safe_and_landing_only(self):
+        self.assertTrue(self.TD.home_safe)
+        self.assertTrue(self.TD.requires_landing())
+        # Only landable bodies are compatible.
+        self.assertFalse(self.TD.body_compatible(BODY_BY_NAME[BodyName.JOOL]))
+        self.assertTrue(self.TD.body_compatible(BODY_BY_NAME[BodyName.MUN]))
+
+    def test_home_survey_charges_inclination(self):
+        # A home survey at a nonzero site latitude costs more than a plain home
+        # landing (the ascent must reach the site's latitude band).
+        mb = self._mb({BodyName.KERBIN: 40.0})
+        survey = C.evaluate_contract(
+            C.ContractSpec(C.ContractType.SURFACE_SURVEY, BodyName.KERBIN),
+            FULL, DIFF, mb)
+        self.assertTrue(survey.feasible)
+        flat = self._mb({BodyName.KERBIN: 0.0})
+        base = C.evaluate_contract(
+            C.ContractSpec(C.ContractType.SURFACE_SURVEY, BodyName.KERBIN),
+            FULL, DIFF, flat)
+        self.assertGreater(survey.launch_mass, base.launch_mass,
+                           "inclined home survey must cost more than an equatorial one")
+
+
+class TestSurfaceSurveyGeneration(KSP1TestBase):
+    """SURFACE_SURVEY must generate (weighted to dominate) and stay reachable."""
+    options = {
+        "contract_type_weights": {"surface_survey": 1},
+        "contracts_available": 40,
+        "allow_missions_harder_than_goal": True,
+    }
+    needs_real_pre_fill = True
+
+    def test_survey_generates_and_is_reachable(self):
+        locs = [loc for loc in self.multiworld.get_locations(self.player)
+                if loc.name.startswith("Contract: Surface Survey")]
+        self.assertTrue(locs, "no surface survey contract generated")
+        state = self.multiworld.get_all_state(False)
+        for loc in locs:
+            self.assertTrue(loc.can_reach(state), f"{loc.name} unreachable")
+
+
+class TestTourism(unittest.TestCase):
+    """TOURISM: fly tourists to a body's orbit and return. Priced as ORBIT_RETURN
+    (reach orbit + return, no rendezvous); suborbit is approximated as orbit."""
+
+    TD = C.CONTRACT_TYPE_DEFS[C.ContractType.TOURISM]
+
+    def test_build_parameters_one_per_tourist(self):
+        params = self.TD.build_parameters(BodyName.MUN, MB)
+        self.assertEqual(len(params), C.TOURISM_CREW)
+        for p in params:
+            j = p.to_json()
+            self.assertEqual(j["kind"], "tourist")
+            self.assertEqual(j["body"], "Mun")
+            self.assertIn(j["entry"], ("Suborbit", "Orbit"))
+            self.assertIsInstance(j["female"], bool)
+
+    def test_offhome_entry_is_orbit(self):
+        # A suborbital hop only makes sense at home; off-home is always orbit.
+        for body, manifest in MB.tourist_manifests.items():
+            if body != BodyName.KERBIN:
+                for t in manifest:
+                    self.assertEqual(t.entry, "Orbit", f"{body} suborbit tourist")
+
+    def test_missing_manifest_raises(self):
+        mb = MissionBuilder(home=BodyName.KERBIN)
+        with self.assertRaises(ValueError):
+            self.TD.build_parameters(BodyName.MUN, mb)
+
+    def test_orbit_return_is_cheaper_than_rescue(self):
+        # No rendezvous phasing, so tourism (ORBIT_RETURN) costs <= a rescue
+        # (RESCUE) to the same body, and both reach that body's orbit.
+        from worlds.ksp1.capability import evaluate_mission_detailed
+        mb = MB
+        orbit_ret = evaluate_mission_detailed(
+            FULL, DIFF, BodyName.MUN, MissionType.ORBIT_RETURN, None, mb)
+        rescue = evaluate_mission_detailed(
+            FULL, DIFF, BodyName.MUN, MissionType.RESCUE, None, mb)
+        self.assertTrue(orbit_ret.feasible)
+        self.assertLessEqual(orbit_ret.launch_mass, rescue.launch_mass)
+
+    def test_home_and_offhome_feasible(self):
+        for body in (BodyName.KERBIN, BodyName.MUN, BodyName.MINMUS):
+            r = C.evaluate_contract(
+                C.ContractSpec(C.ContractType.TOURISM, body), FULL, DIFF, MB)
+            self.assertTrue(r.feasible, f"tourism to {body} infeasible on full kit")
+
+    def test_targets_orbitable_not_star(self):
+        self.assertTrue(self.TD.body_compatible(BODY_BY_NAME[BodyName.JOOL]))
+        self.assertFalse(self.TD.body_compatible(BODY_BY_NAME[BodyName.KERBOL]))
+
+
+class TestTourismGeneration(KSP1TestBase):
+    """TOURISM must generate (weighted to dominate) and stay reachable."""
+    options = {
+        "contract_type_weights": {"tourism": 1},
+        "contracts_available": 40,
+        "allow_missions_harder_than_goal": True,
+    }
+    needs_real_pre_fill = True
+
+    def test_tourism_generates_and_is_reachable(self):
+        locs = [loc for loc in self.multiworld.get_locations(self.player)
+                if loc.name.startswith("Contract: Tourism")]
+        self.assertTrue(locs, "no tourism contract generated")
+        state = self.multiworld.get_all_state(False)
+        for loc in locs:
+            self.assertTrue(loc.can_reach(state), f"{loc.name} unreachable")
+
+
 class TestStarNotAMissionDestination(unittest.TestCase):
     """The star (Kerbol/Sun) is not a mission destination: no contract type can
     target it, it has no registered locations, and the orbit/flyby goal lists
@@ -792,6 +1014,188 @@ class TestRequirementSeam(unittest.TestCase):
             C.required_part_names_for([SimpleNamespace(type_def=td)])
         with self.assertRaises(NotImplementedError):
             C.required_part_breakdown(SimpleNamespace(type_def=td), FULL)
+
+
+class TestSurfaceRescue(unittest.TestCase):
+    """SURFACE_RESCUE: land NEAR a Kerbal stranded on the target's surface
+    (precision-landing surcharge, difficulty-resolved) with a seeded
+    site-latitude plane change on the ascent out, then bring them home.
+    Home body excluded (stock RecoverAsset parity)."""
+
+    TD = C.CONTRACT_TYPE_DEFS[C.ContractType.SURFACE_RESCUE]
+
+    def _mb(self, lats):
+        mb = MissionBuilder(home=BodyName.KERBIN)
+        mb.surface_rescue_site_lats = lats
+        return mb
+
+    def test_profile_lands_and_returns(self):
+        # Inverse of the orbital rescue's no-landing property: the surface
+        # rescue MUST touch the target's surface, and end back home.
+        profiles = MB.profiles_for(BodyName.MUN, MissionType.SURFACE_RESCUE)
+        self.assertTrue(profiles)
+        for profile in profiles:
+            nodes = {e.source for e in profile} | {e.destination for e in profile}
+            self.assertIn("mun_surface", nodes,
+                          "surface rescue must land at the target")
+            self.assertEqual(profile[-1].destination, "kerbin_surface")
+
+    def test_home_excluded_and_body_compat(self):
+        self.assertEqual(
+            MB.profiles_for(BodyName.KERBIN, MissionType.SURFACE_RESCUE), [])
+        self.assertFalse(self.TD.home_safe)
+        self.assertTrue(self.TD.body_compatible(BODY_BY_NAME[BodyName.MUN]))
+        self.assertFalse(self.TD.body_compatible(BODY_BY_NAME[BodyName.JOOL]),
+                         "no solid surface -> no surface rescue")
+
+    def test_transform_marks_precision_and_charges_plane(self):
+        lat = 30.0
+        mb = self._mb({BodyName.MUN: lat})
+        base = list(mb.profiles_for(BodyName.MUN, MissionType.SURFACE_RESCUE)[0])
+        out = self.TD.transform_mission(BodyName.MUN, BodyName.KERBIN, base, mb)
+        land = [e for e in out
+                if e.source == "mun_low_orbit" and e.destination == "mun_surface"]
+        self.assertTrue(land)
+        self.assertTrue(all(e.precision_landing for e in land))
+        # Worst-case ascent plane reconcile: 2*v_LO*sin(lat/2) on the target
+        # ascent edge's plane_change_dv (fraction-priced at evaluation).
+        v_lo = BODY_BY_NAME[BodyName.MUN].lo_circular_velocity
+        want = 2.0 * v_lo * math.sin(math.radians(lat) / 2.0)
+        delta = (sum(e.plane_change_dv for e in out)
+                 - sum(e.plane_change_dv for e in base))
+        self.assertAlmostEqual(delta, want, places=3)
+        # base_dv untouched: precision is difficulty-resolved at evaluation.
+        self.assertAlmostEqual(sum(e.base_dv for e in out),
+                               sum(e.base_dv for e in base), places=6)
+
+    def test_precision_surcharge_arithmetic(self):
+        mun_g = BODY_BY_NAME[BodyName.MUN].surface_gravity
+        for name, hover in (("generous", 45.0), ("comfortable", 30.0),
+                            ("small", 15.0), ("zero", 0.0)):
+            p = DIFFICULTY_PROFILES[name]
+            self.assertEqual(p.precision_hover_s, hover)
+            want = 0.0 if hover == 0.0 else mun_g * hover + 60.0
+            self.assertAlmostEqual(precision_landing_dv(mun_g, p), want,
+                                   places=6, msg=name)
+
+    def test_evaluator_charges_surcharge_zero_profile_free(self):
+        # lat=0 kills the plane term, isolating the precision surcharge:
+        # costs more than a plain RETURN on comfortable, identical on zero.
+        from worlds.ksp1.capability import evaluate_mission_detailed
+        mb = self._mb({BodyName.MUN: 0.0})
+
+        def tf(edges):
+            return self.TD.transform_mission(
+                BodyName.MUN, BodyName.KERBIN, edges, mb)
+
+        for name in ("comfortable", "zero"):
+            diff = DIFFICULTY_PROFILES[name]
+            base = evaluate_mission_detailed(
+                FULL, diff, BodyName.MUN, MissionType.RETURN, None, mb)
+            sr = evaluate_mission_detailed(
+                FULL, diff, BodyName.MUN, MissionType.SURFACE_RESCUE, None, mb,
+                mission_transform=tf)
+            self.assertTrue(base.feasible and sr.feasible, name)
+            if name == "zero":
+                self.assertAlmostEqual(sr.launch_mass, base.launch_mass,
+                                       places=6,
+                                       msg="zero profile budgets no hover")
+            else:
+                self.assertGreater(sr.launch_mass, base.launch_mass)
+
+    def test_mass_monotonic_in_site_latitude(self):
+        from worlds.ksp1.capability import evaluate_mission_detailed
+        diff = DIFFICULTY_PROFILES["generous"]   # pays the full plane change
+        masses = []
+        for lat in (5.0, 25.0, 45.0):
+            mb = self._mb({BodyName.MUN: lat})
+
+            def tf(edges, _mb=mb):
+                return self.TD.transform_mission(
+                    BodyName.MUN, BodyName.KERBIN, edges, _mb)
+
+            r = evaluate_mission_detailed(
+                FULL, diff, BodyName.MUN, MissionType.SURFACE_RESCUE, None,
+                mb, mission_transform=tf)
+            self.assertTrue(r.feasible, f"lat {lat}")
+            masses.append(r.launch_mass)
+        self.assertLessEqual(masses[0], masses[1])
+        self.assertLessEqual(masses[1], masses[2])
+
+    def test_paid_plane_change_scales_with_fraction(self):
+        # Same 45-degree site: generous (fraction 1.0) pays a bigger mass
+        # premium over its own lat-0 baseline than small (0.05) pays over its.
+        from worlds.ksp1.capability import evaluate_mission_detailed
+
+        def premium(name):
+            diff = DIFFICULTY_PROFILES[name]
+            out = []
+            for lat in (45.0, 0.0):
+                mb = self._mb({BodyName.MUN: lat})
+
+                def tf(edges, _mb=mb):
+                    return self.TD.transform_mission(
+                        BodyName.MUN, BodyName.KERBIN, edges, _mb)
+
+                r = evaluate_mission_detailed(
+                    FULL, diff, BodyName.MUN, MissionType.SURFACE_RESCUE,
+                    None, mb, mission_transform=tf)
+                self.assertTrue(r.feasible, name)
+                out.append(r.launch_mass)
+            return out[0] - out[1]
+
+        self.assertGreater(premium("generous"), premium("small"))
+        self.assertGreater(premium("generous"), 0.0)
+
+    def test_params_free_seat_and_fail_loud(self):
+        spec = C.ContractSpec(C.ContractType.SURFACE_RESCUE, BodyName.MUN)
+        params = self.TD.build_parameters(BodyName.MUN, MB)
+        kinds = [p.to_json()["kind"] for p in params]
+        self.assertIn("surface_rescue", kinds)
+        self.assertIn("has_any_part", kinds)   # the crew_cabin free seat
+        sr = next(p for p in params if isinstance(p, C.SurfaceRescueParam))
+        self.assertEqual(sr.lat, MB.surface_rescue_site_lats[BodyName.MUN])
+        # eva_jetpack is logic-only: gates the manifest, never an objective.
+        self.assertIsNotNone(C.required_part_manifest(spec, FULL))
+        self.assertIsNone(C.required_part_manifest(spec, _flags(lambda n: 0)))
+        # A seeded-but-missing site latitude is a wiring bug — fail loud.
+        with self.assertRaises(ValueError):
+            self.TD.build_parameters(BodyName.MUN, self._mb({}))
+
+    def test_slot_round_trip_schema(self):
+        # Schema is pinned so a wire-format change is a conscious bump matched on
+        # the client (ContractPrimitiveRegistry.Schema). v7 = docking + the rest
+        # of the new-type wave.
+        self.assertEqual(C.CONTRACT_SCHEMA_VERSION, 7)
+        spec = C.ContractSpec(C.ContractType.SURFACE_RESCUE, BodyName.MUN)
+        d = spec.to_slot_dict(mission_builder=MB)
+        self.assertEqual(d["schema"], 7)
+        self.assertIn("surface_rescue", [p["kind"] for p in d["parameters"]])
+        self.assertEqual(C.ContractSpec.from_slot_dict(d), spec)
+
+    def test_precise_pointing_gate(self):
+        # Same wheel/RCS-on-assist, gimbal-when-off rule as the orbital rescue.
+        self.assertIn(C.ContractType.SURFACE_RESCUE, C.PRECISE_POINTING_TYPES)
+        g = _flags(lambda n: 99)
+        g.has_reaction_wheels = False
+        g.has_rcs = False
+        g.lightest_reaction_wheel = None
+        g.lightest_rcs_thruster = None
+        spec = C.ContractSpec(C.ContractType.SURFACE_RESCUE, BodyName.MUN)
+        for gameplay, want in ((TestPreciseOrbitAttitude.ASSIST, False),
+                               (TestPreciseOrbitAttitude.NO_ASSIST, True)):
+            mb = self._mb(generate_surface_rescue_site_lats(
+                _random.Random(0), ALL_BODIES))
+            mb.gameplay = gameplay
+            self.assertEqual(C.can_complete_contract(spec, g, DIFF, mb), want)
+
+    def test_logic_needs_eva_and_rendezvous(self):
+        from worlds.ksp1.capability import mission_logic_needs
+        from worlds.ksp1.effects import Capability
+        needs = mission_logic_needs(
+            BodyName.MUN, MissionType.SURFACE_RESCUE, None, None, MB)
+        self.assertIn(Capability.CAN_EVA, needs.capabilities)
+        self.assertIn(Capability.CAN_RENDEZVOUS, needs.capabilities)
 
 
 if __name__ == "__main__":

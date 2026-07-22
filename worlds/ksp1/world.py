@@ -18,9 +18,11 @@ from .data.feasibility import (
 )
 from .bodies import (
     ALL_BODIES, BodyName, EdgeType, MissionBuilder, MissionType, RandomOrbitParams,
-    effective_physics_profile_name, effective_gameplay_difficulty,
+    TouristSpec, effective_physics_profile_name,
+    effective_gameplay_difficulty,
     generate_random_orbit_params, generate_rescue_orbit_params,
-    home_relative_science_values,
+    generate_surface_rescue_site_lats, generate_survey_site_lats,
+    generate_tourist_manifests, home_relative_science_values,
 )
 from .items import (
     ITEM_NAME_TO_ID, PROGRESSIVE_LAUNCH_PAD_CAPS, SCIENCE_PACK_AMOUNTS,
@@ -500,6 +502,37 @@ class KSP1World(World):
             self.mission_builder.rescue_orbit_params = ut_rescue
         else:
             self.mission_builder.rescue_orbit_params = generate_rescue_orbit_params(
+                random.Random(self.random.getrandbits(64)), ALL_BODIES)
+
+        # Seeded SURFACE_RESCUE site-latitude bounds — same timing/why as the
+        # rescue orbits above (feasibility + cap read the site's plane-change
+        # cost via transform_mission). Derived-RNG draw adjacent to the other
+        # orbit draws; UT regen restores the exact values from slot_data.
+        ut_srescue = getattr(self, "_ut_surface_rescue_site_lats", None)
+        if ut_srescue is not None:
+            self.mission_builder.surface_rescue_site_lats = ut_srescue
+        else:
+            self.mission_builder.surface_rescue_site_lats = (
+                generate_surface_rescue_site_lats(
+                    random.Random(self.random.getrandbits(64)), ALL_BODIES))
+
+        # Seeded SURFACE_SURVEY waypoint latitudes — same timing/why as the maps
+        # above (transform_mission charges the home ascent inclination). Derived-
+        # RNG draw adjacent to the others; UT regen restores the exact values.
+        ut_survey = getattr(self, "_ut_survey_site_lats", None)
+        if ut_survey is not None:
+            self.mission_builder.survey_site_lats = ut_survey
+        else:
+            self.mission_builder.survey_site_lats = generate_survey_site_lats(
+                random.Random(self.random.getrandbits(64)), ALL_BODIES)
+
+        # Seeded TOURISM tourist manifests — same lifecycle. UT regen restores
+        # the exact manifests so the client spawns the same tourists.
+        ut_tourists = getattr(self, "_ut_tourist_manifests", None)
+        if ut_tourists is not None:
+            self.mission_builder.tourist_manifests = ut_tourists
+        else:
+            self.mission_builder.tourist_manifests = generate_tourist_manifests(
                 random.Random(self.random.getrandbits(64)), ALL_BODIES)
 
         # Pre-cached home-ascent lifter: pick one of the offline-generated
@@ -995,6 +1028,29 @@ class KSP1World(World):
             str(body): r
             for body, r in self.mission_builder.rescue_orbit_params.items()
         }
+        # Seeded SURFACE_RESCUE site-latitude bounds, per body (deg) — carried so
+        # UT regen restores the exact values; the client also gets each via the
+        # contract's surface_rescue parameter (lat). Server-side record.
+        d["surface_rescue_site_lats"] = {
+            str(body): lat
+            for body, lat in self.mission_builder.surface_rescue_site_lats.items()
+        }
+        # Seeded SURFACE_SURVEY waypoint latitudes, per body (deg) — carried so UT
+        # regen restores the exact values; the client gets each via the contract's
+        # survey_waypoint parameter (lat + seed). Server-side record.
+        d["survey_site_lats"] = {
+            str(body): lat
+            for body, lat in self.mission_builder.survey_site_lats.items()
+        }
+        # Seeded TOURISM manifests, per body — carried so UT regen restores the
+        # exact tourists; the client also gets each via the tourist parameters.
+        d["tourist_manifests"] = {
+            str(body): [
+                {"name": t.name, "female": t.female, "entry": t.entry}
+                for t in manifest
+            ]
+            for body, manifest in self.mission_builder.tourist_manifests.items()
+        }
         # Goal contract mode. ``contract_thresholds`` is the client's watcher map
         # {completed-contract-count -> [threshold locations to report]}: when the
         # player's completed non-goal-contract count reaches a key, the client
@@ -1124,6 +1180,34 @@ class KSP1World(World):
         if rescue_op:
             self._ut_rescue_orbit_params = {
                 BodyName(body): float(r) for body, r in rescue_op.items()
+            }
+
+        # Restore the exact SURFACE_RESCUE site latitudes (re-rolling would
+        # diverge). Absent on pre-feature seeds -> generate_early re-picks.
+        srescue_lats = slot_data.get("surface_rescue_site_lats")
+        if srescue_lats:
+            self._ut_surface_rescue_site_lats = {
+                BodyName(body): float(lat) for body, lat in srescue_lats.items()
+            }
+
+        # Restore the exact SURFACE_SURVEY waypoint latitudes (re-rolling would
+        # diverge). Absent on pre-feature seeds -> generate_early re-picks.
+        survey_lats = slot_data.get("survey_site_lats")
+        if survey_lats:
+            self._ut_survey_site_lats = {
+                BodyName(body): float(lat) for body, lat in survey_lats.items()
+            }
+
+        # Restore the exact TOURISM manifests (re-rolling would diverge).
+        # Absent on pre-feature seeds -> generate_early re-picks.
+        tourists = slot_data.get("tourist_manifests")
+        if tourists:
+            self._ut_tourist_manifests = {
+                BodyName(body): tuple(
+                    TouristSpec(t["name"], bool(t["female"]), t["entry"])
+                    for t in manifest
+                )
+                for body, manifest in tourists.items()
             }
 
         # Restore the chosen lifter profile so regen consults the same bound

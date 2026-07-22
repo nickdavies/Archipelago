@@ -64,7 +64,7 @@ def _cover(flags, pod_size=1.25):
 
 
 def _solve(payload, body, flags, diff_name="comfortable", reentry=False,
-           pod_size=1.25, ground_altitude_m=0.0):
+           pod_size=1.25, ground_altitude_m=0.0, extra_burn_dv=0.0):
     diff = DIFFICULTY_PROFILES[diff_name]
     twr = max(1.3, diff.min_twr_atmo)
     v = (1.4 * body.lo_escape_velocity) if reentry else body.lo_circular_velocity
@@ -73,7 +73,8 @@ def _solve(payload, body, flags, diff_name="comfortable", reentry=False,
                                dvGL_cap=body.dv.dvGL or 0.0,
                                coverage_shield=_cover(flags, pod_size),
                                pod_size=pod_size,
-                               ground_altitude_m=ground_altitude_m)
+                               ground_altitude_m=ground_altitude_m,
+                               extra_burn_dv=extra_burn_dv)
 
 
 class TestPerBodyExpectations(unittest.TestCase):
@@ -230,6 +231,34 @@ class TestKitMonotonicity(unittest.TestCase):
                         prev_feasible = True
                         if not mix.needs_burn:
                             prev_mass = min(prev_mass, mix.hardware_mass)
+
+
+class TestPrecisionDivert(unittest.TestCase):
+    """``extra_burn_dv`` (precision landing onto a designated site, surface
+    rescue): every mix becomes a burn mix carrying the divert on top of its
+    touchdown burn — a chute-only descent cannot steer onto a target."""
+    KERBIN = BODY_BY_NAME[BodyName.KERBIN]
+
+    def test_zero_divert_unchanged(self) -> None:
+        f = _flags(shields=[_HS1], chutes=[_MK16], engine=True)
+        mix = _solve(0.9, self.KERBIN, f, extra_burn_dv=0.0)
+        self.assertTrue(mix.feasible)
+        self.assertFalse(mix.needs_burn)   # passively safe stays passive
+
+    def test_divert_forces_burn_mix(self) -> None:
+        f = _flags(shields=[_HS1], chutes=[_MK16], engine=True)
+        mix = _solve(0.9, self.KERBIN, f, extra_burn_dv=150.0)
+        self.assertTrue(mix.feasible)
+        self.assertTrue(mix.needs_burn)
+        self.assertGreaterEqual(mix.burn_dv, 150.0)
+
+    def test_divert_infeasible_without_engine(self) -> None:
+        f = _flags(shields=[_HS1], chutes=[_MK16], engine=False)
+        self.assertTrue(_solve(0.9, self.KERBIN, f).feasible,
+                        "chutes alone land this pod without a divert")
+        mix = _solve(0.9, self.KERBIN, f, extra_burn_dv=150.0)
+        self.assertFalse(mix.feasible,
+                         "a chute-only descent cannot steer onto a site")
 
 
 if __name__ == "__main__":

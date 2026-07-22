@@ -467,6 +467,11 @@ def _evaluate(
         requires_precise_pointing=(
             info.spec is not None
             and info.spec.contract_type in PRECISE_POINTING_TYPES),
+        # Match evaluate_contract: a rendezvous contract (docking) on the plain
+        # ORBIT profile gates on CAN_RENDEZVOUS, so the bracket must too.
+        requires_rendezvous=(
+            (info.spec is not None
+             and info.spec.type_def.requires_rendezvous) or None),
         run_parallel=run_parallel,
         # Explicit for emphasis: the ladder proves brackets with the lifter
         # table, and the runtime rules / post_fill cross-check consult the SAME
