@@ -1761,12 +1761,30 @@ def generate_contracts(world: "KSP1World") -> tuple[list[ContractSpec], list[Con
 
 
 def _weighted_sample_without_replacement(rng, candidates, weights, k):
-    pool = list(candidates)
+    """Sample up to ``k`` contracts so ``weights`` controls the relative
+    frequency of each contract TYPE, independent of how many bodies a type is
+    eligible for.
+
+    Each draw picks a type weighted by ``weights`` among the types that still
+    have candidates, then a body uniformly within that type. So at equal weight a
+    type eligible for 3 bodies and one eligible for 15 appear equally often —
+    without this, weighting per-candidate made a type's real frequency scale with
+    its eligible-body count, starving narrow types (e.g. surface_rescue, which the
+    harder-than-goal cap trims to a handful of bodies). A type drops out once its
+    bodies are exhausted and the remaining draws re-normalise over the rest."""
+    by_type: dict[ContractType, list[ContractSpec]] = {}
+    for c in candidates:
+        by_type.setdefault(c.contract_type, []).append(c)
     chosen: list[ContractSpec] = []
-    while pool and len(chosen) < k:
-        ws = [max(weights.get(str(c.contract_type), 0), 0) for c in pool]
+    while by_type and len(chosen) < k:
+        types = list(by_type.keys())
+        ws = [max(weights.get(str(t), 0), 0) for t in types]
         if sum(ws) <= 0:
             break
-        idx = rng.choices(range(len(pool)), weights=ws, k=1)[0]
-        chosen.append(pool.pop(idx))
+        t = rng.choices(types, weights=ws, k=1)[0]
+        bucket = by_type[t]
+        spec = bucket.pop(rng.randrange(len(bucket)))
+        chosen.append(spec)
+        if not bucket:
+            del by_type[t]
     return chosen
