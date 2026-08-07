@@ -146,10 +146,13 @@ class HasAnyPartParam:
 class HasSystemParam:
     """Vessel must carry a part providing ``system``, checked via KSP's native
     contract-objective system (stock VesselSystemsParameter on the client).
-    ``system`` is a ContractObjectiveType (``"Generator"`` = any solar/RTG/fuel
-    cell) or a PartModule class name (``"ModuleScienceLab"``). Preferred over
-    has_any_part where a native objective exists — DLC/mod-robust and reads like
-    a stock contract. ``label`` is the human description."""
+    ``system`` must be a KSP ContractObjectiveType backed by a module that
+    implements ``IContractObjectiveModule`` — ``"Generator"`` (solar/RTG/fuel
+    cell), ``"Antenna"``, Wheel, DockingPort, Grapple. A bare PartModule class
+    name never validates, so parts lacking such a module (e.g. the science lab,
+    whose ``ModuleScienceLab`` is not an objective module) must use has_any_part.
+    Preferred over has_any_part where a native objective exists — DLC/mod-robust
+    and reads like a stock contract. ``label`` is the human description."""
     system: str
     label: str = ""
 
@@ -409,14 +412,14 @@ PRECISE_POINTING_TYPES: frozenset[ContractType] = PRECISE_ORBIT_TYPES | frozense
 })
 
 
-# Part categories with a native KSP contract-objective check. "Generator" covers
-# any solar panel / RTG / fuel cell; "ModuleScienceLab" matches the lab by module
-# class. Categories absent here (battery, relay) have no precise native objective
-# — battery is a plain resource, and "Antenna" would lose relay's range tiering —
-# so they stay explicit part lists.
+# Part categories with a native KSP contract-objective check. Only modules that
+# implement IContractObjectiveModule qualify: "Generator" covers any solar panel
+# / RTG / fuel cell. Categories without such a module stay explicit part lists —
+# battery (a plain resource), relay ("Antenna" would lose the range tiering), and
+# the science lab (ModuleScienceLab is not an objective module, so has_system can
+# never validate it — it is matched by part name via has_any_part instead).
 _CATEGORY_TO_SYSTEM: dict[str, tuple[str, str]] = {
     "power": ("Generator", "power generation"),
-    "science_lab": ("ModuleScienceLab", "science lab"),
 }
 
 
