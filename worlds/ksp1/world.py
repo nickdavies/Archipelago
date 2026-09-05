@@ -48,7 +48,7 @@ from .locations import (
 _BANNED_EDGES: frozenset[tuple[BodyName, EdgeType]] = frozenset(
     {(BodyName.EVE, EdgeType.ATMOSPHERIC_ASCENT)}
 )
-from .options import Difficulty, Goal, GoalContractMode, KSP1Options, PhysicsDifficulty, STARTING_BODY_POOLS, StartingBody, TrapDensity
+from .options import BuffDensity, Difficulty, Goal, GoalContractMode, KSP1Options, PhysicsDifficulty, STARTING_BODY_POOLS, StartingBody, TrapDensity
 from .tech_tree import MAX_TIER, NODES_BY_TIER, TECH_NODES, TIER_TO_BAND
 from .effects import RD_FACILITY_THRESHOLDS
 
@@ -904,6 +904,11 @@ class KSP1World(World):
         # substitution), so regen must restore them.
         d["trap_density"] = self.options.trap_density.value
         d["trap_type_weights"] = dict(self.options.trap_type_weights.value)
+        # Buffs: same contract as traps — the item NAME is the entire client
+        # signal, and these two keys exist only so Universal Tracker regen
+        # reproduces the same filler pool (buffs displace science packs).
+        d["buff_density"] = self.options.buff_density.value
+        d["buff_types"] = sorted(self.options.buff_types.value)
         # Home body — used by the client mod to drive every per-body
         # comparison (KSC biome prefixes, altitude polling guard, splashdown
         # detection, first-launch / first-landing / first-crash events).
@@ -1158,6 +1163,15 @@ class KSP1World(World):
         trap_weights = slot_data.get("trap_type_weights")
         if trap_weights is not None:
             self.options.trap_type_weights.value = dict(trap_weights)
+
+        # Buffs reshape filler padding the same way.  Absent keys mean a
+        # pre-buff seed: restore to ``none`` (NOT the option default) so old
+        # seeds regenerate buff-free.
+        self.options.buff_density.value = int(
+            slot_data.get("buff_density", BuffDensity.option_none))
+        buff_types = slot_data.get("buff_types")
+        if buff_types is not None:
+            self.options.buff_types.value = set(buff_types)
 
         # Restore the exact RANDOM_ORBIT target orbits (re-rolling would diverge).
         rop = slot_data.get("random_orbit_params")

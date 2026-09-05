@@ -930,6 +930,13 @@ def _make_starting_inv_ban_rule(player: int):
     Starting-inventory items are granted at connect, before the first
     flight — a trap there is a guaranteed first-launch ambush rather than
     the consequence of a check, so no trap may occupy these slots.
+
+    Buffs are deliberately NOT banned here.  They are the upside twin of
+    traps, so the ambush argument inverts: a buff granted at connect is a
+    pleasant head start, not a punishment.  Logic cannot see buffs at all
+    (they are absent from CAPABILITY_ITEMS), so an early one can only make
+    the first launch easier to fly — never make an unreachable check
+    reachable.  This is a decision, not an oversight.
     """
     banned = _EARLY_BANNED_ITEMS | TRAP_ITEM_NAMES
     def rule(item) -> bool:

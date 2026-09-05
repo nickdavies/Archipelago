@@ -4,6 +4,7 @@ from Options import Choice, DeathLink, DefaultOnToggle, ExcludeLocations, ItemsA
 
 from .bodies import ALL_BODIES, BodyName
 from .contracts import ContractType, NON_GOAL_TYPES
+from .buffs import BUFF_TIER_COUNTS, BuffTier, BuffType
 from .traps import TrapType
 from .parts.packs import OPTIONAL_PACKS, DEFAULT_ENABLED_OPTIONAL_PACKS
 
@@ -752,6 +753,73 @@ class TrapTypeWeights(OptionDict):
     default = {str(t): 1 for t in TrapType}
 
 
+class BuffDensity(Choice):
+    """
+    How many permanent buff items are added to the filler pool.
+
+    Buffs are the upside twin of traps: the client mod applies each one
+    permanently for the rest of the run, and copies stack additively (three
+    +1% copies is +3%).  Each buff type ships as a three-rung ladder --
+    I is +1%, II is +3%, III is +5% -- so the density sets both how many
+    buffs you find and how high a single type can stack.  Structural
+    Integrity is the exception: it runs a steeper 5/15/25 ladder, because
+    the stats it scales are small enough in absolute terms that 1/3/5
+    would be imperceptible.
+
+    Buffs are drawn from the same pool as science packs, so a higher density
+    means fewer science packs.  They are invisible to logic: a buff can never
+    make an out-of-logic mission reachable, only make an in-logic one easier.
+
+    Ceilings below are for the standard ladder; Structural Integrity's is
+    five times higher (+20% / +70% / +120% respectively).
+
+    none   -- No buffs.
+    light  -- 1 x I + 1 x II per type; a type can reach +4%.
+    normal -- 3 x I + 2 x II + 1 x III per type; a type can reach +14%.  The default.
+    heavy  -- 5 x I + 3 x II + 2 x III per type; a type can reach +24%.
+    """
+    display_name = "Buff Density"
+
+    option_none = 0
+    option_light = 1
+    option_normal = 2
+    option_heavy = 3
+
+    # The single balance lever for buffs-vs-science-packs.  ``normal`` is
+    # BUFF_TIER_COUNTS verbatim (buffs.py owns those numbers); the other rungs
+    # scale around it.  Nothing else in the codebase bakes a buff count.
+    _COUNTS: dict[int, dict[BuffTier, int]] = {
+        option_none: {BuffTier.SMALL: 0, BuffTier.MEDIUM: 0, BuffTier.LARGE: 0},
+        option_light: {BuffTier.SMALL: 1, BuffTier.MEDIUM: 1, BuffTier.LARGE: 0},
+        option_normal: dict(BUFF_TIER_COUNTS),
+        option_heavy: {BuffTier.SMALL: 5, BuffTier.MEDIUM: 3, BuffTier.LARGE: 2},
+    }
+
+    default = option_normal
+
+    @property
+    def tier_counts(self) -> dict[BuffTier, int]:
+        """Copies of each tier granted per enabled buff type."""
+        return self._COUNTS[self.value]
+
+
+class BuffTypes(OptionSet):
+    """
+    Which buff categories can appear.  Omitting a name disables it entirely;
+    all six are enabled by default.  Every enabled type is stocked equally.
+
+    isp            -- Engine Efficiency: engines burn fuel more efficiently (more delta-v).
+    thrust         -- Engine Thrust: liquid engines push harder (better TWR).  Not SRBs.
+    heat_tolerance -- Heat Tolerance: every part survives a higher temperature.
+    structural     -- Structural Integrity: parts survive harder impacts and more stress.
+    control        -- Control Authority: stronger reaction wheels and wider engine gimbals.
+    power          -- Power Generation: solar panels, RTGs and fuel cells produce more charge.
+    """
+    display_name = "Buff Types"
+    valid_keys = frozenset(str(b) for b in BuffType)
+    default = frozenset(str(b) for b in BuffType)
+
+
 @dataclass
 class KSP1Options(PerGameCommonOptions):
     goal: Goal
@@ -787,4 +855,6 @@ class KSP1Options(PerGameCommonOptions):
     enabled_part_packs: EnabledPartPacks
     trap_density: TrapDensity
     trap_type_weights: TrapTypeWeights
+    buff_density: BuffDensity
+    buff_types: BuffTypes
     death_link: DeathLink

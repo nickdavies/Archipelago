@@ -37,6 +37,7 @@ from .parts import (
 from .contracts import all_possible_contract_specs
 from .ranks import RankContext, rank_sig_for
 from .options import GoalContractMode
+from .buffs import BUFF_DEFS, build_buff_pool
 from .traps import TRAP_DEFS
 
 if TYPE_CHECKING:
@@ -309,6 +310,16 @@ _TRAP_ITEMS: dict[str, tuple[int, ItemClassification]] = {
 }
 TRAP_ITEM_NAMES: frozenset[str] = frozenset(_TRAP_ITEMS)
 
+# Buff items: offsets 2000-2999, hand-written in buffs.py (same id-stability
+# contract as the blocks above).  Classification is ``filler`` and must stay
+# that way — ``useful`` would move them into ``usefulitempool`` and change
+# fill_hook's ordering.  Like traps, the item name is the entire wire signal.
+_BUFF_ITEMS: dict[str, tuple[int, ItemClassification]] = {
+    name: (offset, ItemClassification.filler)
+    for name, offset in BUFF_DEFS.values()
+}
+BUFF_ITEM_NAMES: frozenset[str] = frozenset(_BUFF_ITEMS)
+
 ITEM_NAME_TO_ID: dict[str, int] = {
     name: KSP1_BASE_ID + offset
     for name, (offset, _) in {
@@ -319,6 +330,7 @@ ITEM_NAME_TO_ID: dict[str, int] = {
         **_CONTRACT_ITEMS,
         **_DISCOVER_ITEMS,
         **_TRAP_ITEMS,
+        **_BUFF_ITEMS,
     }.items()
 }
 
@@ -362,6 +374,8 @@ def create_item(world: KSP1World, name: str) -> KSP1Item:
         offset, classification = _DISCOVER_ITEMS[name]
     elif name in _TRAP_ITEMS:
         offset, classification = _TRAP_ITEMS[name]
+    elif name in _BUFF_ITEMS:
+        offset, classification = _BUFF_ITEMS[name]
     else:
         raise KeyError(f"Unknown KSP1 item: {name!r}")
     item = KSP1Item(name, classification, KSP1_BASE_ID + offset, world.player)
@@ -570,7 +584,26 @@ def create_all_items(world: KSP1World) -> None:
             f"{unfilled_location_count}.  Phase 2 should keep this in balance"
             f" but a check failed — investigate before generating."
         )
-    for _ in range(filler_count):
+    # Buff items take a fixed slice of that filler budget before the padding
+    # loop runs.  Fixed counts, not a get_filler_item_name() roll: every buff
+    # copy must land so the per-type ceiling is knowable, and injecting here
+    # leaves the trap roll byte-identical.
+    #
+    # Buffs therefore displace science packs 1:1.  That is safe for logic:
+    # science_budget() (bodies.py) is a pure function of body / instruments /
+    # crew / home / psi_tier and never counts pooled ``Science Pack *`` items,
+    # and SCIENCE_PACK_NAMES reaches only an item placement rule (rules.py)
+    # plus a client-facing amount table (world.py).  Fewer packs is a pacing
+    # change, not a reachability one.
+    buff_names = build_buff_pool(
+        world.options.buff_density.tier_counts,
+        world.options.buff_types.value,
+        filler_count,
+    )
+    for name in buff_names:
+        pool.append(create_item(world, name))
+
+    for _ in range(filler_count - len(buff_names)):
         pool.append(create_item(world, get_filler_item_name(world)))
 
     world.multiworld.itempool += pool

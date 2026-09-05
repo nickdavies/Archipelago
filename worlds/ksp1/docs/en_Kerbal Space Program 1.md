@@ -100,6 +100,29 @@ equally likely by default; weight 0 disables one):
 - *Sticky Throttle* — the throttle jumps to a random setting.
 - *Minor Kraken Attack* — solar panels, gear, and antennas all toggle. Yes, in atmosphere too.
 
+**Buffs** are the upside twin of traps, and also come out of the filler pool (so a higher *Buff Density*
+means fewer science packs). Each buff applies permanently for the rest of the run the moment you receive
+it, and copies **stack additively** — three *Engine Efficiency I* is +3%, not +3.03%. Every type ships as
+a three-rung ladder: **I** is +1%, **II** is +3%, **III** is +5%. At the default *normal* density you get
+3× I, 2× II and 1× III of each enabled type, so a single type can reach **+14%**; *light* caps it at +4%
+and *heavy* at +24%. *Structural Integrity* runs a steeper **5 / 15 / 25** ladder (so a **+70%** ceiling at
+*normal*) — the stats it scales are small enough in absolute terms that the standard rungs would be
+imperceptible. Unlike traps, buffs are allowed in the starting inventory. Which types appear is
+controlled by *Buff Types*.
+
+- *Engine Efficiency* — engines burn fuel more efficiently. Thrust is unchanged; you just get more Δv.
+- *Engine Thrust* — liquid engines push harder for better TWR. Solid boosters are deliberately excluded:
+  they cannot be throttled down, so buffing them would make ascents harder to fly, not easier.
+- *Heat Tolerance* — every part survives a higher temperature.
+- *Structural Integrity* — parts survive harder impacts, more joint stress, higher g, and greater
+  pressure (crush depth).
+- *Control Authority* — stronger reaction wheels and wider engine gimbal range.
+- *Power Generation* — solar panels, RTGs, and fuel cells all produce more electric charge. Worth most
+  in the outer system, where solar output has fallen off with distance.
+
+Buffs are invisible to the randomizer's logic. A buff can never make an out-of-logic mission reachable —
+it only makes a mission you could already fly easier to fly.
+
 ### Locations
 
 Locations are **mission-based** (plus contracts), not science-experiment-based. You don't run individual
