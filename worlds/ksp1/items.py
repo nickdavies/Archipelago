@@ -37,7 +37,7 @@ from .parts import (
 from .contracts import all_possible_contract_specs
 from .ranks import RankContext, rank_sig_for
 from .options import GoalContractMode
-from .buffs import BUFF_DEFS, build_buff_pool
+from .buffs import BUFF_DEFS, CONSUMABLE_DEFS, build_buff_pool, build_consumable_pool
 from .traps import TRAP_DEFS
 
 if TYPE_CHECKING:
@@ -310,15 +310,27 @@ _TRAP_ITEMS: dict[str, tuple[int, ItemClassification]] = {
 }
 TRAP_ITEM_NAMES: frozenset[str] = frozenset(_TRAP_ITEMS)
 
-# Buff items: offsets 2000-2999, hand-written in buffs.py (same id-stability
-# contract as the blocks above).  Classification is ``filler`` and must stay
-# that way — ``useful`` would move them into ``usefulitempool`` and change
-# fill_hook's ordering.  Like traps, the item name is the entire wire signal.
+# Permanent buff items: offsets 12000-12099, hand-written in buffs.py (same
+# id-stability contract as the blocks above).  Classification is ``filler`` and
+# must stay that way — ``useful`` would move them into ``usefulitempool`` and
+# change fill_hook's ordering.  Like traps, the item name is the entire wire
+# signal.
 _BUFF_ITEMS: dict[str, tuple[int, ItemClassification]] = {
     name: (offset, ItemClassification.filler)
     for name, offset in BUFF_DEFS.values()
 }
 BUFF_ITEM_NAMES: frozenset[str] = frozenset(_BUFF_ITEMS)
+
+# Consumable buff items: offsets 12100-12199, a separate table only because the
+# pool block is sized differently (flat charges per type, no tier ladder).
+# Everything else matches the permanent block, ``filler`` classification
+# included — for exactly the same fill_hook reason.  Each copy the player
+# receives is one charge they spend from the mod UI.
+_CONSUMABLE_ITEMS: dict[str, tuple[int, ItemClassification]] = {
+    name: (offset, ItemClassification.filler)
+    for name, offset in CONSUMABLE_DEFS.values()
+}
+CONSUMABLE_ITEM_NAMES: frozenset[str] = frozenset(_CONSUMABLE_ITEMS)
 
 ITEM_NAME_TO_ID: dict[str, int] = {
     name: KSP1_BASE_ID + offset
@@ -331,6 +343,7 @@ ITEM_NAME_TO_ID: dict[str, int] = {
         **_DISCOVER_ITEMS,
         **_TRAP_ITEMS,
         **_BUFF_ITEMS,
+        **_CONSUMABLE_ITEMS,
     }.items()
 }
 
@@ -376,6 +389,8 @@ def create_item(world: KSP1World, name: str) -> KSP1Item:
         offset, classification = _TRAP_ITEMS[name]
     elif name in _BUFF_ITEMS:
         offset, classification = _BUFF_ITEMS[name]
+    elif name in _CONSUMABLE_ITEMS:
+        offset, classification = _CONSUMABLE_ITEMS[name]
     else:
         raise KeyError(f"Unknown KSP1 item: {name!r}")
     item = KSP1Item(name, classification, KSP1_BASE_ID + offset, world.player)
@@ -603,7 +618,20 @@ def create_all_items(world: KSP1World) -> None:
     for name in buff_names:
         pool.append(create_item(world, name))
 
-    for _ in range(filler_count - len(buff_names)):
+    # Consumables take their slice of what the permanent block left, so a
+    # filler budget too small for both degrades permanent-first rather than
+    # overflowing the pool.  Both blocks displace science packs 1:1; the
+    # padding loop below absorbs whatever they didn't take, which is what keeps
+    # ``len(pool) == unfilled_location_count`` exact.
+    consumable_names = build_consumable_pool(
+        world.options.buff_density.consumable_count,
+        world.options.buff_types.value,
+        filler_count - len(buff_names),
+    )
+    for name in consumable_names:
+        pool.append(create_item(world, name))
+
+    for _ in range(filler_count - len(buff_names) - len(consumable_names)):
         pool.append(create_item(world, get_filler_item_name(world)))
 
     world.multiworld.itempool += pool

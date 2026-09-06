@@ -101,8 +101,8 @@ equally likely by default; weight 0 disables one):
 - *Minor Kraken Attack* — solar panels, gear, and antennas all toggle. Yes, in atmosphere too.
 
 **Buffs** are the upside twin of traps, and also come out of the filler pool (so a higher *Buff Density*
-means fewer science packs). Each buff applies permanently for the rest of the run the moment you receive
-it, and copies **stack additively** — three *Engine Efficiency I* is +3%, not +3.03%. Every type ships as
+means fewer science packs). Most of them are **permanent**: they apply for the rest of the run the moment
+you receive them, and copies **stack additively** — three *Engine Efficiency I* is +3%, not +3.03%. Every permanent type ships as
 a three-rung ladder: **I** is +1%, **II** is +3%, **III** is +5%. At the default *normal* density you get
 3× I, 2× II and 1× III of each enabled type, so a single type can reach **+14%**; *light* caps it at +4%
 and *heavy* at +24%. *Structural Integrity* runs a steeper **5 / 15 / 25** ladder (so a **+70%** ceiling at
@@ -120,8 +120,18 @@ controlled by *Buff Types*.
 - *Power Generation* — solar panels, RTGs, and fuel cells all produce more electric charge. Worth most
   in the outer system, where solar output has fallen off with distance.
 
-Buffs are invisible to the randomizer's logic. A buff can never make an out-of-logic mission reachable —
-it only makes a mission you could already fly easier to fly.
+The rest are **consumables**: instead of applying themselves, each copy you receive banks one charge you
+spend from the AP mod menu at the moment you want it. *Buff Density* sets how many charges of each
+enabled consumable you get across the run — 1 at *light*, 3 at *normal*, 5 at *heavy*.
+
+- *Mid-Air Refuel* — refills the fuel tanks on the craft you are currently flying, wherever it is. It
+  tops up fuel only: ore and other ISRU resources are untouched. Spending a charge consumes it
+  **once and for all** — reverting the save does not hand it back, so bank it for a flight you would
+  otherwise have to abandon.
+
+Buffs are invisible to the randomizer's logic — permanent and consumable alike. A buff can never make an
+out-of-logic mission reachable; it only makes a mission you could already fly easier to fly. Nothing in
+the logic ever assumes you saved a charge.
 
 ### Locations
 

@@ -4,7 +4,7 @@ from Options import Choice, DeathLink, DefaultOnToggle, ExcludeLocations, ItemsA
 
 from .bodies import ALL_BODIES, BodyName
 from .contracts import ContractType, NON_GOAL_TYPES
-from .buffs import BUFF_TIER_COUNTS, BuffTier, BuffType
+from .buffs import BUFF_TIER_COUNTS, CONSUMABLE_DENSITY_COUNTS, BuffTier, BuffType, ConsumableType
 from .traps import TrapType
 from .parts.packs import OPTIONAL_PACKS, DEFAULT_ENABLED_OPTIONAL_PACKS
 
@@ -755,7 +755,7 @@ class TrapTypeWeights(OptionDict):
 
 class BuffDensity(Choice):
     """
-    How many permanent buff items are added to the filler pool.
+    How many buff items are added to the filler pool.
 
     Buffs are the upside twin of traps: the client mod applies each one
     permanently for the rest of the run, and copies stack additively (three
@@ -770,13 +770,17 @@ class BuffDensity(Choice):
     means fewer science packs.  They are invisible to logic: a buff can never
     make an out-of-logic mission reachable, only make an in-logic one easier.
 
+    This also sets how many CONSUMABLE buffs you find -- one-shot charges you
+    spend from the mod menu whenever you want, rather than permanent boosts.
+    They have no I/II/III ladder, so the density is just a charge count.
+
     Ceilings below are for the standard ladder; Structural Integrity's is
     five times higher (+20% / +70% / +120% respectively).
 
-    none   -- No buffs.
-    light  -- 1 x I + 1 x II per type; a type can reach +4%.
-    normal -- 3 x I + 2 x II + 1 x III per type; a type can reach +14%.  The default.
-    heavy  -- 5 x I + 3 x II + 2 x III per type; a type can reach +24%.
+    none   -- No buffs.  No charges either.
+    light  -- 1 x I + 1 x II per type; a type can reach +4%.  1 charge per consumable type.
+    normal -- 3 x I + 2 x II + 1 x III per type; a type can reach +14%.  3 charges.  The default.
+    heavy  -- 5 x I + 3 x II + 2 x III per type; a type can reach +24%.  5 charges.
     """
     display_name = "Buff Density"
 
@@ -802,11 +806,23 @@ class BuffDensity(Choice):
         """Copies of each tier granted per enabled buff type."""
         return self._COUNTS[self.value]
 
+    @property
+    def consumable_count(self) -> int:
+        """Charges granted per enabled consumable type.
+
+        Looked up by key name, so buffs.py stays the only place the numbers
+        exist (``_COUNTS`` above deliberately does not carry a consumable
+        column — a second table here would be a second source of truth).
+        """
+        return CONSUMABLE_DENSITY_COUNTS[self.current_key]
+
 
 class BuffTypes(OptionSet):
     """
     Which buff categories can appear.  Omitting a name disables it entirely;
-    all six are enabled by default.  Every enabled type is stocked equally.
+    all of them are enabled by default.  Every enabled type is stocked equally.
+    The last entry is a consumable -- a one-shot charge you spend when you
+    choose -- and can be switched off exactly like the permanent boosts.
 
     isp            -- Engine Efficiency: engines burn fuel more efficiently (more delta-v).
     thrust         -- Engine Thrust: liquid engines push harder (better TWR).  Not SRBs.
@@ -814,10 +830,12 @@ class BuffTypes(OptionSet):
     structural     -- Structural Integrity: parts survive harder impacts and more stress.
     control        -- Control Authority: stronger reaction wheels and wider engine gimbals.
     power          -- Power Generation: solar panels, RTGs and fuel cells produce more charge.
+    refuel         -- Mid-Air Refuel (consumable): refills the active craft's fuel tanks in flight.
     """
     display_name = "Buff Types"
-    valid_keys = frozenset(str(b) for b in BuffType)
-    default = frozenset(str(b) for b in BuffType)
+    valid_keys = frozenset(
+        [str(b) for b in BuffType] + [str(c) for c in ConsumableType])
+    default = valid_keys
 
 
 @dataclass

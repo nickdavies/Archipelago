@@ -1,14 +1,21 @@
 """
 Buff item definitions for KSP1 Archipelago.
 
-Buffs are filler-pool upside: permanent, additively-stacking stat boosts the
-client mod applies to every part (engine efficiency, thrust, heat tolerance,
-structural strength, control authority, power generation).
+Buffs are filler-pool upside, in two flavours:
+
+* PERMANENT (``BuffType`` x ``BuffTier``) — additively-stacking stat boosts the
+  client mod applies to every part (engine efficiency, thrust, heat tolerance,
+  structural strength, control authority, power generation).  Received once,
+  active forever.
+* CONSUMABLE (``ConsumableType``) — a one-shot charge the player spends from
+  the mod UI when they choose.  Each copy received is one charge; spending it
+  burns it for good.
+
 The AP item NAME is the entire wire signal — there is no slot_data payload;
 the client recognizes each name and owns the effect entirely.
 
-Buffs are deliberately invisible to the capability/physics model: no buff name
-appears in ``DEFAULT_PART_MANAGER.parts``, therefore none is in
+Buffs of both flavours are deliberately invisible to the capability/physics
+model: no buff name appears in ``DEFAULT_PART_MANAGER.parts``, therefore none is in
 ``CAPABILITY_ITEMS``, therefore ``world.collect_item`` returns ``None`` for one
 and ``state.count("Buff: ...")`` is identically 0.  Logic never sees a buff, so
 a buff can never make an out-of-logic mission "reachable" — it only makes an
@@ -16,8 +23,8 @@ in-logic mission easier to fly.  (Item *classification* alone would not be
 enough: USEFUL-classified parts ARE capability-relevant.)
 
 This module is the single source of truth for the buff universe: the
-``BuffType`` / ``BuffTier`` option keys, tier magnitudes, the ``normal``
-baseline tier counts, the player-visible item names, and their stable id
+``BuffType`` / ``BuffTier`` / ``ConsumableType`` option keys, tier magnitudes,
+the per-density copy counts, the player-visible item names, and their stable id
 offsets.  Leaf module — imported by items.py and options.py, imports neither
 (mirrors traps.py owning ``TrapType``).
 """
@@ -45,6 +52,21 @@ class BuffTier(StrEnum):
     SMALL = "small"
     MEDIUM = "medium"
     LARGE = "large"
+
+
+class ConsumableType(StrEnum):
+    """Option keys for one-shot buff selection.
+
+    Consumables share the ``buff_types`` option set with ``BuffType`` — one
+    roster of names the player enables or disables — so adding a member here
+    widens that option automatically.  They have no tier ladder: a copy is a
+    charge, and density alone sets how many charges a run holds.
+
+    Declaration order is load-bearing for the same reason as ``BuffType``:
+    ``build_consumable_pool`` walks types in this order when clamping into a
+    short filler pool, so it is the tie-break order for the odd extra copy.
+    """
+    REFUEL = "refuel"
 
 
 #: Percentage-point boost a single copy of each tier grants.  The client mod
@@ -89,6 +111,24 @@ BUFF_TIER_COUNTS: dict[BuffTier, int] = {
     BuffTier.LARGE: 1,
 }
 
+#: Charges of each enabled consumable type per ``BuffDensity`` rung.  Keyed by
+#: the option's key NAME, not its int value: this module is a leaf and cannot
+#: import options.py, and the names are the stable half of that contract (an
+#: int value could be renumbered).  ``BuffDensity.consumable_count`` looks the
+#: rung up via ``current_key``, so options.py never re-types these numbers; a
+#: test pins the two key sets together so a new rung cannot be added on one
+#: side only.
+#:
+#: A consumable copy is a whole charge with no tier ladder to soften it, so the
+#: ladder is flatter than the permanent block's: heavy is 5 charges per type,
+#: not 5+3+2 items.
+CONSUMABLE_DENSITY_COUNTS: dict[str, int] = {
+    "none": 0,
+    "light": 1,
+    "normal": 3,
+    "heavy": 5,
+}
+
 # AP item ids are KSP1_BASE_ID + offset.  Offsets are hand-written (never
 # enumerate()d) because id stability is a datapackage contract: inserting or
 # reordering a member must never shift another buff's id.
@@ -103,6 +143,12 @@ BUFF_TIER_COUNTS: dict[BuffTier, int] = {
 # only free by accident — the legacy band is already at 4153 of 4199, so the
 # next batch of locations has to widen it.  12000+ sits clear of both and of
 # any plausible growth in either.
+#
+#
+# Inside that block the permanent ladder holds 12000-12099 and consumables hold
+# 12100-12199 (asserted below, so a member landing in the wrong sub-band fails
+# at import rather than silently interleaving).  If either outgrows its hundred
+# the next sub-band opens at 12200 — ids never move to make room.
 #
 # The stride of 10 per type leaves room for a fourth tier without renumbering.
 # Names are player-visible in AP clients and freeze at first release.
@@ -133,16 +179,39 @@ BUFF_NAME_TO_DEF: dict[str, tuple[BuffType, BuffTier]] = {
     name: key for key, (name, _offset) in BUFF_DEFS.items()
 }
 
+#: One-shot buffs.  Same id-stability contract and same "the name IS the wire
+#: signal" contract as the permanent block: the client maps the name to the
+#: effect, grants one spendable charge per copy received, and burns the charge
+#: when the player activates it.  Offsets stride 10 like the permanent block so
+#: a consumable that later grows a tier ladder needs no renumbering.
+CONSUMABLE_DEFS: dict[ConsumableType, tuple[str, int]] = {
+    ConsumableType.REFUEL: ("Buff: Mid-Air Refuel", 12100),
+}
+
+#: Reverse map: item name -> consumable type.
+CONSUMABLE_NAME_TO_TYPE: dict[str, ConsumableType] = {
+    name: key for key, (name, _offset) in CONSUMABLE_DEFS.items()
+}
+
 _offsets = [offset for _name, offset in BUFF_DEFS.values()]
 _names = [name for name, _offset in BUFF_DEFS.values()]
+_c_offsets = [offset for _name, offset in CONSUMABLE_DEFS.values()]
+_c_names = [name for name, _offset in CONSUMABLE_DEFS.values()]
 assert len(set(_offsets)) == len(_offsets), "buff id offsets must be unique"
-assert all(12000 <= o <= 12999 for o in _offsets), "buff ids live in the 12000-12999 block"
+assert all(12000 <= o <= 12099 for o in _offsets), "permanent buff ids live in 12000-12099"
 assert len(set(_names)) == len(_names), "buff item names must be unique"
 assert len(BUFF_DEFS) == len(BuffType) * len(BuffTier), \
     "every (BuffType, BuffTier) pair needs a BUFF_DEFS entry"
 assert set(BUFF_TIER_PERCENT) == set(BuffTier), "every tier needs a percentage"
 assert set(BUFF_TIER_COUNTS) == set(BuffTier), "every tier needs a baseline count"
-del _offsets, _names
+assert len(set(_c_offsets)) == len(_c_offsets), "consumable id offsets must be unique"
+assert all(12100 <= o <= 12199 for o in _c_offsets), "consumable ids live in 12100-12199"
+assert len(set(_c_names)) == len(_c_names), "consumable item names must be unique"
+assert len(CONSUMABLE_DEFS) == len(ConsumableType), \
+    "every ConsumableType needs a CONSUMABLE_DEFS entry"
+assert not set(_offsets) & set(_c_offsets), "permanent and consumable buff ids must not collide"
+assert not set(_names) & set(_c_names), "permanent and consumable buff names must not collide"
+del _offsets, _names, _c_offsets, _c_names
 
 
 #: Tier emit order: strongest first.  Under a short filler budget the block is
@@ -185,4 +254,36 @@ def build_buff_pool(
         for _copy in range(counts.get(tier, 0)):
             for buff_type in enabled:
                 out.append(BUFF_DEFS[(buff_type, tier)][0])
+    return out[:budget]
+
+
+def build_consumable_pool(
+    count_per_type: int,
+    types: Iterable[ConsumableType],
+    budget: int,
+) -> list[str]:
+    """Return the consumable item names to add to the pool, clamped to ``budget``.
+
+    Same contract as ``build_buff_pool`` — pure, so the clamp is unit-testable
+    at any budget without tying the test to a seed's location count — and the
+    same copy-major emit order, so truncation stays even across enabled types
+    (every type gets its Nth charge before any gets its (N+1)th, leaving at
+    most one charge of spread wherever the cut lands).  The odd charge goes to
+    the earlier ``ConsumableType`` member.
+
+    There is no tier dimension to order by: every copy of a given type is the
+    same charge, so the block is a flat ``count_per_type`` charges per enabled
+    type.  A non-positive budget returns nothing — this runs on the REMAINING
+    filler budget after the permanent block took its slice, so a
+    location-starved seed must lose the feature silently, not fail generation.
+    """
+    if budget <= 0 or count_per_type <= 0:
+        return []
+    enabled = [t for t in ConsumableType if t in set(types)]
+    if not enabled:
+        return []
+    out: list[str] = []
+    for _copy in range(count_per_type):
+        for consumable in enabled:
+            out.append(CONSUMABLE_DEFS[consumable][0])
     return out[:budget]
