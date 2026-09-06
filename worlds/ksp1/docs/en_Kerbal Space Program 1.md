@@ -20,6 +20,48 @@ After installing the `.apworld`, create your config from the Archipelago Launche
 
 See the setup guide for step-by-step instructions.
 
+Every option has a sensible default, so you only need to write down the ones you want to change. A config
+that tunes the goal and the filler pool looks like this:
+
+```yaml
+name: YourName
+game: Kerbal Space Program 1
+
+Kerbal Space Program 1:
+  goal: duna_return
+  starting_body: kerbin
+  difficulty: normal
+
+  # Traps, buffs and science packs share one filler pool: turning either up
+  # means fewer science packs.
+  trap_density: light
+  buff_density: normal
+
+  # A MAPPING. Any key you leave out is weight 0, so this disables every trap
+  # except the three listed.
+  trap_type_weights:
+    throttle: 1
+    timewarp: 1
+    comms_outage: 2      # twice as likely as the other two
+
+  # A LIST. Writing it out REPLACES the default (all of them), so this enables
+  # only these three and switches the other four off.
+  buff_types:
+    - isp
+    - thrust
+    - refuel
+```
+
+Those last two comments are the easiest thing to get wrong, and they behave differently:
+
+- **Mapping options** (`trap_type_weights`, `contract_type_weights`) treat an absent key as `0`. Listing one
+  trap does not "add" it to the defaults — it disables the other ten.
+- **List options** (`buff_types`, `enabled_part_packs`, the custom-goal body lists) replace the default set
+  outright. If you list `buff_types` at all, anything you omit is off — including `refuel`, which is easy to
+  forget because it is the only consumable.
+
+If you just want everything on, leave the option out entirely rather than writing out the full set.
+
 ## What does randomization do to this game?
 
 Rocket parts (engines, fuel tanks, capsules, decouplers, etc.) are removed from the normal tech tree and shuffled
@@ -310,6 +352,28 @@ won't contain items required for progression.
 - **Allow Undiscovered Bodies** — **On by default.** On: undiscovered bodies are visible-but-uninteractable and
   can be flown to out of logic (arriving reveals them). Off: they are invisible and flying into their SOI
   destroys your craft. Only meaningful when Body Visibility Mode is hiding bodies.
+
+### Filler pool options
+
+Science packs, traps and buffs all come out of the same filler pool, so turning traps or buffs up means
+fewer science packs. None of them affect logic — a trap can never make a check unreachable, and a buff can
+never make an unreachable check reachable.
+
+- **Trap Density** — How much of the filler pool becomes traps. `none`, `light` (**default**, ~10% of
+  filler), `moderate` (~25%), `heavy` (~50%), `hell` (every filler item is a trap). See *Traps* above for
+  what each one does.
+- **Trap Type Weights** — Relative weight of each trap type in the trap pool; weight `0` disables that trap
+  entirely. All eleven are enabled and equally likely by default. Note this is a mapping, and any key you
+  leave out counts as `0` — see the example above.
+- **Buff Density** — How many buff items are added. `none`, `light`, `normal` (**default**), `heavy`. This
+  sets both how many you find and how high one type can stack: **+4% / +14% / +24%** for the standard
+  ladder, or **+20% / +70% / +120%** for Structural Integrity's steeper one. It also sets how many
+  *Mid-Air Refuel* charges you get: **0 / 1 / 3 / 5** per run.
+- **Buff Types** — Which buff categories appear (`isp`, `thrust`, `heat_tolerance`, `structural`, `control`,
+  `power`, and the consumable `refuel`). All are enabled by default. This is a list, and writing it out
+  **replaces** the default — any name you omit is switched off.
+- **Death Link** — **Off by default.** When on, losing a Kerbal broadcasts a death to everyone else on
+  DeathLink, and their deaths destroy your craft.
 
 ## Tracking In-Logic Locations
 
