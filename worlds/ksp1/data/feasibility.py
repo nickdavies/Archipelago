@@ -32,7 +32,7 @@ MODEL_INFEASIBLE_BASE: dict[str, dict[BodyName, frozenset[tuple[BodyName, Missio
         BodyName.DRES: frozenset(),
         BodyName.DUNA: frozenset(),
         BodyName.EELOO: frozenset(),
-        BodyName.EVE: frozenset({(BodyName.BOP, MissionType.RETURN), (BodyName.BOP, MissionType.SAMPLE_RETURN), (BodyName.EELOO, MissionType.SAMPLE_RETURN), (BodyName.LAYTHE, MissionType.RETURN), (BodyName.LAYTHE, MissionType.SAMPLE_RETURN), (BodyName.MOHO, MissionType.SAMPLE_RETURN), (BodyName.POL, MissionType.SAMPLE_RETURN), (BodyName.TYLO, MissionType.RETURN), (BodyName.TYLO, MissionType.SAMPLE_RETURN), (BodyName.VALL, MissionType.SAMPLE_RETURN)}),
+        BodyName.EVE: frozenset({(BodyName.BOP, MissionType.ORBIT_RETURN), (BodyName.BOP, MissionType.RETURN), (BodyName.BOP, MissionType.SAMPLE_RETURN), (BodyName.EELOO, MissionType.SAMPLE_RETURN), (BodyName.LAYTHE, MissionType.RETURN), (BodyName.LAYTHE, MissionType.SAMPLE_RETURN), (BodyName.MOHO, MissionType.SAMPLE_RETURN), (BodyName.POL, MissionType.SAMPLE_RETURN), (BodyName.TYLO, MissionType.RETURN), (BodyName.TYLO, MissionType.SAMPLE_RETURN), (BodyName.VALL, MissionType.SAMPLE_RETURN)}),
         BodyName.GILLY: frozenset(),
         BodyName.IKE: frozenset(),
         BodyName.KERBIN: frozenset(),

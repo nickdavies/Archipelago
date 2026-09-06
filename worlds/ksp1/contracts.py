@@ -31,8 +31,8 @@ from enum import StrEnum
 from typing import Optional, TYPE_CHECKING
 
 from .bodies import (
-    ALL_BODIES, BODY_BY_NAME, BodyName, MissionType, DifficultyProfile,
-    DIFFICULTY_PROFILES, MissionBuilder, TOURISM_CREW,
+    ALL_BODIES, BODY_BY_NAME, Achievement, BodyName, MissionType,
+    DifficultyProfile, DIFFICULTY_PROFILES, MissionBuilder, TOURISM_CREW,
     effective_physics_profile_name, orbit_reach_dv,
 )
 from .parts import DEFAULT_PART_MANAGER, MiscEquipment, PartManager
@@ -182,12 +182,29 @@ class PlantFlagParam:
 
 @dataclass(frozen=True)
 class SampleReturnParam:
-    """Recover a surface sample from ``body`` back at the home world. Wraps a
-    recover/collect-science parameter on the client (new primitive)."""
+    """A ``{body}`` surface sample physically came home: the recovered craft (or
+    kerbal) carries a surface-sample subject from ``body``.  Wraps the client's
+    RecoveredSurfaceSampleParameter.  There is NO crew check client-side — the
+    sample is the evidence — and transmitted science never counts, because
+    transmitting a sample leaves nothing to recover."""
     body: str
 
     def to_json(self) -> dict:
         return {"kind": "sample_return", "body": str(self.body)}
+
+
+@dataclass(frozen=True)
+class ReturnedFromParam:
+    """The craft's flight log records ``achievement`` at ``body`` AND it got
+    home.  Wraps the client's ReturnedFromParameter, which tests set membership
+    on the trip log — this is NOT a threshold ("at least this deep"), see the
+    ``Achievement`` docstring for why that question has no answer."""
+    body: str
+    achievement: Achievement
+
+    def to_json(self) -> dict:
+        return {"kind": "returned_from", "body": str(self.body),
+                "achievement": str(self.achievement)}
 
 
 @dataclass(frozen=True)
@@ -230,20 +247,20 @@ class SurfaceRescueParam:
 
 @dataclass(frozen=True)
 class TouristParam:
-    """Take a named tourist to ``entry`` (Suborbit / Orbit) at ``body`` and
-    recover them.  Wraps the mod's ApTouristParameter, which spawns a Tourist
-    roster member and hosts stock KerbalTourParameter / KerbalDestinationParameter
-    children (completes on the tourist's flight-log entry + recovery).  ``name``
-    is a display hint — the client persists whatever unique roster name it
-    actually assigns."""
+    """Take a named tourist to ``body`` and recover them, with ``entry`` — an
+    ``Achievement`` — the flight-log entry they must record there.  Wraps the
+    mod's ApTouristParameter, which spawns a Tourist roster member and completes
+    on that entry appearing in the tourist's own log plus their recovery.
+    ``name`` is a display hint — the client persists whatever unique roster name
+    it actually assigns."""
     name: str
     female: bool
     body: str
-    entry: str            # "Suborbit" | "Orbit"
+    entry: Achievement
 
     def to_json(self) -> dict:
         return {"kind": "tourist", "name": self.name, "female": self.female,
-                "body": str(self.body), "entry": self.entry}
+                "body": str(self.body), "entry": str(self.entry)}
 
 
 @dataclass(frozen=True)
@@ -314,12 +331,15 @@ class SpecificOrbitParam:
 
 @dataclass(frozen=True)
 class CollectScienceParam:
-    """Recover OR transmit science from ``body`` at ``location`` (space|surface).
-    Wraps stock CollectScience on the client, which credits on transmit *or*
-    recovery (GameEvents.OnScienceRecieved / OnTriggeredDataTransmission) — so the
-    space variant is the cheap 'phone home' contract, no round trip."""
+    """Recover OR transmit science from ``body`` at ``location``.  Wraps stock
+    CollectScience on the client, which credits on transmit *or* recovery
+    (GameEvents.OnScienceRecieved / OnTriggeredDataTransmission) — so the space
+    variant is the cheap 'phone home' contract, no round trip.  ``any`` drops the
+    situation filter entirely (the client's BodyScienceParameter): any
+    science-yielding thing from the body, in any situation, recovered or
+    transmitted."""
     body: str
-    location: str            # "space" | "surface"
+    location: str            # "space" | "surface" | "any"
 
     def to_json(self) -> dict:
         return {"kind": "collect_science", "body": str(self.body), "location": self.location}
@@ -369,6 +389,9 @@ class ContractType(StrEnum):
     DOCKING = "docking"                     # dock two craft in orbit of a body
     SURFACE_SURVEY = "surface_survey"       # run an experiment at a seeded surface waypoint
     TOURISM = "tourism"                     # take tourists to a body's orbit/suborbit and return
+    # The two shallower return tiers (the surface tier is RETURN, goal-only).
+    SOI_RETURN = "soi_return"               # fly by a body's SOI and come home
+    ORBIT_RETURN = "orbit_return"           # orbit a body and come home
     # Goal-only types — used when a goal achievement is one of these missions.
     RETURN = "return"
     FLYBY = "flyby"
@@ -385,6 +408,7 @@ NON_GOAL_TYPES: tuple[ContractType, ...] = (
     ContractType.SURFACE_RESCUE,
     ContractType.DOCKING, ContractType.SURFACE_SURVEY,
     ContractType.TOURISM,
+    ContractType.SOI_RETURN, ContractType.ORBIT_RETURN,
 )
 
 # Contract types that ask the player to match a SPECIFIC target orbit (via the
@@ -645,8 +669,9 @@ class ContractTypeDef:
 
     def build_parameters(self, body: BodyName, mission_builder=None,
                          part_manager: PartManager = DEFAULT_PART_MANAGER) -> list:
-        # ``mission_builder`` is required only for RANDOM_ORBIT (it owns the
-        # per-body seeded target orbit); other types ignore it.
+        # ``mission_builder`` is required by RANDOM_ORBIT and TOURISM (it owns
+        # the per-body seeded target orbit / tourist manifest) and by
+        # TRANSMIT_SCIENCE (it names the home body); other types ignore it.
         if self.contract_type == ContractType.MINE_ORE:
             return [
                 SituationParam("landed", body),
@@ -711,11 +736,19 @@ class ContractTypeDef:
                 deviation=ORBIT_DEVIATION,
                 lan=params.lan_deg, arg_pe=params.arg_pe_deg)]
         if self.contract_type == ContractType.TRANSMIT_SCIENCE:
-            # Gather + phone home science from the body's space. CollectScience
-            # credits on transmit OR recover; the relay category is the antenna +
-            # the range gate (remoteness cap keys on "relay" in required_categories).
-            return [CollectScienceParam(body, "space"),
-                    _category_param("relay", part_manager)]
+            # Gather science at the body and either recover it or phone it home;
+            # CollectScience credits on transmit OR recovery.  Anywhere but home
+            # that is "any science-yielding thing from the body"; at HOME it must
+            # stay "space", or a goo canister recovered on the launchpad would
+            # complete the contract.  The relay antenna gates logic only (see
+            # logic_only_categories) — the range tier still paces the contract,
+            # but a recovery is a legitimate way to finish it, so a "carry an
+            # antenna" objective would be wrong in game.
+            if mission_builder is None:
+                raise ValueError(
+                    "TRANSMIT_SCIENCE build_parameters needs mission_builder")
+            return [CollectScienceParam(
+                body, "space" if body == mission_builder.home else "any")]
         if self.contract_type == ContractType.FLAG_PLANT:
             return [PlantFlagParam(body)]
         if self.contract_type == ContractType.SAMPLE_RETURN:
@@ -799,8 +832,16 @@ class ContractTypeDef:
             return [TouristParam(t.name, t.female, body, t.entry) for t in manifest]
         if self.contract_type == ContractType.FLYBY:
             return [SituationParam("flyby", body)]      # stock EnterSOI(body)
+        # The three return tiers differ only in which flight-log entry the craft
+        # must have recorded at the body before coming home.  Independent tests,
+        # never a threshold — a direct-entry landing satisfies SURFACE without
+        # ever satisfying ORBIT (see the Achievement docstring).
         if self.contract_type == ContractType.RETURN:
-            return [SampleReturnParam(body)]            # reach body then recover home
+            return [ReturnedFromParam(body, Achievement.SURFACE)]
+        if self.contract_type == ContractType.ORBIT_RETURN:
+            return [ReturnedFromParam(body, Achievement.ORBIT)]
+        if self.contract_type == ContractType.SOI_RETURN:
+            return [ReturnedFromParam(body, Achievement.FLYBY)]
         raise NotImplementedError(
             f"build_parameters not implemented for {self.contract_type}")
 
@@ -906,10 +947,16 @@ CONTRACT_TYPE_DEFS: dict[ContractType, ContractTypeDef] = {
         location_prep="from",
         base_mission_type=MissionType.ORBIT,
         crewed=None,
+        # The relay antenna is logic-only: the contract completes on a recovery
+        # just as well as on a transmission, so "carry an antenna" is not a real
+        # objective — but the category must stay in required_categories, because
+        # the harder-than-goal remoteness cap and _CHAIN_GUARANTEED_CATEGORIES
+        # both key on "relay" being listed there.
         required_categories=("relay",),
+        logic_only_categories=("relay",),
         home_safe=True,
-        title_fmt="Transmit science from {body}",
-        synopsis_fmt="Gather and transmit science from space around {body}.",
+        title_fmt="Return or transmit science from {body}",
+        synopsis_fmt="Gather science from {body} and bring it home or transmit it.",
     ),
     ContractType.KERBAL_RESCUE: ContractTypeDef(
         contract_type=ContractType.KERBAL_RESCUE,
@@ -1023,6 +1070,35 @@ CONTRACT_TYPE_DEFS: dict[ContractType, ContractTypeDef] = {
         title_fmt="Return a surface sample from {body}",
         synopsis_fmt="Collect a surface sample from {body} and bring it home.",
     ),
+    # The two shallower return tiers.  Both are orbital (no landing), so
+    # body_compatible admits Jool via is_orbitable.
+    ContractType.SOI_RETURN: ContractTypeDef(
+        contract_type=ContractType.SOI_RETURN,
+        location_noun="SOI Return",
+        location_prep="from",
+        base_mission_type=MissionType.SOI_RETURN,
+        crewed=None,
+        required_categories=(),
+        # home_safe left at its False default ON PURPOSE: "leave your home SOI
+        # and come back" reads as a chore, and bodies.py registers no home
+        # SOI_RETURN profile — so the candidate loop must never offer it there.
+        title_fmt="Return from a flyby of {body}",
+        synopsis_fmt="Enter the sphere of influence of {body} and bring the "
+                     "craft home safely.",
+    ),
+    ContractType.ORBIT_RETURN: ContractTypeDef(
+        contract_type=ContractType.ORBIT_RETURN,
+        location_noun="Orbit Return",
+        location_prep="from",
+        base_mission_type=MissionType.ORBIT_RETURN,
+        crewed=None,
+        required_categories=(),
+        # Orbit-and-back at the home body is good early content, same reasoning
+        # as TOURISM (which flies the identical profile).
+        home_safe=True,
+        title_fmt="Return from orbit of {body}",
+        synopsis_fmt="Orbit {body} and bring the craft home safely.",
+    ),
     # Goal-only types (used when a goal achievement is a return/flyby).
     ContractType.RETURN: ContractTypeDef(
         contract_type=ContractType.RETURN,
@@ -1031,8 +1107,8 @@ CONTRACT_TYPE_DEFS: dict[ContractType, ContractTypeDef] = {
         base_mission_type=MissionType.RETURN,
         crewed=None,
         required_categories=(),
-        title_fmt="Return from {body}",
-        synopsis_fmt="Travel to {body} and return safely home.",
+        title_fmt="Return from the surface of {body}",
+        synopsis_fmt="Land on {body} and bring the craft home safely.",
     ),
     ContractType.FLYBY: ContractTypeDef(
         contract_type=ContractType.FLYBY,

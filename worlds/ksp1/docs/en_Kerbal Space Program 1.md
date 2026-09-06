@@ -31,8 +31,9 @@ launch, altitude records, orbits, landings, crew landings, flag plants, sample r
 bodies in the Kerbol system. Completing a harder mission awards multiple checks at once (e.g., a Mun Sample
 Return also counts as a Mun Landing, Crewed Landing, etc.).
 
-You also play **contracts**: native KSP contracts (orbit a body, rescue a stranded Kerbal, transmit science,
-plant a flag, and more) injected into your game as items. Accepting and completing a contract checks its
+You also play **contracts**: native KSP contracts (orbit a body, rescue a stranded Kerbal, gather science and
+bring it home or transmit it, fly by a body and return, orbit a body and return, plant a flag, and more)
+injected into your game as items. Accepting and completing a contract checks its
 reward location, and under the default goal mode, completing contracts is what unlocks your victory condition.
 The orbital and rescue contracts are randomized — each seed hands you different target orbits to fly.
 
@@ -111,8 +112,11 @@ experiments; instead you complete missions and contracts:
   Only one per building, not each sub-building biome.
 - **Home-body Milestones** (11) — First Launch, First Landing, First Crash, altitude records, First Staging.
   Plus a single body-agnostic **Splashdown** check that fires on any ocean body (Kerbin / Eve / Laythe).
-- **Body Mission Events** (~231) — Per-body checks across all 17 bodies: Flyby, Orbit, Landing, Crewed Landing,
-  Flag Plant, Return, and Sample Return. Each event type has multiple slots.
+- **Body Mission Events** (~300) — Per-body checks across all 17 bodies: Flyby, Orbit, Landing, Crewed Landing,
+  Flag Plant, Sample Return, and three separate return tiers — **SOI Return** (fly by and come home),
+  **Orbit Return** (capture into orbit and come home) and **Return** (land and come home). Each event type
+  has multiple slots. The three return tiers are independent: a direct-entry landing awards SOI Return and
+  Return but not Orbit Return, because that craft never orbited.
 - **Tech Tree Nodes** (124–248) — Each of the 62 tech nodes has 2–4 location slots (scaled by difficulty).
   Purchasing a node with science points awards these checks.
 - **Contracts** (10 by default) — Native KSP contracts injected by the client; completing one checks its reward

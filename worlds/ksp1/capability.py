@@ -4155,6 +4155,14 @@ def _assess_one_body(
     for event in ALL_EVENTS:
         if event.name not in body_events:
             continue
+        # A home-excluded event does not exist on THIS seed's home body (SOI
+        # Return, Unmanned Flyby), and the mission builder deliberately registers
+        # no profile for it — which the empty-profiles branch below would read as
+        # "trivially achievable".  Match locations.py's emission filter instead:
+        # a location that is never emitted is never reachable.
+        if event.home_excluded and body.name == mission_builder.home:
+            prof.access[event.name] = False
+            continue
         # Single chokepoint for banned/unachievable missions (curated edge bans
         # ∪ dv-infeasible).  Routing it through capability means every
         # reachability consumer — location access rules, contract feasibility,

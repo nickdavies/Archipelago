@@ -58,15 +58,58 @@ class MissionType(StrEnum):
     SURFACE_RESCUE = "surface_rescue"
     # Orbit-and-return: reach the target's ORBIT and bring the vessel home —
     # RESCUE's trajectory without the rendezvous phasing burn (no second craft to
-    # meet). Contract-only (TOURISM); never emitted as a mission location, so it
-    # has no feasibility-table row (full physics filters it).
+    # meet).  Emitted both as a mission location (the middle return tier) and as
+    # a contract type (TOURISM), so it carries feasibility-table rows.
     ORBIT_RETURN = "orbit_return"
+    # SOI-and-return: reach the target's SOI boundary — a flyby — and bring the
+    # vessel home.  No capture and no landing at the target; the turn-around
+    # point is the SOI node rather than low orbit or the surface.  The shallowest
+    # of the three return tiers.
+    SOI_RETURN = "soi_return"
     # Home-body-only mission types (no MissionBuilder profile entry)
     SOUNDING = "sounding"
     FIRST_LAUNCH = "first_launch"
     FIRST_LANDING = "first_landing"
     FIRST_STAGING = "first_staging"
     SPLASHDOWN = "splashdown"
+
+
+class Achievement(StrEnum):
+    """A flight-log entry a vessel or kerbal actually recorded at a body.
+
+    THIS IS NOT AN ORDERED SCALE. Do not add a comparison operator, an ordering
+    key, an int backing you can >=, or an "at least this deep" helper. Two
+    independent reasons, both of which look like missed optimisations:
+
+      1. The difficulty ordering inverts with direction of travel. Outbound from
+         home it is suborbital < flyby < orbit < surface; arriving from outside
+         the system it is flyby < orbit < suborbital < surface, because
+         suborbital sits on the far side of orbital capture on the way down.
+      2. Deeper does not imply shallower. A direct-entry landing reaches the
+         surface without ever orbiting, so Surface must not satisfy an Orbit
+         requirement.
+
+    Every check asks whether the one entry it needs is present in the log's set.
+    Stock KSP does the same — ReturnFrom's independent HasEntry() tests. The
+    client mirrors this enum as MissionAchievement with the same warning.
+    """
+    SUBORBITAL = "suborbital"
+    FLYBY = "flyby"
+    ORBIT = "orbit"
+    SURFACE = "surface"
+
+    # StrEnum inherits str's lexicographic ordering, which would silently answer
+    # "is this deep enough?" with alphabetical nonsense. Make the question itself
+    # an error so the ban above is mechanical, not just documented.
+    def _no_order(self, other):
+        raise TypeError(
+            "Achievement is not an ordered scale — test set membership for the "
+            "exact entry you need (see the Achievement docstring).")
+
+    __lt__ = _no_order
+    __le__ = _no_order
+    __gt__ = _no_order
+    __ge__ = _no_order
 
 
 class BodyName(StrEnum):
@@ -1420,14 +1463,15 @@ _TOURIST_NAMES: tuple[str, ...] = (
 @dataclass(frozen=True)
 class TouristSpec:
     """One tourist on a TOURISM contract: a named passenger to deliver to a
-    destination situation and recover.  ``entry`` is a client FlightLog.EntryType;
-    every tourism objective is an orbit-and-return, so it is always "Orbit" (the
-    client also accepts "Suborbit", reserved for a future pre-orbit tourism
+    destination situation and recover.  ``entry`` is the ``Achievement`` their
+    flight log must record at the destination; every tourism objective is an
+    orbit-and-return, so it is always ``Achievement.ORBIT``
+    (``Achievement.SUBORBITAL`` is reserved for a future pre-orbit tourism
     option).  The capability model prices tourism as reaching the body's ORBIT and
     returning, so ``entry`` is client flavour only."""
     name: str
     female: bool
-    entry: str
+    entry: Achievement
 
 
 def generate_tourist_manifests(
@@ -1443,7 +1487,7 @@ def generate_tourist_manifests(
             continue
         names = rng.sample(_TOURIST_NAMES, TOURISM_CREW)
         out[b.name] = tuple(
-            TouristSpec(f"{nm} Kerman", rng.random() < 0.5, "Orbit")
+            TouristSpec(f"{nm} Kerman", rng.random() < 0.5, Achievement.ORBIT)
             for nm in names)
     return out
 
@@ -2102,6 +2146,42 @@ class MissionBuilder:
                 self._PT, depart_dv, planet.name, pc=pc, attitude=True,
             ))
 
+        # SOI-boundary interplanetary returns: from each non-home planet's SOI
+        # node direct to home.intercept.  This is the only edge leaving a
+        # planet's SOI in the return graph, and it is what makes SOI_RETURN
+        # (flyby-and-come-home) a reachable mission.
+        #
+        # Gravity-assist geometry is not modelled, so the flyby buys nothing:
+        # the craft leaves the SOI co-moving with the planet and pays the FULL
+        # heliocentric excess to get home, with no Oberth benefit (it is already
+        # outside the well).  For shallow wells that is deliberately more than
+        # the Oberth-combined low-orbit departure above — Duna ≈ 615 m/s here vs
+        # ≈ 511 m/s from low orbit — so a Duna-class SOI return can price a
+        # little above an aerobrake orbit return.  That is a conservative
+        # artifact of not modelling the assist, not an error.
+        #
+        # Home's parent is skipped, exactly like the low-orbit loop above: that
+        # hop never leaves the parent's system, so it is neither a heliocentric
+        # transfer nor priced like one.  It is registered in the moon-home branch
+        # below, next to its low-orbit sibling.
+        root = home
+        while root.parent is not None:
+            root = BODY_BY_NAME[root.parent]
+        for planet in self._planets():
+            if planet.name == hn or planet.name == BodyName.KERBOL:
+                continue
+            if home.parent is not None and planet.name == home.parent:
+                continue
+            # Departure v∞ AT THE PLANET for planet → home.  Hohmann is
+            # symmetric, so this equals the arrival v∞ at the planet coming from
+            # home's root — exactly what ``planet_transfer_dv`` returns in slot
+            # 1.  One source for the Hohmann math, never a second copy.
+            _, v_inf, pc = planet_transfer_dv(root, planet)
+            self._add_ret(self._edge(
+                f"{planet.name.lower()}_soi", f"{hnl}_intercept",
+                self._PT, v_inf, planet.name, pc=pc, attitude=True,
+            ))
+
         # Moons of home (planet-home case): low moon orbit → home reentry
         # intercept.  This is a SINGLE energy-preserving ejection burn, NOT
         # escape-then-separately-lower-Pe: ``dvLI`` already encodes the Oberth
@@ -2121,6 +2201,27 @@ class MissionBuilder:
         # descending-to-parent never does.)
         if home.parent is None:
             for moon in self._moons_of(hn):
+                # Home-moon SOI → home reentry intercept.  The moon's own
+                # ``soi → parent.low orbit`` exit edge dead-ends here (nothing
+                # in the RETURN graph leaves home's low orbit), so without this
+                # a home moon has no SOI_RETURN path at all.
+                #
+                # Priced as a plain periapsis-lowering burn, NOT ``dvLI``:
+                # outside the moon's well you are co-moving with it on a
+                # near-circular parent orbit, and dvLI's Oberth ejection bonus
+                # was already spent on the escape edge that put you there.  The
+                # moon's periapsis radius is the worst case (fastest point of an
+                # eccentric orbit ⇒ largest burn) and matches the radius
+                # ``orbit_reach_dv`` charges for the same parent-frame transfer.
+                r_moon = moon.parent_periapsis_km * 1000.0
+                if r_moon > 0.0:
+                    self._add_ret(self._edge(
+                        f"{moon.name.lower()}_soi", f"{hnl}_intercept",
+                        self._PV,
+                        home.transfer_circular_to_ellipse_dv(
+                            r_moon, home.lo_radius_m, r_moon),
+                        moon.name, attitude=True,
+                    ))
                 if moon.dv.dvLI is None:
                     continue
                 self._add_ret(self._edge(
@@ -2143,6 +2244,25 @@ class MissionBuilder:
                     self._PV, tli_home, home.parent,
                     pc=home.dv.dvPlaneChange, attitude=True,
                 ))
+            # …and parent.SOI → home.intercept, so the parent has an SOI_RETURN.
+            # PURE_VACUUM, not PLANET_TRANSFER: this hop never leaves the
+            # parent's system, and the nav-requirement derivation keys on the
+            # PLANET_TRANSFER edge type to mean "interplanetary" (see
+            # ``mission_logic_needs`` and its tripwire test).
+            #
+            # Only the plane change is charged: falling from the parent's SOI
+            # boundary back down to the home moon's orbit is free, and the
+            # outbound leg to that SOI overcharges by far more (it routes
+            # surface → moon SOI → parent low orbit → parent SOI, paying the
+            # parent's full low-orbit escape on top of the moon's).  Plane
+            # change is the home moon's own inclination, matching the low-orbit
+            # sibling edge above — the parent's heliocentric figure is
+            # meaningless here.
+            self._add_ret(self._edge(
+                f"{home.parent.lower()}_soi", f"{hnl}_intercept",
+                self._PV, 0.0, home.parent,
+                pc=home.dv.dvPlaneChange, attitude=True,
+            ))
 
         # Foreign moons (parent != home; for moon-home, this includes home's
         # own siblings): moon.low orbit → parent.low orbit combined escape.  Lets return
@@ -2281,9 +2401,22 @@ class MissionBuilder:
         """Profiles for the home body itself.
 
         Home gets the canonical short paths: ORBIT = ascent only; ESCAPE =
-        ascent + SOI escape; LAND / RETURN = ascent + deorbit (matches the
-        existing "go up and come back" semantic).  FLAG_PLANT and
-        SAMPLE_RETURN stay empty (the Kerbal walks out from the launchpad).
+        ascent + SOI escape; LAND / ORBIT_RETURN = ascent + deorbit.
+
+        Home's return tiers are the inverse of every other body's: the surface
+        is where you start, so RETURN (surface round trip) is trivially true —
+        walk out at the pad and recover — and it is ORBIT_RETURN that carries
+        the "go up and come back" flight.  Trivial tiers are registered as ONE
+        empty alternative (``_add(hn, mt, [])`` ⇒ ``[[]]``), never as zero
+        alternatives: downstream, one empty alternative reads as trivially
+        achievable while an entry holding no alternatives reads as infeasible.
+
+        SOI_RETURN is deliberately NOT registered at home: "leave your home SOI
+        and come back" is hard to explain to players, so the location is
+        ``home_excluded`` and the contract side keeps it off home too.
+
+        FLAG_PLANT and SAMPLE_RETURN are likewise trivial (the Kerbal walks out
+        from the launchpad).
         """
         hn = home.name
         hnl = hn.lower()
@@ -2311,7 +2444,6 @@ class MissionBuilder:
             if deorbit is not None:
                 land_profile = ascent + [deorbit]
                 self._add(hn, MissionType.LAND, land_profile)
-                self._add(hn, MissionType.RETURN, land_profile)
                 # ORBIT_RETURN — reach home orbit and come back down. Same
                 # ascent+deorbit trajectory as LAND (no rendezvous phasing).
                 self._add(hn, MissionType.ORBIT_RETURN, land_profile)
@@ -2320,9 +2452,10 @@ class MissionBuilder:
                 phasing = self.make_phasing_edge(hn, self._RESCUE_RENDEZVOUS_DV)
                 self._add(hn, MissionType.RESCUE, ascent + [phasing, deorbit])
 
-        # FLAG_PLANT and SAMPLE_RETURN: walk out from launchpad (Kerbal EVA),
-        # no rocket required.  See user note in CLAUDE.md about Kerbin
-        # SAMPLE_RETURN: this must stay empty.
+        # RETURN / FLAG_PLANT / SAMPLE_RETURN at home: walk out from the
+        # launchpad (Kerbal EVA) and recover — no rocket required.  See user
+        # note in CLAUDE.md about Kerbin SAMPLE_RETURN: this must stay empty.
+        self._add(hn, MissionType.RETURN, [])
         self._add(hn, MissionType.FLAG_PLANT, [])
         self._add(hn, MissionType.SAMPLE_RETURN, [])
 
@@ -2390,6 +2523,19 @@ class MissionBuilder:
                 # Destination bodies only — the home body is excluded from
                 # surface rescue (matches stock RecoverAsset).
                 self._add(bn, MissionType.SURFACE_RESCUE, *combos)
+
+        # SOI_RETURN — flyby-and-come-home: the same outbound-×-return
+        # cartesian product as RETURN, but the turn-around point is the SOI
+        # node, so nothing is captured into and nothing is landed on.  The
+        # outbound half is exactly ESCAPE's path set.
+        soi_return_alts = self._find_return_paths(target_soi, home_surf)
+        if escape_paths and soi_return_alts:
+            soi_combos = [out + ret
+                          for out in escape_paths
+                          for ret in soi_return_alts]
+            soi_combos.sort(key=lambda p: sum(e.base_dv for e in p))
+            self._add(bn, MissionType.SOI_RETURN,
+                      *soi_combos[:self._MAX_PROFILE_ALTS])
 
         # RESCUE — reach the target's orbit, rendezvous, bring the stranded
         # Kerbal home. The seeded rescue-orbit radius cost is added in
@@ -2470,6 +2616,10 @@ class MissionBuilder:
            (auto-derived from LAND above) and EVA-in-Orbit (shares the ORBIT
            profile via its ``mission_type``).  Missing entries would cause
            silent KeyError in rule-evaluation, so we surface them eagerly.
+           ``get_body_events`` is home-agnostic, so a ``home_excluded`` event
+           is skipped on the home body — this world never emits it, and the
+           builder deliberately registers no profile for it (SOI Return at
+           home).  Non-home bodies still need one.
         """
         # (1) ESCAPE coverage — intrinsic to the mission graph.
         for (body_name, mission_type) in list(self._profiles):
@@ -2489,6 +2639,8 @@ class MissionBuilder:
                 event = EVENT_BY_NAME[event_name]
                 if event.mission_type == MissionType.FLAG_PLANT:
                     continue  # derived from LAND in _build_profiles
+                if event.home_excluded and body.name == self.home:
+                    continue  # never emitted here, so no profile is required
                 key = (body.name, event.mission_type)
                 if key not in self._profiles:
                     raise AssertionError(

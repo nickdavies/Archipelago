@@ -3553,7 +3553,8 @@ def _compute_tech_tier_signatures_rank(
     """
     from .capability import compute_capability_from_items
     from .locations import TechTreeLocation, effective_tech_slots_per_node
-    from .rules import bankable_science, effective_science_safety
+    from .rules import (
+        SCIENCE_ACCESS_EVENTS, bankable_science, effective_science_safety)
     from .tech_tree import TECH_NODES, TIER_TO_BAND, cumulative_tier_cost
 
     difficulty_idx = world.options.difficulty.value
@@ -3571,17 +3572,18 @@ def _compute_tech_tier_signatures_rank(
     # places — not what the rank ceiling would *abstractly* admit.
     sphere_science: list[tuple[SphereBoundary, float]] = []
     from .items import PROGRESSIVE_SCIENCE_INSTRUMENT_NAME
-    from .locations import EventName as _EvN
     # Per-(body, event) cheap bracket: the reps of the FIRST sphere whose
-    # cumulative kit proves that body/event reachable.  bankable_science reads
-    # ORBIT/RETURN/CREWED_LANDING, and the per-sphere ``cap`` is already computed
-    # here for the science sum — so recording the first-true sphere's reps costs
-    # nothing and lets the runtime science rule use a cheap ``has_all(reps)``
-    # instead of a live ``get_capability``.  Derived FROM this funding pass, so
-    # the runtime measure stays consistent with tier placement by construction
-    # (bracket-true at sphere s ⟺ this pass's cap-access at s — access is
-    # monotonic along the chain).
-    _sci_events = (_EvN.ORBIT, _EvN.RETURN, _EvN.LANDING, _EvN.CREWED_LANDING)
+    # cumulative kit proves that body/event reachable.  The events are exactly
+    # the ones the two science sums read (``rules.SCIENCE_ACCESS_EVENTS`` — note
+    # the home body's recover tier is ORBIT_RETURN, not RETURN), and the
+    # per-sphere ``cap`` is already computed here for the science sum — so
+    # recording the first-true sphere's reps costs nothing and lets the runtime
+    # science rule use a cheap ``has_all(reps)`` instead of a live
+    # ``get_capability``.  Derived FROM this funding pass, so the runtime measure
+    # stays consistent with tier placement by construction (bracket-true at
+    # sphere s ⟺ this pass's cap-access at s — access is monotonic along the
+    # chain).
+    _sci_events = SCIENCE_ACCESS_EVENTS
     science_brackets: dict[tuple, frozenset[str]] = {}
     # Per-(body,event) science bracket from the ladder ORDERING, not a per-sphere
     # physics re-solve.  The bumper already placed every mission; the first sphere
@@ -3709,6 +3711,23 @@ _GRAPH_WALK_EVENT_ORDER: dict[str, int] = {
     EventName.FLAG_PLANT.value:     2,
     EventName.RETURN.value:         3,
     EventName.SAMPLE_RETURN.value:  4,
+}
+
+# The two shallow return tiers BRANCH OFF the walk instead of joining it: SOI
+# Return is "the flyby, plus get home", Orbit Return is "the orbit, plus get
+# home".  They are deliberately absent from _GRAPH_WALK_EVENT_ORDER above,
+# because a tier in the chain hands its kit to every later tier at that body —
+# measured, inserting SOI Return before Orbit pushes a heat-shield rank onto
+# Orbit / Orbital Probe / EVA in Orbit / Landing / Crewed Landing / Flag Plant
+# across 15-22 bodies per home, gear none of those one-way missions carry.
+# Instead the fallback below seeds each from the tier it extends: their real
+# requirement is that kit plus home-reentry gear, and a deep-body flyby-and-
+# return does not converge from an EMPTY kit at all (the bumper bails to the
+# full-admit rescue and the location ends up with no signature — the bug-109
+# unbracketable shape, which leaves raw capability physics running during fill).
+_RETURN_TIER_PRIOR_EVENT: dict[EventName, EventName] = {
+    EventName.SOI_RETURN: EventName.FLYBY,
+    EventName.ORBIT_RETURN: EventName.ORBIT,
 }
 
 
@@ -3857,9 +3876,21 @@ def _build_ladder_graph_walk(
             # A mission location whose canonical (body, event) walk produced no
             # result (infeasible under any kit it was offered) — fall back to a
             # from-empty intrinsic so the location still gets a signature.
+            # A shallow return tier is seeded from the tier it extends instead
+            # (see _RETURN_TIER_PRIOR_EVENT): its requirement IS that kit plus
+            # home-reentry gear, so from-empty is both slower and, at a deep
+            # body, unsolvable.
+            prior_sig, prior_reps = Signature.empty(), frozenset()
+            prior_event = _RETURN_TIER_PRIOR_EVENT.get(info.event)
+            if prior_event is not None:
+                prior_info = descriptor_for.get((info.body, prior_event.value))
+                prior_cum = (mission_cumulative.get(_mission_key(prior_info))
+                             if prior_info is not None else None)
+                if prior_cum is not None:
+                    prior_sig, prior_reps = prior_cum
             rocket = minimal_ranks_for(
-                info, Signature.empty(), ctx,
-                prior_reps=frozenset(), **_bump_kw,
+                info, prior_sig, ctx,
+                prior_reps=prior_reps, **_bump_kw,
             )
             if rocket is None and info.spec is not None:
                 # A contract keys on contract_id, so it misses the body-graph

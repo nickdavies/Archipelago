@@ -12,8 +12,8 @@ import random as _random
 
 from worlds.ksp1 import contracts as C
 from worlds.ksp1.bodies import (
-    ALL_BODIES, BodyName, BODY_BY_NAME, MissionBuilder, DIFFICULTY_PROFILES,
-    GameplayDifficulty, MissionType,
+    ALL_BODIES, Achievement, BodyName, BODY_BY_NAME, MissionBuilder,
+    DIFFICULTY_PROFILES, GameplayDifficulty, MissionType,
     generate_random_orbit_params,
     generate_rescue_orbit_params, generate_surface_rescue_site_lats,
     generate_survey_site_lats,
@@ -619,6 +619,42 @@ class TestParamWireFormat(unittest.TestCase):
         self.assertEqual(C.CollectScienceParam(BodyName.MUN, "space").to_json(),
                          {"kind": "collect_science", "body": "Mun",
                           "location": "space"})
+        self.assertEqual(C.CollectScienceParam(BodyName.MUN, "any").to_json(),
+                         {"kind": "collect_science", "body": "Mun",
+                          "location": "any"})
+
+    def test_returned_from(self):
+        for ach, wire in ((Achievement.SURFACE, "surface"),
+                          (Achievement.ORBIT, "orbit"),
+                          (Achievement.FLYBY, "flyby")):
+            self.assertEqual(
+                C.ReturnedFromParam(BodyName.DUNA, ach).to_json(),
+                {"kind": "returned_from", "body": "Duna", "achievement": wire})
+
+
+class TestAchievementVocabulary(unittest.TestCase):
+    """The shared flight-log vocabulary. It is deliberately NOT an ordered
+    scale — the difficulty ordering inverts with direction of travel and deeper
+    does not imply shallower (see the Achievement docstring)."""
+
+    def test_wire_values(self):
+        self.assertEqual(
+            [str(a) for a in Achievement],
+            ["suborbital", "flyby", "orbit", "surface"])
+
+    def test_has_no_ordering(self):
+        for a, b in ((Achievement.SURFACE, Achievement.ORBIT),
+                     (Achievement.FLYBY, Achievement.SUBORBITAL)):
+            for op in ("__lt__", "__le__", "__gt__", "__ge__"):
+                with self.subTest(op=op, a=a.name, b=b.name):
+                    with self.assertRaises(TypeError):
+                        getattr(a, op)(b)
+
+    def test_equality_still_works(self):
+        # Set membership is the ONLY question the vocabulary answers.
+        log = {Achievement.FLYBY, Achievement.SURFACE}
+        self.assertIn(Achievement.SURFACE, log)
+        self.assertNotIn(Achievement.ORBIT, log)
 
 
 class TestStockBackedContractTypes(KSP1TestBase):
@@ -833,7 +869,9 @@ class TestTourism(unittest.TestCase):
             j = p.to_json()
             self.assertEqual(j["kind"], "tourist")
             self.assertEqual(j["body"], "Mun")
-            self.assertIn(j["entry"], ("Suborbit", "Orbit"))
+            # The shared achievement vocabulary, on the wire as its plain value.
+            self.assertEqual(j["entry"], "orbit")
+            self.assertIsInstance(j["entry"], str)
             self.assertIsInstance(j["female"], bool)
 
     def test_offhome_entry_is_orbit(self):
@@ -841,7 +879,8 @@ class TestTourism(unittest.TestCase):
         for body, manifest in MB.tourist_manifests.items():
             if body != BodyName.KERBIN:
                 for t in manifest:
-                    self.assertEqual(t.entry, "Orbit", f"{body} suborbit tourist")
+                    self.assertIs(t.entry, Achievement.ORBIT,
+                                  f"{body} suborbit tourist")
 
     def test_missing_manifest_raises(self):
         mb = MissionBuilder(home=BodyName.KERBIN)
@@ -887,6 +926,158 @@ class TestTourismGeneration(KSP1TestBase):
         state = self.multiworld.get_all_state(False)
         for loc in locs:
             self.assertTrue(loc.can_reach(state), f"{loc.name} unreachable")
+
+
+class TestReturnTiers(unittest.TestCase):
+    """The three return tiers — SOI Return (flyby), Orbit Return (capture) and
+    Return (surface). Each asks for ONE flight-log entry plus getting home; the
+    two shallower tiers are ordinary pacing contracts, the surface tier stays
+    goal-only."""
+
+    SOI = C.CONTRACT_TYPE_DEFS[C.ContractType.SOI_RETURN]
+    ORB = C.CONTRACT_TYPE_DEFS[C.ContractType.ORBIT_RETURN]
+    SURF = C.CONTRACT_TYPE_DEFS[C.ContractType.RETURN]
+
+    def test_parameters_are_one_returned_from_each(self):
+        for td, wire in ((self.SURF, "surface"), (self.ORB, "orbit"),
+                         (self.SOI, "flyby")):
+            with self.subTest(contract_type=td.contract_type.name):
+                self.assertEqual(
+                    [p.to_json() for p in td.build_parameters(BodyName.DUNA, MB)],
+                    [{"kind": "returned_from", "body": "Duna",
+                      "achievement": wire}])
+
+    def test_shallow_tiers_are_non_goal_surface_is_goal_only(self):
+        self.assertIn(C.ContractType.SOI_RETURN, C.NON_GOAL_TYPES)
+        self.assertIn(C.ContractType.ORBIT_RETURN, C.NON_GOAL_TYPES)
+        self.assertNotIn(C.ContractType.RETURN, C.NON_GOAL_TYPES)
+        # The goal mapping stays on the surface tier alone.
+        self.assertEqual(C._GOAL_MISSION_TO_CONTRACT[MissionType.RETURN],
+                         C.ContractType.RETURN)
+        self.assertNotIn(MissionType.SOI_RETURN, C._GOAL_MISSION_TO_CONTRACT)
+        self.assertNotIn(MissionType.ORBIT_RETURN, C._GOAL_MISSION_TO_CONTRACT)
+
+    def test_home_safety(self):
+        # "Leave your home SOI and come back" is banned; orbit-and-back at home
+        # is good early content (same profile TOURISM already flies there).
+        self.assertFalse(self.SOI.home_safe)
+        self.assertTrue(self.ORB.home_safe)
+
+    def test_home_candidacy_matches_the_profile_registry(self):
+        # bodies.py registers no home SOI_RETURN profile, so the candidate loop's
+        # home_safe skip and the mission graph must agree — otherwise generation
+        # would offer a contract nothing can fly.
+        home = MB.home
+        self.assertEqual(MB.profiles_for(home, MissionType.SOI_RETURN), [])
+        self.assertTrue(MB.profiles_for(home, MissionType.ORBIT_RETURN))
+        # The candidate loop's predicate: home is offered only to home_safe types.
+        self.assertFalse(self.SOI.home_safe and
+                         self.SOI.body_compatible(BODY_BY_NAME[home]))
+        self.assertTrue(self.ORB.home_safe and
+                        self.ORB.body_compatible(BODY_BY_NAME[home]))
+
+    def test_both_target_jool_not_the_star(self):
+        # Orbital tiers, so body_compatible admits the gas giant via is_orbitable.
+        for td in (self.SOI, self.ORB):
+            with self.subTest(contract_type=td.contract_type.name):
+                self.assertFalse(td.requires_landing())
+                self.assertTrue(td.body_compatible(BODY_BY_NAME[BodyName.JOOL]))
+                self.assertFalse(td.body_compatible(BODY_BY_NAME[BodyName.KERBOL]))
+        # The surface tier still needs a landable body.
+        self.assertTrue(self.SURF.requires_landing())
+        self.assertFalse(self.SURF.body_compatible(BODY_BY_NAME[BodyName.JOOL]))
+
+    def test_feasible_on_mun_with_full_kit(self):
+        for td in (self.SOI, self.ORB):
+            with self.subTest(contract_type=td.contract_type.name):
+                r = C.evaluate_contract(
+                    C.ContractSpec(td.contract_type, BodyName.MUN),
+                    FULL, DIFF, MB)
+                self.assertIsNotNone(r)
+                self.assertTrue(
+                    r.feasible,
+                    f"{td.contract_type} to Mun infeasible on the full kit")
+
+    def test_soi_return_no_costlier_than_orbit_return(self):
+        # A flyby-and-back never captures, so it can only be cheaper than the
+        # same body's orbit-and-back.
+        soi = C.evaluate_contract(
+            C.ContractSpec(C.ContractType.SOI_RETURN, BodyName.MUN),
+            FULL, DIFF, MB)
+        orb = C.evaluate_contract(
+            C.ContractSpec(C.ContractType.ORBIT_RETURN, BodyName.MUN),
+            FULL, DIFF, MB)
+        self.assertLessEqual(soi.launch_mass, orb.launch_mass)
+
+    def test_routed_through_the_feasibility_filter(self):
+        # _migrated_event_map is what points the generator's feasibility filter
+        # at each tier's mission-location table rows.
+        from worlds.ksp1.rules import _migrated_event_map
+        from worlds.ksp1.locations import EventName
+        m = _migrated_event_map()
+        self.assertEqual(m[C.ContractType.SOI_RETURN], EventName.SOI_RETURN)
+        self.assertEqual(m[C.ContractType.ORBIT_RETURN], EventName.ORBIT_RETURN)
+        self.assertEqual(m[C.ContractType.RETURN], EventName.RETURN)
+
+
+class TestReturnTierGeneration(KSP1TestBase):
+    """Both shallow return tiers must generate (weighted to dominate) and stay
+    reachable."""
+    options = {
+        "contract_type_weights": {"soi_return": 1, "orbit_return": 1},
+        "contracts_available": 40,
+        "allow_missions_harder_than_goal": True,
+    }
+    needs_real_pre_fill = True
+
+    def test_return_tiers_generate_and_are_reachable(self):
+        locs = [loc for loc in self.multiworld.get_locations(self.player)
+                if loc.name.startswith(("Contract: SOI Return",
+                                        "Contract: Orbit Return"))]
+        self.assertTrue(locs, "no return-tier contract generated")
+        state = self.multiworld.get_all_state(False)
+        for loc in locs:
+            self.assertTrue(loc.can_reach(state), f"{loc.name} unreachable")
+
+    def test_no_home_soi_return_contract(self):
+        home = self.world.mission_builder.home
+        self.assertEqual(
+            [s for s in self.world.contract_specs
+             if s.contract_type == C.ContractType.SOI_RETURN and s.body == home],
+            [])
+
+
+class TestTransmitScienceParameters(unittest.TestCase):
+    """TRANSMIT_SCIENCE completes on a recovery OR a transmission, so it emits a
+    single collect_science objective and no antenna objective."""
+
+    TD = C.CONTRACT_TYPE_DEFS[C.ContractType.TRANSMIT_SCIENCE]
+
+    def test_any_science_off_home(self):
+        self.assertEqual(
+            [p.to_json() for p in self.TD.build_parameters(BodyName.DUNA, MB)],
+            [{"kind": "collect_science", "body": "Duna", "location": "any"}])
+
+    def test_home_stays_space_only(self):
+        # "any" at home would be completed by a goo canister recovered on the
+        # launchpad — the home contract must stay a real trip to space.
+        self.assertEqual(
+            [p.to_json() for p in self.TD.build_parameters(MB.home, MB)],
+            [{"kind": "collect_science", "body": "Kerbin", "location": "space"}])
+
+    def test_relay_is_logic_only(self):
+        # Still a required category (the remoteness cap and the chain-guaranteed
+        # set both key on it) but never an in-game objective.
+        self.assertIn("relay", self.TD.required_categories)
+        self.assertIn("relay", self.TD.logic_only_categories)
+        for body in (MB.home, BodyName.DUNA):
+            kinds = {p.to_json()["kind"]
+                     for p in self.TD.build_parameters(body, MB)}
+            self.assertEqual(kinds, {"collect_science"})
+
+    def test_needs_mission_builder(self):
+        with self.assertRaises(ValueError):
+            self.TD.build_parameters(BodyName.DUNA)
 
 
 class TestStarNotAMissionDestination(unittest.TestCase):

@@ -172,6 +172,32 @@ def _make_goal_event_rule(
 # Science heuristic helpers
 # ---------------------------------------------------------------------------
 
+def science_recover_event(body: BodyName, home: BodyName) -> EventName:
+    """The mission event that proves science from ``body`` can be physically
+    brought home and banked (as opposed to transmitted).
+
+    Off home that is ``RETURN`` — the surface round trip.  AT home ``RETURN`` is
+    the trivial tier (walk out at the pad and recover), which is true from an
+    empty inventory and would credit home *orbital* science before the player
+    can deorbit anything.  Home therefore reads ``ORBIT_RETURN``, the
+    ascent+deorbit tier that carries exactly the profile home ``RETURN`` used
+    to, so the science budget is unchanged.
+
+    Both science sums (the funding pass's ``bankable_science`` and the fill
+    rule's ``_cheap_bankable_science``) go through here so they cannot drift.
+    """
+    return EventName.ORBIT_RETURN if body == home else EventName.RETURN
+
+
+#: Per-(body, event) access the two science sums read.  The sphere ladder's
+#: funding pass builds its brackets from exactly this set, so every event either
+#: sum can ask for is guaranteed present in ``world._science_body_event_reps``.
+SCIENCE_ACCESS_EVENTS: tuple[EventName, ...] = (
+    EventName.ORBIT, EventName.RETURN, EventName.ORBIT_RETURN,
+    EventName.LANDING, EventName.CREWED_LANDING,
+)
+
+
 def bankable_science(cap, psi_tier: int, home: BodyName,
                      access=None, skip_bodies: frozenset = frozenset()) -> float:
     """Per-body science contributions, gated on the player's ability to
@@ -219,16 +245,17 @@ def bankable_science(cap, psi_tier: int, home: BodyName,
     for body in ALL_BODIES:
         if body.name in skip_bodies:
             continue
+        recover_event = science_recover_event(body.name, home)
         if access is not None:
             acc = access[body.name]
             a_orbit = acc[EventName.ORBIT]
-            a_return = acc[EventName.RETURN]
+            a_return = acc[recover_event]
             a_land = acc[EventName.LANDING]
             a_crewed = acc[EventName.CREWED_LANDING]
         else:
             body_cap = cap.bodies[body.name]
             a_orbit = body_cap.access[EventName.ORBIT]
-            a_return = body_cap.access[EventName.RETURN]
+            a_return = body_cap.access[recover_event]
             a_land = body_cap.access[EventName.LANDING]
             a_crewed = body_cap.access[EventName.CREWED_LANDING]
         if not a_orbit:
@@ -332,8 +359,9 @@ def _cheap_bankable_science(
         if body.name in gated_hidden and not _discovered(state, player, body.name,
                                                           gated_hidden):
             continue
-        ret = reps_map.get((body.name, EventName.RETURN))
-        ret_nav = counted_map.get((body.name, EventName.RETURN.value), ())
+        recover_event = science_recover_event(body.name, home)
+        ret = reps_map.get((body.name, recover_event))
+        ret_nav = counted_map.get((body.name, recover_event.value), ())
         can_recover = (ret is not None and state.has_all(ret, player)
                        and all(state.has(kind, player, lvl)
                                for kind, lvl in ret_nav))
@@ -641,6 +669,8 @@ def _migrated_event_map() -> dict:
         ContractType.SAMPLE_RETURN: EventName.SAMPLE_RETURN,
         ContractType.ORBIT: EventName.ORBIT,
         ContractType.RETURN: EventName.RETURN,
+        ContractType.SOI_RETURN: EventName.SOI_RETURN,
+        ContractType.ORBIT_RETURN: EventName.ORBIT_RETURN,
         ContractType.FLYBY: EventName.FLYBY,
     }
 
@@ -956,7 +986,8 @@ def _ban_early_science_windfalls(world: KSP1World, player: int, difficulty: int)
     for event in (EventName.ORBIT, EventName.EVA_IN_ORBIT,
                   EventName.ORBITAL_PROBE, EventName.LANDING,
                   EventName.CREWED_LANDING, EventName.FLAG_PLANT,
-                  EventName.RETURN, EventName.SAMPLE_RETURN):
+                  EventName.ORBIT_RETURN, EventName.RETURN,
+                  EventName.SAMPLE_RETURN):
         for loc in event_locations(home, event):
             add_item_rule(world.get_location(str(loc)), early_ban_rule)
 

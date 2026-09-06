@@ -17,8 +17,8 @@ from .data.feasibility import (
     MODEL_INFEASIBLE_BASE, MODEL_INFEASIBLE_DELTAS, BASE_RELEVANT_PACKS,
 )
 from .bodies import (
-    ALL_BODIES, BodyName, EdgeType, MissionBuilder, MissionType, RandomOrbitParams,
-    TouristSpec, effective_physics_profile_name,
+    ALL_BODIES, Achievement, BodyName, EdgeType, MissionBuilder, MissionType,
+    RandomOrbitParams, TouristSpec, effective_physics_profile_name,
     effective_gameplay_difficulty,
     generate_random_orbit_params, generate_rescue_orbit_params,
     generate_surface_rescue_site_lats, generate_survey_site_lats,
@@ -1046,7 +1046,7 @@ class KSP1World(World):
         # exact tourists; the client also gets each via the tourist parameters.
         d["tourist_manifests"] = {
             str(body): [
-                {"name": t.name, "female": t.female, "entry": t.entry}
+                {"name": t.name, "female": t.female, "entry": str(t.entry)}
                 for t in manifest
             ]
             for body, manifest in self.mission_builder.tourist_manifests.items()
@@ -1204,7 +1204,8 @@ class KSP1World(World):
         if tourists:
             self._ut_tourist_manifests = {
                 BodyName(body): tuple(
-                    TouristSpec(t["name"], bool(t["female"]), t["entry"])
+                    TouristSpec(t["name"], bool(t["female"]),
+                                Achievement(t["entry"]))
                     for t in manifest
                 )
                 for body, manifest in tourists.items()

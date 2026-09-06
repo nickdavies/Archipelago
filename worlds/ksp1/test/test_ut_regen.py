@@ -217,6 +217,26 @@ class TestUTRegen(unittest.TestCase):
         self.assertEqual(original_sd["random_orbit_params"],
                          world2.fill_slot_data()["random_orbit_params"])
 
+    def test_tourist_manifests_round_trip(self):
+        """TOURISM manifests reconstruct identically after regen, with ``entry``
+        typed back into the shared Achievement vocabulary — the wire carries the
+        plain value, so a raw string here would silently diverge from the
+        generator's typed manifest."""
+        from worlds.ksp1.bodies import Achievement
+        opts = {"contract_type_weights": {"tourism": 5, "orbit": 1}}
+        world1, world2, original_sd = self._regen_from_slot_data(seed=23, options=opts)
+        self.assertEqual(world1.mission_builder.tourist_manifests,
+                         world2.mission_builder.tourist_manifests)
+        self.assertEqual(original_sd["tourist_manifests"],
+                         world2.fill_slot_data()["tourist_manifests"])
+        for manifest in world2.mission_builder.tourist_manifests.values():
+            for t in manifest:
+                self.assertIs(t.entry, Achievement.ORBIT)
+        for rows in original_sd["tourist_manifests"].values():
+            for row in rows:
+                self.assertEqual(row["entry"], "orbit")
+                self.assertIs(type(row["entry"]), str)
+
     def test_contracts_and_science_in_logic_under_ut(self):
         """Under UT (no pre_fill) contract locations and tech nodes must NOT be
         permanently out of logic.

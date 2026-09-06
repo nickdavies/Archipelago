@@ -10,18 +10,18 @@ Four location sources (total ~524 max, filtered by difficulty):
      Earned by performing science experiments at KSC buildings/grounds.
      Requires EVA (capsule) or rover (probe + wheels + power + instrument).
 
-  3. Mission Event Locations  (288 total)
-     11 home-body-specific + 1 body-agnostic (Splashdown) + 276 per-body
+  3. Mission Event Locations  (352 total)
+     11 home-body-specific + 1 body-agnostic (Splashdown) + 340 per-body
      event-scaled checks.  (Universe is home-agnostic; a seed emits fewer —
-     Unmanned Flyby is dropped for its own home body.)
+     Unmanned Flyby and SOI Return are dropped for its own home body.)
      Kerbol excluded (root body — can't escape/flyby, orbit infeasible).
      Eve Return/Sample Return exist but require all progression parts.
      Scale is by event difficulty, not body distance:
        Flyby/SOI Leave/Unmanned Flyby/Orbit/EVA in Orbit/Orbital Probe = 1 slot each,
-       Landing/Crewed Landing/Flag Plant = 2 slots each,
+       SOI Return/Orbit Return/Landing/Crewed Landing/Flag Plant = 2 slots each,
        Return/Sample Return = 3 slots each.
-     Per landable body: 6×1 + 3×2 + 2×3 = 18 locations.
-     Per non-landable body (Jool): 6×1 = 6 locations.
+     Per landable body: 6×1 + 5×2 + 2×3 = 22 locations.
+     Per non-landable body (Jool): 6×1 + 2×2 = 10 locations.
      Kerbol excluded entirely (root body).
 
   4. Tech Tree Locations  (124–248 by difficulty)
@@ -137,9 +137,11 @@ class EventName(StrEnum):
     FLYBY = "Flyby"
     SOI_LEAVE = "SOI Leave"
     UNMANNED_FLYBY = "Unmanned Flyby"
+    SOI_RETURN = "SOI Return"
     ORBIT = "Orbit"
     EVA_IN_ORBIT = "EVA in Orbit"
     ORBITAL_PROBE = "Orbital Probe"
+    ORBIT_RETURN = "Orbit Return"
     LANDING = "Landing"
     CREWED_LANDING = "Crewed Landing"
     FLAG_PLANT = "Flag Plant"
@@ -168,9 +170,14 @@ class EventDef:
     # Whether this event is NOT emitted for the seed's HOME body.  A *home*
     # flyby is the weird "returning from interplanetary and passing home"
     # special case; the probe-only UNMANNED_FLYBY variant skips it (home orbit
-    # is fine — that's a first-satellite check).  Applied event-side in the
-    # LocationBuilder emission filter because the ``unachievable`` set is keyed
-    # by (body, mission_type) and can't single out one event of a shared type.
+    # is fine — that's a first-satellite check).  SOI_RETURN is excluded for the
+    # same reason: "leave your home SOI and come back" is hard to explain to
+    # players and reads as a chore, and home's return tiers are inverted anyway
+    # (its surface is the starting point).  If the location budget ever needs
+    # those slots back, Kerbol is the reserve source — see ``get_body_events``.
+    # Applied event-side in the LocationBuilder emission filter because the
+    # ``unachievable`` set is keyed by (body, mission_type) and can't single out
+    # one event of a shared type.
     home_excluded: bool = False
 
 ALL_EVENTS: tuple[EventDef, ...] = (
@@ -180,6 +187,10 @@ ALL_EVENTS: tuple[EventDef, ...] = (
     EventDef(EventName.FLYBY,          1, MissionType.ESCAPE,        None,  False),
     EventDef(EventName.SOI_LEAVE,      1, MissionType.ESCAPE,        None,  False),
     EventDef(EventName.UNMANNED_FLYBY, 1, MissionType.ESCAPE,        False, False, home_excluded=True),
+    # The three return tiers.  requires_landing=False on the two shallow ones so
+    # Jool (no surface) still gets a flyby-return and a capture-return check.
+    EventDef(EventName.SOI_RETURN,     2, MissionType.SOI_RETURN,    None,  False, home_excluded=True),
+    EventDef(EventName.ORBIT_RETURN,   2, MissionType.ORBIT_RETURN,  None,  False),
     EventDef(EventName.LANDING,        2, MissionType.LAND,          None,  True),
     EventDef(EventName.CREWED_LANDING, 2, MissionType.LAND,          True,  True),
     EventDef(EventName.FLAG_PLANT,     2, MissionType.FLAG_PLANT,    True,  True,  requires_eva=True),
@@ -546,9 +557,9 @@ class LocationBuilder:
                 for event in get_body_events(body)
                 for slot in range(1, EVENT_BY_NAME[event].scale + 1)
             ]
-            # 15 landable × 18 + 1 non-landable (Jool) × 6 = 276 (Kerbol excluded)
-            assert len(locs) == 276, (
-                f"Expected 276 per-body mission locations, got {len(locs)}"
+            # 15 landable × 22 + 1 non-landable (Jool) × 10 = 340 (Kerbol excluded)
+            assert len(locs) == 340, (
+                f"Expected 340 per-body mission locations, got {len(locs)}"
             )
             cls._all_missions = tuple(locs)
         return cls._all_missions
@@ -590,13 +601,18 @@ class LocationBuilder:
 _KERBIN_HOME_LOCATIONS: tuple[HomeLocationDef, ...] = LocationBuilder._build_for(BodyName.KERBIN)
 
 # ---------------------------------------------------------------------------
-# Per-body mission location names (276-location universe, generated from body data)
+# Per-body mission location names (340-location universe, generated from body data)
 # ---------------------------------------------------------------------------
 
 def get_body_events(body) -> tuple[EventName, ...]:
     """Return the AP event list for a body."""
     if body.name == BodyName.KERBOL:
-        return ()  # root body — can't flyby/escape, orbit is infeasible
+        # Root body — can't flyby/escape, orbit is infeasible.  Kerbol is also
+        # the reserve source of extra mission locations: it is excluded wholesale
+        # here AND in ``MissionBuilder._build_destination_profiles``, so if the
+        # location budget ever runs short, ``Kerbol Orbit Return`` /
+        # ``Kerbol SOI Return`` can be turned on by relaxing both of those.
+        return ()
     if body.can_land:
         return tuple(e.name for e in ALL_EVENTS)
     return tuple(e.name for e in ALL_EVENTS if not e.requires_landing)

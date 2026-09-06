@@ -768,7 +768,12 @@ class TestBankableScienceGate(unittest.TestCase):
 
     @staticmethod
     def _kerbin_only_cap(*, relay_tier: int = 0, return_access: bool = True):
-        """Cap where only Kerbin has orbit access (recover or not by flag)."""
+        """Cap where only Kerbin has orbit access (recover or not by flag).
+
+        Kerbin is the home body here, so the tier that proves "can bank science
+        from it" is ORBIT_RETURN (ascent + deorbit), not RETURN — home RETURN is
+        the trivial walk-out-at-the-pad tier.  See ``rules.science_recover_event``.
+        """
         cap = _make_zero_cap()
         cap.has_capsule = True
         cap.has_thermometer = True
@@ -776,7 +781,7 @@ class TestBankableScienceGate(unittest.TestCase):
         cap.relay_tier = relay_tier
         events = {EventName.ORBIT}
         if return_access:
-            events.add(EventName.RETURN)
+            events.add(EventName.ORBIT_RETURN)
             events.add(EventName.CREWED_LANDING)
         cap.bodies = _all_false_bodies()
         cap.bodies[BodyName.KERBIN] = _make_body_cap(events)
@@ -807,14 +812,17 @@ class TestBankableScienceGate(unittest.TestCase):
 
     def test_transmit_only_applies_discount(self):
         """Same body, same instruments, same crewed-landing access, but
-        differing RETURN access: transmit-only contribution = full × discount.
+        differing recover access: transmit-only contribution = full × discount.
+
+        The body under test is Kerbin from Kerbin home, so its recover tier is
+        ORBIT_RETURN (``rules.science_recover_event``) — home RETURN is trivial.
 
         Isolates the gate's recover-vs-transmit decision from the
         downstream ``crew_surface_val`` term in ``science_budget`` (which
-        depends on CREWED_LANDING, not RETURN).
+        depends on CREWED_LANDING, not the recover tier).
         """
         from worlds.ksp1.rules import bankable_science, _TRANSMIT_ONLY_DISCOUNT
-        # Recover: orbit + return + crewed-landing.
+        # Recover: orbit + orbit-return + crewed-landing.
         recover_cap = _make_zero_cap()
         recover_cap.has_capsule = True
         recover_cap.has_thermometer = True
@@ -822,7 +830,7 @@ class TestBankableScienceGate(unittest.TestCase):
         recover_cap.relay_tier = 0
         recover_cap.bodies = _all_false_bodies()
         recover_cap.bodies[BodyName.KERBIN] = _make_body_cap(
-            {EventName.ORBIT, EventName.RETURN, EventName.CREWED_LANDING}
+            {EventName.ORBIT, EventName.ORBIT_RETURN, EventName.CREWED_LANDING}
         )
         # Transmit-only: orbit + crewed-landing, but NO return path.  Relay 0
         # is enough — Kerbin sits at tier 0 from Kerbin home.
@@ -844,6 +852,47 @@ class TestBankableScienceGate(unittest.TestCase):
             msg=f"Transmit-only contribution ({transmit_val:.1f}) should equal "
                 f"recover ({recover_val:.1f}) × {_TRANSMIT_ONLY_DISCOUNT}.",
         )
+
+    def test_recover_tier_is_orbit_return_at_home_and_return_elsewhere(self):
+        """Pins ``rules.science_recover_event``'s split.
+
+        Home ``RETURN`` is trivially true (walk out at the pad), so it must NOT
+        count as "can bank science from home" — otherwise home ORBITAL science
+        is credited before the player can deorbit anything.  Off home, RETURN is
+        still the surface round trip and stays the recover tier.
+        """
+        from worlds.ksp1.rules import bankable_science, _TRANSMIT_ONLY_DISCOUNT
+
+        def kerbin_home_cap(body, events):
+            cap = _make_zero_cap()
+            cap.has_capsule = True
+            cap.has_thermometer = True
+            cap.has_barometer = True
+            cap.relay_tier = 0
+            cap.bodies = _all_false_bodies()
+            cap.bodies[body] = _make_body_cap(events)
+            return bankable_science(cap, psi_tier=0, home=BodyName.KERBIN)
+
+        # Home: RETURN alone is the trivial tier — must read as transmit-only.
+        home_return = kerbin_home_cap(
+            BodyName.KERBIN, {EventName.ORBIT, EventName.RETURN})
+        home_orbit_return = kerbin_home_cap(
+            BodyName.KERBIN, {EventName.ORBIT, EventName.ORBIT_RETURN})
+        self.assertAlmostEqual(
+            home_return, home_orbit_return * _TRANSMIT_ONLY_DISCOUNT, places=6,
+            msg="Home RETURN is trivial and must not grant recover credit; only "
+                "home ORBIT_RETURN (ascent + deorbit) may.")
+
+        # Mun (relay tier 0 from Kerbin, so transmit is available either way):
+        # RETURN grants full credit, ORBIT_RETURN does not.
+        mun_return = kerbin_home_cap(
+            BodyName.MUN, {EventName.ORBIT, EventName.RETURN})
+        mun_orbit_return = kerbin_home_cap(
+            BodyName.MUN, {EventName.ORBIT, EventName.ORBIT_RETURN})
+        self.assertAlmostEqual(
+            mun_orbit_return, mun_return * _TRANSMIT_ONLY_DISCOUNT, places=6,
+            msg="Off home the recover tier stays RETURN — ORBIT_RETURN must not "
+                "stand in for it.")
 
     def test_no_orbit_contributes_zero(self):
         """Body without orbit access never contributes regardless of other flags."""
