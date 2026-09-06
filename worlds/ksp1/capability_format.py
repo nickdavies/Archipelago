@@ -444,7 +444,12 @@ def _format_one_stage(
         # Real parallel build on this stage (not the old blanket flag).
         mode = "ASPARAGUS" if asparagus else "ONION"
         kind = "engine-boost" if stage.booster_engines > 0 else "drop-tank"
-        tags.append(f"{mode}: {stage.n_boosters} {kind} boosters")
+        tag = f"{mode}: {stage.n_boosters} {kind} boosters"
+        if not asparagus:
+            # Onion feeds the core through the radial decouplers themselves,
+            # which ship with crossfeed OFF; the player must switch it on.
+            tag += " (enable decoupler crossfeed)"
+        tags.append(tag)
     elif stage.engine_count > 1:
         tags.append(f"{stage.engine_count}-WAY")
     tag_str = f"  [{', '.join(tags)}]" if tags else ""

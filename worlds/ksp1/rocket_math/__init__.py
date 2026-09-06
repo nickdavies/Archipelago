@@ -551,13 +551,17 @@ def parallel_stage_dv(
     (bounded in practice by the radial-decoupler + fuel-line mass folded into
     ``booster_dry``).
 
-    ``onion`` (no crossfeed): every booster drains its own tank in step, so none
-    can drop until they are ALL empty -- the whole ring is one coarse drop after
-    ``n_boost*col_fuel`` is burnt, then the core.  Far less shedding, which is
-    why it only wins when fuel lines (asparagus) are unavailable.
+    ``onion`` (decoupler crossfeed, no fuel line): every booster feeds the
+    stack through its own radial decoupler, and stock flow priority drains the
+    ring before the core, but all ``n_boost`` tanks drain in step so none can
+    drop until they are ALL empty -- the whole ring is one coarse drop after
+    ``n_boost*col_fuel`` is burnt, then the still-full core.  Far less
+    shedding, which is why it only wins when fuel lines (asparagus) are
+    unavailable.  Stock hides the radial-decoupler crossfeed toggle behind the
+    Fuel Systems node; the AP client blanks that gate, so onion needs no tech.
 
-    Pure Tsiolkovsky; thrust/TWR is the caller's concern (asparagus fires every
-    engine from liftoff, onion only the live ring).  Returns total dv (m/s)."""
+    Pure Tsiolkovsky; thrust/TWR is the caller's concern (both modes fire every
+    engine from liftoff, see ``parallel_stage_min_twr``).  Returns total dv (m/s)."""
     m = payload + core_dry + col_fuel + n_boost * (booster_dry + col_fuel)
     dv = 0.0
     if mode == "asparagus":

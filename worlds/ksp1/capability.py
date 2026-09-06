@@ -1589,7 +1589,8 @@ def _parallel_staging_inputs(
 ) -> tuple[str, float, str, float, str]:
     """Kit-derived parallel-staging inputs: the staging mode plus the parts
     the real parallel builder needs — a radial decoupler to shed boosters and
-    the fuel line for asparagus crossfeed (onion has none).
+    the fuel line for asparagus crossfeed (onion crossfeeds through the radial
+    decoupler itself; the client unlocks that toggle from the start).
 
         staging_tier >= 2 + fuel lines -> asparagus (radial crossfeed build)
         staging_tier >= 2, no fuel lines -> onion (radial ring drop)
