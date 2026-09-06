@@ -838,6 +838,21 @@ class BuffTypes(OptionSet):
     default = valid_keys
 
 
+class DeathLinkOnRevert(Toggle):
+    """
+    Also broadcast a death when you Revert a flight, so you can't save-scum a
+    failure away without the rest of the multiworld paying for it.  Requires
+    Death Link; ignored on its own.
+
+    Reverting a craft that never actually launched -- still clamped on the pad,
+    or on the runway before you taxi -- is always free, so checking a design or
+    fixing a misclick costs nothing.  A flight that already broadcast a death
+    (you crashed, or an incoming Death Link destroyed your craft) never sends a
+    second one when you revert it.
+    """
+    display_name = "Death Link On Revert"
+
+
 @dataclass
 class KSP1Options(PerGameCommonOptions):
     goal: Goal
@@ -876,3 +891,4 @@ class KSP1Options(PerGameCommonOptions):
     buff_density: BuffDensity
     buff_types: BuffTypes
     death_link: DeathLink
+    death_link_on_revert: DeathLinkOnRevert

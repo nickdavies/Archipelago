@@ -894,10 +894,13 @@ class KSP1World(World):
     def fill_slot_data(self) -> dict[str, Any]:
         d = self.options.as_dict(
             "goal", "difficulty", "start_with_launch_clamps", "buildings_in_logic")
-        # DeathLink: purely client-side. When on, a KSP crash/crew-death is
+        # DeathLink: purely client-side. When on, losing the craft or a Kerbal is
         # broadcast to the multiworld and an incoming death destroys the craft.
-        # Generation/logic never reads it.
-        d["death_link"] = self.options.death_link.value   # 0/1
+        # Generation/logic never reads it.  death_link_on_revert additionally
+        # charges a death for reverting a flight that actually launched; it is
+        # meaningless without death_link and the client ignores it when off.
+        d["death_link"] = self.options.death_link.value                       # 0/1
+        d["death_link_on_revert"] = self.options.death_link_on_revert.value   # 0/1
         # Traps: the item NAME is the entire client signal — no payload here.
         # These two keys exist only for Universal Tracker regen fidelity:
         # unlike death_link, trap options reshape the item pool (filler
