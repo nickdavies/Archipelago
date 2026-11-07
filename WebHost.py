@@ -2,6 +2,7 @@ import argparse
 import os
 import multiprocessing
 import logging
+import signal
 import typing
 
 import ModuleUpdate
@@ -99,6 +100,9 @@ if __name__ == "__main__":
     multiprocessing.freeze_support()
     multiprocessing.set_start_method('spawn')
     logging.basicConfig(format='[%(asctime)s] %(message)s', level=logging.INFO)
+    # Container runtimes (docker stop, Kubernetes) send SIGTERM to this process only. Treat it like Ctrl+C so the
+    # server loop returns and stop() shuts the room hosters down cleanly instead of leaving them to be SIGKILLed.
+    signal.signal(signal.SIGTERM, signal.default_int_handler)
 
     from WebHostLib.autolauncher import autohost, autogen, stop
     from WebHostLib.options import create as create_options_files

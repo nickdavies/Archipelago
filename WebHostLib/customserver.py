@@ -9,6 +9,7 @@ import logging
 import multiprocessing
 import pickle
 import random
+import signal
 import socket
 import threading
 import time
@@ -490,6 +491,11 @@ def run_server_process(
     starter = Starter()
     starter.daemon = True
     starter.start()
+    try:
+        # MultiworldInstance.stop() terminates us with SIGTERM; stopping the loop runs the shutdown save below.
+        loop.add_signal_handler(signal.SIGTERM, loop.stop)
+    except NotImplementedError:
+        pass  # Windows: Process.terminate() is TerminateProcess, which cannot be handled anyway
     try:
         loop.run_forever()
     finally:

@@ -130,16 +130,25 @@ def autohost(config: dict):
                     hosters.append(hoster)
                     hoster.start()
 
-                while not stop_event.wait(0.1):
-                    with db_session:
-                        rooms = select(
-                            room for room in Room if
-                            room.last_activity >= utcnow() - timedelta(
-                                seconds=config["MAX_ROOM_TIMEOUT"])).order_by(desc(Room.last_port))
-                        for room in rooms:
-                            # we have to filter twice, as the per-room timeout can't currently be PonyORM transpiled.
-                            if room.last_activity >= utcnow() - timedelta(seconds=room.timeout + 5):
-                                hosters[room.id.int % len(hosters)].start_room(room.id)
+                try:
+                    while not stop_event.wait(0.1):
+                        with db_session:
+                            rooms = select(
+                                room for room in Room if
+                                room.last_activity >= utcnow() - timedelta(
+                                    seconds=config["MAX_ROOM_TIMEOUT"])).order_by(desc(Room.last_port))
+                            for room in rooms:
+                                # we have to filter twice, as the per-room timeout can't currently be PonyORM
+                                # transpiled.
+                                if room.last_activity >= utcnow() - timedelta(seconds=room.timeout + 5):
+                                    hosters[room.id.int % len(hosters)].start_room(room.id)
+                finally:
+                    # Hosters are non-daemon processes: left running, they keep serving rooms after we are gone and
+                    # block interpreter exit. Signal all of them first so they save their rooms in parallel.
+                    for hoster in hosters:
+                        hoster.stop()
+                    for hoster in hosters:
+                        hoster.collect()
 
         except AlreadyRunningException:
             logging.info("Autohost reports as already running, not starting another.")
@@ -220,16 +229,17 @@ class MultiworldInstance():
             self.rooms_to_start.put(room_id)
 
     def stop(self):
+        """Ask the hoster to save its rooms and exit; collect() waits for it."""
         if self.process:
             self.process.terminate()
-            self.process = None
 
     def done(self):
         return self.process and not self.process.is_alive()
 
     def collect(self):
-        self.process.join()  # wait for process to finish
-        self.process = None
+        if self.process:
+            self.process.join()  # wait for process to finish
+            self.process = None
 
 
 from .models import Room, Generation, STATE_QUEUED, STATE_STARTED, STATE_ERROR, db, Seed, Slot
