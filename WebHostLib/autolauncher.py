@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import multiprocessing
+import time
 import typing
 from datetime import timedelta
 from threading import Event, Thread
@@ -131,6 +132,11 @@ def autohost(config: dict):
                     hoster.start()
 
                 while not stop_event.wait(0.1):
+                    for hoster in hosters:
+                        if hoster.should_respawn():
+                            logging.error(f"{hoster.name} exited with code {hoster.process.exitcode}, restarting it.")
+                            hoster.collect()
+                            hoster.start()
                     with db_session:
                         rooms = select(
                             room for room in Room if
@@ -186,9 +192,14 @@ def autogen(config: dict):
 
 
 class MultiworldInstance():
+    # A hoster that dies sooner than this after starting is not restarted until this much time has passed,
+    # so one that crashes on startup does not respawn in a tight loop.
+    min_respawn_interval = 10.0
+
     def __init__(self, config: dict, id: int):
         self.room_ids = set()
         self.process: typing.Optional[multiprocessing.Process] = None
+        self.started_at = 0.0
         self.ponyconfig = config["PONY"]
         self.cert = config["SELFLAUNCHCERT"]
         self.key = config["SELFLAUNCHKEY"]
@@ -209,6 +220,7 @@ class MultiworldInstance():
                                           name=self.name)
         process.start()
         self.process = process
+        self.started_at = time.monotonic()
 
     def start_room(self, room_id):
         while not self.rooms_shutting_down.empty():
@@ -227,9 +239,17 @@ class MultiworldInstance():
     def done(self):
         return self.process and not self.process.is_alive()
 
+    def should_respawn(self) -> bool:
+        return self.done() and time.monotonic() - self.started_at >= self.min_respawn_interval
+
     def collect(self):
         self.process.join()  # wait for process to finish
         self.process = None
+        # Its rooms died with it; forget them so autohost queues them again for the next process. The queues are
+        # replaced because a process killed while using a queue can leave it corrupted.
+        self.room_ids = set()
+        self.rooms_to_start = multiprocessing.Queue()
+        self.rooms_shutting_down = multiprocessing.Queue()
 
 
 from .models import Room, Generation, STATE_QUEUED, STATE_STARTED, STATE_ERROR, db, Seed, Slot
