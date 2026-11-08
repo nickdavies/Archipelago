@@ -103,7 +103,7 @@ class TestEffectiveSituationMult(unittest.TestCase):
         # penalty, so the effective scalar should be smaller than what
         # plain dv/edge ratios would give.
         from worlds.ksp1.bodies import (
-            _return_dv, _return_edge_count, _intra_system,
+            MissionType, _return_edge_count, _intra_system, mission_dv,
         )
         scalar = _mission_scalar(
             BodyName.KERBIN, BodyName.MUN,
@@ -114,8 +114,8 @@ class TestEffectiveSituationMult(unittest.TestCase):
         self.assertFalse(_intra_system(BodyName.LAYTHE, BodyName.KERBIN))
         # The intra penalty should be present in the scalar — verify by
         # computing the scalar without the penalty and comparing.
-        dv_now = _return_dv(BodyName.KERBIN, BodyName.MUN)
-        dv_ref = _return_dv(BodyName.LAYTHE, BodyName.KERBIN)
+        dv_now = mission_dv(BodyName.KERBIN, BodyName.MUN, MissionType.RETURN)
+        dv_ref = mission_dv(BodyName.LAYTHE, BodyName.KERBIN, MissionType.RETURN)
         ec_now = _return_edge_count(BodyName.KERBIN, BodyName.MUN)
         ec_ref = _return_edge_count(BodyName.LAYTHE, BodyName.KERBIN)
         without_penalty = (dv_now / dv_ref) * (ec_now / ec_ref)

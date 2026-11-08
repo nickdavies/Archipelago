@@ -57,6 +57,7 @@ _BANNED_EDGES: frozenset[tuple[BodyName, EdgeType]] = frozenset(
 )
 from .options import BuffDensity, Difficulty, Goal, GoalContractMode, KSP1Options, PhysicsDifficulty, STARTING_BODY_POOLS, StartingBody, TrapDensity
 from .tech_tree import MAX_TIER, TECH_NODES, TIER_TO_BAND
+from .ut_map import UT_MAP_HOMES
 
 #: UT location sort: per-body checks follow ALL_BODIES order.
 _BODY_SORT_INDEX: dict[BodyName, int] = {b.name: i for i, b in enumerate(ALL_BODIES)}
@@ -344,7 +345,8 @@ class KSP1World(World):
         }
 
     def map_index(self, data) -> int:
-        return self.options.starting_body.value #This option is numbered the same as the json (for now)
+        """UT map tab to open: this seed's home map (``maps.json`` order)."""
+        return UT_MAP_HOMES.index(self.mission_builder.home)
 
     def generate_early(self) -> None:
         """Resolve goal spec and apply ExcludeLateTechTree."""
