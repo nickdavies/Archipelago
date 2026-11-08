@@ -79,7 +79,7 @@ class TestSmallGoalMunFlag(KSP1TestBase):
 
 class TestLocationDescriptor(unittest.TestCase):
     """The physics meaning of a location is a real ``LocationDescriptor``
-    (locations.py); the sphere ladder reads it off ``loc.descriptor`` instead of
+    (locations/descriptor.py); the sphere ladder reads it off ``loc.descriptor`` instead of
     decoding the name.  A contract slot MUST carry a spec-bearing descriptor (a
     None un-gates the location and deadlocks fill); a per-body mission carries its
     event; the body-agnostic Splashdown is not capability-gated."""
@@ -87,7 +87,7 @@ class TestLocationDescriptor(unittest.TestCase):
     def test_contract_descriptor_carries_spec(self) -> None:
         from worlds.ksp1.contracts import ContractSpec, ContractType
         from worlds.ksp1.bodies import BodyName
-        from worlds.ksp1.locations import LocationDescriptor
+        from worlds.ksp1.locations.descriptor import LocationDescriptor
         d = LocationDescriptor.from_spec(
             ContractSpec(ContractType.MINE_ORE, BodyName.MUN))
         self.assertEqual(d.spec.contract_type, ContractType.MINE_ORE)
@@ -96,21 +96,20 @@ class TestLocationDescriptor(unittest.TestCase):
 
     def test_mission_descriptor_carries_event(self) -> None:
         from worlds.ksp1.bodies import BodyName, MissionType
-        from worlds.ksp1.locations import (
-            EVENT_BY_NAME, EventName, LocationDescriptor, MissionLocation,
-        )
+        from worlds.ksp1.locations.defs import MissionLocation
+        from worlds.ksp1.locations.descriptor import LocationDescriptor
+        from worlds.ksp1.locations.events import EventName
         d = LocationDescriptor.from_mission(
-            MissionLocation(BodyName.MUN, EventName.ORBIT, 1),
-            EVENT_BY_NAME[EventName.ORBIT])
+            MissionLocation(BodyName.MUN, EventName.ORBIT, 1))
         self.assertEqual(d.body, BodyName.MUN)
         self.assertEqual(d.event, EventName.ORBIT)
         self.assertEqual(d.mission_type, MissionType.ORBIT)
 
     def test_splashdown_is_not_capability_gated(self) -> None:
-        from worlds.ksp1.locations import LocationBuilder, LocationDescriptor
-        # Body-agnostic Splashdown (body=None) has no single-body physics gate.
-        self.assertIsNone(
-            LocationDescriptor.from_home(LocationBuilder._SPLASHDOWN_DEF))
+        from worlds.ksp1.locations.catalog import LocationCatalog
+        from worlds.ksp1.locations.descriptor import descriptor_for
+        # Body-agnostic Splashdown has no single-body physics gate.
+        self.assertIsNone(descriptor_for(LocationCatalog.splashdown()))
 
 
 class TestDescriptorCoverage(KSP1TestBase):
@@ -121,13 +120,10 @@ class TestDescriptorCoverage(KSP1TestBase):
     needs_real_pre_fill = False  # descriptors are attached in create_regions
 
     def test_missions_and_contracts_have_descriptors(self) -> None:
-        from worlds.ksp1.locations import LocationBuilder
+        from worlds.ksp1.locations.catalog import LocationCatalog
         world = self.world
-        mission_names = set(LocationBuilder.all_mission_location_names())
-        contract_names = {
-            n for spec in (*world.contract_specs, *world.goal_contract_specs)
-            for n in spec.location_names(world.locations_per_contract)
-        }
+        mission_names = {str(ml) for ml in LocationCatalog.missions()}
+        contract_names = {str(c) for c in world.seed_locations.contracts}
         saw_mission = saw_contract = False
         for loc in world.multiworld.get_locations(world.player):
             if loc.name in mission_names:

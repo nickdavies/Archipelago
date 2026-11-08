@@ -188,7 +188,7 @@ class TestUTRegen(unittest.TestCase):
         }
         world1, world2, original_sd = self._regen_from_slot_data(seed=7, options=opts)
         self.assertEqual(world1.contracts_required, world2.contracts_required)
-        self.assertEqual(world1.contract_threshold_defs, world2.contract_threshold_defs)
+        self.assertEqual(world1.seed_locations.thresholds, world2.seed_locations.thresholds)
         regen_sd = world2.fill_slot_data()
         for key in ("goal_contract_mode", "contracts_required", "contract_thresholds"):
             self.assertEqual(original_sd[key], regen_sd[key],
@@ -203,7 +203,7 @@ class TestUTRegen(unittest.TestCase):
             "contracts_available": 10,
         }
         world1, world2, _ = self._regen_from_slot_data(seed=11, options=opts)
-        self.assertEqual(world1.contract_threshold_defs, world2.contract_threshold_defs)
+        self.assertEqual(world1.seed_locations.thresholds, world2.seed_locations.thresholds)
 
     def test_random_orbit_params_round_trip(self):
         """RANDOM_ORBIT target orbits reconstruct identically after regen (a
@@ -304,7 +304,7 @@ class TestUTRegen(unittest.TestCase):
         world1, world2, _ = self._regen_from_slot_data(seed=13, options=opts)
         self.assertTrue(world2.goal_spec.free_goal)
         self.assertEqual(world1.goal_spec.flag_bodies, world2.goal_spec.flag_bodies)
-        self.assertEqual(world1.contract_threshold_defs, world2.contract_threshold_defs)
+        self.assertEqual(world1.seed_locations.thresholds, world2.seed_locations.thresholds)
 
     def test_hidden_bodies_round_trip(self):
         """Feature-on regen (a DIFFERENT RNG seed) must reproduce the exact

@@ -22,7 +22,7 @@ from worlds.ksp1.options import Difficulty, PhysicsDifficulty
 MISSION_BUILDER = MissionBuilder(home=BodyName.KERBIN)
 MISSION_PROFILES = MISSION_BUILDER.all_profiles()
 HOME_BODY = MISSION_BUILDER.home_body
-from worlds.ksp1.locations import EventName
+from worlds.ksp1.locations.events import EventName
 from worlds.ksp1.capability import (
     BodyAccessProfile, EquipmentFlags,
     _evaluate_profile, _assess_bodies, _assess_one_body,
@@ -1481,7 +1481,7 @@ class TestEscapeRelayGate(unittest.TestCase):
         """For every body that exposes a Flyby / SOI Leave check (per
         locations.get_body_events), MISSION_PROFILES must carry an ESCAPE
         profile. No auto-strip fallback."""
-        from worlds.ksp1.locations import get_body_events
+        from worlds.ksp1.locations.events import get_body_events
         for body in ALL_BODIES:
             events = set(get_body_events(body))
             if EventName.FLYBY not in events and EventName.SOI_LEAVE not in events:

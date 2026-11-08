@@ -33,7 +33,7 @@ def body_region_name(body: BodyName) -> str:
     """Canonical AP region name for a celestial body.
 
     Single source of truth for the body→region-name mapping; both region
-    creation (here) and location assignment (``locations.create_all_locations``)
+    creation (here) and location assignment (``locations.ap.create_all_locations``)
     call this rather than forming the string inline.
     """
     return str(body)
@@ -80,16 +80,12 @@ def location_owning_bodies(world: KSP1World) -> frozenset[BodyName]:
     (region creation) and the hidden-body pruning in ``generate_early`` so both
     agree on which bodies actually carry locations.
     """
-    lb = world.location_builder
-    owning: set[BodyName] = set()
-    for ml in lb.mission_locations:
-        owning.add(ml.body)
-    for hloc in lb.locations:
-        if hloc.body is not None:
-            owning.add(hloc.body)
-    for spec in (*world.contract_specs, *world.goal_contract_specs):
-        owning.add(spec.body)
-    return frozenset(owning)
+    seed = world.seed_locations
+    return frozenset(
+        loc.body for loc in (
+            *seed.configured.missions, *seed.configured.home_specials,
+            *seed.contracts)
+    )
 
 
 def bodies_needing_regions(world: KSP1World) -> list[BodyName]:

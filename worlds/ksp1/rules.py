@@ -18,12 +18,12 @@ Golden rule: when in doubt, say something is NOT achievable.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Callable, assert_never
 
 from BaseClasses import CollectionState, ItemClassification
 
 from .bodies import (
-    ALL_BODIES, BODY_BY_NAME, BodyName, MissionType,
+    ALL_BODIES, BODY_BY_NAME, BodyName,
     home_system_bodies, relay_tier_table_for, science_budget,
 )
 from .comms import DSN_POWER_MAX, dsn_required_relay_table
@@ -34,20 +34,11 @@ from .capability import (
 from .items import (
     PROGRESSIVE_RD_NAME, SCIENCE_PACK_NAMES, TRAP_ITEM_NAMES, discover_item_name,
 )
-from .locations import (
-    EVENT_BY_NAME,
-    EventName,
-    HomeLocationDef,
-    KSC_BIOME_NAMES,
-    MissionLocation,
-    STARTING_INV_NAMES,
-    TechTreeLocation,
-    effective_starting_inv_count,
-    effective_tech_slots_per_node,
-    event_locations,
-)
+from .locations.catalog import LocationCatalog
+from .locations.defs import HomeLocation, HomeMilestone, MissionLocation, TechTreeLocation
+from .locations.events import EVENT_BY_NAME, EventName
 from .options import Difficulty, Goal, GoalContractMode
-from .tech_tree import MAX_TIER, MAX_RD_BAND, cumulative_tier_cost, TECH_NODES, LEAF_TECH_NODES
+from .tech_tree import MAX_TIER, MAX_RD_BAND, cumulative_tier_cost, LEAF_TECH_NODES
 from .gates import AccumulationGate, Resource
 
 if TYPE_CHECKING:
@@ -444,7 +435,6 @@ def _make_science_threshold_rule(
 
 def set_all_rules(world: KSP1World) -> None:
     player = world.player
-    difficulty = world.options.difficulty.value
 
     _set_ksc_biome_rules(world, player)
     _set_home_rules(world, player)
@@ -453,8 +443,8 @@ def set_all_rules(world: KSP1World) -> None:
     _set_threshold_rules(world, player)
     _apply_home_system_local_exclusions(world)
     # Tech tree rules are now region entrance rules (see regions.py).
-    _ban_early_science_windfalls(world, player, difficulty)
-    _set_early_bucket_item_bans(world, player, difficulty)
+    _ban_early_science_windfalls(world, player)
+    _set_early_bucket_item_bans(world, player)
     if world.goal_spec.is_home_system_only(world.mission_builder.home):
         _set_interplanetary_item_rules(world, player)
 
@@ -516,16 +506,15 @@ def _set_ksc_biome_rules(world: KSP1World, player: int) -> None:
     def rule(state: CollectionState) -> bool:
         return _can_do_ksc_science(state, player)
 
-    for name in world.location_builder.ksc_biome_names:
-        world.get_location(name).access_rule = rule
+    for loc in world.seed_locations.configured.ksc_biomes:
+        world.get_location(str(loc)).access_rule = rule
 
 
 # ---------------------------------------------------------------------------
-# Kerbin-specific location rules
+# Home-body location rules
 #
-# Mission types and thresholds are owned by ``LocationBuilder`` in
-# locations.py (single source of truth).  This module maps mission_type →
-# access rule.
+# Milestones and thresholds are owned by the location model
+# (``locations.defs.HomeLocation``).  This module maps milestone → access rule.
 # ---------------------------------------------------------------------------
 
 # These home-body rules read only equipment flags, so they use the cheap
@@ -614,26 +603,28 @@ def _make_splashdown_rule(
     return rule
 
 
-_HOME_RULE_FACTORIES: dict[MissionType, Callable[[int, "HomeLocationDef", BodyName],
-                                                 Callable[[CollectionState], bool]]] = {
-    MissionType.SOUNDING:       lambda player, loc, home: _make_altitude_rule(player, loc.threshold_km or 0.0),
-    MissionType.FIRST_LAUNCH:   lambda player, loc, home: _make_first_launch_rule(player),
-    MissionType.FIRST_LANDING:  lambda player, loc, home: _make_first_landing_rule(player),
-    MissionType.FIRST_STAGING:  lambda player, loc, home: _make_staging_rule(player),
-    MissionType.SPLASHDOWN:     lambda player, loc, home: _make_splashdown_rule(player, loc.threshold_km or 1.0, home),
-}
+def _home_special_rule(player: int, loc: HomeLocation) -> Callable[[CollectionState], bool]:
+    match loc.milestone:
+        case HomeMilestone.FIRST_CRASH | HomeMilestone.ALTITUDE:
+            return _make_altitude_rule(player, loc.threshold_km)
+        case HomeMilestone.FIRST_LAUNCH:
+            return _make_first_launch_rule(player)
+        case HomeMilestone.FIRST_LANDING:
+            return _make_first_landing_rule(player)
+        case HomeMilestone.FIRST_STAGING:
+            return _make_staging_rule(player)
+        case _:
+            assert_never(loc.milestone)
 
 
 def _set_home_rules(world: KSP1World, player: int) -> None:
     """Apply access rules to the home-body specials and to the single
-    body-agnostic Splashdown location.  Dispatches by ``mission_type``.
-    """
-    home = world.location_builder.home
-    for loc in world.location_builder.locations:
-        factory = _HOME_RULE_FACTORIES.get(loc.mission_type)
-        if factory is None:
-            raise ValueError(f"Unknown home mission type: {loc.mission_type!r}")
-        world.get_location(loc.name).access_rule = factory(player, loc, home)
+    body-agnostic Splashdown location."""
+    configured = world.seed_locations.configured
+    for loc in configured.home_specials:
+        world.get_location(str(loc)).access_rule = _home_special_rule(player, loc)
+    world.get_location(str(configured.splashdown)).access_rule = _make_splashdown_rule(
+        player, configured.splashdown.SOUNDING_KM, configured.home)
 
 
 # ---------------------------------------------------------------------------
@@ -805,7 +796,7 @@ def _set_contract_rules(world: KSP1World, player: int) -> None:
         # _set_mission_rules, overwriting that event's separately-computed
         # capability rule (which could drift from the contract's feasibility).
         if spec.is_goal and ev is not None:
-            for ev_loc in event_locations(spec.body, ev):
+            for ev_loc in LocationCatalog.missions_for(spec.body, ev):
                 _apply(str(ev_loc))
 
 
@@ -818,9 +809,9 @@ def _set_threshold_rules(world: KSP1World, player: int) -> None:
     from .contracts import CONTRACT_COUNT_PROGRESS_EVENT
     def measure(state: CollectionState) -> float:
         return state.count(CONTRACT_COUNT_PROGRESS_EVENT, player)
-    for loc_name, count, _item in world.contract_threshold_defs:
-        gate = AccumulationGate(Resource.CONTRACT_COMPLETION, count)
-        world.get_location(loc_name).access_rule = gate.runtime_rule(measure)
+    for threshold in world.seed_locations.thresholds:
+        gate = AccumulationGate(Resource.CONTRACT_COMPLETION, threshold.required_count)
+        world.get_location(str(threshold.location)).access_rule = gate.runtime_rule(measure)
 
 
 def _set_mission_rules(world: KSP1World, player: int) -> None:
@@ -828,7 +819,7 @@ def _set_mission_rules(world: KSP1World, player: int) -> None:
     Apply access rules to the per-body mission event locations this world
     emits.
 
-    The LocationBuilder emits only reachable missions — infeasible
+    ConfiguredLocations emits only reachable missions — infeasible
     ``(body, mission_type)`` pairs (dv-infeasible ∪ curated ban) are not
     created at all — so every location here carries its real capability-based
     rule for its (body, event) pair, aligned with the victory rule
@@ -856,9 +847,9 @@ def _set_mission_rules(world: KSP1World, player: int) -> None:
 
     # Group the world's emitted mission locations by (body, event) so each
     # event's shared capability rule is built once.  The emitted set is owned
-    # by the LocationBuilder — never reconstructed from module-level data.
+    # by ConfiguredLocations — never reconstructed from module-level data.
     by_event: dict[tuple[BodyName, EventName], list[MissionLocation]] = {}
-    for ml in world.location_builder.mission_locations:
+    for ml in world.seed_locations.configured.missions:
         by_event.setdefault((ml.body, ml.event), []).append(ml)
     for (body, event), locs in by_event.items():
         cap_rule = _mission_rule_for_event(player, body, event)
@@ -896,7 +887,7 @@ def _apply_home_system_local_exclusions(world: KSP1World) -> None:
         return
     assert spec.home is not None
     in_system = home_system_bodies(spec.home)
-    for ml in world.location_builder.mission_locations:
+    for ml in world.seed_locations.configured.missions:
         if ml.body in in_system:
             continue
         world.get_location(str(ml)).progress_type = LocationProgressType.EXCLUDED
@@ -963,7 +954,7 @@ def _make_science_pack_rule():
     return rule
 
 
-def _ban_early_science_windfalls(world: KSP1World, player: int, difficulty: int) -> None:
+def _ban_early_science_windfalls(world: KSP1World, player: int) -> None:
     """Keep early checks from handing out science / tech windfalls.
 
     Bans ``_EARLY_BANNED_ITEMS`` (Progressive R&D + the two largest science
@@ -974,45 +965,39 @@ def _ban_early_science_windfalls(world: KSP1World, player: int, difficulty: int)
     """
     from worlds.generic.Rules import add_item_rule
 
-    num_slots = effective_tech_slots_per_node(world.options, difficulty)
-    num_starting = effective_starting_inv_count(world.options, difficulty)
+    configured = world.seed_locations.configured
     early_ban_rule = _make_early_ban_rule(player)
 
     # Starting Inventory (early ban + all traps)
     starting_inv_rule = _make_starting_inv_ban_rule(player)
-    for name in STARTING_INV_NAMES[:num_starting]:
-        add_item_rule(world.get_location(name), starting_inv_rule)
+    for loc in configured.starting_inventory:
+        add_item_rule(world.get_location(str(loc)), starting_inv_rule)
 
-    # KSC biomes + home-body specials + early home mission events (everything
-    # except Flyby/SOI Leave, which need escape).
-    for name in world.location_builder.ksc_biome_names:
-        add_item_rule(world.get_location(name), early_ban_rule)
-    for name in world.location_builder.names:
-        add_item_rule(world.get_location(name), early_ban_rule)
-    home = world.mission_builder.home
+    # KSC biomes + home-body specials + Splashdown + early home mission events
+    # (everything except Flyby/SOI Leave, which need escape).
+    for loc in (*configured.ksc_biomes, *configured.home_specials, configured.splashdown):
+        add_item_rule(world.get_location(str(loc)), early_ban_rule)
+    home = configured.home
     for event in (EventName.ORBIT, EventName.EVA_IN_ORBIT,
                   EventName.ORBITAL_PROBE, EventName.LANDING,
                   EventName.CREWED_LANDING, EventName.FLAG_PLANT,
                   EventName.ORBIT_RETURN, EventName.RETURN,
                   EventName.SAMPLE_RETURN):
-        for loc in event_locations(home, event):
+        for loc in LocationCatalog.missions_for(home, event):
             add_item_rule(world.get_location(str(loc)), early_ban_rule)
 
     # Science-pack filler off early-tier tech nodes (tiers 1-3).
     science_rule = _make_science_pack_rule()
-    for node in TECH_NODES:
-        if node.tier > _EARLY_TECH_MAX_TIER:
-            continue
-        for slot in range(1, num_slots + 1):
-            name = str(TechTreeLocation(node.display_name, slot))
-            add_item_rule(world.get_location(name), science_rule)
+    for loc in configured.tech:
+        if loc.node.tier <= _EARLY_TECH_MAX_TIER:
+            add_item_rule(world.get_location(str(loc)), science_rule)
 
 
 # ---------------------------------------------------------------------------
 # Early-bucket targeted item bans
 # ---------------------------------------------------------------------------
 
-def _set_early_bucket_item_bans(world: KSP1World, player: int, difficulty: int) -> None:
+def _set_early_bucket_item_bans(world: KSP1World, player: int) -> None:
     """Ban Progressive Launch Pad from starter inventory only.
 
     The Pad item is a blow-open item: collecting it raises the launch-mass
@@ -1029,13 +1014,10 @@ def _set_early_bucket_item_bans(world: KSP1World, player: int, difficulty: int) 
     from worlds.generic.Rules import add_item_rule
     from .items import PROGRESSIVE_LAUNCH_PAD_NAME
 
-    num_starter = effective_starting_inv_count(world.options, difficulty)
-    starter_bucket = list(STARTING_INV_NAMES[:num_starter])
-
     def starter_rule(item) -> bool:
         return item.player != player or item.name != PROGRESSIVE_LAUNCH_PAD_NAME
-    for name in starter_bucket:
-        add_item_rule(world.get_location(name), starter_rule)
+    for loc in world.seed_locations.configured.starting_inventory:
+        add_item_rule(world.get_location(str(loc)), starter_rule)
 
 
 # ---------------------------------------------------------------------------
@@ -1058,7 +1040,7 @@ def _set_interplanetary_item_rules(world: KSP1World, player: int) -> None:
     def no_advancement(item) -> bool:
         return item.player != player or not item.advancement
 
-    for loc in world.location_builder.mission_locations:
+    for loc in world.seed_locations.configured.missions:
         if loc.body not in home_system:
             add_item_rule(world.get_location(str(loc)), no_advancement)
 
@@ -1358,7 +1340,7 @@ def goal_spec_location_names(spec: GoalSpec) -> list[str]:
     names = [s.location_name for s in _goal_contract_specs(spec)]
     if spec.complete_tech_tree:
         for n in LEAF_TECH_NODES:
-            names.append(str(TechTreeLocation(n.display_name, 1)))
+            names.append(str(TechTreeLocation(n, 1)))
     return names
 
 
@@ -1395,21 +1377,22 @@ def create_threshold_locations(world: KSP1World) -> None:
     from BaseClasses import Location
     from .items import create_item, KSP1Item
     from .contracts import CONTRACT_COUNT_PROGRESS_EVENT
-    from .locations import KSP1Location, LOCATION_NAME_TO_ID
+    from .locations.ap import KSP1Location
 
-    defs = world.contract_threshold_defs
-    if not defs:
+    thresholds = world.seed_locations.thresholds
+    if not thresholds:
         return
 
     menu = world.get_region("Menu")
 
     # Threshold locations: real (addressed), pre-filled with the locked item.
-    threshold_locs = {
-        loc_name: LOCATION_NAME_TO_ID[loc_name] for loc_name, _c, _i in defs
-    }
-    menu.add_locations(threshold_locs, KSP1Location)
-    for loc_name, _count, item_name in defs:
-        world.get_location(loc_name).place_locked_item(create_item(world, item_name))
+    menu.add_locations({
+        str(t.location): LocationCatalog.id_of(t.location) for t in thresholds
+    }, KSP1Location)
+    for t in thresholds:
+        ap_loc = world.get_location(str(t.location))
+        ap_loc.definition = t.location
+        ap_loc.place_locked_item(create_item(world, t.item_name))
 
     # Contract-completion events: one per non-goal contract, address None.
     for spec in world.contract_specs:
@@ -1428,7 +1411,7 @@ def _all_locations_infeasible(
     """True iff every AP-location slot for ``(body, event)`` is in the
     model-infeasible set.  Used by goal building to filter bodies whose
     entire mission class is unverifiable from the current home."""
-    locs = event_locations(body, event)
+    locs = LocationCatalog.missions_for(body, event)
     return bool(locs) and all(str(loc) in model_infeasible_locations
                               for loc in locs)
 

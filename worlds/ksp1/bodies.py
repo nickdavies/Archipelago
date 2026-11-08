@@ -237,7 +237,7 @@ def effective_gameplay_difficulty(options) -> GameplayDifficulty:
 
 
 # Base Difficulty.value → default physics profile when PhysicsDifficulty=auto.
-# Raw-int keys (mirrors locations.py's difficulty tables) so bodies.py stays
+# Raw-int keys (mirrors locations/ap.py's difficulty tables) so bodies.py stays
 # free of an options import (options.py imports bodies — the reverse would cycle).
 _AUTO_PHYSICS_BY_DIFFICULTY: dict[int, str] = {
     0: "generous",     # casual
@@ -2632,8 +2632,8 @@ class MissionBuilder:
                 )
 
         # (2) Cross-module coverage — every body/event check must have a profile.
-        # Deferred import: locations.py imports from bodies.py.
-        from .locations import EVENT_BY_NAME, get_body_events
+        # Deferred import: locations.events imports from bodies.py.
+        from .locations.events import EVENT_BY_NAME, get_body_events
         for body in ALL_BODIES:
             for event_name in get_body_events(body):
                 event = EVENT_BY_NAME[event_name]

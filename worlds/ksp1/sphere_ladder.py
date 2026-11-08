@@ -55,10 +55,9 @@ from .capability import (
 from .capability_reasons import (
     BlockingInfo, BlockingReason, StageDiagnostic, StageFailure,
 )
-from .locations import (
-    EVENT_BY_NAME, EventName, LocationDescriptor,
-    KSC_BIOME_NAMES, KSC_LOCATION_PREFIX, STARTING_INV_NAME_SET,
-)
+from .locations.defs import HomeMilestone
+from .locations.descriptor import LocationDescriptor
+from .locations.events import EventName
 from .contracts import (
     contract_payload_parts, required_part_breakdown,
     _CHAIN_GUARANTEED_CATEGORIES, PRECISE_POINTING_TYPES,
@@ -288,7 +287,7 @@ class SphereLadder:
 # Helpers
 # ---------------------------------------------------------------------------
 
-# The physics meaning of a location is a ``LocationDescriptor`` (locations.py),
+# The physics meaning of a location is a ``LocationDescriptor`` (locations/descriptor.py),
 # built at creation and carried on ``loc.descriptor``.  The ladder reads it off
 # the real object — never by decoding the display name (bug 086).  Sites that
 # hold only an AP name resolve the object through AP's registry
@@ -2260,7 +2259,7 @@ def _predictable_spheres(
         PSI=3 injected) covers ``cumulative_tier_cost(MAX_TIER)``.
     """
     from .rules import goal_spec_location_names
-    lb = world.location_builder
+    configured = world.seed_locations.configured
     home_body = world.mission_builder.home
 
     def _desc(name: str) -> "LocationDescriptor | None":
@@ -2268,14 +2267,13 @@ def _predictable_spheres(
         # off the object's descriptor, never from decoding the name.
         return world.get_location(name).descriptor
 
-    # Home launch + orbit seeds: ask the builder for the typed home locations
-    # and read their canonical names / descriptors — never rebuild a name.
-    _launch = lb.home_location(MissionType.FIRST_LAUNCH)
-    _orbit = lb.emitted_mission(home_body, EventName.ORBIT)
+    # Home launch + orbit seeds: ask for the typed home locations and read
+    # their canonical names / descriptors — never rebuild a name.
+    _launch = configured.home_special(HomeMilestone.FIRST_LAUNCH)
+    _orbit = configured.emitted_mission(home_body, EventName.ORBIT)
     out: list[tuple[str, str, LocationDescriptor]] = [
-        ("S_launch", _launch.name, LocationDescriptor.from_home(_launch)),
-        ("S_orbit", str(_orbit),
-         LocationDescriptor.from_mission(_orbit, EVENT_BY_NAME[_orbit.event])),
+        ("S_launch", str(_launch), LocationDescriptor.from_home(_launch)),
+        ("S_orbit", str(_orbit), LocationDescriptor.from_mission(_orbit)),
     ]
     goal_names = list(goal_spec_location_names(world.goal_spec))
     infeasible = world.model_infeasible_locations
@@ -2418,14 +2416,14 @@ def _pick_tech_tree_anchors(
         if b.name not in home_set
         and b.name != BodyName.KERBOL
         and b.can_land
-        and (ml := world.location_builder.emitted_mission(
+        and (ml := world.seed_locations.configured.emitted_mission(
             b.name, EventName.RETURN)) is not None
     }
     interp_bodies = [b for b in ALL_BODIES if b.name in return_locs]
     # Physics descriptor straight off the typed MissionLocation (the same object
     # create_regions attaches to the AP location) — no name round-trip.
     desc_for = {
-        bn: LocationDescriptor.from_mission(ml, EVENT_BY_NAME[ml.event])
+        bn: LocationDescriptor.from_mission(ml)
         for bn, ml in return_locs.items()
     }
     dv_for = {
@@ -2513,8 +2511,8 @@ def _body_chain_depth(body_name: str, home_name: str) -> int:
 
 def _install_bootstrap_local_rule(world: "KSP1World") -> None:
     """Extend the local-only item rule (Rule A) to KSC biomes and the
-    ``Kerbin First Launch`` location.  Starting-inventory locations
-    already have this rule (locations.py:387).
+    home First Launch location.  Starting-inventory locations already have
+    this rule (``locations.ap.create_all_locations``).
 
     The default ``Location.item_rule`` is a no-op accepting everything;
     composing with it always returns True for the prior, so we replace
@@ -2526,11 +2524,9 @@ def _install_bootstrap_local_rule(world: "KSP1World") -> None:
     def local_only(item, _p=player) -> bool:
         return item.player == _p
 
-    extra_names = set(world.location_builder.ksc_biome_names) | {
-        world.location_builder.home_location(MissionType.FIRST_LAUNCH).name}
-    for loc in world.multiworld.get_locations(player):
-        if loc.name in extra_names:
-            loc.item_rule = local_only
+    configured = world.seed_locations.configured
+    for loc in (*configured.ksc_biomes, configured.home_special(HomeMilestone.FIRST_LAUNCH)):
+        world.get_location(str(loc)).item_rule = local_only
 
 
 # ---------------------------------------------------------------------------
@@ -3552,7 +3548,6 @@ def _compute_tech_tier_signatures_rank(
         copies at this sphere's depth)
     """
     from .capability import compute_capability_from_items
-    from .locations import TechTreeLocation, effective_tech_slots_per_node
     from .rules import (
         SCIENCE_ACCESS_EVENTS, bankable_science, effective_science_safety)
     from .tech_tree import TECH_NODES, TIER_TO_BAND, cumulative_tier_cost
@@ -3644,7 +3639,7 @@ def _compute_tech_tier_signatures_rank(
     sigs: dict[str, LocationSignature] = {}
     min_sigs_out: dict[str, Signature] = {}
     band_funding: dict[int, SphereBoundary] = {}
-    num_slots = effective_tech_slots_per_node(world.options, difficulty_idx)
+    tech_locations = world.seed_locations.configured.tech
     tier_set = sorted({n.tier for n in TECH_NODES})
 
     for tier in tier_set:
@@ -3674,13 +3669,11 @@ def _compute_tech_tier_signatures_rank(
         min_sig = funding.provides
         if rd_required > 0:
             min_sig = min_sig.with_counted(PROGRESSIVE_RD_NAME, rd_required)
-        for node in TECH_NODES:
-            if node.tier != tier:
+        for tech_loc in tech_locations:
+            if tech_loc.node.tier != tier:
                 continue
-            for slot in range(1, num_slots + 1):
-                loc_name = str(TechTreeLocation(node.display_name, slot))
-                sigs[loc_name] = sig
-                min_sigs_out[loc_name] = min_sig
+            sigs[str(tech_loc)] = sig
+            min_sigs_out[str(tech_loc)] = min_sig
         if rd_required > 0:
             prev = band_funding.get(rd_required)
             if prev is None or (
@@ -3776,10 +3769,9 @@ def _build_ladder_graph_walk(
         return sum(sig.rank(a) for a in RankAxisKey)
 
     # ---- base: home-orbit kit -------------------------------------------
-    _home_orbit = world.location_builder.emitted_mission(
+    _home_orbit = world.seed_locations.configured.emitted_mission(
         world.mission_builder.home, EventName.ORBIT)
-    _home_orbit_desc = LocationDescriptor.from_mission(
-        _home_orbit, EVENT_BY_NAME[_home_orbit.event])
+    _home_orbit_desc = LocationDescriptor.from_mission(_home_orbit)
     _ko = minimal_ranks_for(_home_orbit_desc, Signature.empty(), ctx,
                             prior_reps=frozenset(), **_bump_kw)
     ko_sig = _ko.signature if _ko is not None else Signature.empty()
@@ -4386,13 +4378,11 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
 
     # Bootstrap-local rule on starting-inv / KSC / First Launch.
     _install_bootstrap_local_rule(world)
-    first_launch = world.location_builder.home_location(MissionType.FIRST_LAUNCH).name
-    bootstrap_locations = set(world.location_builder.ksc_biome_names) | {first_launch}
-    for loc in world.multiworld.get_locations(world.player):
-        if loc.address is None:
-            continue
-        if loc.name in STARTING_INV_NAME_SET:
-            bootstrap_locations.add(loc.name)
+    configured = world.seed_locations.configured
+    first_launch = str(configured.home_special(HomeMilestone.FIRST_LAUNCH))
+    starting_names = [str(loc) for loc in configured.starting_inventory]
+    bootstrap_locations = (
+        {str(loc) for loc in configured.ksc_biomes} | {first_launch} | set(starting_names))
 
     # Step A: pin First Launch and Starting Inventory to sphere 0 so the unified
     # sphere rule gates them.  KSC science and the first splashdown are LEFT OUT
@@ -4408,11 +4398,8 @@ def apply_sphere_ladder(world: "KSP1World") -> None:
     # marginal (set in the predictable-anchor walk; the setdefault below no-ops
     # for it) — an honest tier-0-pad liftoff kit, not the orbit-kit warm start.
     _gate_early: dict[str, Signature] = {first_launch: Signature.empty()}
-    for loc in world.multiworld.get_locations(world.player):
-        if loc.address is None:
-            continue
-        if loc.name in STARTING_INV_NAME_SET:
-            _gate_early[loc.name] = Signature.empty()
+    for name in starting_names:
+        _gate_early[name] = Signature.empty()
     for _name, _need in _gate_early.items():
         location_signatures.setdefault(_name, _need)
         bootstrap_locations.discard(_name)

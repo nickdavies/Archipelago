@@ -45,10 +45,10 @@ class _ModeChecks:
         self.assertEqual(len(self.multiworld.itempool), len(unfilled))
 
     def test_thresholds_prefilled_with_correct_items(self):
-        for loc_name, _count, item_name in self.world.contract_threshold_defs:
-            loc = self.world.get_location(loc_name)
-            self.assertIsNotNone(loc.item, f"{loc_name} should be pre-filled")
-            self.assertEqual(loc.item.name, item_name)
+        for t in self.world.seed_locations.thresholds:
+            loc = self.world.get_location(str(t.location))
+            self.assertIsNotNone(loc.item, f"{t.location} should be pre-filled")
+            self.assertEqual(loc.item.name, t.item_name)
 
 
 class TestDunaCount(_ModeChecks, KSP1TestBase):
@@ -82,12 +82,12 @@ class TestFlagEveryBodyProgressive(_ModeChecks, KSP1TestBase):
 
     def test_one_threshold_per_goal_contract(self):
         self.assertEqual(
-            len(self.world.contract_threshold_defs),
+            len(self.world.seed_locations.thresholds),
             len(self.world.goal_contract_specs),
         )
 
     def test_progressive_thresholds_strictly_increasing(self):
-        counts = [c for _l, c, _i in self.world.contract_threshold_defs]
+        counts = [t.required_count for t in self.world.seed_locations.thresholds]
         self.assertEqual(counts, sorted(counts))
         self.assertEqual(counts[-1], self.world.contracts_required)
 
@@ -101,8 +101,8 @@ class _TechModeChecks:
     def test_rd_distribution(self):
         pool_rd = sum(1 for i in self.multiworld.itempool
                       if i.name == PROGRESSIVE_RD_NAME)
-        locked_rd = sum(1 for _l, _c, it in self.world.contract_threshold_defs
-                        if it == PROGRESSIVE_RD_NAME)
+        locked_rd = sum(1 for t in self.world.seed_locations.thresholds
+                        if t.item_name == PROGRESSIVE_RD_NAME)
         precollected_rd = sum(1 for i in self.multiworld.precollected_items[self.player]
                               if i.name == PROGRESSIVE_RD_NAME)
         self.assertEqual(locked_rd, self.expected_locked)

@@ -24,17 +24,19 @@ Key part items for real-item tests:
 import unittest
 from unittest.mock import patch, MagicMock
 
-from worlds.ksp1.locations import (
-    LocationBuilder,
-    KSC_BIOME_NAMES,
-    EventName,
-    MissionType,
-)
-from worlds.ksp1.bodies import ALL_BODIES, BodyName
+from worlds.ksp1.locations.catalog import LocationCatalog
+from worlds.ksp1.locations.defs import HomeMilestone
+from worlds.ksp1.locations.events import EventName
+from worlds.ksp1.bodies import ALL_BODIES, BodyName, MissionType
 from worlds.ksp1.comms import DSN_POWER_MAX
 from worlds.ksp1.items import PROGRESSIVE_ASTRONAUT_COMPLEX_NAME, PROGRESSIVE_RD_NAME
 from worlds.ksp1.tech_tree import TECH_NODES, TIER_TO_BAND
 from worlds.ksp1.test.base import KSP1TestBase as _SharedKSP1TestBase
+
+# These tests run Kerbin-home worlds, which emit every KSC biome.
+KSC_BIOME_NAMES = [str(loc) for loc in LocationCatalog.ksc_biomes()]
+MISSION_NAMES = frozenset(str(ml) for ml in LocationCatalog.missions())
+KERBIN_HOME_SPECIALS = LocationCatalog.home_specials(BodyName.KERBIN)
 
 
 class KSP1TestBase(_SharedKSP1TestBase):
@@ -99,7 +101,7 @@ def _make_zero_cap() -> MagicMock:
 # ---------------------------------------------------------------------------
 
 class TestLocationSetStructure(unittest.TestCase):
-    """Static assertions on locations.py data — catches wiring mistakes at import time."""
+    """Static assertions on the location catalog — catches wiring mistakes at import time."""
 
     def test_kerbin_sample_return_is_a_location(self):
         """Kerbin sample return must be a mission location.
@@ -111,7 +113,7 @@ class TestLocationSetStructure(unittest.TestCase):
         """
         self.assertIn(
             "Kerbin Sample Return 1",
-            LocationBuilder.all_mission_location_names(),
+            MISSION_NAMES,
             "Kerbin Sample Return 1 must be a mission location "
             "(bodies.py defines it with an empty/always-achievable profile).",
         )
@@ -120,7 +122,7 @@ class TestLocationSetStructure(unittest.TestCase):
         """Kerbin Return is handled by the per-body mission system."""
         self.assertIn(
             "Kerbin Return 1",
-            LocationBuilder.all_mission_location_names(),
+            MISSION_NAMES,
             "Kerbin Return 1 must be a mission location.",
         )
 
@@ -130,11 +132,11 @@ class TestLocationSetStructure(unittest.TestCase):
         Those event types go through the per-body system (MissionLocation),
         not the home-body specials.
         """
-        for loc in LocationBuilder(BodyName.KERBIN).locations:
+        for loc in (*KERBIN_HOME_SPECIALS, LocationCatalog.splashdown()):
             self.assertNotIn(
                 loc.mission_type,
                 (MissionType.RETURN, MissionType.SAMPLE_RETURN),
-                f"Home location entry {loc.name!r} has mission_type "
+                f"Home location entry {str(loc)!r} has mission_type "
                 f"{loc.mission_type!r}; return events belong in the per-body system.",
             )
 
@@ -150,17 +152,14 @@ class TestLocationSetStructure(unittest.TestCase):
             name = f"{body.name} Flyby 1"
             self.assertIn(
                 name,
-                LocationBuilder.all_mission_location_names(),
+                MISSION_NAMES,
                 f"Missing location '{name}' in the mission-location set.",
             )
 
     def test_kerbol_has_no_locations(self):
         """Kerbol (root body) must not have any mission locations."""
-        for name in LocationBuilder.all_mission_location_names():
-            self.assertFalse(
-                name.startswith("Kerbol "),
-                f"Unexpected Kerbol location: '{name}'",
-            )
+        kerbol = [str(ml) for ml in LocationCatalog.missions() if ml.body == BodyName.KERBOL]
+        self.assertEqual(kerbol, [], "Unexpected Kerbol locations")
 
     def test_flyby_and_orbit_both_exist_per_body(self):
         """Every body except Kerbol must have both Flyby and Orbit locations.
@@ -175,31 +174,28 @@ class TestLocationSetStructure(unittest.TestCase):
                 name = f"{body.name} {event} 1"
                 self.assertIn(
                     name,
-                    LocationBuilder.all_mission_location_names(),
+                    MISSION_NAMES,
                     f"Missing location '{name}' in the mission-location set.",
                 )
 
     def test_crewed_events_only_on_landable_bodies(self):
         """FLAG_PLANT, SAMPLE_RETURN, CREWED_LANDING must only exist for landable bodies."""
         landable = {b.name for b in ALL_BODIES if b.can_land}
-        for name in LocationBuilder.all_mission_location_names():
-            for event in (EventName.FLAG_PLANT, EventName.SAMPLE_RETURN,
-                          EventName.CREWED_LANDING):
-                marker = f" {event} "
-                if marker in name:
-                    body_name = name.split(marker)[0]
-                    self.assertIn(
-                        body_name, landable,
-                        f"Location '{name}' has event '{event}' but "
-                        f"body '{body_name}' is not landable.",
-                    )
+        crewed = (EventName.FLAG_PLANT, EventName.SAMPLE_RETURN, EventName.CREWED_LANDING)
+        for ml in LocationCatalog.missions():
+            if ml.event in crewed:
+                self.assertIn(
+                    ml.body, landable,
+                    f"Location '{ml}' has event '{ml.event}' but "
+                    f"body '{ml.body}' is not landable.",
+                )
 
     def test_kerbin_special_location_count(self):
-        """Kerbin home location set must have exactly 12 entries."""
-        kerbin = LocationBuilder(BodyName.KERBIN).locations
+        """Kerbin has exactly 11 home specials (4 fixed + 7 altitude milestones);
+        the body-agnostic Splashdown is separate."""
         self.assertEqual(
-            len(kerbin), 12,
-            f"Expected 12 Kerbin home locations, got {len(kerbin)}.",
+            len(KERBIN_HOME_SPECIALS), 11,
+            f"Expected 11 Kerbin home specials, got {len(KERBIN_HOME_SPECIALS)}.",
         )
 
 
@@ -451,39 +447,20 @@ class TestKerbinEarlyLocations(KSP1TestBase):
         Altitudes are read from the Kerbin home location set so this stays
         correct if the milestone schedule shifts (5/10/16/20/30/45/70).
         """
-        altitudes = sorted(
-            int(loc.threshold_km)
-            for loc in LocationBuilder(BodyName.KERBIN).locations
-            if loc.mission_type == MissionType.SOUNDING
-            and loc.threshold_km is not None
-            and loc.threshold_km >= 1.0  # exclude First Crash (0.1 km)
-        )
+        milestones = [loc for loc in KERBIN_HOME_SPECIALS
+                      if loc.milestone is HomeMilestone.ALTITUDE]
 
         def reaches_up_to(limit_km):
             # the rule calls _sounding_reaches(flags, home, threshold_km)
             return lambda _flags, _home, threshold_km: threshold_km <= limit_km
 
-        # reachable up to 10 km: only the lowest milestones pass
-        with patch("worlds.ksp1.rules._sounding_reaches", side_effect=reaches_up_to(10.0)):
-            for km in altitudes:
-                name = f"Kerbin {km}km Altitude"
-                if km <= 10:
-                    self.assertTrue(self.can_reach_location(name),
-                                    f"{km} km check must pass when reachable to 10 km")
-                else:
-                    self.assertFalse(self.can_reach_location(name),
-                                     f"{km} km check must fail when reachable to 10 km")
-
-        # reachable up to 50 km: everything below 50 km passes, top tier fails
-        with patch("worlds.ksp1.rules._sounding_reaches", side_effect=reaches_up_to(50.0)):
-            for km in altitudes:
-                name = f"Kerbin {km}km Altitude"
-                if km <= 50:
-                    self.assertTrue(self.can_reach_location(name),
-                                    f"{km} km check must pass when reachable to 50 km")
-                else:
-                    self.assertFalse(self.can_reach_location(name),
-                                     f"{km} km check must fail when reachable to 50 km")
+        for limit_km in (10.0, 50.0):
+            with patch("worlds.ksp1.rules._sounding_reaches",
+                       side_effect=reaches_up_to(limit_km)):
+                for loc in milestones:
+                    self.assertEqual(
+                        self.can_reach_location(str(loc)), loc.altitude_km <= limit_km,
+                        f"{loc} when reachable to {limit_km} km")
 
 
 # ---------------------------------------------------------------------------

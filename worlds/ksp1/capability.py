@@ -39,7 +39,7 @@ from .parts import (
     usable_fuel_mass,
 )
 from .capability_reasons import BlockingInfo, BlockingReason
-from .locations import (
+from .locations.events import (
     ALL_EVENTS, EVENT_BY_NAME, EventName,
     get_body_events,
 )
@@ -4148,7 +4148,7 @@ def _assess_one_body(
                 ))
                 return prof
 
-    # --- Evaluate the events that locations.py exposes for this body ---
+    # --- Evaluate the events that locations.events exposes for this body ---
     # Iterating get_body_events instead of ALL_EVENTS means "events that don't
     # exist for this body" naturally stay at their default False access value.
     # No special-case branches per body needed.
@@ -4159,7 +4159,7 @@ def _assess_one_body(
         # A home-excluded event does not exist on THIS seed's home body (SOI
         # Return, Unmanned Flyby), and the mission builder deliberately registers
         # no profile for it — which the empty-profiles branch below would read as
-        # "trivially achievable".  Match locations.py's emission filter instead:
+        # "trivially achievable".  Match ConfiguredLocations' emission filter instead:
         # a location that is never emitted is never reachable.
         if event.home_excluded and body.name == mission_builder.home:
             prof.access[event.name] = False

@@ -7,7 +7,8 @@ from worlds.ksp1.data.feasibility import MODEL_INFEASIBLE_BASE
 
 # Tests resolve against the default config's comfortable-profile table.
 MODEL_INFEASIBLE_LOCATIONS = MODEL_INFEASIBLE_BASE["comfortable"]
-from worlds.ksp1.locations import EVENT_BY_NAME, EventName, MissionLocation
+from worlds.ksp1.locations.defs import MissionLocation
+from worlds.ksp1.locations.events import EVENT_BY_NAME, EventName
 from worlds.ksp1.rules import (
     GoalSpec,
     resolve_goal_spec,

@@ -16,7 +16,8 @@ from worlds.ksp1.items import (
 from worlds.ksp1.parts import DEFAULT_PART_MANAGER
 from worlds.ksp1.rules import _accessible_science, _can_afford_tier
 from worlds.ksp1.tech_tree import TECH_NODES, TIER_TO_BAND, MAX_RD_BAND, cumulative_tier_cost
-from worlds.ksp1.locations import EventName, TechTreeLocation
+from worlds.ksp1.locations.defs import TechTreeLocation
+from worlds.ksp1.locations.events import EventName
 from worlds.ksp1.options import Difficulty
 from worlds.ksp1.capability import get_capability, explain_body_unreachable
 from worlds.ksp1.test.base import KSP1TestBase
@@ -263,7 +264,7 @@ class TestProgressiveRD(KSP1TestBase):
             band = TIER_TO_BAND[node.tier]
             if band == 0:
                 continue
-            loc_name = str(TechTreeLocation(node.display_name, 1))
+            loc_name = str(TechTreeLocation(node, 1))
             loc = self.multiworld.get_location(loc_name, self.player)
             self.assertFalse(
                 loc.can_reach(state),
@@ -276,7 +277,7 @@ class TestProgressiveRD(KSP1TestBase):
         self.collect_all_but([])
         state = self.multiworld.state
         for node in TECH_NODES:
-            loc_name = str(TechTreeLocation(node.display_name, 1))
+            loc_name = str(TechTreeLocation(node, 1))
             loc = self.multiworld.get_location(loc_name, self.player)
             self.assertTrue(
                 loc.can_reach(state),

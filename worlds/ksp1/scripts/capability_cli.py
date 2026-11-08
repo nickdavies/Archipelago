@@ -33,7 +33,7 @@ from worlds.ksp1.capability import (
     compute_capability_from_items, evaluate_mission_detailed,
     get_capability,
 )
-from worlds.ksp1.locations import EventName, KSC_LOCATION_PREFIX, MissionLocation
+from worlds.ksp1.contracts import ContractSpec, goal_body_lists_from_specs
 from worlds.ksp1.world import KSP1World
 
 from worlds.ksp1.capability_format import (
@@ -150,25 +150,12 @@ def build_world_and_state(ap: APState) -> tuple[MultiWorld, int]:
         "goal": sd.get("goal", 0),
     }
 
-    # For custom goals, reconstruct body lists from goal_locations in slot_data.
-    # Entries follow "{Body} {Event} 1" — e.g. "Mun Flag Plant 1", "Duna Return 1".
+    # A custom goal's body lists ARE the goal.  Recover them from the goal
+    # contracts in slot_data — the same structured record UT regen uses
+    # (``goal_locations`` holds contract display names, which don't round-trip).
     if options["goal"] == 99:  # Goal.option_custom
-        flag_bodies = set()
-        return_bodies = set()
-        sample_return_bodies = set()
-        for loc_str in sd.get("goal_locations", []):
-            parsed = MissionLocation.parse(loc_str)
-            if parsed is None:
-                continue
-            if parsed.event == EventName.FLAG_PLANT:
-                flag_bodies.add(parsed.body)
-            elif parsed.event == EventName.SAMPLE_RETURN:
-                sample_return_bodies.add(parsed.body)
-            elif parsed.event == EventName.RETURN:
-                return_bodies.add(parsed.body)
-        options["flag_bodies"] = flag_bodies
-        options["return_bodies"] = return_bodies
-        options["sample_return_bodies"] = sample_return_bodies
+        options.update(goal_body_lists_from_specs(
+            ContractSpec.from_slot_dict(entry) for entry in sd.get("contracts", [])))
 
     multiworld = setup_multiworld(
         KSP1World,
@@ -208,13 +195,7 @@ def cmd_in_logic(ap: APState, parts_list: bool = False) -> None:
         if not loc.can_reach(state):
             continue
 
-        if loc.name.startswith(KSC_LOCATION_PREFIX):
-            actionable["KSC"].append(loc.name)
-        elif " " in loc.name:
-            group = location_group(loc.name)
-            actionable[group].append(loc.name)
-        else:
-            actionable["Other"].append(loc.name)
+        actionable[location_group(loc.definition)].append(loc.name)
 
     for line in format_in_logic_locations(actionable):
         print(line)

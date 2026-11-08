@@ -9,7 +9,6 @@ import unittest
 from BaseClasses import ItemClassification
 
 from worlds.ksp1.items import ITEM_NAME_TO_ID, SCIENCE_PACK_NAMES, TRAP_ITEM_NAMES
-from worlds.ksp1.locations import STARTING_INV_NAMES, effective_starting_inv_count
 from worlds.ksp1.traps import TRAP_DEFS, TrapType
 
 from worlds.ksp1.test.base import KSP1TestBase
@@ -86,11 +85,11 @@ class TestTrapsHell(_TrapPoolMixin, KSP1TestBase):
         # Starting-inventory items are granted at connect, before the first
         # flight — the item rule must reject every trap there while still
         # accepting ordinary items (Science Pack 25 isn't early-banned).
-        num = effective_starting_inv_count(
-            self.world.options, self.world.options.difficulty.value)
-        self.assertGreater(num, 0)
+        starting = self.world.seed_locations.configured.starting_inventory
+        self.assertGreater(len(starting), 0)
         allowed = self.world.create_item("Science Pack 25")
-        for name in STARTING_INV_NAMES[:num]:
+        for defn in starting:
+            name = str(defn)
             loc = self.multiworld.get_location(name, self.player)
             for trap_name in sorted(TRAP_ITEM_NAMES):
                 self.assertFalse(
@@ -149,10 +148,8 @@ class TestTrapsHellFill(KSP1TestBase):
     def test_no_trap_lands_on_starting_inventory(self):
         from Fill import distribute_items_restrictive
         distribute_items_restrictive(self.multiworld)
-        for name in STARTING_INV_NAMES:
-            try:
-                loc = self.multiworld.get_location(name, self.player)
-            except KeyError:
-                continue
+        for defn in self.world.seed_locations.configured.starting_inventory:
+            name = str(defn)
+            loc = self.multiworld.get_location(name, self.player)
             self.assertIsNotNone(loc.item, f"{name!r} left unfilled")
             self.assertNotIn(loc.item.name, TRAP_ITEM_NAMES, f"trap on {name!r}")

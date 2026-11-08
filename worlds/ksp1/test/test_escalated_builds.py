@@ -25,7 +25,7 @@ from worlds.ksp1.capability import (
     _evaluate_profile, compute_capability_from_items,
 )
 from worlds.ksp1.data.feasibility import ESCALATED_ASCENT_EDGES
-from worlds.ksp1.locations import EventName
+from worlds.ksp1.locations.events import EventName
 from worlds.ksp1.parts import CapabilityFlag, DEFAULT_PART_MANAGER
 from worlds.ksp1.rocket_math import _F4_DV_SPLITS
 from worlds.ksp1.scripts.generate_feasibility import (

@@ -13,7 +13,7 @@ overhead.  For every body that can serve as a starting body, the script:
 2. Runs ``compute_capability_from_items`` against a ``MissionBuilder``
    rooted at that home, at each difficulty profile.
 3. Records EVERY non-home body event reported as unreachable (False
-   access) — all events ``locations.py`` exposes for the body, not just
+   access) — all events ``locations.events`` exposes for the body, not just
    returns.  A body harder than the maximal kit's ceiling (even for
    plain orbit) therefore excludes gracefully instead of leaving
    progression-eligible locations behind a permanently-false rule.
@@ -60,9 +60,7 @@ import worlds.ksp1.capability as capability
 from worlds.ksp1.capability import (
     compute_capability_from_items, evaluate_mission_detailed,
 )
-from worlds.ksp1.locations import (
-    EVENT_BY_NAME, get_body_events,
-)
+from worlds.ksp1.locations.events import EVENT_BY_NAME, get_body_events
 from worlds.ksp1.parts import ALL_PACKS, part_manager_for
 from worlds.ksp1.parts.packs import (
     STOCK, OPTIONAL_PACKS, DEFAULT_ENABLED_OPTIONAL_PACKS,
@@ -179,7 +177,7 @@ def compute_model_infeasible_for_home(
     for body in ALL_BODIES:
         if body.name == home:
             continue
-        # Probe exactly the events locations.py exposes for this body —
+        # Probe exactly the events locations.events exposes for this body —
         # Jool contributes its orbital events, Kerbol contributes none.
         events = get_body_events(body)
         if not events:

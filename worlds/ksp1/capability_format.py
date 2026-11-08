@@ -9,7 +9,7 @@ from __future__ import annotations
 import dataclasses
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, assert_never
 
 from worlds.ksp1.bodies import (
     ALL_BODIES, BODY_BY_NAME, BodyName, MissionType, DIFFICULTY_PROFILES, EdgeType,
@@ -21,7 +21,12 @@ from worlds.ksp1.capability import (
     compute_capability_from_items, evaluate_mission_detailed,
     event_mission_info,
 )
-from worlds.ksp1.locations import LocationBuilder, event_locations, get_body_events
+from worlds.ksp1.locations.catalog import LANDABLE_HOMES, LocationCatalog
+from worlds.ksp1.locations.defs import (
+    ContractLocation, HomeLocation, KSP1LocationDef, KscBiomeLocation,
+    MissionLocation, SplashdownLocation, StartingInventoryLocation,
+    TechTreeLocation, ThresholdLocation,
+)
 from worlds.ksp1.parts import PART_REGISTRY
 
 
@@ -77,20 +82,22 @@ def _build_check_map() -> dict[str, CheckInfo]:
     even when the current seed isn't pinned to that home.
     """
     result: dict[str, CheckInfo] = {}
-    # Per-body mission events
-    for body in ALL_BODIES:
-        for event in get_body_events(body):
-            mission_type, crewed = event_mission_info(event)
-            for loc in event_locations(body.name, event):
-                result[str(loc)] = CheckInfo(body.name, event, mission_type, crewed)
+    for ml in LocationCatalog.missions():
+        mission_type, crewed = event_mission_info(ml.event)
+        result[str(ml)] = CheckInfo(ml.body, ml.event, mission_type, crewed)
 
     # Home-body specials (sounding, first_launch, …) across all landable bodies.
-    for loc in LocationBuilder.all_home_locations().values():
-        result[loc.name] = CheckInfo(
-            loc.body, loc.name, loc.mission_type, None,
-            threshold_km=loc.threshold_km,
-        )
-
+    for home in LANDABLE_HOMES:
+        for hloc in LocationCatalog.home_specials(home):
+            result[str(hloc)] = CheckInfo(
+                hloc.home, str(hloc), hloc.mission_type, None,
+                threshold_km=hloc.threshold_km,
+            )
+    splashdown = LocationCatalog.splashdown()
+    result[str(splashdown)] = CheckInfo(
+        None, str(splashdown), splashdown.mission_type, None,
+        threshold_km=splashdown.SOUNDING_KM,
+    )
     return result
 
 
@@ -118,12 +125,21 @@ def edge_desc(edge: MissionEdge) -> str:
     return f"{edge.source} -> {edge.destination} ({edge.base_dv:.0f} m/s)"
 
 
-def location_group(loc_name: str) -> str:
-    """Extract the body/category name from a location name for grouping."""
-    for body in ALL_BODIES:
-        if loc_name.startswith(body.name + " "):
-            return body.name
-    return "Tech Tree"
+def location_group(defn: KSP1LocationDef) -> str:
+    """Display group for a location: its body, or its non-body family."""
+    match defn:
+        case MissionLocation() | HomeLocation() | ContractLocation():
+            return str(defn.body)
+        case KscBiomeLocation():
+            return "KSC"
+        case TechTreeLocation():
+            return "Tech Tree"
+        case StartingInventoryLocation():
+            return "Starting Inventory"
+        case SplashdownLocation() | ThresholdLocation():
+            return "Other"
+        case _:
+            assert_never(defn)
 
 
 # ---------------------------------------------------------------------------

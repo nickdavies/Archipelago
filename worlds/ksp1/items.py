@@ -257,7 +257,7 @@ PROGRESSIVE_PSI_COUNT: int = 3
 # is fixed even though any given seed places only a subset. Every contract item
 # is progression (it self-gates its location and paces the run). Item and
 # location ids share a base, so the two blocks must not overlap: items live at
-# 10_000+, contract locations at 20_000+ (see locations.py / test_parts_data).
+# 10_000+, contract locations at 20_000+ (see locations/catalog.py / test_parts_data).
 _CONTRACT_ITEM_BASE_OFFSET = 10_000
 _CONTRACT_ITEMS: dict[str, tuple[int, ItemClassification]] = {
     spec.item_name: (_CONTRACT_ITEM_BASE_OFFSET + i, ItemClassification.progression)
@@ -521,8 +521,8 @@ def create_all_items(world: KSP1World) -> None:
     mode = world.options.goal_contract_mode.value
     is_tech = world.goal_spec.complete_tech_tree
     rd_locked = sum(
-        1 for _loc, _cnt, item_name in world.contract_threshold_defs
-        if item_name == PROGRESSIVE_RD_NAME
+        1 for t in world.seed_locations.thresholds
+        if t.item_name == PROGRESSIVE_RD_NAME
     )
     if is_tech and mode == GoalContractMode.option_starting:
         for _ in range(PROGRESSIVE_RD_COUNT):

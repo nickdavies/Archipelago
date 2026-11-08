@@ -21,9 +21,7 @@ from unittest.mock import patch
 
 from worlds.ksp1.bodies import BodyName
 from worlds.ksp1.data.feasibility import MODEL_INFEASIBLE_BASE
-from worlds.ksp1.locations import (
-    EVENT_BY_NAME, LocationBuilder, MissionLocation,
-)
+from worlds.ksp1.locations.catalog import LocationCatalog
 from worlds.ksp1.test.base import KSP1TestBase
 
 # The simulated ultra-hard body and its (parent-gated) subtree.
@@ -33,8 +31,8 @@ _SYNTH_BODIES = frozenset({
 })
 
 _SYNTH_MISSIONS = frozenset(
-    (ml.body, EVENT_BY_NAME[ml.event].mission_type)
-    for ml in LocationBuilder.all_mission_locations() if ml.body in _SYNTH_BODIES
+    (ml.body, ml.event_def.mission_type)
+    for ml in LocationCatalog.missions() if ml.body in _SYNTH_BODIES
 )
 
 
@@ -70,9 +68,8 @@ class TestUltraHardBodyGracefulExclusion(KSP1TestBase):
         emitted = {loc.name for loc in self.multiworld.get_locations(self.player)}
         # The whole synthetic subtree lands in the model-infeasible set...
         subtree_infeasible = {
-            name for name in world.model_infeasible_locations
-            if (ml := MissionLocation.parse(name)) is not None
-            and ml.body in _SYNTH_BODIES
+            str(ml) for ml in world.seed_locations.configured.excluded_missions
+            if ml.body in _SYNTH_BODIES
         }
         # The Jool system exposes locations for 5 landable moons + Jool's
         # orbital events; if this is small the simulation itself is broken.

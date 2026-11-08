@@ -282,13 +282,14 @@ class TestStableIdRanges(unittest.TestCase):
         self.assertEqual(len(ids), len(set(ids)), "Duplicate item IDs detected")
 
     def test_location_offsets_in_range(self) -> None:
-        from worlds.ksp1.locations import LOCATION_TABLE
+        from worlds.ksp1.locations.catalog import KSP1_BASE_ID, LocationCatalog
         # Location offsets occupy distinct bands: 2000-4199 for the legacy
         # buckets (starting inventory, KSC biomes, Kerbin home specials,
         # mission events, tech tree) plus the 14 non-Kerbin home sets, a small
         # 19_000-block for goal-mode threshold locations, and a large dedicated
-        # 20_000+ block for contract completion locations (3 names per spec).
-        for name, offset in LOCATION_TABLE.items():
+        # 20_000+ block for contract completion locations.
+        for name, loc_id in LocationCatalog.name_to_id().items():
+            offset = loc_id - KSP1_BASE_ID
             in_legacy = 2000 <= offset < 4200
             in_thresholds = 19_000 <= offset < 19_100
             in_contracts = 20_000 <= offset < 30_000
@@ -298,15 +299,15 @@ class TestStableIdRanges(unittest.TestCase):
             )
 
     def test_no_location_offset_collisions(self) -> None:
-        from worlds.ksp1.locations import LOCATION_NAME_TO_ID
-        ids = list(LOCATION_NAME_TO_ID.values())
+        from worlds.ksp1.locations.catalog import LocationCatalog
+        ids = list(LocationCatalog.name_to_id().values())
         self.assertEqual(len(ids), len(set(ids)), "Duplicate location IDs detected")
 
     def test_item_and_location_ranges_no_overlap(self) -> None:
         from worlds.ksp1.items import ITEM_NAME_TO_ID
-        from worlds.ksp1.locations import LOCATION_NAME_TO_ID
+        from worlds.ksp1.locations.catalog import LocationCatalog
         item_ids = set(ITEM_NAME_TO_ID.values())
-        loc_ids = set(LOCATION_NAME_TO_ID.values())
+        loc_ids = set(LocationCatalog.name_to_id().values())
         overlap = item_ids & loc_ids
         self.assertEqual(len(overlap), 0, f"Overlapping IDs: {overlap}")
 

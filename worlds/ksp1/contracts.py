@@ -35,6 +35,8 @@ from .bodies import (
     DifficultyProfile, DIFFICULTY_PROFILES, MissionBuilder, TOURISM_CREW,
     effective_physics_profile_name, orbit_reach_dv,
 )
+from .locations.defs import ContractLocation
+from .locations.events import EventName
 from .parts import DEFAULT_PART_MANAGER, MiscEquipment, PartManager
 
 if TYPE_CHECKING:
@@ -1177,14 +1179,8 @@ class ContractSpec:
         (a single unsuffixed location, ignoring ``slot_count``); non-goal
         contracts award ``slot_count`` suffixed locations ("... 1", "... 2", ...)
         that share one gate item and one access rule. ``slot_count`` defaults to
-        ``LOCATIONS_PER_CONTRACT``; the data package threads
-        ``MAX_LOCATIONS_PER_CONTRACT`` to register every possible location name."""
-        if self.is_goal:
-            return (self.display_name,)
-        return tuple(
-            f"{self.display_name} {i}"
-            for i in range(1, slot_count + 1)
-        )
+        ``LOCATIONS_PER_CONTRACT``. Names come from ``ContractLocation``."""
+        return tuple(str(loc) for loc in ContractLocation.for_spec(self, slot_count))
 
     @property
     def location_name(self) -> str:
@@ -1192,9 +1188,7 @@ class ContractSpec:
         the client's binding key all use this; the suffixed siblings share its
         access rule. Independent of the seed's location count — location 1 always
         exists (>= the base 2 per contract), so this is stable if it's raised."""
-        if self.is_goal:
-            return self.display_name
-        return f"{self.display_name} 1"
+        return str(ContractLocation.for_spec(self, 1)[0])
 
     def to_slot_dict(self, mission_builder=None,
                      slot_count: int = LOCATIONS_PER_CONTRACT,
@@ -1431,7 +1425,7 @@ def required_part_names_for(specs,
 
 def all_possible_contract_specs() -> list[ContractSpec]:
     """Every (type, body) a contract could ever target, independent of seed.
-    items.py / locations.py register names from this so the name set is stable."""
+    items.py / locations/catalog.py register names from this so the name set is stable."""
     out: list[ContractSpec] = []
     for ct in ContractType:
         td = CONTRACT_TYPE_DEFS[ct]
@@ -1783,7 +1777,6 @@ def generate_contracts(world: "KSP1World") -> tuple[list[ContractSpec], list[Con
             # which would also opt it into the milestone equal-or-after gating.
             event = contract_event_of.get(ct)
             if event is None and ct == ContractType.SURFACE_RESCUE:
-                from .locations import EventName
                 event = EventName.RETURN
             if event is not None and _all_locations_infeasible(
                     body.name, event, model_infeasible):

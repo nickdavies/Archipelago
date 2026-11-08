@@ -27,7 +27,7 @@ from worlds.ksp1.capability import (
     _apollo_split_for, _group_edges, compute_capability_from_items,
     evaluate_mission_detailed,
 )
-from worlds.ksp1.locations import EventName
+from worlds.ksp1.locations.events import EventName
 from worlds.ksp1.parts import CapabilityFlag, DEFAULT_PART_MANAGER
 from worlds.ksp1.scripts.generate_feasibility import _profile_with_overhead
 
@@ -214,7 +214,7 @@ class TestApolloBracketBuildingGate(unittest.TestCase):
 
     def test_via_apollo_adds_rendezvous_buildings(self) -> None:
         from worlds.ksp1.sphere_ladder import _mission_building_reqs
-        from worlds.ksp1.locations import LocationDescriptor
+        from worlds.ksp1.locations.descriptor import LocationDescriptor
         from worlds.ksp1.items import PROGRESSIVE_MISSION_CONTROL_NAME
         mb = MissionBuilder(home=BodyName.LAYTHE)
         info = LocationDescriptor(

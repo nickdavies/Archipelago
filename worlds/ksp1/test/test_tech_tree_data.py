@@ -155,17 +155,14 @@ class TestLocationNames(unittest.TestCase):
     """Tech tree location names must be consistent."""
 
     def test_location_count(self) -> None:
-        from worlds.ksp1.locations import MAX_TECH_SLOTS, TECH_TREE_LOCATION_NAMES
+        from worlds.ksp1.locations.catalog import MAX_TECH_SLOTS, LocationCatalog
         self.assertEqual(MAX_TECH_SLOTS, 4)
-        self.assertEqual(len(TECH_TREE_LOCATION_NAMES), 62 * 4)
+        self.assertEqual(len(LocationCatalog.tech()), 62 * 4)
 
     def test_location_ids_in_range(self) -> None:
-        from worlds.ksp1.locations import LOCATION_TABLE
-        tech_locs = {
-            name: offset for name, offset in LOCATION_TABLE.items()
-            if offset >= 3000 and offset < 4000
-        }
-        self.assertEqual(len(tech_locs), 62 * 4)
+        from worlds.ksp1.locations.catalog import KSP1_BASE_ID, LocationCatalog
+        for loc in LocationCatalog.tech():
+            self.assertIn(LocationCatalog.id_of(loc) - KSP1_BASE_ID, range(3000, 4000), str(loc))
 
 
 if __name__ == "__main__":

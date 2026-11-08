@@ -1013,7 +1013,7 @@ class TestReturnTiers(unittest.TestCase):
         # _migrated_event_map is what points the generator's feasibility filter
         # at each tier's mission-location table rows.
         from worlds.ksp1.rules import _migrated_event_map
-        from worlds.ksp1.locations import EventName
+        from worlds.ksp1.locations.events import EventName
         m = _migrated_event_map()
         self.assertEqual(m[C.ContractType.SOI_RETURN], EventName.SOI_RETURN)
         self.assertEqual(m[C.ContractType.ORBIT_RETURN], EventName.ORBIT_RETURN)
@@ -1098,8 +1098,9 @@ class TestStarNotAMissionDestination(unittest.TestCase):
         self.assertEqual(sun_specs, [], f"star has contracts: {sun_specs}")
 
     def test_star_has_no_registered_locations(self):
-        from worlds.ksp1.locations import LOCATION_NAME_TO_ID
-        sun_locs = [n for n in LOCATION_NAME_TO_ID if BodyName.KERBOL in n]
+        from worlds.ksp1.locations.catalog import LocationCatalog
+        sun_locs = [str(d) for d in LocationCatalog.all()
+                    if getattr(d, "body", None) == BodyName.KERBOL]
         self.assertEqual(sun_locs, [], f"star has location checks: {sun_locs}")
 
     def test_orbit_flyby_options_reject_the_star(self):

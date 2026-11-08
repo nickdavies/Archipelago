@@ -1,13 +1,13 @@
 import math
 import os
 import random
-from typing import Any
+from typing import Any, assert_never
 
 from BaseClasses import CollectionState, Item, MultiWorld, Tutorial
 from Options import OptionError
 from worlds.AutoWorld import LogicMixin, WebWorld, World
 
-from . import body_visibility, contracts, items, locations, regions, rules
+from . import body_visibility, contracts, items, regions, rules
 from .data import lifter_chains
 from .parts import part_manager_for
 from .ksc_sites import ksc_site_slot_data
@@ -30,12 +30,18 @@ from .items import (
     PROGRESSIVE_VAB_NAME, PROGRESSIVE_TRACKING_STATION_NAME,
     PROGRESSIVE_ASTRONAUT_COMPLEX_NAME, PROGRESSIVE_MISSION_CONTROL_NAME,
 )
-from .locations import (
-    ALL_EVENTS, EVENT_BY_NAME, EventName, KSC_BIOMES, KSC_LOCATION_PREFIX,
-    LOCATION_NAME_TO_ID, LocationBuilder, MAX_TECH_SLOTS,
-    THRESHOLD_LOCATION_NAMES, TechTreeLocation, event_locations,
-    effective_starting_inv_count, effective_tech_slots_per_node,
+from .locations.ap import (
+    create_all_locations, effective_starting_inv_count, effective_tech_slots_per_node,
 )
+from .locations.catalog import LocationCatalog
+from .locations.configured import ConfiguredLocations
+from .locations.defs import (
+    ContractLocation, HomeLocation, KSP1LocationDef, KscBiomeLocation,
+    MissionLocation, SplashdownLocation, StartingInventoryLocation,
+    TechTreeLocation, ThresholdLocation,
+)
+from .locations.events import ALL_EVENTS
+from .locations.seed import ContractThreshold, SeedLocations
 
 # Curated edge bans: graph subsections too tedious to fly, banned by POLICY
 # (independent of the dv feasibility verdict).  Expressed as edges, not
@@ -49,7 +55,10 @@ _BANNED_EDGES: frozenset[tuple[BodyName, EdgeType]] = frozenset(
     {(BodyName.EVE, EdgeType.ATMOSPHERIC_ASCENT)}
 )
 from .options import BuffDensity, Difficulty, Goal, GoalContractMode, KSP1Options, PhysicsDifficulty, STARTING_BODY_POOLS, StartingBody, TrapDensity
-from .tech_tree import MAX_TIER, NODES_BY_TIER, TECH_NODES, TIER_TO_BAND
+from .tech_tree import MAX_TIER, TECH_NODES, TIER_TO_BAND
+
+#: UT location sort: per-body checks follow ALL_BODIES order.
+_BODY_SORT_INDEX: dict[BodyName, int] = {b.name: i for i, b in enumerate(ALL_BODIES)}
 from .effects import RD_FACILITY_THRESHOLDS
 
 
@@ -143,9 +152,7 @@ def _validate_goal_not_excluded(
     # them as exactly ``str(TechTreeLocation(leaf, 1))``; subtract that same
     # structured set rather than prefix-matching the name.
     from .tech_tree import LEAF_TECH_NODES
-    tech_goal_names = {
-        str(TechTreeLocation(n.display_name, 1)) for n in LEAF_TECH_NODES
-    }
+    tech_goal_names = {str(TechTreeLocation(n, 1)) for n in LEAF_TECH_NODES}
     mission_goal_names = goal_names - tech_goal_names
     conflict = mission_goal_names & exclude_locations
     if not conflict:
@@ -171,10 +178,9 @@ def _validate_goal_contracts_registrable(goal_contract_specs) -> None:
     ``ORBITABLE_BODY_NAMES`` (the star has no missions), so this is defense in
     depth: fail fast with a clear message if any path ever slips one through.
     """
-    from .locations import CONTRACT_LOCATION_NAME_SET
     bad = sorted(
         s.location_name for s in goal_contract_specs
-        if s.location_name not in CONTRACT_LOCATION_NAME_SET
+        if not isinstance(LocationCatalog.by_name(s.location_name), ContractLocation)
     )
     if not bad:
         return
@@ -267,7 +273,7 @@ class KSP1World(World):
     options: KSP1Options
 
     item_name_to_id = ITEM_NAME_TO_ID
-    location_name_to_id = LOCATION_NAME_TO_ID
+    location_name_to_id = dict(LocationCatalog.name_to_id())
 
     # Fingerprint → RocketCapability, shared across all CollectionState copies
     capability_cache: dict[frozenset[tuple[str, int]], RocketCapability]
@@ -280,11 +286,10 @@ class KSP1World(World):
     # state.
     mission_builder: MissionBuilder
 
-    # Per-world home-body location set (11 home specials: first launch /
-    # landing / crash, altitude milestones, first staging — plus the single
-    # body-agnostic "Splashdown" entry).  Owned alongside ``mission_builder``
-    # so the two stay in sync on the same home.
-    location_builder: LocationBuilder
+    # Every location this world emits (settings-derived + contracts and
+    # thresholds).  Built once in generate_early, after contracts resolve; see
+    # ``locations/__init__.py`` for the lifetimes.
+    seed_locations: SeedLocations
 
     # AP location names whose mission the dv model can't verify from this
     # world's home, even given a full progressive kit + every part.
@@ -311,14 +316,8 @@ class KSP1World(World):
     gated_hidden_bodies: list
     # Goal-mode (count / progressive_unlock) state. Resolved in generate_early.
     # ``contracts_required`` is X (completed non-goal contracts needed for the
-    # goal). ``contract_threshold_defs`` is the list of
-    # ``(threshold_location_name, required_count, locked_item_name)`` triples —
-    # each threshold is a pre-filled location the client reports once the
-    # completed-contract count reaches ``required_count``, releasing the locked
-    # goal contract item (or Progressive R&D copy for the tech-tree goal). Empty
-    # in findable / starting modes.
+    # goal); the thresholds themselves live on ``seed_locations.thresholds``.
     contracts_required: int
-    contract_threshold_defs: list
     # Part ksp_names this seed's contracts require — promoted to progression in
     # items.create_item so AP guarantees them reachable before the contract.
     contract_required_part_names: frozenset[str]
@@ -463,15 +462,19 @@ class KSP1World(World):
             unachievable |= self.mission_builder.missions_using_edges(banned)
         self.unachievable_missions = frozenset(unachievable)
         self.mission_builder.unachievable = self.unachievable_missions
-        # The builder emits only reachable mission locations — it needs the
-        # unachievable set, so it is built here, once that set is known.  It is
-        # the single owner of the emitted/excluded split; the name-keyed
-        # ``model_infeasible_locations`` (goal spec, contracts) is just its
-        # excluded view.  The offline feasibility generator constructs a RAW
-        # builder (empty ``unachievable``) so it keeps probing true max kit.
-        self.location_builder = LocationBuilder(
-            home=home, unachievable=self.unachievable_missions)
-        self.model_infeasible_locations = self.location_builder.excluded_mission_names
+        # The settings-derived location set: it emits only reachable missions,
+        # so it is built here, once the unachievable set is known.  It owns the
+        # emitted/excluded split; the name-keyed ``model_infeasible_locations``
+        # (goal spec, contracts) is just its excluded view.  It becomes part of
+        # ``self.seed_locations`` once contracts resolve below.
+        configured = ConfiguredLocations.from_settings(
+            home=home,
+            starting_inv_count=effective_starting_inv_count(self.options, _diff),
+            tech_slots=effective_tech_slots_per_node(self.options, _diff),
+            unachievable=self.unachievable_missions,
+        )
+        self.model_infeasible_locations = frozenset(
+            str(ml) for ml in configured.excluded_missions)
         self.goal_spec = resolve_goal_spec(
             self.options, self.mission_builder.home,
             self.model_infeasible_locations,
@@ -582,7 +585,12 @@ class KSP1World(World):
         _validate_goal_contracts_registrable(self.goal_contract_specs)
 
         # Goal contract mode: validate + resolve X and the threshold locations.
-        self._resolve_goal_contract_mode()
+        thresholds = self._resolve_goal_contract_mode()
+
+        # Contracts and thresholds are resolved: the location set is final.
+        self.seed_locations = SeedLocations.build(
+            configured, (*self.contract_specs, *self.goal_contract_specs),
+            self.locations_per_contract, thresholds)
 
         # Hidden-body visibility: resolve the mode (auto -> home_only/home_system
         # by goal reach) and derive which bodies start hidden and which of those
@@ -601,12 +609,11 @@ class KSP1World(World):
             self.hidden_bodies, regions.location_owning_bodies(self))
 
         if self.options.exclude_late_tech_tree:
-            late_tier_locs: set[str] = {
-                str(TechTreeLocation(node.display_name, slot))
-                for node in NODES_BY_TIER.get(MAX_TIER, [])
-                for slot in range(1, MAX_TECH_SLOTS + 1)
+            # Every possible slot (not just this seed's), matching the
+            # registered universe the yaml option can name.
+            self.options.exclude_locations.value |= {
+                str(loc) for loc in LocationCatalog.tech() if loc.node.tier == MAX_TIER
             }
-            self.options.exclude_locations.value |= late_tier_locs
 
         # Final exclude_locations is resolved (yaml + late-tech-tree).  Now
         # verify no goal location ended up excluded — that combination is
@@ -616,15 +623,15 @@ class KSP1World(World):
             self.goal_spec, frozenset(self.options.exclude_locations.value),
         )
 
-    def _resolve_goal_contract_mode(self) -> None:
+    def _resolve_goal_contract_mode(self) -> tuple[ContractThreshold, ...]:
         """Validate the goal-contract-mode configuration and build the threshold
         locations (count / progressive_unlock). Fail fast with ``OptionError`` on
         any unsolvable combination — predictable structural violations belong at
         generate_early, not as an opaque FillError later.
 
-        Sets ``self.contracts_required`` (X) and ``self.contract_threshold_defs``
-        (empty in findable / starting). UT regen restores X from slot_data; the
-        threshold defs recompute deterministically from the restored contracts."""
+        Sets ``self.contracts_required`` (X) and returns the thresholds (empty in
+        findable / starting). UT regen restores X from slot_data; the thresholds
+        recompute deterministically from the restored contracts."""
         mode = self.options.goal_contract_mode.value
         is_random = self.options.goal.value == Goal.option_random_contracts
         is_tech = self.goal_spec.complete_tech_tree
@@ -642,8 +649,7 @@ class KSP1World(World):
 
         if not needs_thresholds:
             self.contracts_required = 0
-            self.contract_threshold_defs = []
-            return
+            return ()
 
         # count / progressive need contracts to count toward.
         n_contracts = len(self.contract_specs)
@@ -697,18 +703,22 @@ class KSP1World(World):
                 s.item_name for s in contracts.goal_contracts_easiest_first(self)
             ]
 
+        # count: every goal item unlocks together at X. progressive: staggered
+        # so the k-th unlocks exactly at X.
         k = len(threshold_items)
-        defs: list = []
-        for i, item_name in enumerate(threshold_items, start=1):
-            # count: every goal item unlocks together at X. progressive: staggered
-            # so the k-th unlocks exactly at X.
-            count = x if mode == GoalContractMode.option_count else math.ceil(i * x / k)
-            defs.append((THRESHOLD_LOCATION_NAMES[i - 1], count, item_name))
-        self.contract_threshold_defs = defs
+        return tuple(
+            ContractThreshold(
+                location=LocationCatalog.thresholds()[i - 1],
+                required_count=(x if mode == GoalContractMode.option_count
+                                else math.ceil(i * x / k)),
+                item_name=item_name,
+            )
+            for i, item_name in enumerate(threshold_items, start=1)
+        )
 
     def create_regions(self) -> None:
         regions.create_all_regions(self)
-        locations.create_all_locations(self)
+        create_all_locations(self)
         rules.create_victory_location(self)
         rules.create_threshold_locations(self)
 
@@ -928,9 +938,8 @@ class KSP1World(World):
         ksc_site = ksc_site_slot_data(self.mission_builder.home)
         if ksc_site is not None:
             d["ksc_site"] = ksc_site
-        d["tech_slots_per_node"] = effective_tech_slots_per_node(
-            self.options, self.options.difficulty.value
-        )
+        configured = self.seed_locations.configured
+        d["tech_slots_per_node"] = configured.tech_slots
         # Resolved physics profile name (generous/comfortable/small/zero).  The
         # C# client ignores it, but Universal Tracker regen needs it to rebuild
         # logic with the same dv margins (else an explicit-physics seed would
@@ -943,20 +952,15 @@ class KSP1World(World):
         # Authoritative data for C# client — eliminates hardcoded dicts.
         d["event_scales"] = {e.name: e.scale for e in ALL_EVENTS}
         d["tech_display_names"] = {n.node_id: n.display_name for n in TECH_NODES}
-        # Per-home biome_key -> AP location name map.  The client populates
-        # its detection table directly from this; it has no hardcoded copy.
-        # ``location_builder.ksc_biomes`` filters out the ``KSC`` catchall
-        # entry on non-Kerbin homes (the surrounding terrain doesn't
-        # report as that biome off Kerbin).
+        # Per-home biome_key -> AP location name map, in KscBiome order (the
+        # client's sub-biome fallback depends on it).  The client populates its
+        # detection table directly from this; it has no hardcoded copy.  Kerbin-
+        # only biomes are already dropped on alien homes.
         d["ksc_biome_locations"] = {
-            key: KSC_LOCATION_PREFIX + name
-            for key, name in self.location_builder.ksc_biomes
+            loc.biome.key: str(loc) for loc in configured.ksc_biomes
         }
         home_altitude_thresholds = [
-            int(loc.threshold_km * 1000)
-            for loc in self.location_builder.locations
-            if loc.mission_type == MissionType.SOUNDING and loc.threshold_km is not None
-            and loc.threshold_km >= 1.0  # exclude "First Crash" (0.1 km)
+            loc.altitude_km * 1000 for loc in configured.altitude_milestones
         ]
         d["home_altitude_thresholds"] = home_altitude_thresholds
         # Backwards-compat alias for client v0.3.x.  The renamed
@@ -976,9 +980,7 @@ class KSP1World(World):
         sci_values = home_relative_science_values(self.mission_builder.home)
         if sci_values:
             d["science_values"] = sci_values
-        d["starting_inv_count"] = effective_starting_inv_count(
-            self.options, self.options.difficulty.value
-        )
+        d["starting_inv_count"] = len(configured.starting_inventory)
         # Mass-cap progression: only set when option is enabled. Caps are in
         # tonnes, indexed by collected count of "Progressive Launch Pad"
         # (0..N). The sentinel -1.0 marks "unlimited" so JSON can carry it.
@@ -1069,8 +1071,8 @@ class KSP1World(World):
         d["contracts_required"] = self.contracts_required
         d["contracts_available"] = self.options.contracts_available.value
         thresholds_map: dict[str, list[str]] = {}
-        for loc_name, count, _item in self.contract_threshold_defs:
-            thresholds_map.setdefault(str(count), []).append(loc_name)
+        for t in self.seed_locations.thresholds:
+            thresholds_map.setdefault(str(t.required_count), []).append(str(t.location))
         d["contract_thresholds"] = thresholds_map
         # Pre-cached lifter profile chosen this seed (or None when no table
         # covers this home/pack/difficulty).  Carried only so UT regen picks
@@ -1365,24 +1367,30 @@ class KSP1World(World):
 
     def _contract_spec_for_name(self, name: str):
         """The ContractSpec whose location matches ``name``, or None. Looks up the
-        world's own specs (the source of truth) rather than parsing the display
-        name, so /explain covers every contract type without per-type handling."""
-        for spec in (*self.contract_specs, *self.goal_contract_specs):
-            if name in spec.location_names(self.locations_per_contract):
-                return spec
-        return None
+        world's own emitted locations (the source of truth) rather than parsing
+        the display name, so /explain covers every contract type without
+        per-type handling."""
+        defn = self.seed_locations.by_name(name)
+        return defn.spec if isinstance(defn, ContractLocation) else None
 
     def custom_ut_sort(self, region_label: str, location_label: str) -> str:
-        """UT hook: sort by body order (ALL_BODIES), then tech tree, then KSC."""
-        body_order = {b.name: f"A_{i:02d}" for i, b in enumerate(ALL_BODIES)}
-        for prefix, sort_key in body_order.items():
-            if location_label.startswith(prefix + " "):
-                return f"{sort_key}_{location_label}"
-        if region_label.startswith("Tech "):
-            return f"B_{location_label}"
-        if location_label.startswith(KSC_LOCATION_PREFIX) or location_label.startswith("Starting "):
-            return f"Z_{location_label}"
-        return f"C_{location_label}"
+        """UT hook: sort by body order (ALL_BODIES), then tech tree, then the
+        body-less checks, with KSC science and starting inventory last."""
+        return f"{self._ut_sort_group(self.seed_locations.by_name(location_label))}_{location_label}"
+
+    @staticmethod
+    def _ut_sort_group(defn: KSP1LocationDef | None) -> str:
+        match defn:
+            case MissionLocation() | HomeLocation() | ContractLocation():
+                return f"A_{_BODY_SORT_INDEX[defn.body]:02d}"
+            case TechTreeLocation():
+                return "B"
+            case SplashdownLocation() | ThresholdLocation() | None:
+                return "C"
+            case KscBiomeLocation() | StartingInventoryLocation():
+                return "Z"
+            case _:
+                assert_never(defn)
 
     def collect_item(self, state: CollectionState, item: Item, remove: bool = False) -> str | None:
         if item.advancement or item.name in CAPABILITY_ITEMS:
