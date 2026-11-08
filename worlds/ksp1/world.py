@@ -42,7 +42,9 @@ from .locations.defs import (
     TechTreeLocation, ThresholdLocation,
 )
 from .locations.events import ALL_EVENTS
+from .locations.groups import LOCATION_NAME_GROUPS
 from .locations.seed import ContractThreshold, SeedLocations
+from .item_groups import ITEM_NAME_GROUPS
 
 # Curated edge bans: graph subsections too tedious to fly, banned by POLICY
 # (independent of the dv feasibility verdict).  Expressed as edges, not
@@ -285,6 +287,8 @@ class KSP1World(World):
 
     item_name_to_id = ITEM_NAME_TO_ID
     location_name_to_id = dict(LocationCatalog.name_to_id())
+    item_name_groups = dict(ITEM_NAME_GROUPS)
+    location_name_groups = dict(LOCATION_NAME_GROUPS)
 
     # Fingerprint → RocketCapability, shared across all CollectionState copies
     capability_cache: dict[frozenset[tuple[str, int]], RocketCapability]
