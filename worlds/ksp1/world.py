@@ -1,11 +1,12 @@
 import math
 import os
 import random
-from typing import Any, assert_never
+from typing import Any, Union, assert_never
 
 from BaseClasses import CollectionState, Item, MultiWorld, Tutorial
 from Options import OptionError
 from worlds.AutoWorld import LogicMixin, WebWorld, World
+from settings import Group, FilePath
 
 from . import body_visibility, contracts, items, regions, rules
 from .data import lifter_chains
@@ -56,6 +57,7 @@ _BANNED_EDGES: frozenset[tuple[BodyName, EdgeType]] = frozenset(
 )
 from .options import BuffDensity, Difficulty, Goal, GoalContractMode, KSP1Options, PhysicsDifficulty, STARTING_BODY_POOLS, StartingBody, TrapDensity
 from .tech_tree import MAX_TIER, TECH_NODES, TIER_TO_BAND
+from .ut_map import UT_MAP_HOMES
 
 #: UT location sort: per-body checks follow ALL_BODIES order.
 _BODY_SORT_INDEX: dict[BodyName, int] = {b.name: i for i, b in enumerate(ALL_BODIES)}
@@ -252,6 +254,14 @@ _FACILITY_ITEM_MAP: dict[str, dict] = {
                        "SpaceCenter/SpaceplaneHangar"], "thresholds": [1, 2]},
 }
 
+class KSPSettings(Group):
+    class UTPackPath(FilePath):
+        """Path to the map pack zip"""
+        required=False
+        ut_dialog_name="Select Map Zip"
+
+    ut_pack_path: Union[UTPackPath,str] = UTPackPath("")
+
 
 class KSP1World(World):
     """
@@ -271,6 +281,7 @@ class KSP1World(World):
 
     options_dataclass = KSP1Options
     options: KSP1Options
+    settings: KSPSettings
 
     item_name_to_id = ITEM_NAME_TO_ID
     location_name_to_id = dict(LocationCatalog.name_to_id())
@@ -321,6 +332,21 @@ class KSP1World(World):
     # Part ksp_names this seed's contracts require — promoted to progression in
     # items.create_item so AP guarantees them reachable before the contract.
     contract_required_part_names: frozenset[str]
+
+    def __init__(self, multiworld: MultiWorld, player: int):
+        super().__init__(multiworld, player)
+        self._ut_active = False
+        self.tracker_world = { #normally a ClassVar but the map index requires crimes
+            "map_page_folder":"tracker",
+            "external_pack_key":"ut_pack_path",
+            "map_page_maps":"maps.json",
+            "map_page_locations":"locations.json",
+            "map_page_index":self.map_index
+        }
+
+    def map_index(self, data) -> int:
+        """UT map tab to open: this seed's home map (``maps.json`` order)."""
+        return UT_MAP_HOMES.index(self.mission_builder.home)
 
     def generate_early(self) -> None:
         """Resolve goal spec and apply ExcludeLateTechTree."""
@@ -740,7 +766,7 @@ class KSP1World(World):
         # ladder must stay unbuilt there. Historically that fell out of UT not
         # calling pre_fill; now that the build lives in set_rules (which UT does
         # call), the skip is explicit.
-        if not getattr(self, "_ut_active", False):
+        if not self._ut_active:
             from .sphere_ladder import apply_sphere_ladder
             apply_sphere_ladder(self)
 

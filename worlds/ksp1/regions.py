@@ -14,6 +14,8 @@ Region layout:
     body's region.  A **hidden** body's entrance additionally requires its
     ``Discover`` item; the home body always connects straight from Menu (it is
     the start, never gated behind a possibly-hidden parent).
+  * Universal Tracker only: dead-end per-body entrance regions for the map tab
+    (``_create_ut_map_entrances``).
 """
 from __future__ import annotations
 
@@ -71,6 +73,9 @@ def create_all_regions(world: KSP1World) -> None:
 
     _create_body_regions(world, menu)
 
+    if world._ut_active:
+        _create_ut_map_entrances(world)
+
 
 def location_owning_bodies(world: KSP1World) -> frozenset[BodyName]:
     """Bodies that own at least one emitted location in this world.
@@ -103,6 +108,36 @@ def bodies_needing_regions(world: KSP1World) -> list[BodyName]:
             cur = BODY_BY_NAME[cur].parent
 
     return [b.name for b in ALL_BODIES if b.name in needed]
+
+
+def _create_ut_map_entrances(world: KSP1World) -> None:
+    """Universal Tracker only: one dead-end region per (body, ``UT_ENTRANCES``)
+    for the map tab, named with the mission's raw profile dV.
+
+    Never created during generation — they hold no locations, so they would
+    only add fill cost.  Each entrance mirrors its mission location's
+    reachability (whatever rule is live: capability under UT), so it always
+    agrees with that location's dot; missions this world doesn't emit get no
+    entrance.
+    """
+    from .bodies import mission_dv
+    from .ut_map import UT_ENTRANCES
+
+    configured = world.seed_locations.configured
+    player = world.player
+    mw = world.multiworld
+    for body in bodies_needing_regions(world):
+        region = world.get_region(body_region_name(body))
+        for entrance in UT_ENTRANCES:
+            mirrored = configured.emitted_mission(body, entrance.event)
+            if mirrored is None:
+                continue
+            name = entrance.name(body)
+            dv = mission_dv(body, configured.home, entrance.mission)
+            target = Region(f"{name} dV {int(dv)}", player, mw)
+            mw.regions.append(target)
+            region.connect(target, name, rule=lambda state, loc=str(mirrored):
+                           state.can_reach_location(loc, player))
 
 
 def _create_body_regions(world: KSP1World, menu: Region) -> None:

@@ -2700,7 +2700,7 @@ SITUATION_FIELD_TO_ATTR: dict[str, str] = {
 # Cache MissionBuilder per home — construction is heavy (builds the full
 # mission graph + every (body, mission_type) profile) but the result is
 # deterministic and pure.  Sharing a single builder per home across all
-# ``_return_dv`` calls means we pay the cost ~once per process.
+# ``mission_dv`` calls means we pay the cost ~once per process.
 @lru_cache(maxsize=None)
 def _mission_builder_for(home: BodyName) -> "MissionBuilder":
     return MissionBuilder(home=home)
@@ -2716,17 +2716,16 @@ _INTERPLANETARY_PREMIUM: float = 1.67
 
 
 @lru_cache(maxsize=None)
-def _return_dv(body: BodyName, home: BodyName) -> float:
-    """Cheapest round-trip Δv from ``home`` to ``body`` and back, using
-    ``MissionType.RETURN`` profiles (both legs + capture / aerobrake).
+def mission_dv(body: BodyName, home: BodyName, mission: MissionType) -> float:
+    """Cheapest raw Δv from ``home`` for ``mission`` to ``body``: the sum of
+    the profile's edge ``base_dv``, with no difficulty margin — the
+    delta-v-map convention (theoretical physics, not the seed's requirement).
 
-    Round-trip rather than one-way because Kerbin's thick atmosphere
-    makes one-way capture from any vacuum body nearly free (aerobrake);
-    the return leg has to actually climb back out of Kerbin's gravity well.
-
-    Returns ``inf`` when no return profile exists (e.g. Kerbol)."""
+    Uses a default ``MissionBuilder`` for ``home``, so the value is a static
+    function of (body, home, mission).  Returns ``inf`` when no profile exists
+    (e.g. Kerbol)."""
     builder = _mission_builder_for(home)
-    profiles = builder.profiles_for(body, MissionType.RETURN)
+    profiles = builder.profiles_for(body, mission)
     if not profiles:
         return float("inf")
     return min(sum(e.base_dv for e in profile) for profile in profiles)
@@ -2791,8 +2790,11 @@ def _mission_scalar(
        a sibling-moon hop from the new home.
 
     Falls back to 1.0 when reference data is missing / unreachable."""
-    dv_now = _return_dv(body, home)
-    dv_ref = _return_dv(ref_body, ref_home)
+    # Round-trip RETURN Δv rather than one-way: Kerbin's thick atmosphere
+    # makes one-way capture from any vacuum body nearly free (aerobrake); the
+    # return leg has to actually climb back out of Kerbin's gravity well.
+    dv_now = mission_dv(body, home, MissionType.RETURN)
+    dv_ref = mission_dv(ref_body, ref_home, MissionType.RETURN)
     if (dv_now == float("inf")
             or dv_ref == float("inf")
             or dv_ref == 0.0):
