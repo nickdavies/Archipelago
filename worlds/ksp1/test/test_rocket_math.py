@@ -756,5 +756,54 @@ class TestStageMonotonicity(unittest.TestCase):
                       "uncapped set keeps the wide tank (guard)")
 
 
+class TestParallelBoosterMount(unittest.TestCase):
+    """Booster columns hang on radial decouplers, which have no stack node, so
+    only surface-attachable (RADIAL_MOUNT) tanks can build them.  The FL-A
+    adapters and R-12 Doughnut are stack-only (attachRules srfAttach=0) —
+    play-tested; the old model hung them on decouplers anyway."""
+
+    _ASCENT = dict(
+        required_dv=4500.0,
+        payload_mass=1.0,
+        gravity=9.81,
+        min_twr=1.5,
+        in_atmosphere=True,
+        atm_scale_height_m=5600.0,
+        atm_top_m=70000.0,
+        parallel_mode="asparagus",
+        radial_decoupler_mass=0.025,
+        radial_decoupler_name="radialDecoupler",
+        fuel_line_mass=0.05,
+        fuel_line_name="fuelLine",
+        player_has_rcs=True,
+    )
+    _SRF = ("fuelTank", "fuelTank.long")
+    _STACK_ONLY = ("Size1p5.Size1.Adapter.01", "Size1p5.Size1.Adapter.02",
+                   "externalTankToroid")
+
+    def _build(self, names):
+        return find_optimal_stage(
+            available_engines=[_SWIVEL], available_srbs=[],
+            available_tanks=[_p(n) for n in names], **self._ASCENT)
+
+    def test_stack_only_tanks_cannot_build_boosters(self) -> None:
+        guard = self._build(self._SRF)
+        self.assertIsNotNone(guard)
+        assert guard is not None
+        self.assertGreater(guard.n_boosters, 0,
+                           "srf-tank kit must need asparagus here (guard)")
+        res = self._build(self._STACK_ONLY)
+        self.assertTrue(res is None or res.n_boosters == 0,
+                        f"stack-only tanks hung on radial decouplers: {res}")
+
+    def test_mixed_kit_boosters_use_radial_mount_tanks_only(self) -> None:
+        res = self._build(self._SRF + self._STACK_ONLY)
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertGreater(res.n_boosters, 0)
+        self.assertEqual({name for _n, name in res.tank_manifest}
+                         & set(self._STACK_ONLY), set())
+
+
 if __name__ == "__main__":
     unittest.main()

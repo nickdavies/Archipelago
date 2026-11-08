@@ -76,9 +76,10 @@ class FuelTank:
     size_class: float       # metres
     max_count: int = 0      # 0 = unlimited; >0 caps optimizer tank count (adapters)
     # Structural roles derived from attach-node geometry (see part_geometry).
-    # SPINE = can be a stage's central stackable column; RADIAL_MOUNT = side/drop
-    # booster only.  Replaces the old bulkhead-only is_radial, which mis-modelled
-    # single-node/slanted/coupler tanks (FL-C1000, slant adapters) as spines.
+    # SPINE = can be a stage's central stackable column; RADIAL_MOUNT = can
+    # surface-attach (hang on a radial decoupler).  Replaces the old bulkhead-only
+    # is_radial, which mis-modelled single-node/slanted/coupler tanks (FL-C1000,
+    # slant adapters) as spines.
     roles: frozenset[PartRole] = field(default_factory=frozenset)
     # Per-propellant mass at 100% fill (tonnes), e.g. {"LiquidFuel": 0.5,
     # "Oxidizer": 0.5} for an LFO tank. Lets an engine that needs only a

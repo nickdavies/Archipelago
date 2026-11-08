@@ -41,7 +41,7 @@ MODEL_INFEASIBLE_BASE: dict[str, dict[BodyName, frozenset[tuple[BodyName, Missio
         BodyName.MOHO: frozenset(),
         BodyName.MUN: frozenset(),
         BodyName.POL: frozenset(),
-        BodyName.TYLO: frozenset(),
+        BodyName.TYLO: frozenset({(BodyName.EVE, MissionType.SAMPLE_RETURN)}),
         BodyName.VALL: frozenset(),
     },
     'comfortable': {
@@ -108,9 +108,8 @@ MODEL_INFEASIBLE_DELTAS: dict[
 ] = {
     ('Stock',): {
         'generous': {
-            BodyName.EVE: (frozenset({(BodyName.MOHO, MissionType.RETURN)}), frozenset()),
+            BodyName.EVE: (frozenset({(BodyName.MOHO, MissionType.RETURN), (BodyName.VALL, MissionType.RETURN)}), frozenset()),
             BodyName.LAYTHE: (frozenset({(BodyName.EVE, MissionType.RETURN)}), frozenset()),
-            BodyName.TYLO: (frozenset({(BodyName.EVE, MissionType.SAMPLE_RETURN)}), frozenset()),
         },
     },
 }
@@ -149,5 +148,4 @@ ASSEMBLY_ELIGIBLE_MISSIONS: frozenset[
     (BodyName.EVE, BodyName.VALL, MissionType.RETURN),
     (BodyName.KERBIN, BodyName.EVE, MissionType.SAMPLE_RETURN),
     (BodyName.TYLO, BodyName.EVE, MissionType.RETURN),
-    (BodyName.TYLO, BodyName.EVE, MissionType.SAMPLE_RETURN),
 })

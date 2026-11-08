@@ -54,11 +54,14 @@ class _OrbitKitLocalMixin:
             "bootstrap into another world",
         )
         # It must be the per-seed kit, not a whole category — a category would
-        # gut the multiworld (all pods/engines/tanks stuck local). The
-        # home-orbit kit is a handful of parts; the smallest category
-        # (control sources) is 27.
+        # gut the multiworld (all pods/engines/tanks stuck local). The kit's
+        # size varies per seed (a heavy capsule pick drags in a heavy lifter:
+        # 16 parts seen), but it stays below the smallest category, the
+        # control sources.
+        control_sources = [n for n in self.world.part_manager.parts
+                           if _has_control_source(self.world, n)]
         self.assertLess(
-            len(local), 15,
+            len(local), len(control_sources),
             f"local_items looks like a category, not the per-seed kit: "
             f"{sorted(local)}",
         )

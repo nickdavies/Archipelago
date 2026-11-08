@@ -802,10 +802,12 @@ def _pre_pass(item_count_fn: Callable[[str], int],
                 continue
             # Roles are part of the dedup identity: stat-identical tanks with
             # different structural roles are NOT interchangeable — the stage
-            # builder mounts SPINE tanks only, so letting a RADIAL_MOUNT tank
+            # builder mounts SPINE tanks only, so letting a radial-only tank
             # (radialRCSTank) evict a stat-twin SPINE tank (rcsTankMini) makes
             # acquiring the radial tank LOSE every mission with a monoprop
-            # stage (bug-092-class non-monotonicity).
+            # stage (bug-092-class non-monotonicity).  Likewise a stack-only
+            # spine must not evict a RADIAL_MOUNT spine twin, which is the only
+            # kind the parallel builder can hang on a radial decoupler.
             key = (engine_ft, tank.dry_mass, eff_mass, tank.size_class,
                    tank.roles)
             if key in seen_tank_stats:

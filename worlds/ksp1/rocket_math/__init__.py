@@ -120,7 +120,7 @@ def _tank_ratio(t):
     return t.fuel_mass / t.dry_mass if t.dry_mass > 0.0 else float("inf")
 
 
-def _packable_tanks(tanks, engine, max_tank_size=None):
+def _packable_tanks(tanks, engine, max_tank_size=None, radial_mount=False):
     """Return ``(pack_ctx, rho_star)``: the packing context for this engine
     and the best fuel:dry ratio among its mountable tanks.  ``pack_ctx`` is
     ``(packable, boundaries, cov_fuels, cov_tanks)`` — or ``None`` when the
@@ -139,6 +139,12 @@ def _packable_tanks(tanks, engine, max_tank_size=None):
     tanks, single-node tanks like the FL-C1000, slanted/coupler adapters) can't
     form a central stackable column and are excluded, and the optimizer's size
     gate (``engine.size_class <= tank.size_class``) is applied.
+
+    ``radial_mount`` (set by the parallel builder) additionally requires
+    ``RADIAL_MOUNT``: every column is identical and booster columns hang on a
+    radial decoupler, which has no stack node, so a stack-only tank (FL-A
+    adapters, R-12 Doughnut, FL-R RCS tanks) can't mount one.  Filtering the set
+    rather than the pack keeps it monotone — a larger kit never loses a tank.
 
     ``max_tank_size`` (set on shielded stages to the largest owned heat shield's
     size) excludes tanks WIDER than any shield can cover.  A reentry stage's
@@ -169,6 +175,7 @@ def _packable_tanks(tanks, engine, max_tank_size=None):
     heavier than a smaller one)."""
     mountable = [t for t in tanks
                  if PartRole.SPINE in t.roles and t.fuel_mass > 0.0
+                 and (not radial_mount or PartRole.RADIAL_MOUNT in t.roles)
                  and engine.size_class <= t.size_class
                  and (max_tank_size is None or t.size_class <= max_tank_size)]
     if not mountable:
@@ -862,7 +869,8 @@ def _find_optimal_parallel_stage(
         _cap = (max_heat_shield_size
                 if (needs_heat_shield and max_heat_shield_size is not None)
                 else None)
-        pack_ctx, _rho = _packable_tanks(compatible, engine, max_tank_size=_cap)
+        pack_ctx, _rho = _packable_tanks(compatible, engine, max_tank_size=_cap,
+                                         radial_mount=True)
         if pack_ctx is None:
             continue
 

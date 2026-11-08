@@ -47,7 +47,9 @@ def _max_kit(exclude: frozenset[str] = frozenset()):
 
 class TestEligibilitySet(unittest.TestCase):
     """Lock the probed set: the missions some difficulty can close ONLY by
-    multi-launch assembly.  Kerbin/Tylo keep their Eve tails; Laythe's Eve
+    multi-launch assembly.  Kerbin keeps its Eve SSR tail and Tylo its Eve
+    RETURN; Tylo's Eve SSR left when booster columns stopped hanging
+    stack-only tanks (the R-12 Doughnut) on radial decouplers; Laythe's Eve
     SSR left the set when escalated parallel sub-stages (bug 093) made its
     single launch expressible; the Eve-home Pol/Vall RETURN triples entered
     when the same lever made the generous mesa lifter big enough to lift
@@ -59,7 +61,6 @@ class TestEligibilitySet(unittest.TestCase):
             (BodyName.EVE, BodyName.VALL, MissionType.RETURN),
             (BodyName.KERBIN, BodyName.EVE, MissionType.SAMPLE_RETURN),
             (BodyName.TYLO, BodyName.EVE, MissionType.RETURN),
-            (BodyName.TYLO, BodyName.EVE, MissionType.SAMPLE_RETURN),
         }))
 
 

@@ -16,11 +16,12 @@ Roles (a part may carry several):
 
 * ``SPINE`` — can be a stage's central, load-bearing column: at least two stack
   nodes, all colinear on a common vertical axis, with the centre of mass on that
-  axis.  Normal cylindrical tanks and *straight* adapters.  Also valid as a
-  radially-decoupled booster column.
-* ``RADIAL_MOUNT`` — surface-attachable to the side of a spine (drop tank /
-  radial booster): has a surface attach node and is **not** a ``SPINE``.  This is
-  the role that lets a single radial tank serve as a droppable booster.
+  axis.  Normal cylindrical tanks and *straight* adapters.
+* ``RADIAL_MOUNT`` — can itself surface-attach (``srfAttach``), so it can hang on
+  a radial decoupler or the side of a spine.  Independent of ``SPINE``: a radial
+  decoupler has no stack node, so a radially-decoupled booster column needs a
+  ``SPINE`` + ``RADIAL_MOUNT`` tank.  Stack-only spines (FL-A adapters, R-12
+  Doughnut, FL-R RCS tanks) can't hang there.
 * ``SPLITTER`` — one stack node one way, two-or-more the other: a coupler that
   fans a stack out to several mounts (multi-engine mounting).  Never a spine.
 
@@ -121,7 +122,6 @@ def derive_roles(geom: dict) -> frozenset[PartRole]:
         roles.add(PartRole.SPINE)
     if is_splitter(geom):
         roles.add(PartRole.SPLITTER)
-    # Radial-mount is the side-booster role: surface-attachable and not a spine.
-    if reject is not SpineReject.OK and has_surface_mount(geom):
+    if has_surface_mount(geom):
         roles.add(PartRole.RADIAL_MOUNT)
     return frozenset(roles)

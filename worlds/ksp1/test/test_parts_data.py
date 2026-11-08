@@ -15,6 +15,7 @@ from worlds.ksp1.parts import (
 # Internal data-integrity test: reaches into the private loader for the raw
 # universe + the dual-purpose table it asserts on.
 from worlds.ksp1.parts._raw import _DUAL_PURPOSE
+from worlds.ksp1.part_geometry import PartRole
 
 PART_DB = DEFAULT_PART_MANAGER.parts
 
@@ -147,6 +148,22 @@ class TestFuelTankSanity(unittest.TestCase):
                 tank.fuel_type, valid_types,
                 f"{name}: fuel_type {tank.fuel_type!r} not valid",
             )
+
+    def test_radial_mount_matches_in_game_attach(self) -> None:
+        # Play-tested in KSP: which spine tanks can be surface-attached (e.g.
+        # onto a radial decoupler).  Follows attachRules[1] (srfAttach) — NOT
+        # bulkheadProfiles, which lists "srf" on the FL-A adapters and the
+        # Doughnut even though they can't surface-attach.
+        can = ("Size3.Size4.Adapter.01", "noseConeAdapter")
+        cannot = ("Size1p5.Size0.Adapter.01", "Size1p5.Size1.Adapter.01",
+                  "Size1p5.Size1.Adapter.02", "RCSFuelTank",
+                  "externalTankToroid")
+        for name in can + cannot:
+            tank = next(p for p in PART_DB[name] if isinstance(p, FuelTank))
+            with self.subTest(name=name):
+                self.assertIn(PartRole.SPINE, tank.roles)
+                self.assertEqual(PartRole.RADIAL_MOUNT in tank.roles,
+                                 name in can)
 
 
 class TestSolidBoosterSanity(unittest.TestCase):
