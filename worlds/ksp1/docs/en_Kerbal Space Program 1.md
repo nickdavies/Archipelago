@@ -417,6 +417,9 @@ as you receive items and complete checks.
   and equipment logic thinks you need, and why a mission might not be in logic yet.
 - `/explain parts [filter]` — Lists all parts you've received, grouped by type. Optionally filter by
   name (e.g. `/explain parts engine`).
+- **Map tab** — your locations on a solar-system map, using Kerbonaut's map pack
+  ([KSP-Style-Flags releases](https://github.com/1Kerbonaut/KSP-Style-Flags/releases), `UT.Maps.zip`).
+  See the setup guide for installing it.
 
 ## I am stuck!
 

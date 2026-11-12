@@ -258,11 +258,16 @@ _FACILITY_ITEM_MAP: dict[str, dict] = {
 
 class KSPSettings(Group):
     class UTPackPath(FilePath):
-        """Path to the map pack zip"""
+        """Path to the Universal Tracker map pack zip (UT.Maps.zip from
+        https://github.com/1Kerbonaut/KSP-Style-Flags/releases).
+        Empty: UT asks for it on connect.  null: map off, no prompt
+        (cancelling the dialog sets this); /reload_pack in UT asks again."""
         required=False
         ut_dialog_name="Select Map Zip"
 
-    ut_pack_path: Union[UTPackPath,str] = UTPackPath("")
+    # None is a real state, not just an unset value: UT stores it when the
+    # player cancels the dialog, so it must load back without a type warning.
+    ut_pack_path: Union[UTPackPath, str, None] = UTPackPath("")
 
 
 class KSP1World(World):
@@ -274,6 +279,10 @@ class KSP1World(World):
 
     game = "Kerbal Space Program 1"
     web = KSP1WebWorld()
+    # Explicit: the derived key comes from the module path, and this class
+    # lives in ksp1/world.py, which would name the host.yaml section
+    # "ksp1.world_options".
+    settings_key = "ksp1_options"
     ut_can_gen_without_yaml = True
 
     # Tech tree entrance rules use can_reach_region() for parent dependencies.
