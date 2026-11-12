@@ -83,19 +83,17 @@ These are classified as `useful` rather than `advancement`. Finding them feels r
 
 ## Staging Model
 
-### Staging Connector Tier
+### Staging Connectors
 
-Staging requires physical connectors. This is modelled as a tiered item:
+Staging requires physical connectors. Each kind unlocks a different capability, independently — they are NOT tiers (owning a radial decoupler implies nothing about stack decouplers):
 
 ```
-staging_tier: int
-  0 = no staging (single stage only)
-  1 = stack decouplers (serial staging only)
-  2 = radial decouplers (parallel and asparagus staging unlocked)
-  3 = docking ports (orbital assembly, multi-launch missions)
+has_stack_decoupler   serial staging (one stage atop another)
+has_radial_decoupler  parallel staging within a stage (onion; asparagus with fuel lines)
+has_docking_port      orbital assembly, multi-launch missions
 ```
 
-The backpropagation limits the number of modelled stages based on this tier. A player with `staging_tier = 0` gets a single-stage calculation regardless of how many engine and tank groups they hold. This is a meaningful early gate and creates a clear "aha" moment when decouplers arrive.
+Without a stack decoupler the whole mission is one serial stage regardless of how many engine and tank groups the player holds — radial decouplers shed side boosters but have no stack node, so they can't separate an upper stage. This is a meaningful early gate and creates a clear "aha" moment when decouplers arrive. Either decoupler kind fires a staging event (First Staging).
 
 ### Backpropagation Algorithm
 
@@ -109,7 +107,7 @@ Steps:
 5. The output of each stage calculation becomes the payload mass input for the next stage back
 6. Record a `StageResult` for each edge capturing delta-V, TWR at ignition and burnout, and engine properties
 
-The algorithm respects `staging_tier` by capping how many separate stages can be modelled.
+The algorithm models a single serial stage unless the kit has a stack decoupler.
 
 ### Fuel Carryover Between Edges
 
@@ -117,7 +115,7 @@ Not every edge boundary requires a stage separation. Adjacent edges with low com
 
 ### Asparagus and Onion Staging (Future)
 
-Parallel staging (asparagus, onion) is deferred to a later version. It requires `staging_tier >= 2`. When implemented, the algorithm models fuel crossfeed across parallel stacks before separation. For AP logic purposes, asparagus staging significantly increases effective delta-V for the same parts — its absence is a conservative (safe) approximation.
+Parallel staging (asparagus, onion) is deferred to a later version. It requires a radial decoupler. When implemented, the algorithm models fuel crossfeed across parallel stacks before separation. For AP logic purposes, asparagus staging significantly increases effective delta-V for the same parts — its absence is a conservative (safe) approximation.
 
 ### ISRU (Future)
 
@@ -175,7 +173,8 @@ class RocketCapability:
     has_docking_port: bool
     relay_tier: int               # 0=none, 1=local, 2=inner planets, 3=mid system, 4=outer system
     power_profile: str            # "solar" | "solar_marginal" | "rtg"
-    staging_tier: int
+    has_stack_decoupler: bool
+    has_radial_decoupler: bool
 
     # Delta-V summary
     max_dv_total: float
@@ -501,8 +500,8 @@ The client mod also receives items from AP and grants the corresponding parts to
 
 ## Open Design Questions
 
-- **Apollo-style and docking missions:** Orbital rendezvous and multi-launch assembly are a natural extension of the docking port item. Apollo-style missions (separate lander and command module, rendezvous in orbit) could add a distinct mission profile type requiring `staging_tier >= 3` and docking port. Worth designing as a future extension once the base mission model is stable.
-- **Asparagus/onion staging delta-V bonus:** How much more capable does `staging_tier >= 2` make the modelled rocket? This affects when outer planet locations become reachable and needs careful tuning.
+- **Apollo-style and docking missions:** Orbital rendezvous and multi-launch assembly are a natural extension of the docking port item. Apollo-style missions (separate lander and command module, rendezvous in orbit) could add a distinct mission profile type requiring a stack decoupler and docking port. Worth designing as a future extension once the base mission model is stable.
+- **Asparagus/onion staging delta-V bonus:** How much more capable does a radial decoupler make the modelled rocket? This affects when outer planet locations become reachable and needs careful tuning.
 - **ISRU modelling depth:** When ISRU is implemented, which bodies support it and how aggressively does it reduce launch requirements?
 - **Relay network as locations:** Should placing a relay satellite in a specific orbit itself be a checkable location? This would add ~8 locations and give relay items a dedicated unlock moment.
 - **KSP2 compatibility:** KSP2 development has ended so this is low priority, but the design is intentionally agnostic to KSP version. If KSP2 support were pursued, only the part group constants would need separate definitions — the capability model and AP logic are version-agnostic.

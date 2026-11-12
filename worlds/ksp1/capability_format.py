@@ -227,7 +227,7 @@ def _format_profile_summary(info: CheckInfo, mission_builder: MissionBuilder) ->
     # --- Kerbin-specific mission types ---
     if mt == MissionType.SOUNDING:
         lines.append(f"  Profile: [sounding rocket]")
-        lines.append(f"  Command: probe_core OR capsule (with parachute + decoupler)")
+        lines.append(f"  Command: probe_core OR capsule (with parachute + stack decoupler)")
         if info.threshold_km is not None:
             lines.append(f"  Target altitude: {info.threshold_km:.1f} km")
         lines.append(f"  Propulsion: SRB or engine + fuel tank")
@@ -245,7 +245,7 @@ def _format_profile_summary(info: CheckInfo, mission_builder: MissionBuilder) ->
 
     if mt == MissionType.FIRST_STAGING:
         lines.append(f"  Profile: [first staging]")
-        lines.append(f"  Requires: decoupler (staging_tier >= 1) + command part "
+        lines.append(f"  Requires: decoupler (stack or radial) + command part "
                      f"(capsule or probe core)")
         return lines
 
@@ -527,7 +527,7 @@ def _format_stack(
     """
     lines: list[str] = []
     num_stages = len(stages)
-    asparagus = (flags.staging_tier >= 2 and flags.has_fuel_lines)
+    asparagus = (flags.has_radial_decoupler and flags.has_fuel_lines)
 
     def _group_idx(i: int) -> int:
         if i < len(group_indices):
@@ -576,7 +576,7 @@ def _format_assembly_breakdown(
     lines: list[str] = []
     launches = result.assembly_launches
     n = len(launches)
-    asparagus = (flags.staging_tier >= 2 and flags.has_fuel_lines)
+    asparagus = (flags.has_radial_decoupler and flags.has_fuel_lines)
     total_chunk = sum(L.chunk_payload_mass for L in launches)
 
     ascent = result.edge_groups[0] if result.edge_groups else []
@@ -867,7 +867,8 @@ def build_bug_report_dict(
         mission_builder,
     )
     report["equipment_flags"] = {
-        "staging_tier": flags.staging_tier,
+        "has_stack_decoupler": flags.has_stack_decoupler,
+        "has_radial_decoupler": flags.has_radial_decoupler,
         "has_heat_shield": flags.has_heat_shield,
         "has_parachutes": flags.has_parachutes,
         "has_probe_core": flags.has_probe_core,

@@ -1780,7 +1780,6 @@ def find_optimal_multistage_ascent(
     tanks_by_fuel_type: Optional[dict[str, list[FuelTank]]] = None,
     available_multi_mounts: Optional[list[MultiMount]] = None,
     stack_decoupler: Optional[Decoupler],
-    staging_tier: int,
     needs_heat_shield: bool = False,
     max_heat_shield_size: Optional[float] = None,
     heat_shields: tuple[tuple[float, float], ...] = (),
@@ -1804,10 +1803,10 @@ def find_optimal_multistage_ascent(
     diagnostic_out: Optional[list[StageDiagnostic]] = None,
     partial_stages_out: Optional[list[StageResult]] = None,
     # Escalated search bounds (capability's Apollo/eligible-edge scoping).
-    # ``max_ascent_stages`` None = the hot-path default: _F4_MAX_K, further
-    # bounded by staging_tier+1.  An explicit value bypasses the tier bound
-    # (a search-cost choice, not physics — stack decouplers permit arbitrary
-    # serial depth) but never the no-stack-decoupler ⇒ K=1 kit gate.
+    # ``max_ascent_stages`` None = the hot-path default, _F4_MAX_K.  An
+    # explicit value overrides it (a search-cost choice, not physics — stack
+    # decouplers permit arbitrary serial depth) but never the
+    # no-stack-decoupler ⇒ K=1 kit gate.
     max_ascent_stages: Optional[int] = None,
     booster_counts: tuple[int, ...] = _PARALLEL_BOOSTER_COUNTS,
     max_eng_per_col: int = _PARALLEL_MAX_ENG_PER_COL,
@@ -1848,7 +1847,7 @@ def find_optimal_multistage_ascent(
     elif max_ascent_stages is not None:
         max_K = max(1, max_ascent_stages)
     else:
-        max_K = min(_F4_MAX_K, max(1, staging_tier + 1))
+        max_K = _F4_MAX_K
     if guide is not None:
         guide_split, guide_stages = guide
         # The no-stack-decoupler ⇒ K=1 gate is physics, never bypassed.

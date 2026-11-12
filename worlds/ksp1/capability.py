@@ -352,7 +352,13 @@ class EquipmentFlags:
     # Tiered values
     landing_leg_tier: int = 0       # 0 = no legs
     relay_tier: int = 0             # 0 = no relay
-    staging_tier: int = 0           # 0=none, 1=stack, 2=radial
+
+    # Decouplers are two independent capabilities, not a tier: a stack
+    # decoupler separates serial stages (one stack atop another); a radial
+    # decoupler sheds side-mounted boosters (asparagus/onion) but has no stack
+    # node, so it can never separate an upper stage from the one below it.
+    has_stack_decoupler: bool = False
+    has_radial_decoupler: bool = False
 
     # Part references — None means not available.
     # Each stores the selected part so both .mass and .name are accessible.
@@ -516,7 +522,8 @@ class RocketCapability:
     # the transmit-science comms check is antenna-only when the option is off.
     dsn_power: float = DSN_POWER_MAX
     power_profile: str = "none"
-    staging_tier: int = 0
+    has_stack_decoupler: bool = False
+    has_radial_decoupler: bool = False
     has_launch_clamp: bool = False
     has_thermometer: bool = False
     has_barometer: bool = False
@@ -730,14 +737,9 @@ def _pre_pass(item_count_fn: Callable[[str], int],
     flags.has_lfo_fuel = any(t.fuel_type == "lfo" for t in flags.available_tanks)
     flags.has_srb_fuel = bool(flags.available_srbs)
 
-    # Docking ports don't affect staging_tier — they can't be used for
+    # Docking ports don't count as stack decouplers — they can't be used for
     # practical stage separation (can't attach below engines, no automatic
-    # staging). They set has_docking_port for future orbital assembly support.
-
-    # Parallel staging mode (determined per-stage in _evaluate_profile):
-    #   staging_tier >= 2 + fuel lines → asparagus (real radial crossfeed build)
-    #   staging_tier >= 2, no fuel lines → onion (radial ring drop)
-    #   staging_tier < 2 → none (no parallel staging)
+    # staging). They set has_docking_port for orbital assembly.
 
     # Derive relay tier from available relays
     flags.relay_tier = _compute_relay_tier(flags)
@@ -887,10 +889,10 @@ def _add_part_to_flags(flags: EquipmentFlags, part, count: int) -> None:
         flags.available_landing_legs.append(part)
 
     elif isinstance(part, Decoupler):
-        if part.kind == "stack" and flags.staging_tier < 1:
-            flags.staging_tier = 1
-        elif part.kind == "radial" and flags.staging_tier < 2:
-            flags.staging_tier = 2
+        if part.kind == "stack":
+            flags.has_stack_decoupler = True
+        elif part.kind == "radial":
+            flags.has_radial_decoupler = True
         flags.available_decouplers.append(part)
 
     elif isinstance(part, MiscEquipment):
@@ -1299,14 +1301,12 @@ def _build_kit_used(flags: EquipmentFlags,
     # in the rep set, re-eval can't reproduce the same flag-state and
     # the optimizer's choices fall apart (e.g. dropping the radial decoupler
     # + fuel line would disable the asparagus build the optimizer chose).
-    if flags.staging_tier >= 1:
-        stack = [d for d in flags.available_decouplers if d.kind == "stack"]
-        if stack:
-            kit.stack_decoupler = min(stack, key=lambda d: d.mass).name
-    if flags.staging_tier >= 2:
-        radial = [d for d in flags.available_decouplers if d.kind == "radial"]
-        if radial:
-            kit.radial_decoupler = min(radial, key=lambda d: d.mass).name
+    stack = [d for d in flags.available_decouplers if d.kind == "stack"]
+    if stack:
+        kit.stack_decoupler = min(stack, key=lambda d: d.mass).name
+    radial = [d for d in flags.available_decouplers if d.kind == "radial"]
+    if radial:
+        kit.radial_decoupler = min(radial, key=lambda d: d.mass).name
     if flags.has_fuel_lines and _FUEL_LINE_PART is not None:
         kit.fuel_line = _FUEL_LINE_PART
     if flags.has_srb_fuel and flags.available_srbs:
@@ -1594,15 +1594,18 @@ def _parallel_staging_inputs(
     the fuel line for asparagus crossfeed (onion crossfeeds through the radial
     decoupler itself; the client unlocks that toggle from the start).
 
-        staging_tier >= 2 + fuel lines -> asparagus (radial crossfeed build)
-        staging_tier >= 2, no fuel lines -> onion (radial ring drop)
-        staging_tier < 2 -> none
+        radial decoupler + fuel lines -> asparagus (radial crossfeed build)
+        radial decoupler, no fuel lines -> onion (radial ring drop)
+        no radial decoupler -> none
+
+    Independent of stack decouplers: parallel boosters shed within one serial
+    stage, so a radial-only kit gets asparagus/onion but never a second stage.
 
     Shared by ``_evaluate_profile`` and the offline lifter-chain generator so
     the two derivations can never drift."""
-    if flags.staging_tier >= 2 and flags.has_fuel_lines:
+    if flags.has_radial_decoupler and flags.has_fuel_lines:
         parallel_mode = "asparagus"
-    elif flags.staging_tier >= 2:
+    elif flags.has_radial_decoupler:
         parallel_mode = "onion"
     else:
         parallel_mode = "none"
@@ -1651,7 +1654,6 @@ def _ascent_stage_kwargs(
         tanks_by_fuel_type=flags.tanks_by_fuel_type,
         available_multi_mounts=flags.available_multi_mounts,
         stack_decoupler=stack_decoupler,
-        staging_tier=flags.staging_tier,
         needs_heat_shield=needs_hs,
         max_heat_shield_size=flags.best_heat_shield.size_class if flags.best_heat_shield else None,
         heat_shields=heat_shields_arg,
@@ -2144,7 +2146,7 @@ def _evaluate_profile(
     # Each group is a list of consecutive edges that share a stage.
     # Kerbin ascent is always its own stage.
 
-    groups = _group_edges(profile, flags.staging_tier)
+    groups = _group_edges(profile, flags.has_stack_decoupler)
 
     # Lightest stack decoupler from the player's kit — enables multi-stage
     # atmospheric ascent (F4) when present. K-1 interstages are needed for
@@ -2156,14 +2158,12 @@ def _evaluate_profile(
         if _stack_decouplers else None
     )
 
-    # Staging feasibility: if merging couldn't reduce groups to what the
-    # player's decouplers allow, the profile is physically impossible.
-    max_stages = 1 if flags.staging_tier == 0 else len(groups)
-    if len(groups) > max_stages:
+    # Staging feasibility: without a stack decoupler the mission must fly as
+    # one serial stage; if merging couldn't get there, it's impossible.
+    if not flags.has_stack_decoupler and len(groups) > 1:
         blocking.append(BlockingInfo(
-            reason=BlockingReason.STAGING_TIER_INSUFFICIENT,
+            reason=BlockingReason.NO_STACK_DECOUPLER,
             stages_needed=len(groups),
-            stages_available=flags.staging_tier,
         ))
 
     # Passive aero entries (chute + shield do all the work) must fly a shield
@@ -2741,7 +2741,7 @@ def _evaluate_profile(
                 max_lift = 0.0
                 _lifter_ok = (lifter_table is not None
                               and body.name == home
-                              and flags.staging_tier >= 1
+                              and flags.has_stack_decoupler
                               and run_parallel)
                 # Heaviest chunk first: it decides feasibility, fail fast.
                 _sorted_chunks = sorted(chunk_masses, reverse=True)
@@ -2834,12 +2834,12 @@ def _evaluate_profile(
             multistage = None
             _lifter_fallback = True
             # The chain serves the home LIFTER — the pad->low-orbit ascent as
-            # its own stage.  ``staging_tier >= 1`` is exactly that condition:
-            # with any decoupler the ascent is always its own group (grouping
-            # sets max_stages=len(groups), no merging), so group 0 is the pure
-            # ascent.  At staging_tier 0 (no decouplers) the whole mission
-            # collapses into one un-staged stage — not a lifter at all — so the
-            # general capability path handles it (not a lifter fallback).
+            # its own stage.  ``has_stack_decoupler`` is exactly that condition:
+            # with a stack decoupler the ascent is always its own group
+            # (grouping never merges), so group 0 is the pure ascent.  Without
+            # one (no decouplers, or radial only) the whole mission collapses
+            # into one serial stage — not a lifter at all — so the general
+            # capability path handles it (not a lifter fallback).
             #
             # ``run_parallel`` gates it too: the chain's rungs are AUTHORITATIVE
             # (parallel/asparagus) builds.  The bumper's serial-guidance trials
@@ -2849,7 +2849,7 @@ def _evaluate_profile(
             # home lifter); the chain serves only the authoritative decision,
             # where the parallel build always reproduces.
             if (lifter_table is not None and flight_idx == 0
-                    and body.name == home and flags.staging_tier >= 1
+                    and body.name == home and flags.has_stack_decoupler
                     and run_parallel):
                 _c = _consult_home_lifter(
                     lifter_table, flags, body,
@@ -3099,22 +3099,24 @@ def _evaluate_profile(
     )
 
 
-def _group_edges(profile: list[MissionEdge], staging_tier: int) -> list[list[MissionEdge]]:
+def _group_edges(profile: list[MissionEdge], can_stage: bool) -> list[list[MissionEdge]]:
     """
-    Group consecutive edges into stages based on staging_tier.
+    Group consecutive edges into serial stages.
 
-    staging_tier=0: everything is one stage (no decouplers).
-    staging_tier=1-2: limited staging (staging_tier + 1 stages). Excess
-      natural groups are merged (smallest-dv pairs first).
+    ``can_stage`` (the kit has a stack decoupler): every natural group is its
+    own stage — stack decouplers are cheap and stackable, no practical limit.
+    Otherwise the mission must fly as ONE serial stage (radial decouplers only
+    shed boosters within a stage), so natural groups are merged smallest-dv
+    pair first.
 
     Natural stage boundaries:
-      - After Kerbin ascent (always own stage if staging_tier >= 1)
-      - Before and after landing (always own stage if staging_tier >= 1)
-      - Before any vacuum-to-atmo transition
+      - After any surface ascent
+      - Before and after landing
 
-    When forced to merge (tier 0), constraint-aware merging skips incompatible
-    pairs (e.g. atmospheric + vacuum, TWR-constrained + unconstrained) to avoid
-    creating physically impossible combined stages.
+    Forced merging is constraint-aware: it skips incompatible pairs (e.g.
+    atmospheric + vacuum, TWR-constrained + unconstrained) to avoid creating
+    physically impossible combined stages, so more than one group can remain;
+    the caller treats that as infeasible.
     """
     # Mark preferred split indices (after edge i, before edge i+1)
     from .bodies import EdgeType as ET
@@ -3155,16 +3157,10 @@ def _group_edges(profile: list[MissionEdge], staging_tier: int) -> list[list[Mis
 
     # Remove empty groups
     groups = [g for g in groups if g]
+    if can_stage:
+        return groups
 
-    # Tier 0 = no decouplers = single stage.
-    # Tier 1+ = any decoupler allows all natural stage groups (stack
-    # decouplers are cheap and stackable in KSP — no practical limit).
-    if staging_tier == 0:
-        max_stages = 1
-    else:
-        max_stages = len(groups)
-
-    # Constraint-aware merging: skip incompatible pairs when forced to merge.
+    # Constraint-aware merging: skip incompatible pairs.
     # ATMO_LANDING is treated as atmospheric here (a landing that needs a burn
     # is atmospheric propulsion) so a forced merge never puts it with a vacuum
     # burn and contaminates ISP; landing is normally its own group anyway.
@@ -3182,15 +3178,11 @@ def _group_edges(profile: list[MissionEdge], staging_tier: int) -> list[list[Mis
             return False
         return True
 
-    while len(groups) > max_stages:
+    while len(groups) > 1:
         best_pair = -1
         best_dv = float("inf")
         for i in range(len(groups) - 1):
-            # At tier 0 (no decouplers), skip incompatible merges to avoid
-            # creating physically impossible single stages. At tier 1-2,
-            # merge unconditionally (decouplers allow staging; the optimizer
-            # handles mixed groups by picking the most constrained engine).
-            if staging_tier == 0 and not _can_merge(groups[i], groups[i + 1]):
+            if not _can_merge(groups[i], groups[i + 1]):
                 continue
             combined = sum(e.base_dv for e in groups[i]) + sum(e.base_dv for e in groups[i + 1])
             if combined < best_dv:
@@ -4584,12 +4576,11 @@ def evaluate_mission_detailed(
         return ProfileResult(False, blocking=blocking_list)
 
     if mission_type == MissionType.FIRST_STAGING:
-        if flags.staging_tier < 1:
+        # Any decoupler fires a staging event (the client reports First
+        # Staging on onStageSeparation), so a radial one counts here.
+        if not (flags.has_stack_decoupler or flags.has_radial_decoupler):
             return ProfileResult(False, blocking=[BlockingInfo(
-                reason=BlockingReason.STAGING_TIER_INSUFFICIENT,
-                stages_needed=0,
-                stages_available=0,
-            )])
+                reason=BlockingReason.NO_DECOUPLER)])
         # Staging a vessel needs a command part to fly it — a lone decoupler
         # can't be controlled or staged.
         if not flags.has_capsule and not flags.has_probe_core:
@@ -4753,12 +4744,13 @@ _SOUNDING_LIFTOFF_KM: float = 0.001
 
 def _sounding_payload_masses(flags: EquipmentFlags) -> list[float]:
     """Candidate sounding payloads (tonnes): a probe core (unmanned) and/or a
-    capsule that can separate and descend safely (needs decoupler + parachute)."""
+    capsule that can separate and descend safely (needs a stack decoupler to
+    shed the booster below it, plus a parachute)."""
     payloads: list[float] = []
     if flags.lightest_probe:
         payloads.append(flags.lightest_probe.mass)
     if (flags.lightest_capsule and flags.lightest_capsule.mass > 0
-            and flags.has_parachutes and flags.staging_tier >= 1):
+            and flags.has_parachutes and flags.has_stack_decoupler):
         payloads.append(flags.lightest_capsule.mass)
     return payloads
 
@@ -4827,8 +4819,8 @@ def _evaluate_sounding(flags: EquipmentFlags, threshold_km: float, home: Body) -
             missing = []
             if not flags.has_parachutes:
                 missing.append("parachute")
-            if flags.staging_tier < 1:
-                missing.append("decoupler")
+            if not flags.has_stack_decoupler:
+                missing.append("stack decoupler")
             blocking_list.append(BlockingInfo(
                 reason=BlockingReason.CAPSULE_SOUNDING_INCOMPLETE,
                 detail=", ".join(missing) or "survival gear"))
@@ -4916,7 +4908,8 @@ def compute_capability_from_items(
         relay_tier=flags.relay_tier,
         dsn_power=flags.dsn_power,
         power_profile=power_str,
-        staging_tier=flags.staging_tier,
+        has_stack_decoupler=flags.has_stack_decoupler,
+        has_radial_decoupler=flags.has_radial_decoupler,
         has_launch_clamp=flags.has_launch_clamp,
         has_thermometer=flags.has_thermometer,
         has_barometer=flags.has_barometer,

@@ -89,7 +89,8 @@ def _make_zero_cap() -> MagicMock:
     cap.power_profile = "none"
     cap.has_thermometer = False
     cap.has_barometer = False
-    cap.staging_tier = 0
+    cap.has_stack_decoupler = False
+    cap.has_radial_decoupler = False
     cap.sounding_altitude_km = 0.0
     cap.relay_tier = 0
     cap.dsn_power = DSN_POWER_MAX   # option-off: transmit gate is antenna-only
@@ -306,11 +307,11 @@ class TestKerbinEarlyLocations(KSP1TestBase):
     def test_staging_needs_command_part(self):
         """First Staging needs a command part, not just a decoupler.
 
-        A lone stack decoupler sets staging_tier ≥ 1 but the vessel can't be
-        controlled or staged — the milestone must stay out of logic until a
-        capsule or probe core is collected (matching every sibling milestone).
+        A lone stack decoupler can't be controlled or staged — the milestone
+        must stay out of logic until a capsule or probe core is collected
+        (matching every sibling milestone).
         """
-        self.collect_by_name("Decoupler.1")   # TR-18A stack decoupler → staging_tier = 1
+        self.collect_by_name("Decoupler.1")   # TR-18A stack decoupler
         self.assertFalse(
             self.can_reach_location("Kerbin First Staging"),
             "First Staging: a decoupler with no command part must NOT be in logic",
@@ -327,6 +328,15 @@ class TestKerbinEarlyLocations(KSP1TestBase):
         self.assertTrue(
             self.can_reach_location("Kerbin First Staging"),
             "First Staging: decoupler + probe core must pass",
+        )
+
+    def test_staging_enabled_by_radial_decoupler_plus_command(self):
+        """A radial decoupler fires a staging event too (onStageSeparation)."""
+        self.collect_by_name("radialDecoupler")   # TT-38K radial decoupler
+        self.collect_by_name("probeCoreSphere.v2")
+        self.assertTrue(
+            self.can_reach_location("Kerbin First Staging"),
+            "First Staging: radial decoupler + probe core must pass",
         )
 
     def test_splashdown_needs_altitude_and_descent_control(self):

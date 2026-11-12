@@ -257,7 +257,7 @@ class TestApolloSplitFinder(unittest.TestCase):
 
     def _groups(self, body: BodyName, mt: MissionType):
         profile = self.mb.profiles_for(body, mt)[0]
-        return _group_edges(profile, staging_tier=2)
+        return _group_edges(profile, can_stage=True)
 
     def test_split_found_on_destination_return(self) -> None:
         groups = self._groups(BodyName.TYLO, MissionType.RETURN)

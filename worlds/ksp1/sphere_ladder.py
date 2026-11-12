@@ -751,7 +751,11 @@ _RANK_BUMP_TABLE: dict[BlockingReason, tuple[RankAxisKey, ...]] = {
     BlockingReason.NO_PROPULSION: (
         RankAxisKey.LAUNCH_ENGINE, RankAxisKey.LFO_TANK, RankAxisKey.SRB,
     ),
-    BlockingReason.STAGING_TIER_INSUFFICIENT: (RankAxisKey.STACK_DECOUPLER,),
+    BlockingReason.NO_STACK_DECOUPLER: (RankAxisKey.STACK_DECOUPLER,),
+    # First Staging: either decoupler kind fires a staging event.
+    BlockingReason.NO_DECOUPLER: (
+        RankAxisKey.STACK_DECOUPLER, RankAxisKey.RADIAL_DECOUPLER,
+    ),
     BlockingReason.NO_HEAT_SHIELD: (RankAxisKey.HEAT_SHIELD,),
     # No owned shield covers any owned pod on a passive aero entry: a larger
     # shield always closes it (higher rank = larger; 3.75m covers every pod).
@@ -1752,7 +1756,7 @@ def minimal_ranks_for(
             # feasible, ``ProfileResult.kit_used`` is the complete
             # structured set of parts the optimizer relied on —
             # including presence-only representatives (radial
-            # decoupler for staging_tier=2, fuelLine for asparagus,
+            # decoupler for onion, + fuelLine for asparagus,
             # etc.) that aren't directly used in any stage but enable
             # the dry-mass factors the optimization assumed.
             #

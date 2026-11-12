@@ -29,7 +29,7 @@ from worlds.ksp1.capability import (
     _try_profiles, _try_profiles_reason, _solve_atmo_landing, _required_power_source,
     _inject_reboard, _evaluate_sounding, _sounding_reaches,
     _sounding_min_launch_mass,
-    _group_edges, _MAX_SAFE_LANDING_SPEED,
+    _group_edges, _MAX_SAFE_LANDING_SPEED, _add_part_to_flags,
 )
 from worlds.ksp1.capability_reasons import BlockingReason
 from worlds.ksp1.parts import (
@@ -121,7 +121,6 @@ def _make_flags(
     solar=False, solar_retractable=False, solar_large=False, rtg=False,
     battery_large=False,
     relay_tier=0, ladder=False, eva_jetpack=False, launch_clamp=False,
-    staging_tier=None,
 ) -> EquipmentFlags:
     flags = EquipmentFlags()
     flags.available_engines = list(engines or [])
@@ -176,16 +175,12 @@ def _make_flags(
         if leg.tier > flags.landing_leg_tier:
             flags.landing_leg_tier = leg.tier
 
-    # Staging tier (docking ports don't affect staging_tier)
-    if staging_tier is not None:
-        flags.staging_tier = staging_tier
-    else:
-        if decoupler_radial:
-            flags.staging_tier = 2
-        elif decoupler_stack:
-            flags.staging_tier = 1
-        else:
-            flags.staging_tier = 0
+    # Decouplers go through the real _pre_pass handler so the flags AND the
+    # available_decouplers inventory (the optimizer's stack/radial picks) agree.
+    if decoupler_stack:
+        _add_part_to_flags(flags, _TR18A, 1)
+    if decoupler_radial:
+        _add_part_to_flags(flags, _TT38K, 1)
 
     flags.has_fuel_lines = fuel_lines
     flags.has_docking_port = docking_port
@@ -357,7 +352,7 @@ class TestParachuteGate(unittest.TestCase):
             probe_core=True, reaction_wheels=True,
             heat_shields=[_SHIELD_25],
             solar=True, relay_tier=1, launch_clamp=True,
-            decoupler_radial=True, staging_tier=2,
+            decoupler_stack=True, decoupler_radial=True,
         )
 
     def _return_flags_with_chutes(self) -> EquipmentFlags:
@@ -369,7 +364,7 @@ class TestParachuteGate(unittest.TestCase):
             heat_shields=[_SHIELD_25],
             legs=[_LT2],        # Mun landing requires tier-2 legs
             solar=True, relay_tier=1, launch_clamp=True,
-            decoupler_radial=True, staging_tier=2,
+            decoupler_stack=True, decoupler_radial=True,
         )
         flags.has_parachutes = True
         flags.available_parachutes = [_MK16, _MK16, _MK16]
@@ -575,31 +570,69 @@ class TestParentGating(unittest.TestCase):
                          f"Blocking reason should not be parent-related: {reason}")
 
 
-class TestStagingTier(unittest.TestCase):
-    """Higher staging tier enables more multi-stage configurations."""
+class TestDecouplerKinds(unittest.TestCase):
+    """Stack and radial decouplers are independent capabilities: only a stack
+    decoupler separates serial stages; a radial one sheds boosters within a
+    stage and fires a staging event, nothing more."""
 
-    def test_staging_tier_0_single_stage(self) -> None:
+    def _mun_orbit_flags(self, **decouplers) -> EquipmentFlags:
+        return _make_flags(
+            engines=[_SWIVEL, _MAINSAIL],
+            tanks=[_FL_T400, _FL_T800, _X200_32],
+            probe_core=True, reaction_wheels=True, solar=True,
+            launch_clamp=True, **decouplers,
+        )
+
+    def _mun_orbit(self, flags: EquipmentFlags):
+        from worlds.ksp1.capability import evaluate_mission_detailed
+        return evaluate_mission_detailed(
+            flags, _normal_diff(), BodyName.MUN, MissionType.ORBIT, False,
+            MISSION_BUILDER)
+
+    def test_no_decoupler_single_stage(self) -> None:
         # Single-stage to Mun orbit is extremely hard at normal margins.
         # Just verify the evaluation runs without error.
         flags = _make_flags(
             engines=[_MAINSAIL], tanks=[_X200_32, _JUMBO_64],
             probe_core=True, reaction_wheels=True, solar=True,
-            launch_clamp=True, staging_tier=0,
+            launch_clamp=True,
         )
         profiles = MISSION_PROFILES.get((BodyName.MUN, MissionType.ORBIT), [])
         ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.ORBIT, crewed=False, home=BodyName.KERBIN)
         self.assertIsInstance(ok, bool)
 
-    def test_staging_tier_1_enables_two_stages(self) -> None:
-        flags = _make_flags(
-            engines=[_SWIVEL, _MAINSAIL],
-            tanks=[_FL_T400, _FL_T800, _X200_32],
-            probe_core=True, reaction_wheels=True, solar=True,
-            launch_clamp=True, decoupler_stack=True, staging_tier=1,
-        )
-        profiles = MISSION_PROFILES.get((BodyName.MUN, MissionType.ORBIT), [])
-        ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.ORBIT, crewed=False, home=BodyName.KERBIN)
-        self.assertTrue(ok, "Mun orbit should be achievable with 2-stage rocket")
+    def test_stack_decoupler_enables_serial_stages(self) -> None:
+        result = self._mun_orbit(self._mun_orbit_flags(decoupler_stack=True))
+        self.assertTrue(result.feasible,
+                        "Mun orbit should be achievable with 2-stage rocket")
+        self.assertGreater(len(result.stage_results), 1)
+
+    def test_radial_only_cannot_serial_stage(self) -> None:
+        """Issue #25: a radial-only kit was claimed to fly a 2-stage rocket
+        (ascent stage + transfer stage) with no way to separate them."""
+        flags = self._mun_orbit_flags(decoupler_radial=True)
+        self.assertTrue(flags.has_radial_decoupler)
+        self.assertFalse(flags.has_stack_decoupler)
+        result = self._mun_orbit(flags)
+        self.assertFalse(result.feasible)
+        self.assertIn(BlockingReason.NO_STACK_DECOUPLER,
+                      {b.reason for b in result.blocking})
+
+    def test_radial_only_allows_first_staging(self) -> None:
+        from worlds.ksp1.capability import evaluate_mission_detailed
+        flags = self._mun_orbit_flags(decoupler_radial=True)
+        result = evaluate_mission_detailed(
+            flags, _normal_diff(), BodyName.KERBIN, MissionType.FIRST_STAGING,
+            None, MISSION_BUILDER)
+        self.assertTrue(result.feasible)
+
+    def test_no_decoupler_blocks_first_staging(self) -> None:
+        from worlds.ksp1.capability import evaluate_mission_detailed
+        result = evaluate_mission_detailed(
+            self._mun_orbit_flags(), _normal_diff(), BodyName.KERBIN,
+            MissionType.FIRST_STAGING, None, MISSION_BUILDER)
+        self.assertFalse(result.feasible)
+        self.assertEqual(result.blocking[0].reason, BlockingReason.NO_DECOUPLER)
 
 
 class TestDifficultyMargins(unittest.TestCase):
@@ -780,13 +813,12 @@ class TestKerbinOrbit(unittest.TestCase):
 
     def test_mainsail_x200_single_stage_orbits_kerbin(self) -> None:
         # Single stage, no decoupler: Mainsail (2.5m) + X200-32 (2.5m).
-        # staging_tier=0 forces a single group — the optimizer stacks X200-32s.
+        # No stack decoupler forces a single group — the optimizer stacks X200-32s.
         flags = _make_flags(
             engines=[_MAINSAIL],
             tanks=[_X200_32],
             probe_core=True, solar=True,
             launch_clamp=True,
-            staging_tier=0,
         )
         profiles = MISSION_PROFILES.get((BodyName.KERBIN, MissionType.ORBIT), [])
         ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.ORBIT, crewed=False, home=BodyName.KERBIN)
@@ -830,7 +862,7 @@ class TestAtmosphericAscentControl(unittest.TestCase):
             engines=[_DART],
             tanks=[_FL_T400, _FL_T800, _X200_32],
             probe_core=True, reaction_wheels=True, solar=True,
-            launch_clamp=True, staging_tier=1,
+            launch_clamp=True, decoupler_stack=True,
         )
         profiles = MISSION_PROFILES.get((BodyName.KERBIN, MissionType.ORBIT), [])
         ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.ORBIT, crewed=False, home=BodyName.KERBIN)
@@ -846,7 +878,7 @@ class TestAtmosphericAscentControl(unittest.TestCase):
             engines=[_SWIVEL, _MAINSAIL],
             tanks=[_FL_T400, _FL_T800, _X200_32],
             probe_core=True, reaction_wheels=True, solar=True,
-            launch_clamp=True, staging_tier=1,
+            launch_clamp=True, decoupler_stack=True,
         )
         profiles = MISSION_PROFILES.get((BodyName.KERBIN, MissionType.ORBIT), [])
         ok = _try_profiles(profiles, flags, _normal_diff(), MissionType.ORBIT, crewed=False, home=BodyName.KERBIN)
@@ -862,7 +894,7 @@ class TestAtmosphericAscentControl(unittest.TestCase):
             engines=[_DART],
             tanks=[_FL_T400, _FL_T800, _X200_32],
             probe_core=True, reaction_wheels=True, solar=True,
-            launch_clamp=True, staging_tier=1,
+            launch_clamp=True, decoupler_stack=True,
         )
         self._add_aero_control(flags, _BASIC_FIN)
         profiles = MISSION_PROFILES.get((BodyName.KERBIN, MissionType.ORBIT), [])
@@ -931,7 +963,7 @@ class TestDunaReturn(unittest.TestCase):
             heat_shields=[_SHIELD_25],
             parachutes=[_MK16, _MK16, _MK16],
             legs=[_LT2],
-            launch_clamp=True, decoupler_radial=True,
+            launch_clamp=True, decoupler_stack=True, decoupler_radial=True,
         )
 
     def test_duna_can_return_to_kerbin(self) -> None:
@@ -955,7 +987,7 @@ class TestDunaReturn(unittest.TestCase):
             # No heat shield
             parachutes=[_MK16, _MK16, _MK16],
             legs=[_LT2],
-            launch_clamp=True, decoupler_radial=True,
+            launch_clamp=True, decoupler_stack=True, decoupler_radial=True,
         )
         return_profiles = MISSION_PROFILES.get((BodyName.DUNA, MissionType.RETURN), [])
         ok = _try_profiles(return_profiles, flags, _normal_diff(), MissionType.RETURN, crewed=False, home=BodyName.KERBIN)
@@ -983,7 +1015,7 @@ class TestInterplanetaryBodies(unittest.TestCase):
             heat_shields=[_SHIELD_25],
             parachutes=[_MK16, _MK16, _MK16],
             legs=[_LT2],
-            launch_clamp=True, decoupler_radial=True,
+            launch_clamp=True, decoupler_stack=True, decoupler_radial=True,
         )
 
     def test_inner_and_middle_bodies_orbitally_reachable(self) -> None:
@@ -1029,7 +1061,6 @@ class TestKerbinOrbitIsEarlyGame(unittest.TestCase):
             tanks=[_X200_32],
             probe_core=True, reaction_wheels=True, solar=True,
             launch_clamp=True,
-            staging_tier=0,
         )
         profiles = MISSION_PROFILES.get((BodyName.KERBIN, MissionType.ORBIT), [])
         self.assertTrue(len(profiles) > 0, "Kerbin orbit profiles must exist")
@@ -1046,7 +1077,6 @@ class TestKerbinOrbitIsEarlyGame(unittest.TestCase):
             tanks=[_X200_32],
             probe_core=True, reaction_wheels=True, solar=True,
             launch_clamp=True,
-            staging_tier=0,
         )
         from worlds.ksp1.parts import MULTI_MOUNT_TABLE
         flags.available_multi_mounts = [MULTI_MOUNT_TABLE["stackQuadCoupler"]]
@@ -1096,7 +1126,7 @@ class TestSounding(unittest.TestCase):
         # Capsule + engine + tank + decoupler but NO parachute -> the capsule
         # can't descend safely and there's no probe, so no valid payload.
         flags = _make_flags(engines=[_RELIANT], tanks=[_FL_T800],
-                            capsule=True, staging_tier=1)
+                            capsule=True, decoupler_stack=True)
         self.assertFalse(self._reaches(flags, 0.1))
         self.assertEqual(
             _evaluate_sounding(flags, 5.0, HOME_BODY).blocking[0].reason,
@@ -1104,12 +1134,19 @@ class TestSounding(unittest.TestCase):
 
     def test_crewed_no_decoupler_infeasible(self) -> None:
         flags = _make_flags(engines=[_RELIANT], tanks=[_FL_T800],
-                            capsule=True, parachutes=[_MK16], staging_tier=0)
+                            capsule=True, parachutes=[_MK16])
+        self.assertFalse(self._reaches(flags, 0.1))
+
+    def test_crewed_radial_decoupler_only_infeasible(self) -> None:
+        # A radial decoupler can't shed the booster beneath the capsule.
+        flags = _make_flags(engines=[_RELIANT], tanks=[_FL_T800],
+                            capsule=True, parachutes=[_MK16],
+                            decoupler_radial=True)
         self.assertFalse(self._reaches(flags, 0.1))
 
     def test_crewed_full_kit_reaches_70km(self) -> None:
         flags = _make_flags(engines=[_RELIANT], tanks=[_FL_T800],
-                            capsule=True, parachutes=[_MK16], staging_tier=1)
+                            capsule=True, parachutes=[_MK16], decoupler_stack=True)
         self.assertTrue(self._reaches(flags, 70.0))
 
     def test_no_command_part_names_reason(self) -> None:
@@ -1140,32 +1177,30 @@ class TestSounding(unittest.TestCase):
 
 
 class TestStagingGroupPreservation(unittest.TestCase):
-    """Any decoupler (tier 1+) preserves all natural stage groups."""
+    """A stack decoupler preserves all natural stage groups."""
 
-    def test_any_decoupler_preserves_all_return_groups(self) -> None:
-        """Tylo sample_return at tier 1+ should preserve all natural groups."""
+    def test_stack_decoupler_preserves_all_return_groups(self) -> None:
+        """Tylo sample_return with a stack decoupler keeps every natural group."""
         profiles = MISSION_PROFILES.get((BodyName.TYLO, MissionType.SAMPLE_RETURN), [])
         if not profiles:
             self.skipTest("No Tylo sample_return profiles")
-        profile = profiles[0]
-        groups_natural = _group_edges(profile, staging_tier=99)
-        groups_tier1 = _group_edges(profile, staging_tier=1)
-        self.assertEqual(len(groups_tier1), len(groups_natural),
-                         "Tier 1+ should preserve all natural groups")
-        self.assertGreater(len(groups_tier1), 4,
-                           f"Expected >4 groups, got {len(groups_tier1)}")
+        groups = _group_edges(profiles[0], can_stage=True)
+        self.assertGreater(len(groups), 4,
+                           f"Expected >4 groups, got {len(groups)}")
 
     def test_constraint_aware_merge_skips_incompatible(self) -> None:
-        """When forced to merge (tier 0), incompatible groups are skipped."""
+        """When forced to merge (no stack decoupler), incompatible groups are
+        skipped."""
         profiles = MISSION_PROFILES.get((BodyName.MUN, MissionType.RETURN), [])
         self.assertTrue(len(profiles) > 0)
         profile = profiles[0]
-        groups_tier0 = _group_edges(profile, staging_tier=0)
-        # Tier 0 wants 1 stage but _can_merge should prevent merging atmospheric
-        # ascent with vacuum transfer. We may get >1 group if incompatible
-        # pairs exist, or exactly 1 if all happen to be compatible.
+        merged = _group_edges(profile, can_stage=False)
+        # Merging wants 1 stage but _can_merge should prevent merging
+        # atmospheric ascent with vacuum transfer. We may get >1 group if
+        # incompatible pairs exist, or exactly 1 if all happen to be compatible.
         # The key assertion: no crash, and the result is a valid partition.
-        total_edges = sum(len(g) for g in groups_tier0)
+        self.assertLess(len(merged), len(_group_edges(profile, can_stage=True)))
+        total_edges = sum(len(g) for g in merged)
         self.assertEqual(total_edges, len(profile),
                          "All edges must be accounted for after merging")
 
@@ -1410,7 +1445,7 @@ class TestAeroLandingPassiveStage(unittest.TestCase):
             heat_shields=[_SHIELD_25],
             parachutes=[_MK16, _MK16, _MK16],
             legs=[_LT2],
-            launch_clamp=True, decoupler_radial=True,
+            launch_clamp=True, decoupler_stack=True, decoupler_radial=True,
         )
         profiles = MISSION_PROFILES.get((BodyName.DUNA, MissionType.RETURN), [])
         self.assertTrue(len(profiles) > 0)
@@ -1442,7 +1477,7 @@ class TestEscapeRelayGate(unittest.TestCase):
             heat_shields=[_SHIELD_25],
             parachutes=[_MK16, _MK16, _MK16],
             legs=[_LT2],
-            launch_clamp=True, decoupler_radial=True,
+            launch_clamp=True, decoupler_stack=True, decoupler_radial=True,
         )
 
     def _escape_feasible(self, body: BodyName, relay_tier: int) -> bool:
@@ -1594,12 +1629,12 @@ class TestStructuredBlockingReasons(unittest.TestCase):
         self.assertFalse(result.feasible)
         reasons = {b.reason for b in result.blocking}
         # An empty kit should report at least one of NO_FUEL / NO_ENGINE
-        # / NO_LAUNCH_ENGINE / STAGING_TIER_INSUFFICIENT.
+        # / NO_LAUNCH_ENGINE / NO_STACK_DECOUPLER.
         self.assertTrue(reasons & {
             BlockingReason.NO_FUEL,
             BlockingReason.NO_ENGINE,
             BlockingReason.NO_LAUNCH_ENGINE,
-            BlockingReason.STAGING_TIER_INSUFFICIENT,
+            BlockingReason.NO_STACK_DECOUPLER,
             BlockingReason.NO_PROBE_CORE,
         }, f"Expected propulsion or command-module reason; got {reasons}")
 
@@ -1673,7 +1708,8 @@ class TestPowerChargeMonotonic(unittest.TestCase):
         f.lightest_probe = _part("roverBody.v2")
         f.available_probes = [f.lightest_probe]  # covering pair-pick reads the list
         f.has_reaction_wheels = True
-        f.staging_tier = 2
+        f.has_stack_decoupler = True
+        f.has_radial_decoupler = True
         f.available_decouplers = [_TR18A, _TT38K]
         f.has_launch_clamp = True
         # A 1.25m probe needs a shield that COVERS it (the merged covering rule
@@ -1786,7 +1822,7 @@ class TestControlSurchargeMonotonicity(unittest.TestCase):
             engines=[_SWIVEL, _MAINSAIL],
             tanks=[_FL_T400, _FL_T800, _X200_32],
             probe_core=True, solar=True,
-            launch_clamp=True, staging_tier=1,
+            launch_clamp=True, decoupler_stack=True,
         )
 
     def _orbit(self, flags):
@@ -1845,7 +1881,7 @@ class TestPassiveEntryShieldCovering(unittest.TestCase):
             probe_core=True, solar=True, rtg=True,
             heat_shields=shields, parachutes=[_MK16, _MK2R],
             legs=[_LT1], relay_tier=4,
-            launch_clamp=True, staging_tier=2,
+            launch_clamp=True,
             decoupler_stack=True, fuel_lines=True, decoupler_radial=True,
         )
         for pod in capsules:
@@ -1929,7 +1965,7 @@ class TestReboardAidGate(unittest.TestCase):
             tanks=[_FL_T400, _FL_T800, _X200_32, _JUMBO_64],
             capsule=True, probe_core=True, solar=True, rtg=True,
             heat_shields=[_SHIELD_125], parachutes=[_MK16, _MK2R],
-            legs=[_LT1], relay_tier=4, launch_clamp=True, staging_tier=2,
+            legs=[_LT1], relay_tier=4, launch_clamp=True,
             decoupler_stack=True, fuel_lines=True, decoupler_radial=True,
             ladder=ladder, eva_jetpack=eva_jetpack,
         )

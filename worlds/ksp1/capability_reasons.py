@@ -25,7 +25,11 @@ class BlockingReason(str, Enum):
     NO_LAUNCH_ENGINE = "no_launch_engine"              # no atmo-ascent engine
     NO_FUEL = "no_fuel"                                # no tanks available
     NO_PROPULSION = "no_propulsion"                    # combined sounding-rocket case
-    STAGING_TIER_INSUFFICIENT = "staging_tier_insufficient"
+    # Serial staging (one stage atop another) needs a stack decoupler; radial
+    # decouplers only shed boosters within a stage.
+    NO_STACK_DECOUPLER = "no_stack_decoupler"
+    # A staging event needs SOME decoupler (stack or radial) to fire.
+    NO_DECOUPLER = "no_decoupler"
 
     # --- Command --------------------------------------------------------
     NO_CAPSULE = "no_capsule"
@@ -201,7 +205,6 @@ class BlockingInfo:
     mass_actual: float = 0.0     # tonnes
     mass_cap: float = 0.0        # tonnes
     stages_needed: int = 0
-    stages_available: int = 0
     solar_helps: bool = True     # only meaningful for INSUFFICIENT_POWER_*
     # Sub-strings or sub-reasons; used by composite reasons to preserve
     # exact human-readable output without forcing every variant into the
@@ -240,12 +243,11 @@ class BlockingInfo:
             if self.detail:
                 return f"no sounding altitude ({self.detail})"
             return "no propulsion (need SRB or engine + fuel)"
-        if r == BlockingReason.STAGING_TIER_INSUFFICIENT:
-            if self.stages_needed > 0:
-                return (f"need {self.stages_needed} stages but "
-                        f"staging_tier={self.stages_available} only allows "
-                        f"{max(1, self.stages_available)}")
-            return "no stack decoupler (staging_tier < 1)"
+        if r == BlockingReason.NO_STACK_DECOUPLER:
+            return (f"need {self.stages_needed} serial stages but no stack "
+                    f"decoupler (radial decouplers can't separate stages)")
+        if r == BlockingReason.NO_DECOUPLER:
+            return "no decoupler (stack or radial) to stage"
         # Command -------------------------------------------------------
         if r == BlockingReason.NO_CAPSULE:
             if self.detail:
